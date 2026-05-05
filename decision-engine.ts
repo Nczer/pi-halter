@@ -1,0 +1,295 @@
+import path from "node:path";
+import fs from "node:fs";
+import { ABORT_REMEMBER_MS, allowedBashPatterns } from "./config";
+import { analyzeCommand } from "./command-analysis";
+import {
+  resolvePathReal,
+  expandTilde,
+  isInsideCwd,
+  isInsideAutoAllowedDir,
+  isAllowedReadPath,
+  isProjectPiPath,
+  isPathDenied,
+  getOutsideCwdPaths,
+} from "./path-analysis";
+import type { Store, AllowRules } from "./store";
+
+// ── Request types (discriminated union) ──
+
+export interface BashRequest {
+  type: "bash";
+  command: string;
+  cwd: string;
+}
+
+export interface FileRequest {
+  type: "file";
+  toolName: "read" | "write" | "edit";
+  filePath: string;
+  cwd: string;
+}
+
+export interface SubagentRequest {
+  type: "subagent";
+  agentNames: string[];
+}
+
+export type PermissionRequest = BashRequest | FileRequest | SubagentRequest;
+
+// ── Decision types (discriminated union) ──
+
+/** Command was auto-allowed — proceed without prompting. */
+export interface AutoAllowDecision {
+  kind: "auto-allow";
+}
+
+/** Command must be blocked — no prompt shown. */
+export interface BlockDecision {
+  kind: "block";
+  reason: string;
+}
+
+/** Command requires user confirmation. */
+export interface PromptDecision {
+  kind: "prompt";
+  /** Structured data for the PromptBuilder to format into title/body. */
+  promptData: PromptData;
+  /** Rules to apply if user selects "Always (everything)". */
+  allowRules: AllowRules;
+  /** Rules to apply if user selects "Always (paths only)" (bash only). */
+  allowPathsRules?: AllowRules;
+  /** Rules to apply if user selects "This file only" (file only). */
+  allowFileRules?: AllowRules;
+  /** Whether to include the "Always (paths only)" option. */
+  includePathsOption?: boolean;
+}
+
+export type Decision = AutoAllowDecision | BlockDecision | PromptDecision;
+
+// ── Prompt data (discriminated union, mirrors request types) ──
+
+export interface BashPromptData {
+  type: "bash";
+  command: string;
+  cwd: string;
+  outsideDirs: string[];
+  segments: string[];
+  signatures: string[];
+  /** Indices of segments whose signature is NOT in the static allowlist. */
+  nonAllowedSegmentIndices: number[];
+  riskDangerous: boolean;
+  riskSeverity: "high" | "medium" | null;
+  riskReasons: string[];
+  needsCommandApproval: boolean;
+  needsPathApproval: boolean;
+}
+
+export interface FilePromptData {
+  type: "file";
+  action: string;
+  filePath: string;
+  resolved: string;
+  cwd: string;
+  outsideDir: string | null; // null if inside cwd
+  isWriteOp: boolean;
+  deniedRule: string | null;
+  symlinkHint: string | null; // e.g. "/home/user/data → /mnt/storage"
+}
+
+export interface SubagentPromptData {
+  type: "subagent";
+  mode: "single" | "parallel";
+  taskCount: number;
+  agentNames: string[];
+  hasWriteAccess: boolean;
+}
+
+export type PromptData = BashPromptData | FilePromptData | SubagentPromptData;
+
+// ── Decision engine ──
+
+/**
+ * Pure decision function. Given a permission request and the current store state,
+ * returns a decision: auto-allow, block, or prompt.
+ *
+ * UI-agnostic — always returns "prompt" when human judgment is needed,
+ * regardless of whether a UI is available. The handler adapts.
+ */
+export function decide(request: PermissionRequest, store: Store): Decision {
+  switch (request.type) {
+    case "bash":
+      return decideBash(request, store);
+    case "file":
+      return decideFile(request, store);
+    case "subagent":
+      return decideSubagent(request, store);
+  }
+}
+
+// ── Bash decision ──
+
+function decideBash(req: BashRequest, store: Store): Decision {
+  // Retry-loop prevention
+  const lastAbort = store.getLastAbort(req.command);
+  if (lastAbort && Date.now() - lastAbort < ABORT_REMEMBER_MS) {
+    return {
+      kind: "block",
+      reason:
+        "Blocked by bash-guard: command was already aborted recently. " +
+        "Ask the user for a safer alternative; do not retry the same command.",
+    };
+  }
+
+  const analysis = analyzeCommand(req.command, req.cwd);
+  const outsidePaths = getOutsideCwdPaths(
+    analysis.paths,
+    req.cwd,
+    store.listAllowedReadDirs(),
+    store.listAllowedWriteDirs(),
+  );
+
+  // Auto-allow: all segments simple + no unsafe patterns + no unapproved outside paths
+  if (analysis.allSimple && !analysis.hasUnsafePattern && outsidePaths.length === 0) {
+    return { kind: "auto-allow" };
+  }
+
+  // Auto-allow if all signatures previously approved
+  if (analysis.signatures.every(sig => store.hasAllowedBash(sig))) {
+    if (!analysis.hasUnsafePattern && outsidePaths.length === 0) {
+      return { kind: "auto-allow" };
+    }
+  }
+
+  // For directories, use the path itself; for files, use the parent directory.
+  const outsideDirs = [...new Set(outsidePaths.map(p => {
+    try {
+      const stat = fs.statSync(p);
+      return stat.isDirectory() ? p : path.dirname(p);
+    } catch {
+      return path.dirname(p); // Assume directory if stat fails (e.g. non-existent)
+    }
+  }))].sort();
+  const needsCommandApproval = !analysis.allSimple;
+  const needsPathApproval = outsidePaths.length > 0;
+
+  if (!needsCommandApproval && !needsPathApproval) {
+    return { kind: "auto-allow" };
+  }
+
+  // Only store signatures that aren't already in the static allowlist.
+  // Allowed commands auto-allow via `allSimple` anyway — no need to clutter the store.
+  const nonAllowlistedSegmentIndices = analysis.signatures
+    .map((sig, i) =>
+      allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0])) ? -1 : i,
+    )
+    .filter(i => i >= 0);
+  const nonAllowlistedSigs = nonAllowlistedSegmentIndices.map(i => analysis.signatures[i]);
+  const uniqueSigs = [...new Set(nonAllowlistedSigs)];
+
+  // Build allow rules for "always" confirmation
+  const allowRules: AllowRules = {};
+  if (needsPathApproval) allowRules.readDirs = outsideDirs;
+  if (needsCommandApproval && nonAllowlistedSigs.length > 0) allowRules.bashSigs = nonAllowlistedSigs;
+
+  const hasBoth = needsCommandApproval && needsPathApproval;
+  const allowPathsRules = hasBoth
+    ? { readDirs: outsideDirs }
+    : undefined;
+
+  return {
+    kind: "prompt",
+    promptData: {
+      type: "bash",
+      command: req.command,
+      cwd: req.cwd,
+      outsideDirs,
+      segments: analysis.segments,
+      signatures: uniqueSigs,
+      nonAllowedSegmentIndices: nonAllowlistedSegmentIndices,
+      riskDangerous: analysis.risk.dangerous,
+      riskSeverity: analysis.risk.severity,
+      riskReasons: analysis.risk.reasons,
+      needsCommandApproval,
+      needsPathApproval,
+    },
+    allowRules,
+    allowPathsRules,
+    includePathsOption: hasBoth,
+  };
+}
+
+// ── File decision ──
+
+function decideFile(req: FileRequest, store: Store): Decision {
+  const resolved = resolvePathReal(expandTilde(req.filePath), req.cwd);
+
+  // Auto-allow checks
+  if (isProjectPiPath(req.filePath, req.cwd)) return { kind: "auto-allow" };
+  if (store.hasAllowedPath(resolved)) return { kind: "auto-allow" };
+
+  const autoAllowedDirs = req.toolName === "read"
+    ? store.listAllowedReadDirs()
+    : store.listAllowedWriteDirs();
+
+  if (!isInsideCwd(resolved, req.cwd) && isInsideAutoAllowedDir(resolved, autoAllowedDirs)) {
+    return { kind: "auto-allow" };
+  }
+  if (req.toolName === "read" && isAllowedReadPath(resolved)) return { kind: "auto-allow" };
+  if (req.toolName === "read" && isInsideCwd(resolved, req.cwd)) return { kind: "auto-allow" };
+
+  const deniedResult = isPathDenied(req.filePath, req.cwd);
+  const action = req.toolName.charAt(0).toUpperCase() + req.toolName.slice(1);
+  const isWriteOp = req.toolName !== "read";
+
+  // Detect symlink: compare parent of original path vs parent of resolved path
+  const originalParent = path.dirname(expandTilde(req.filePath));
+  const resolvedParent = path.dirname(resolved);
+  const symlinkHint = originalParent !== resolvedParent
+    ? `${originalParent} → ${resolvedParent}`
+    : null;
+
+  const promptData: FilePromptData = {
+    type: "file",
+    action,
+    filePath: req.filePath,
+    resolved,
+    cwd: req.cwd,
+    outsideDir: isInsideCwd(resolved, req.cwd) ? null : path.dirname(resolved),
+    isWriteOp,
+    deniedRule: deniedResult.matchedRule,
+    symlinkHint,
+  };
+
+  const allowRules: AllowRules = isInsideCwd(resolved, req.cwd)
+    ? { paths: [resolved] }
+    : (isWriteOp ? { writeDirs: [path.dirname(resolved)] } : { readDirs: [path.dirname(resolved)] });
+
+  const allowFileRules = isInsideCwd(resolved, req.cwd)
+    ? undefined
+    : { paths: [resolved] };
+
+  return { kind: "prompt", promptData, allowRules, allowFileRules };
+}
+
+// ── Subagent decision ──
+
+function decideSubagent(req: SubagentRequest, store: Store): Decision {
+  if (req.agentNames.every(name => store.hasAllowedSubagent(name))) {
+    return { kind: "auto-allow" };
+  }
+
+  const hasWriteAccess = req.agentNames.some(name => name === "worker");
+
+  return {
+    kind: "prompt",
+    promptData: {
+      type: "subagent",
+      mode: req.agentNames.length > 1 ? "parallel" : "single",
+      taskCount: req.agentNames.length,
+      agentNames: req.agentNames,
+      hasWriteAccess,
+    },
+    allowRules: { subagentNames: req.agentNames },
+  };
+}
+
