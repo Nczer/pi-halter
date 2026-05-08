@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import path from "node:path";
 import fs from "node:fs";
 import type { FileRequest } from "../decision-engine";
@@ -48,7 +48,7 @@ export async function handleFile(
   }
 
   const request: FileRequest = { type: "file", toolName: toolName as "read" | "write" | "edit", filePath, cwd: ctx.cwd };
-  const decision = decide(request, store);
+  const decision = await decide(request, store);
 
   // Auto-allow: proceed without prompting
   if (decision.kind === "auto-allow") return;
@@ -58,7 +58,7 @@ export async function handleFile(
     return { block: true, reason: decision.reason };
   }
 
-  // Prompt needed but no UI available — convert to block
+  // No UI available — block
   if (!ctx.hasUI) {
     const pd = decision.promptData;
     const reasons: string[] = [];

@@ -1,14 +1,13 @@
-import { parse as shellParse } from "shell-quote";
-import path from "node:path";
-import os from "node:os";
-import fs from "node:fs";
 import {
   allowedBashPatterns,
   dangerousFindFlags,
+  dangerousPerlFlags,
+  dangerousSedFlags,
   dangerousPatterns,
-  pathAwareCommands,
+  wrapperCommands,
+  writeCapableCommands,
 } from "./config";
-import { expandTilde, resolvePathReal } from "./path-analysis";
+import { extractPathsFromBash, hasSubshell as hasSubshellAST, extractSegments as extractSegmentsAST } from "./bash-parser";
 
 // ── Public types ──
 
@@ -43,53 +42,7 @@ export interface CommandAnalysis {
   obfuscation: ObfuscationResult;
 }
 
-// ── Internal types ──
-
-type OpToken = { op: string; [k: string]: unknown };
-type Token = string | OpToken;
-
-function isOpToken(t: Token): t is OpToken {
-  return typeof t === "object" && t !== null && "op" in t;
-}
-
-// ── Shell parsing (shell-quote based) ──
-
-function parseCommand(command: string): Token[] | null {
-  try {
-    return shellParse(command) as Token[];
-  } catch {
-    return null;
-  }
-}
-
-function tokensToStrings(tokens: Token[]): string[] {
-  return tokens.filter((t) => typeof t === "string") as string[];
-}
-
-function splitTokensOnOps(tokens: Token[], splitOps: string[]): Token[][] {
-  const out: Token[][] = [];
-  let current: Token[] = [];
-  for (const t of tokens) {
-    if (isOpToken(t) && splitOps.includes(t.op)) {
-      if (current.length) out.push(current);
-      current = [];
-      continue;
-    }
-    current.push(t);
-  }
-  if (current.length) out.push(current);
-  return out;
-}
-
-function getSegmentOps(seg: Token[]): string[] {
-  return seg.filter(isOpToken).map((o) => o.op);
-}
-
-function getAllOps(tokens: Token[]): string[] {
-  return tokens.filter(isOpToken).map((t) => t.op);
-}
-
-// ── String-based segment splitting ──
+// ── Segment helpers (string-based, for signature extraction) ──
 
 function stripQuotedStrings(cmd: string): string {
   let s = cmd.replace(/"(?:[^"\\]|\\.)*"/g, (match) => {
@@ -102,21 +55,26 @@ function stripQuotedStrings(cmd: string): string {
   return s;
 }
 
-function splitIntoSegments(cmd: string): string[] {
-  return stripQuotedStrings(cmd)
-    .split(/\s*(?:;\s*|&&\s*|\|\|\s*|\|&\s*|\|\s*|&\s*|\n\s*)/)
-    .map(s => s.trim())
-    .filter(s => s.length > 0 && s !== "__STR__");
-}
-
 // ── Segment helpers ──
 
 function getFirstWord(segment: string): string {
   return segment.trim().split(/\s+/)[0].toLowerCase();
 }
 
+/**
+ * Extract a command signature from a segment, handling pipelines and redirects.
+ * Strips shell redirections (2>&1, >, >>, etc.) before extracting command + flags.
+ * For pipelines ("cmd1 | cmd2"), uses the first command's signature.
+ */
 function getCommandSignature(segment: string): string {
-  const tokens = stripQuotedStrings(segment.trim()).split(/\s+/);
+  // For pipelines, take the first command part
+  const firstCmd = segment.split("|")[0].trim();
+  // Strip shell redirections: 2>&1, > file, >> file, 2> file, &> file, etc.
+  const cleaned = firstCmd
+    .replace(/&?[0-9]*>>?\s*\S+/g, "") // redirect patterns
+    .replace(/<\s*\S+/g, "")           // input redirects
+    .trim();
+  const tokens = stripQuotedStrings(cleaned).split(/\s+/);
   const cmd = tokens[0].toLowerCase();
   const flags = tokens.slice(1).filter(t => t.startsWith("-")).sort();
   return flags.length === 0 ? cmd : `${cmd} ${flags.join(" ")}`;
@@ -124,18 +82,27 @@ function getCommandSignature(segment: string): string {
 
 // ── Safety checks ──
 
-function hasSubshell(cmd: string): boolean {
-  return /\$\s*\(/.test(cmd)
-    || /`/.test(cmd)
-    || /<\s*\(/.test(cmd)
-    || />\s*\(/.test(cmd)
-    || /<<</.test(cmd);
+async function hasSubshell(cmd: string): Promise<boolean> {
+  // Quick regex check for common patterns (fast path)
+  if (/\$\s*\(/.test(cmd) || /`/.test(cmd) || /<\s*\(/.test(cmd)) return true;
+  // Full AST check for edge cases
+  return hasSubshellAST(cmd);
 }
 
 function hasWriteRedirect(cmd: string): boolean {
+  // If the segment is ONLY a redirect (no command name), check if it's safe
+  const trimmed = cmd.trim();
+  if (/^[0-9]*&?>+/.test(trimmed)) {
+    // Strip safe redirects
+    let stripped = trimmed;
+    stripped = stripped.replace(/[0-9]*&?>+\s*(?:\/dev\/(?:null|stderr))\b/g, "");
+    stripped = stripped.replace(/[0-9]*>&[0-9]+/g, ""); // fd duplication
+    if (!stripped.trim()) return false; // entire segment is safe redirect
+  }
+
   let stripped = cmd;
   stripped = stripped.replace(/[0-9]*&?>+\s*(?:\/dev\/(?:null|stderr))\b/g, "");
-  stripped = stripped.replace(/2>&1\s*>+\s*(?:\/dev\/(?:null|stderr))\b/g, "");
+  stripped = stripped.replace(/[0-9]*>&[0-9]+/g, ""); // fd duplication (e.g. 2>&1, >&1) is safe
   if (/>+\s*\S/.test(stripped)) {
     const inTest = /\[\s.*\]/.test(stripped) || /test\s/.test(stripped);
     if (!inTest) return true;
@@ -167,89 +134,78 @@ function isSegmentObfuscated(seg: string): boolean {
   return /__CMD_SUBST__/.test(seg) || detectObfuscation(seg).detected;
 }
 
-function isSimpleAllowedCommand(segment: string): boolean {
+/**
+ * Check if a wrapper command (xargs, watch, timeout) is running a write-capable command.
+ * e.g. "xargs sed -i" → true, "xargs grep -l" → false
+ */
+function isWrapperRunningWrite(segment: string): boolean {
+  const args = segment.trim().split(/\s+/);
+  // Skip wrapper flags (-0, -r, -I, -n, etc.) to find the actual command
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("-")) continue; // skip flags
+    const wrappedCmd = arg.toLowerCase();
+    // Command itself writes
+    if (writeCapableCommands.has(wrappedCmd)) {
+      // Check for write-indicating flags on the wrapped command
+      const rest = args.slice(i + 1);
+      if (wrappedCmd === "sed" && /\b-i(?:\s|$)/.test(segment)) return true;
+      if (wrappedCmd === "perl" && /\b-i(?:\s|$)/.test(segment)) return true;
+      if (wrappedCmd === "rm" || wrappedCmd === "rmdir" || wrappedCmd === "unlink") return true;
+      if (wrappedCmd === "mv" || wrappedCmd === "cp") return true;
+      if (wrappedCmd === "chmod" || wrappedCmd === "chown") return true;
+      if (wrappedCmd === "touch" || wrappedCmd === "mkdir") return true;
+      if (wrappedCmd === "dd" || wrappedCmd === "truncate") return true;
+      if (wrappedCmd === "patch" || wrappedCmd === "install") return true;
+      // Archive/package commands — write by default
+      if (["tar", "zip", "unzip", "gzip", "gunzip"].includes(wrappedCmd)) return true;
+      if (["pip", "npm", "yarn", "cargo", "go"].includes(wrappedCmd)) return true;
+    }
+    break; // only check first non-flag argument (the command)
+  }
+  return false;
+}
+
+async function isSimpleAllowedCommand(segment: string): Promise<boolean> {
+  // Redirect-only segments (e.g. 2>/dev/null, >&1) are safe modifiers, not commands
+  const trimmed = segment.trim();
+  if (/^[0-9]*&?>+/.test(trimmed)) {
+    return !hasWriteRedirect(segment); // safe if no real file write
+  }
+
   const firstWord = getFirstWord(segment);
   if (!allowedBashPatterns.some(p => p.test(firstWord))) return false;
-  if (hasSubshell(segment)) return false;
+  if (await hasSubshell(segment)) return false;
   if (firstWord === "find" && dangerousFindFlags.test(segment)) return false;
+  if (firstWord === "sed" && dangerousSedFlags.test(segment)) return false;
+  if (firstWord === "perl" && dangerousPerlFlags.test(segment)) return false;
+  if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment)) return false;
   if (hasWriteRedirect(segment)) return false;
   return true;
 }
 
-function isSegmentUnsafe(seg: string): boolean {
-  return hasSubshell(seg)
+async function isSegmentUnsafe(seg: string): Promise<boolean> {
+  // Redirect-only segments are safe if they don't write to a real file
+  const trimmed = seg.trim();
+  if (/^[0-9]*&?>+/.test(trimmed) && !hasWriteRedirect(seg)) return false;
+
+  return (await hasSubshell(seg))
     || isSegmentObfuscated(seg)
     || (getFirstWord(seg) === "find" && dangerousFindFlags.test(seg))
+    || (getFirstWord(seg) === "sed" && dangerousSedFlags.test(seg))
+    || (getFirstWord(seg) === "perl" && dangerousPerlFlags.test(seg))
+    || (wrapperCommands.has(getFirstWord(seg)) && isWrapperRunningWrite(seg))
     || hasWriteRedirect(seg)
     || dangerousPatterns.some(({ pattern }) => pattern.test(seg));
 }
 
-// ── Path extraction ──
+// ── Path extraction (tree-sitter AST) ──
+// Delegated to bash-parser.ts for accurate parsing of heredocs, quotes, subshells, redirects.
 
-function extractPathsFromSegment(segment: string, cwd: string): string[] {
-  const firstWord = getFirstWord(segment);
-  if (!pathAwareCommands.has(firstWord)) return [];
-
-  const tokens = stripQuotedStrings(segment.trim()).split(/\s+/);
-  const paths: string[] = [];
-
-  if (firstWord === "find") {
-    for (let i = 1; i < tokens.length; i++) {
-      if (!tokens[i].startsWith("-") && tokens[i] !== "__STR__") {
-        paths.push(resolvePathReal(expandTilde(tokens[i]), cwd));
-      }
-    }
-  } else if (firstWord === "grep") {
-    let foundPattern = false;
-    for (let i = 1; i < tokens.length; i++) {
-      if (tokens[i].startsWith("-") || tokens[i] === "__STR__") continue;
-      if (!foundPattern) { foundPattern = true; continue; }
-      paths.push(resolvePathReal(expandTilde(tokens[i]), cwd));
-    }
-  } else if (firstWord === "cd" || firstWord === "pushd" || firstWord === "popd") {
-    for (let i = 1; i < tokens.length; i++) {
-      if (!tokens[i].startsWith("-") && tokens[i] !== "__STR__") {
-        paths.push(resolvePathReal(expandTilde(tokens[i]), cwd));
-      }
-    }
-  } else if (firstWord === "sed" || firstWord === "awk") {
-    for (let i = 1; i < tokens.length; i++) {
-      const t = tokens[i];
-      if (t.startsWith("-")) continue;
-      if (t === "__STR__") continue;
-      if (firstWord === "sed") {
-        if (/^s[\/\\#%|]/.test(t) || /^[adiwct]=$/.test(t) || /^[adiwct]\\?\//.test(t)) continue;
-      }
-      if (t.includes("/") || t.includes(".") || t.startsWith("~") || t === "..") {
-        paths.push(resolvePathReal(expandTilde(t), cwd));
-      }
-    }
-  } else {
-    for (let i = 1; i < tokens.length; i++) {
-      const t = tokens[i];
-      if (t.startsWith("-") || /^\d+$/.test(t) || t === "__STR__") continue;
-      if ((t.includes("*") || t.includes("?")) && !t.includes("/")) continue;
-      if (t.includes("/") || t.includes(".") || t.startsWith("~") || t === "..") {
-        paths.push(resolvePathReal(expandTilde(t), cwd));
-      }
-    }
-  }
-
-  return paths;
-}
-
-function extractPathsFromSegments(segments: string[], cwd: string): string[] {
-  const allPaths: string[] = [];
-  for (const seg of segments) {
-    allPaths.push(...extractPathsFromSegment(seg, cwd));
-  }
-  return [...new Set(allPaths)];
-}
-
-// ── Token-based risk analysis ──
+// ── Risk analysis ──
 
 function hasFlag(args: string[], flag: string): boolean {
-  return args.includes(flag) || args.some((a) => a.startsWith(flag) && flag.length === 2 && a.startsWith("-"));
+  return args.includes(flag) || args.some((a) => a === flag || a.startsWith(flag + "=") || a.startsWith(flag + "."));
 }
 
 function anyArgStartsWith(args: string[], prefix: string): boolean {
@@ -261,15 +217,19 @@ interface Risk {
   reasons: string[];
 }
 
-function analyzeSegmentRisk(seg: Token[]): Risk | null {
+/**
+ * Analyze risk for a single command segment (string text + operators).
+ * Operates on the segment text directly, not on shell-quote tokens.
+ */
+function analyzeSegmentRisk(text: string, ops: string[]): Risk | null {
   const reasons: string[] = [];
   let severity: Severity = "medium";
 
-  const args = tokensToStrings(seg);
+  // Parse args from the segment text
+  const args = text.trim().split(/\s+/);
   if (args.length === 0) return null;
 
-  const ops = getSegmentOps(seg);
-  const cmd = args[0];
+  const cmd = args[0].toLowerCase();
   const rest = args.slice(1);
 
   // Pipe to shell
@@ -339,7 +299,7 @@ function analyzeSegmentRisk(seg: Token[]): Risk | null {
   }
 
   // dd of=
-  if (cmd === "dd" && (anyArgStartsWith(rest, "of=") || rest.includes("of"))) {
+  if (cmd === "dd" && anyArgStartsWith(rest, "of=")) {
     severity = "high";
     reasons.push("dd with output file/device (can overwrite data)");
   }
@@ -466,43 +426,46 @@ function analyzeSegmentRisk(seg: Token[]): Risk | null {
 
 // ── Unified risk analysis ──
 
-function analyzeRisk(cmd: string): CommandRisk {
+async function analyzeRisk(cmd: string, segments: { text: string; ops: string[] }[]): Promise<CommandRisk> {
   const reasons: string[] = [];
   let severity: Severity | null = null;
 
-  // Token-based analysis (shell-quote)
-  const tokens = parseCommand(cmd);
-  if (tokens) {
-    const allOps = getAllOps(tokens);
-
-    // Whole-command operator checks
-    if (allOps.some((op) => op === ">" || op === ">>" || op === "2>" || op === "2>>")) {
-      reasons.push("shell output redirection (can overwrite files)");
+  // Collect all operators from all segments
+  const allOps = new Set<string>();
+  for (const seg of segments) {
+    for (const op of seg.ops) {
+      allOps.add(op);
     }
-    if (allOps.includes("<")) {
-      reasons.push("shell input redirection");
-    }
-    if (allOps.includes("|")) {
-      reasons.push("pipe operator (chained commands)");
-    }
-
-    // Per-segment risk
-    const segments = splitTokensOnOps(tokens, ["&&", "||", ";"]);
-    for (const seg of segments) {
-      const segRisk = analyzeSegmentRisk(seg);
-      if (!segRisk) continue;
-      if (segRisk.severity === "high") severity = "high";
-      else if (!severity) severity = "medium";
-      for (const r of segRisk.reasons) {
-        if (!reasons.includes(r)) reasons.push(r);
-      }
-    }
-  } else {
-    reasons.push("unparsed shell command (unable to analyze safely)");
-    severity = "medium";
   }
 
-  // Regex-based checks (safety net for patterns not caught by token analysis)
+  // Whole-command operator checks
+  // Strip redirects to /dev/null or /dev/stderr — they're safe discards, not file writes
+  let cmdNoNullRedirect = cmd
+    .replace(/[0-9]*&?>+\s*\/dev\/(?:null|stderr)\b/g, "");
+  cmdNoNullRedirect = cmdNoNullRedirect.replace(/[0-9]*>&[0-9]+/g, ""); // fd duplication (2>&1, >&1) is safe
+  const hasRealWriteRedirect = /[0-9]*&?>+\s*\S/.test(cmdNoNullRedirect);
+  if (hasRealWriteRedirect) {
+    reasons.push("shell output redirection (can overwrite files)");
+  }
+  if (allOps.has("<")) {
+    reasons.push("shell input redirection");
+  }
+  if (allOps.has("|") || allOps.has("|&")) {
+    reasons.push("pipe operator (chained commands)");
+  }
+
+  // Per-segment risk
+  for (const seg of segments) {
+    const segRisk = analyzeSegmentRisk(seg.text, seg.ops);
+    if (!segRisk) continue;
+    if (segRisk.severity === "high") severity = "high";
+    else if (!severity) severity = "medium";
+    for (const r of segRisk.reasons) {
+      if (!reasons.includes(r)) reasons.push(r);
+    }
+  }
+
+  // Regex-based checks (safety net for patterns not caught by AST analysis)
   for (const { pattern, label } of dangerousPatterns) {
     if (pattern.test(cmd) && !reasons.includes(label)) {
       reasons.push(label);
@@ -517,16 +480,22 @@ function analyzeRisk(cmd: string): CommandRisk {
 
 /**
  * Analyze a shell command. Single source of truth for parsing, path extraction,
- * safety evaluation, and risk assessment. One tokenization pass, one result.
+ * safety evaluation, and risk assessment.
+ *
+ * Uses tree-sitter-bash AST for accurate segmentation, path extraction,
+ * and operator detection (handles heredocs, comments, quotes, subshells,
+ * and redirects correctly).
  */
-export function analyzeCommand(cmd: string, cwd: string): CommandAnalysis {
-  const segments = splitIntoSegments(cmd);
-  const signatures = segments.map(getCommandSignature);
-  const paths = extractPathsFromSegments(segments, cwd);
-  const allSimple = segments.every(isSimpleAllowedCommand);
-  const hasUnsafe = segments.some(isSegmentUnsafe);
-  const risk = analyzeRisk(cmd);
+export async function analyzeCommand(cmd: string, cwd: string): Promise<CommandAnalysis> {
+  // Extract segments from AST (splits on &&, ||, ;, |, |&, &)
+  const astSegments = await extractSegmentsAST(cmd);
+  const segmentTexts = astSegments.map(s => s.text);
+  const signatures = segmentTexts.map(getCommandSignature);
+  const paths = await extractPathsFromBash(cmd, cwd);
+  const allSimple = (await Promise.all(segmentTexts.map(isSimpleAllowedCommand))).every(Boolean);
+  const hasUnsafe = (await Promise.all(segmentTexts.map(isSegmentUnsafe))).some(Boolean);
+  const risk = await analyzeRisk(cmd, astSegments);
   const obfuscation = detectObfuscation(cmd);
 
-  return { segments, signatures, paths, allSimple, hasUnsafePattern: hasUnsafe, risk, obfuscation };
+  return { segments: segmentTexts, signatures, paths, allSimple, hasUnsafePattern: hasUnsafe, risk, obfuscation };
 }

@@ -34,7 +34,15 @@ export interface SubagentRequest {
   agentNames: string[];
 }
 
-export type PermissionRequest = BashRequest | FileRequest | SubagentRequest;
+export interface McpRequest {
+  type: "mcp";
+  server: string;
+  tool: string;
+  /** Truncated tool arguments for display in permission prompts. */
+  argsPreview?: string;
+}
+
+export type PermissionRequest = BashRequest | FileRequest | SubagentRequest | McpRequest;
 
 // ── Decision types (discriminated union) ──
 
@@ -104,7 +112,16 @@ export interface SubagentPromptData {
   hasWriteAccess: boolean;
 }
 
-export type PromptData = BashPromptData | FilePromptData | SubagentPromptData;
+export interface McpPromptData {
+  type: "mcp";
+  server: string;
+  tool: string;
+  op: string;
+  /** Truncated tool arguments for display in permission prompts. */
+  argsPreview?: string;
+}
+
+export type PromptData = BashPromptData | FilePromptData | SubagentPromptData | McpPromptData;
 
 // ── Decision engine ──
 
@@ -115,7 +132,7 @@ export type PromptData = BashPromptData | FilePromptData | SubagentPromptData;
  * UI-agnostic — always returns "prompt" when human judgment is needed,
  * regardless of whether a UI is available. The handler adapts.
  */
-export function decide(request: PermissionRequest, store: Store): Decision {
+export async function decide(request: PermissionRequest, store: Store): Promise<Decision> {
   switch (request.type) {
     case "bash":
       return decideBash(request, store);
@@ -123,12 +140,14 @@ export function decide(request: PermissionRequest, store: Store): Decision {
       return decideFile(request, store);
     case "subagent":
       return decideSubagent(request, store);
+    case "mcp":
+      return decideMcp(request, store);
   }
 }
 
 // ── Bash decision ──
 
-function decideBash(req: BashRequest, store: Store): Decision {
+async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   // Retry-loop prevention
   const lastAbort = store.getLastAbort(req.command);
   if (lastAbort && Date.now() - lastAbort < ABORT_REMEMBER_MS) {
@@ -140,7 +159,7 @@ function decideBash(req: BashRequest, store: Store): Decision {
     };
   }
 
-  const analysis = analyzeCommand(req.command, req.cwd);
+  const analysis = await analyzeCommand(req.command, req.cwd);
   const outsidePaths = getOutsideCwdPaths(
     analysis.paths,
     req.cwd,
@@ -153,8 +172,10 @@ function decideBash(req: BashRequest, store: Store): Decision {
     return { kind: "auto-allow" };
   }
 
-  // Auto-allow if all signatures previously approved
-  if (analysis.signatures.every(sig => store.hasAllowedBash(sig))) {
+  // Auto-allow if all signatures are either previously approved or in the static allowlist
+  const isSigApproved = (sig: string) =>
+    store.hasAllowedBash(sig) || allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0]));
+  if (analysis.signatures.every(isSigApproved)) {
     if (!analysis.hasUnsafePattern && outsidePaths.length === 0) {
       return { kind: "auto-allow" };
     }
@@ -178,9 +199,13 @@ function decideBash(req: BashRequest, store: Store): Decision {
 
   // Only store signatures that aren't already in the static allowlist.
   // Allowed commands auto-allow via `allSimple` anyway — no need to clutter the store.
+  // Redirect-only segments (e.g. 2>/dev/null) are not commands — skip them.
+  const isRedirectOnly = (text: string) => /^[0-9]*&?>+/.test(text.trim());
   const nonAllowlistedSegmentIndices = analysis.signatures
     .map((sig, i) =>
-      allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0])) ? -1 : i,
+      isRedirectOnly(analysis.segments[i])
+        ? -1
+        : allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0])) ? -1 : i,
     )
     .filter(i => i >= 0);
   const nonAllowlistedSigs = nonAllowlistedSegmentIndices.map(i => analysis.signatures[i]);
@@ -225,7 +250,8 @@ function decideFile(req: FileRequest, store: Store): Decision {
 
   // Auto-allow checks
   if (isProjectPiPath(req.filePath, req.cwd)) return { kind: "auto-allow" };
-  if (store.hasAllowedPath(resolved)) return { kind: "auto-allow" };
+  if (req.toolName === "read" && store.hasAllowedReadPath(resolved)) return { kind: "auto-allow" };
+  if (req.toolName !== "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" };
 
   const autoAllowedDirs = req.toolName === "read"
     ? store.listAllowedReadDirs()
@@ -261,12 +287,12 @@ function decideFile(req: FileRequest, store: Store): Decision {
   };
 
   const allowRules: AllowRules = isInsideCwd(resolved, req.cwd)
-    ? { paths: [resolved] }
+    ? (isWriteOp ? { writePaths: [resolved] } : { readPaths: [resolved] })
     : (isWriteOp ? { writeDirs: [path.dirname(resolved)] } : { readDirs: [path.dirname(resolved)] });
 
   const allowFileRules = isInsideCwd(resolved, req.cwd)
     ? undefined
-    : { paths: [resolved] };
+    : (isWriteOp ? { writePaths: [resolved] } : { readPaths: [resolved] });
 
   return { kind: "prompt", promptData, allowRules, allowFileRules };
 }
@@ -293,3 +319,43 @@ function decideSubagent(req: SubagentRequest, store: Store): Decision {
   };
 }
 
+// ── MCP decision ──────────────────────────────────────────────────────────
+
+/**
+ * Parse qualified tool name `server:tool` to extract server.
+ */
+function parseServerFromTool(tool: string): string | null {
+  const colonIndex = tool.indexOf(":");
+  if (colonIndex > 0 && colonIndex < tool.length - 1) {
+    return tool.slice(0, colonIndex).trim();
+  }
+  return null;
+}
+
+function decideMcp(req: McpRequest, store: Store): Decision {
+  // Auto-allow if server is already approved
+  if (store.hasAllowedMcpServer(req.server)) {
+    return { kind: "auto-allow" };
+  }
+
+  // Auto-allow if specific tool is already approved
+  if (store.hasAllowedMcpTool(`${req.server}:${req.tool}`)) {
+    return { kind: "auto-allow" };
+  }
+
+  // Try to extract server from tool name if not explicitly provided
+  const toolServer = parseServerFromTool(req.tool);
+  const effectiveServer = toolServer ?? req.server;
+
+  return {
+    kind: "prompt",
+    promptData: {
+      type: "mcp",
+      server: effectiveServer,
+      tool: req.tool,
+      op: "call",
+      argsPreview: req.argsPreview,
+    },
+    allowRules: { mcpServers: [effectiveServer] },
+  };
+}

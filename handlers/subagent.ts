@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SubagentRequest } from "../decision-engine";
 import { decide } from "../decision-engine";
 import { showPrompt } from "../prompt-flow";
@@ -21,7 +21,7 @@ export async function handleSubagent(
   if (agentNames.length === 0) return;
 
   const request: SubagentRequest = { type: "subagent", agentNames };
-  const decision = decide(request, store);
+  const decision = await decide(request, store);
 
   // Auto-allow: proceed without prompting
   if (decision.kind === "auto-allow") return;
@@ -31,7 +31,7 @@ export async function handleSubagent(
     return { block: true, reason: decision.reason };
   }
 
-  // Prompt needed but no UI available — convert to block
+  // No UI available — block
   if (!ctx.hasUI) {
     return { block: true, reason: "[Permission Policy] Auto-blocked (no UI): subagent spawning requires confirmation" };
   }

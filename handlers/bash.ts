@@ -1,5 +1,5 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import type { BashRequest } from "../decision-engine";
 import { decide } from "../decision-engine";
 import { showPrompt } from "../prompt-flow";
@@ -15,7 +15,7 @@ export async function handleBash(
   if (!cmd || cmd.trim().length === 0) return;
 
   const request: BashRequest = { type: "bash", command: cmd, cwd: ctx.cwd };
-  const decision = decide(request, store);
+  const decision = await decide(request, store);
 
   // Auto-allow: proceed without prompting
   if (decision.kind === "auto-allow") return;
@@ -25,7 +25,7 @@ export async function handleBash(
     return { block: true, reason: decision.reason };
   }
 
-  // Prompt needed but no UI available — convert to block
+  // No UI available — block
   if (!ctx.hasUI) {
     return { block: true, reason: "[Permission Policy] Auto-blocked (no UI): Bash command requires confirmation" };
   }
@@ -38,11 +38,12 @@ export async function handleBash(
     if (!result.allowed) {
       store.recordAbort(cmd);
       const pd = decision.promptData;
-      const detail = pd.riskDangerous
+      const isBash = pd.type === "bash";
+      const detail = isBash && pd.riskDangerous
         ? ` Danger flags: ${pd.riskReasons.join(", ")}.`
         : "";
       const reasonDetail = result.reason ? ` Reason: ${result.reason}.` : "";
-      ctx.ui.notify(`Permission denied: ${pd.riskDangerous ? "dangerous " : ""}bash command`, "error");
+      ctx.ui.notify(`Permission denied: ${isBash && pd.riskDangerous ? "dangerous " : ""}bash command`, "error");
       return { block: true, reason: `[USER REJECTED] You denied this bash command: ${cmd.slice(0, 120)}.${detail}${reasonDetail}` };
     }
   } finally {

@@ -1,4 +1,4 @@
-import type { PromptDecision, PromptData, BashPromptData, FilePromptData, SubagentPromptData } from "./decision-engine";
+import type { PromptDecision, PromptData, BashPromptData, FilePromptData, SubagentPromptData, McpPromptData } from "./decision-engine";
 
 // ── Output types (match twoTierAlwaysPrompt's expected inputs) ──
 
@@ -26,6 +26,8 @@ export function buildPrompt(decision: PromptDecision): BuiltPrompt {
       return buildFilePrompt(promptData, allowRules);
     case "subagent":
       return buildSubagentPrompt(promptData, allowRules);
+    case "mcp":
+      return buildMcpPrompt(promptData, allowRules);
   }
 }
 
@@ -112,19 +114,22 @@ function buildBashPrompt(
 
 function buildFilePrompt(
   data: FilePromptData,
-  _allowRules: { paths?: string[]; readDirs?: string[]; writeDirs?: string[] },
+  _allowRules: { readPaths?: string[]; writePaths?: string[]; readDirs?: string[]; writeDirs?: string[] },
 ): BuiltPrompt {
   const { action, filePath, resolved, cwd, outsideDir, isWriteOp, deniedRule, symlinkHint } = data;
   const insideCwd = outsideDir === null;
   const symlinkLine = symlinkHint ? `\n\n🔗 Resolved via symlink: ${symlinkHint}` : "";
 
   if (insideCwd) {
+    const scopeNote = isWriteOp
+      ? `"Always Yes" will auto-allow ${action.toLowerCase()} on this file this session (read will still prompt).`
+      : `"Always Yes" will auto-allow read on this file this session (write/edit will still prompt).`;
     return {
       title: action,
       body: `Path:\n  ${filePath}${deniedRule ? `\n\n⚠️ Matches denied rule "${deniedRule}" — typically contains credentials or generated files.` : ""}${symlinkLine}\n`,
       tier2Everything: {
         title: `Confirm Always Allow: ${action} ${resolved.split("/").pop() || resolved}`,
-        body: `"Always Yes" will auto-allow "${action}" on this path this session:\n\n  ${resolved}\n\n"Back" returns to the previous prompt.`,
+        body: `${scopeNote}\n\n  ${resolved}\n\n"Back" returns to the previous prompt.`,
       },
       includePathsOption: false,
       includeFileOption: false,
@@ -136,6 +141,9 @@ function buildFilePrompt(
     : `auto-allow read for this directory this session (write/edit will still prompt)`;
   const tier2Label = isWriteOp ? `${action} ${outsideDir}` : `read ${outsideDir}`;
   const fileName = resolved.split("/").pop() || resolved;
+  const fileScope = isWriteOp
+    ? `auto-allow ${action.toLowerCase()} on this file this session (read will still prompt)`
+    : `auto-allow read on this file this session (write/edit will still prompt)`;
 
   return {
     title: `⚠️ ${action} outside cwd`,
@@ -146,7 +154,7 @@ function buildFilePrompt(
     },
     tier2File: {
       title: `Confirm Always Allow: ${action} ${fileName}`,
-      body: `"Always Yes" will auto-allow "${action}" for this file this session:\n\n  ${resolved}\n\nOther files in ${outsideDir} will still prompt.\n\n"Back" returns to the previous prompt.`,
+      body: `"Always Yes" will ${fileScope}:\n\n  ${resolved}\n\nOther files in ${outsideDir} will still prompt.\n\n"Back" returns to the previous prompt.`,
     },
     includePathsOption: false,
     includeFileOption: true,
@@ -174,6 +182,33 @@ function buildSubagentPrompt(
     tier2Everything: {
       title: "Confirm Always Allow: Subagent spawning",
       body: `"Always Yes" will auto-allow subagent spawning this session.\n\n"Back" returns to the previous prompt.`,
+    },
+    includePathsOption: false,
+    includeFileOption: false,
+  };
+}
+
+// ── MCP prompt ────────────────────────────────────────────────────────────
+
+function buildMcpPrompt(
+  data: McpPromptData,
+  _allowRules: { mcpServers?: string[] },
+): BuiltPrompt {
+  const { server, tool, op, argsPreview } = data;
+  const toolDisplay = tool.includes(":") ? tool : `${server}:${tool}`;
+
+  let body = `Server: ${server}\nTool: ${toolDisplay}\nOperation: ${op}`;
+  if (argsPreview) {
+    body += `\nArguments: ${argsPreview}`;
+  }
+  body += `\n\n⚠️ This MCP tool will be called through an external server.\n`;
+
+  return {
+    title: `\u26a0\ufe0f MCP`,
+    body,
+    tier2Everything: {
+      title: `Confirm Always Allow: ${server}:*`,
+      body: `"Always Yes" will auto-allow all tools from MCP server '${server}' this session:\n\n  ${server}:*\n\n"Back" returns to the previous prompt.`,
     },
     includePathsOption: false,
     includeFileOption: false,
