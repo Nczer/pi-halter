@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BuiltPrompt } from "./prompt-builder";
 import { store } from "./store";
 import { showSelect, showReasonEditor } from "./selector";

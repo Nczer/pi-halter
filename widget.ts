@@ -1,5 +1,5 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { store } from "./store";
 
 // ── Widget rendering ──
@@ -38,12 +38,14 @@ function groupCommandVariants(items: string[]): string[] {
  */
 export function updateWidget(ctx: ExtensionContext): void {
   const bashItems = [...store.listAllowedBash()];
-  const pathItems = [...store.listAllowedPaths()];
+  const readPathItems = [...store.listAllowedReadPaths()];
+  const writePathItems = [...store.listAllowedWritePaths()];
   const readDirItems = [...store.listAllowedReadDirs()];
   const writeDirItems = [...store.listAllowedWriteDirs()];
   const subagentItems = [...store.listAllowedSubagent()];
+  const mcpServerItems = [...store.listAllowedMcpServers()];
 
-  if (bashItems.length === 0 && pathItems.length === 0 && readDirItems.length === 0 && writeDirItems.length === 0 && subagentItems.length === 0) {
+  if (bashItems.length === 0 && readPathItems.length === 0 && writePathItems.length === 0 && readDirItems.length === 0 && writeDirItems.length === 0 && subagentItems.length === 0 && mcpServerItems.length === 0) {
     ctx.ui.setWidget("permissions", undefined);
     return;
   }
@@ -61,11 +63,17 @@ export function updateWidget(ctx: ExtensionContext): void {
     if (writeDirItems.length > 0) {
       baseLines.push(theme.fg("muted", "Write dirs:") + " " + theme.fg("dim", writeDirItems.join(" ")));
     }
-    if (pathItems.length > 0) {
-      baseLines.push(theme.fg("muted", "Paths:") + " " + theme.fg("dim", pathItems.join(" ")));
+    if (readPathItems.length > 0) {
+      baseLines.push(theme.fg("muted", "Read paths:") + " " + theme.fg("dim", readPathItems.join(" ")));
+    }
+    if (writePathItems.length > 0) {
+      baseLines.push(theme.fg("muted", "Write paths:") + " " + theme.fg("dim", writePathItems.join(" ")));
     }
     if (subagentItems.length > 0) {
       baseLines.push(theme.fg("muted", "Subagents:") + " " + theme.fg("dim", subagentItems.join(", ")));
+    }
+    if (mcpServerItems.length > 0) {
+      baseLines.push(theme.fg("muted", "MCP:") + " " + theme.fg("dim", mcpServerItems.map(s => `${s}:*`).join(", ")));
     }
 
     return { render: (width: number) => baseLines.map(l => truncateToWidth(l, width)), invalidate: () => {} };

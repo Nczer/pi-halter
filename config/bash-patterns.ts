@@ -7,6 +7,8 @@ export const allowedBashPatterns: RegExp[] = [
   /^sort\b/, /^uniq\b/, /^cut\b/, /^tr\b/, /^diff\b/,
   /^tac\b/, /^rev\b/, /^nl\b/, /^fold\b/, /^expand\b/, /^unexpand\b/, /^fmt\b/,
   /^join\b/, /^comm\b/, /^paste\b/, /^column\b/, /^seq\b/,
+  // Text transform (safe stdout — guarded by dangerous flag checks)
+  /^sed\b/, /^perl\b/,
   // Hashing / binary inspection
   /^md5sum\b/, /^sha1sum\b/, /^sha256sum\b/, /^sha512sum\b/, /^cksum\b/,
   /^hexdump\b/, /^od\b/, /^strings\b/,
@@ -14,7 +16,7 @@ export const allowedBashPatterns: RegExp[] = [
   /^echo\b/, /^printf\b/, /^basename\b/, /^dirname\b/, /^realpath\b/, /^readlink\b/,
   /^test\b/, /^true\b/, /^false\b/,
   // System info (read-only, no file side effects)
-  /^pwd\b/, /^date\b/, /^whoami\b/, /^id\b/, /^uname\b/, /^hostname\b/,
+  /^pwd\b/, /^cd\b/, /^date\b/, /^whoami\b/, /^id\b/, /^uname\b/, /^hostname\b/,
   /^groups\b/, /^printenv\b/, /^uptime\b/, /^tty\b/, /^tput\b/,
   // Disk / process inspection (read-only)
   /^df\b/, /^du\b/, /^free\b/, /^ps\b/, /^pgrep\b/, /^pidof\b/,
@@ -49,3 +51,25 @@ export const pathAwareCommands = new Set([
 
 /** Flags on `find` that make it dangerous. */
 export const dangerousFindFlags = /\b-(?:exec|execdir|okexec|delete|empty|truncate)\b/;
+
+/** Flags that make `sed` dangerous (in-place editing). */
+export const dangerousSedFlags = /\b-i(?:\s|$)/;
+
+/** Flags that make `perl` dangerous (in-place editing via -i). */
+export const dangerousPerlFlags = /\b-i(?:\s|$)/;
+
+/** Wrapper commands that delegate to another command (xargs sed -i, timeout rm, etc.). */
+export const wrapperCommands = new Set(["xargs", "watch", "timeout"]);
+
+/** Commands that write to files when given certain flags. */
+export const writeCapableCommands = new Set([
+  // In-place editors
+  "sed", "perl", "awk", "python", "python3", "node", "ruby", "php",
+  // File modification
+  "rm", "rmdir", "unlink", "mv", "cp", "chmod", "chown",
+  "touch", "mkdir", "dd", "truncate", "patch", "install", "ln",
+  // Archives (can write)
+  "tar", "zip", "unzip", "gzip", "gunzip",
+  // Package managers
+  "pip", "npm", "yarn", "cargo", "go",
+]);
