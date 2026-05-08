@@ -160,8 +160,36 @@ function isWrapperRunningWrite(segment: string): boolean {
       // Archive/package commands — write by default
       if (["tar", "zip", "unzip", "gzip", "gunzip"].includes(wrappedCmd)) return true;
       if (["pip", "npm", "yarn", "cargo", "go"].includes(wrappedCmd)) return true;
+      // tee writes when given file args (not just stdout)
+      if (wrappedCmd === "tee" && /\btee\b.*\S/.test(segment)) return true;
     }
     break; // only check first non-flag argument (the command)
+  }
+  return false;
+}
+
+/**
+ * Check if `find -exec` or `find -execdir` runs a write-capable command.
+ * e.g. "find . -exec sed -i ... {} \;" → true, "find . -exec grep -l ... {} \;" → false
+ */
+function isFindExecWrite(segment: string): boolean {
+  // Check for -exec or -execdir
+  const execMatch = segment.match(/\b-(?:exec|execdir)\b\s+(\S+)/);
+  if (!execMatch) return false;
+
+  const execCmd = execMatch[1].toLowerCase();
+  if (writeCapableCommands.has(execCmd)) {
+    // Check for write-indicating flags
+    if (execCmd === "sed" && /\b-i(?:\s|$)/.test(segment)) return true;
+    if (execCmd === "perl" && /\b-i(?:\s|$)/.test(segment)) return true;
+    if (execCmd === "rm" || execCmd === "rmdir" || execCmd === "unlink") return true;
+    if (execCmd === "mv" || execCmd === "cp") return true;
+    if (execCmd === "chmod" || execCmd === "chown") return true;
+    if (execCmd === "touch" || execCmd === "mkdir") return true;
+    if (execCmd === "dd" || execCmd === "truncate") return true;
+    if (execCmd === "patch" || execCmd === "install") return true;
+    if (["tar", "zip", "unzip", "gzip", "gunzip"].includes(execCmd)) return true;
+    if (["pip", "npm", "yarn", "cargo", "go"].includes(execCmd)) return true;
   }
   return false;
 }
@@ -177,6 +205,7 @@ async function isSimpleAllowedCommand(segment: string): Promise<boolean> {
   if (!allowedBashPatterns.some(p => p.test(firstWord))) return false;
   if (await hasSubshell(segment)) return false;
   if (firstWord === "find" && dangerousFindFlags.test(segment)) return false;
+  if (firstWord === "find" && isFindExecWrite(segment)) return false;
   if (firstWord === "sed" && dangerousSedFlags.test(segment)) return false;
   if (firstWord === "perl" && dangerousPerlFlags.test(segment)) return false;
   if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment)) return false;
@@ -192,6 +221,7 @@ async function isSegmentUnsafe(seg: string): Promise<boolean> {
   return (await hasSubshell(seg))
     || isSegmentObfuscated(seg)
     || (getFirstWord(seg) === "find" && dangerousFindFlags.test(seg))
+    || (getFirstWord(seg) === "find" && isFindExecWrite(seg))
     || (getFirstWord(seg) === "sed" && dangerousSedFlags.test(seg))
     || (getFirstWord(seg) === "perl" && dangerousPerlFlags.test(seg))
     || (wrapperCommands.has(getFirstWord(seg)) && isWrapperRunningWrite(seg))

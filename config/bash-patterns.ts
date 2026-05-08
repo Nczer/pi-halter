@@ -49,8 +49,8 @@ export const pathAwareCommands = new Set([
   "pip", "npm", "yarn", "cargo", "go",
 ]);
 
-/** Flags on `find` that make it dangerous. */
-export const dangerousFindFlags = /\b-(?:exec|execdir|okexec|delete|empty|truncate)\b/;
+/** Flags on `find` that make it dangerous (excluding -exec which depends on the subcommand). */
+export const dangerousFindFlags = /\b-(?:delete|empty|truncate)\b/;
 
 /** Flags that make `sed` dangerous (in-place editing). */
 export const dangerousSedFlags = /\b-i(?:\s|$)/;
@@ -59,7 +59,9 @@ export const dangerousSedFlags = /\b-i(?:\s|$)/;
 export const dangerousPerlFlags = /\b-i(?:\s|$)/;
 
 /** Wrapper commands that delegate to another command (xargs sed -i, timeout rm, etc.). */
-export const wrapperCommands = new Set(["xargs", "watch", "timeout"]);
+export const wrapperCommands = new Set([
+  "xargs", "watch", "timeout", "parallel", "env", "nice", "ionice", "stdbuf",
+]);
 
 /** Commands that write to files when given certain flags. */
 export const writeCapableCommands = new Set([
@@ -70,6 +72,8 @@ export const writeCapableCommands = new Set([
   "touch", "mkdir", "dd", "truncate", "patch", "install", "ln",
   // Archives (can write)
   "tar", "zip", "unzip", "gzip", "gunzip",
+  // File writing
+  "tee",
   // Package managers
   "pip", "npm", "yarn", "cargo", "go",
 ]);
