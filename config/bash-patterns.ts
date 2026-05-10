@@ -47,6 +47,7 @@ export const pathAwareCommands = new Set([
   "xargs", "watch", "timeout",
   "source", ".",
   "pip", "npm", "yarn", "cargo", "go",
+  "uv",
 ]);
 
 /** Flags on `find` that make it dangerous (excluding -exec which depends on the subcommand). */
@@ -76,4 +77,5 @@ export const writeCapableCommands = new Set([
   "tee",
   // Package managers
   "pip", "npm", "yarn", "cargo", "go",
+  "uv",
 ]);
