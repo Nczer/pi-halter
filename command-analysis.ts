@@ -160,7 +160,7 @@ function isWrapperRunningWrite(segment: string): boolean {
       if (wrappedCmd === "patch" || wrappedCmd === "install") return true;
       // Archive/package commands — write by default
       if (["tar", "zip", "unzip", "gzip", "gunzip"].includes(wrappedCmd)) return true;
-      if (["pip", "npm", "yarn", "cargo", "go"].includes(wrappedCmd)) return true;
+      if (["pip", "npm", "yarn", "cargo", "go", "uv"].includes(wrappedCmd)) return true;
       // tee writes when given file args (not just stdout)
       if (wrappedCmd === "tee" && /\btee\b.*\S/.test(segment)) return true;
     }
@@ -190,7 +190,7 @@ function isFindExecWrite(segment: string): boolean {
     if (execCmd === "dd" || execCmd === "truncate") return true;
     if (execCmd === "patch" || execCmd === "install") return true;
     if (["tar", "zip", "unzip", "gzip", "gunzip"].includes(execCmd)) return true;
-    if (["pip", "npm", "yarn", "cargo", "go"].includes(execCmd)) return true;
+    if (["pip", "npm", "yarn", "cargo", "go", "uv"].includes(execCmd)) return true;
   }
   return false;
 }
