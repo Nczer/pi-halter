@@ -4,3 +4,4 @@ export { ABORT_REMEMBER_MS, PROMPT_WARNING_THRESHOLD } from "./thresholds";
 export { allowedBashPatterns, pathAwareCommands, dangerousFindFlags, dangerousSedFlags, dangerousPerlFlags, wrapperCommands, writeCapableCommands } from "./bash-patterns";
 export { allowedReadPaths, deniedPaths } from "./path-rules";
 export { dangerousPatterns } from "./dangerous-patterns";
+export { trustedScriptDirs, isTrustedScriptPath, isTrustedScriptCommand } from "./trusted-scripts";

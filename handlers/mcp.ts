@@ -19,16 +19,11 @@ const BUILTIN_TOOLS = new Set([
 
 // ── Direct tool detection ──────────────────────────────────────────────
 
-/** Cached on first call. Restart Pi after adding new MCP servers. */
-let cachedToolMap: Map<string, { server: string; originalName: string }> | null = null;
-
 /**
  * Load the MCP config and build a map of direct tool names to server info.
- * Cached for the session — read once, reused for all tool calls.
+ * Reloads on each call — config file is small JSON, overhead is negligible.
  */
 function loadDirectToolMap(): Map<string, { server: string; originalName: string }> {
-  if (cachedToolMap) return cachedToolMap;
-
   const map = new Map<string, { server: string; originalName: string }>();
   const configPaths = [
     join(homedir(), ".pi", "agent", "mcp.json"),
@@ -53,7 +48,6 @@ function loadDirectToolMap(): Map<string, { server: string; originalName: string
     }
   }
 
-  cachedToolMap = map;
   return map;
 }
 
