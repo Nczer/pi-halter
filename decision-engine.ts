@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
-import { ABORT_REMEMBER_MS, allowedBashPatterns } from "./config";
+import { ABORT_REMEMBER_MS, allowedBashPatterns, isTrustedScriptCommand } from "./config";
 import { analyzeCommand } from "./command-analysis";
 import {
   resolvePathReal,
@@ -179,6 +179,13 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
     if (!analysis.hasUnsafePattern && outsidePaths.length === 0) {
       return { kind: "auto-allow" };
     }
+  }
+
+  // Auto-allow: command has at least one trusted script segment and no outside paths
+  // (covers compound commands like `source venv/bin/activate && python3 script.py`)
+  const hasTrustedScript = analysis.segments.some(seg => isTrustedScriptCommand(seg, req.cwd));
+  if (hasTrustedScript && outsidePaths.length === 0) {
+    return { kind: "auto-allow" };
   }
 
   // For directories, use the path itself; for files, use the parent directory.

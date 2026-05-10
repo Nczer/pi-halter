@@ -4,6 +4,7 @@ import {
   dangerousPerlFlags,
   dangerousSedFlags,
   dangerousPatterns,
+  isTrustedScriptCommand,
   wrapperCommands,
   writeCapableCommands,
 } from "./config";
@@ -194,12 +195,15 @@ function isFindExecWrite(segment: string): boolean {
   return false;
 }
 
-async function isSimpleAllowedCommand(segment: string): Promise<boolean> {
+async function isSimpleAllowedCommand(segment: string, cwd: string): Promise<boolean> {
   // Redirect-only segments (e.g. 2>/dev/null, >&1) are safe modifiers, not commands
   const trimmed = segment.trim();
   if (/^[0-9]*&?>+/.test(trimmed)) {
     return !hasWriteRedirect(segment); // safe if no real file write
   }
+
+  // Trusted scripts in known directories are simple-allowed
+  if (isTrustedScriptCommand(segment, cwd)) return true;
 
   const firstWord = getFirstWord(segment);
   if (!allowedBashPatterns.some(p => p.test(firstWord))) return false;
@@ -213,10 +217,13 @@ async function isSimpleAllowedCommand(segment: string): Promise<boolean> {
   return true;
 }
 
-async function isSegmentUnsafe(seg: string): Promise<boolean> {
+async function isSegmentUnsafe(seg: string, cwd: string): Promise<boolean> {
   // Redirect-only segments are safe if they don't write to a real file
   const trimmed = seg.trim();
   if (/^[0-9]*&?>+/.test(trimmed) && !hasWriteRedirect(seg)) return false;
+
+  // Trusted scripts: skip dangerous-pattern check for interpreter + script in trusted dir
+  const trusted = isTrustedScriptCommand(seg, cwd);
 
   return (await hasSubshell(seg))
     || isSegmentObfuscated(seg)
@@ -226,7 +233,7 @@ async function isSegmentUnsafe(seg: string): Promise<boolean> {
     || (getFirstWord(seg) === "perl" && dangerousPerlFlags.test(seg))
     || (wrapperCommands.has(getFirstWord(seg)) && isWrapperRunningWrite(seg))
     || hasWriteRedirect(seg)
-    || dangerousPatterns.some(({ pattern }) => pattern.test(seg));
+    || (!trusted && dangerousPatterns.some(({ pattern }) => pattern.test(seg)));
 }
 
 // ── Path extraction (tree-sitter AST) ──
@@ -522,8 +529,8 @@ export async function analyzeCommand(cmd: string, cwd: string): Promise<CommandA
   const segmentTexts = astSegments.map(s => s.text);
   const signatures = segmentTexts.map(getCommandSignature);
   const paths = await extractPathsFromBash(cmd, cwd);
-  const allSimple = (await Promise.all(segmentTexts.map(isSimpleAllowedCommand))).every(Boolean);
-  const hasUnsafe = (await Promise.all(segmentTexts.map(isSegmentUnsafe))).some(Boolean);
+  const allSimple = (await Promise.all(segmentTexts.map(seg => isSimpleAllowedCommand(seg, cwd)))).every(Boolean);
+  const hasUnsafe = (await Promise.all(segmentTexts.map(seg => isSegmentUnsafe(seg, cwd)))).some(Boolean);
   const risk = await analyzeRisk(cmd, astSegments);
   const obfuscation = detectObfuscation(cmd);
 

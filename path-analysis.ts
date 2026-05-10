@@ -1,7 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import { allowedReadPaths, deniedPaths } from "./config";
+import { allowedReadPaths, deniedPaths, isTrustedScriptPath } from "./config";
 
 // ── Path resolution ──
 
@@ -67,6 +67,7 @@ export function getOutsideCwdPaths(
     if (isInsideAutoAllowedDir(p, autoAllowedReadDirs)) return false;
     if (isInsideAutoAllowedDir(p, autoAllowedWriteDirs)) return false;
     if (isAllowedReadPath(p)) return false;
+    if (isTrustedScriptPath(p)) return false;
     return true;
   });
 }
