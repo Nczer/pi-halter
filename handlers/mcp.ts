@@ -8,14 +8,124 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+// ── Metadata cache resolution ──────────────────────────────────────────
+
+/**
+ * Load the MCP metadata cache and build a map of tool names to server names.
+ * This lets us resolve the server for any tool call, even when the user
+ * doesn't specify a server param.
+ */
+interface McpCacheTool {
+  name: string;
+}
+
+interface McpCacheServer {
+  tools: McpCacheTool[];
+}
+
+interface McpCache {
+  version: number;
+  servers: Record<string, McpCacheServer>;
+}
+
+function loadToolToServerMap(): Map<string, string> {
+  const map = new Map<string, string>();
+  const cachePaths = [
+    join(homedir(), ".pi", "agent", "mcp-cache.json"),
+  ];
+
+  // Load prefix mode from mcp.json settings
+  let prefixMode: "server" | "none" | "short" = "server"; // default
+  const configPaths = [
+    join(homedir(), ".pi", "agent", "mcp.json"),
+    join(homedir(), ".config", "mcp", "mcp.json"),
+  ];
+  for (const configPath of configPaths) {
+    if (!existsSync(configPath)) continue;
+    try {
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      const settings = config.settings ?? {};
+      if (settings.toolPrefix) {
+        prefixMode = settings.toolPrefix;
+      }
+      break;
+    } catch {
+      // Try next config path
+    }
+  }
+
+  for (const cachePath of cachePaths) {
+    if (!existsSync(cachePath)) continue;
+    try {
+      const cache = JSON.parse(readFileSync(cachePath, "utf-8")) as McpCache;
+      if (!cache?.servers || typeof cache.servers !== "object") continue;
+
+      for (const [serverName, entry] of Object.entries(cache.servers)) {
+        if (!entry?.tools || !Array.isArray(entry.tools)) continue;
+        for (const tool of entry.tools) {
+          if (!tool?.name) continue;
+
+          // Store raw name
+          map.set(tool.name, serverName);
+
+          // Store prefixed names based on toolPrefix setting
+          if (prefixMode === "server") {
+            map.set(`${serverName}_${tool.name}`, serverName);
+          } else if (prefixMode === "none") {
+            map.set(`${tool.name}_${serverName}`, serverName);
+          } else if (prefixMode === "short") {
+            const shortName = serverName.split("/").pop() ?? serverName;
+            map.set(`${shortName}_${tool.name}`, serverName);
+          }
+        }
+      }
+    } catch {
+      // Skip invalid cache files
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Resolve an MCP tool name to its server using the metadata cache.
+ * Falls back to pattern matching against known server names from mcp.json.
+ */
+function resolveServerFromToolName(
+  toolName: string,
+  serverParam: string | null,
+): string | null {
+  // If server was explicitly provided, use it
+  if (serverParam) return serverParam;
+
+  // Try metadata cache first (most reliable)
+  const toolMap = loadToolToServerMap();
+  const cachedServer = toolMap.get(toolName);
+  if (cachedServer) return cachedServer;
+
+  // Fall back to pattern matching against mcp.json server names
+  const directToolMap = loadDirectToolMap();
+  for (const [key] of directToolMap) {
+    if (!key.startsWith("__server__:")) continue;
+    const serverName = key.slice(11); // strip "__server__:"
+
+    // Pattern: {server}_{tool} (prefix=server with multiple servers)
+    if (toolName.startsWith(`${serverName}_`)) {
+      return serverName;
+    }
+
+    // Pattern: {tool}_{server} (prefix=none)
+    const suffix = `_${serverName}`;
+    if (toolName.endsWith(suffix) && !toolName.startsWith(`${serverName}_`)) {
+      return serverName;
+    }
+  }
+
+  return null;
+}
+
 /** MCP operations that are metadata-only and auto-allowed. */
 const METADATA_OPS = new Set(["connect", "describe", "search", "list", "status"]);
-
-/** Built-in pi tool names that are never MCP tools. */
-const BUILTIN_TOOLS = new Set([
-  "read", "bash", "edit", "write", "grep", "find", "ls", "mcp",
-  "subagent", "ask_user_question", "exa",
-]);
 
 // ── Direct tool detection ──────────────────────────────────────────────
 
@@ -49,49 +159,6 @@ function loadDirectToolMap(): Map<string, { server: string; originalName: string
   }
 
   return map;
-}
-
-/**
- * Check if a tool name appears to be a direct MCP tool.
- * Returns the inferred server name or null.
- *
- * Direct tools follow naming patterns based on toolPrefix setting:
- * - prefix="server" with multiple servers: {server}_{tool} (e.g., "exa_web_search")
- * - prefix="none": {tool}_{server} (e.g., "web_search_exa")
- * - prefix="short": {shortServer}_{tool}
- *
- * We match against known MCP server names from mcp.json, checking both
- * prefix and suffix patterns to cover all naming conventions.
- */
-function inferMcpServerFromToolName(toolName: string): { server: string; tool: string } | null {
-  if (BUILTIN_TOOLS.has(toolName)) return null;
-
-  const map = loadDirectToolMap();
-
-  // Check if tool name starts with any known MCP server name
-  for (const [key] of map) {
-    if (!key.startsWith("__server__:")) continue;
-    const serverName = key.slice(11); // strip "__server__:"
-
-    // Pattern: {server}_{tool} (prefix=server with multiple servers)
-    if (toolName.startsWith(`${serverName}_`)) {
-      return {
-        server: serverName,
-        tool: toolName.slice(serverName.length + 1),
-      };
-    }
-
-    // Pattern: {tool}_{server} (prefix=none)
-    const suffix = `_${serverName}`;
-    if (toolName.endsWith(suffix) && !toolName.startsWith(`${serverName}_`)) {
-      return {
-        server: serverName,
-        tool: toolName.slice(0, -suffix.length),
-      };
-    }
-  }
-
-  return null;
 }
 
 // ── Argument preview ───────────────────────────────────────────────────
@@ -254,8 +321,11 @@ export async function handleMcp(
 
   const argsPreview = buildArgsPreview(params);
 
+  // Resolve server from tool name if not explicitly provided
+  const resolvedServer = resolveServerFromToolName(tool ?? "", server);
+
   return await checkMcpPermission(
-    server ?? "unknown",
+    resolvedServer ?? "unknown",
     tool ?? "unknown",
     argsPreview,
     ctx,
@@ -276,16 +346,15 @@ export async function handleMcpDirectTool(
   // Skip if it's the mcp proxy tool (handled by handleMcp)
   if (toolName === "mcp") return;
 
-  // Try to infer MCP server from tool name
-  const inferred = inferMcpServerFromToolName(toolName);
-  if (!inferred) return;
+  const resolvedServer = resolveServerFromToolName(toolName, null);
+  if (!resolvedServer) return;
 
   const params = event.input ?? {};
   const argsPreview = buildArgsPreview(params);
 
   return await checkMcpPermission(
-    inferred.server,
-    inferred.tool,
+    resolvedServer,
+    toolName,
     argsPreview,
     ctx,
   );
