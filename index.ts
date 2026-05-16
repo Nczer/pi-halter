@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resetState, updateWidget } from "./permission-state";
+import { updateToolsStatus } from "./widget";
 import { handleBash, handleSubagent, handleFile, handleMcp, handleMcpDirectTool } from "./handlers";
 import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
 
@@ -12,6 +13,7 @@ export default function (pi: ExtensionAPI) {
     setDspActive(false);
     ctx.ui.setWidget("permissions", undefined);
     ctx.ui.setWidget("dsp-warning", undefined);
+    ctx.ui.setStatus("tools", undefined);
   });
 
   // ── /dsp command ──
@@ -35,6 +37,9 @@ export default function (pi: ExtensionAPI) {
 
   // ── Tool call interception ──
   pi.on("tool_call", async (event, ctx) => {
+    // Update tools panel status on every tool call
+    updateToolsStatus(ctx);
+
     // DSP mode: bypass all permission checks
     if (isDspActive()) return;
 
