@@ -1,4 +1,4 @@
-import type { PromptDecision, PromptData, BashPromptData, FilePromptData, SubagentPromptData, McpPromptData } from "./decision-engine";
+import type { PromptDecision, BashPromptData, FilePromptData, SubagentPromptData, McpPromptData } from "./decision-engine";
 
 // ── Output types (match twoTierAlwaysPrompt's expected inputs) ──
 

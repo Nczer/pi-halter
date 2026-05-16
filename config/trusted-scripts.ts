@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 
 /** Directories whose scripts are auto-trusted (interpreter + script in this dir bypasses dangerous-pattern check). */
-export const trustedScriptDirs: string[] = [
+const trustedScriptDirs: string[] = [
   path.join(os.homedir(), ".pi", "agent", "skills"),
 ];
 
