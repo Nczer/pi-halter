@@ -42,17 +42,17 @@ export interface McpRequest {
   argsPreview?: string;
 }
 
-export type PermissionRequest = BashRequest | FileRequest | SubagentRequest | McpRequest;
+type PermissionRequest = BashRequest | FileRequest | SubagentRequest | McpRequest;
 
 // ── Decision types (discriminated union) ──
 
 /** Command was auto-allowed — proceed without prompting. */
-export interface AutoAllowDecision {
+interface AutoAllowDecision {
   kind: "auto-allow";
 }
 
 /** Command must be blocked — no prompt shown. */
-export interface BlockDecision {
+interface BlockDecision {
   kind: "block";
   reason: string;
 }
@@ -342,11 +342,6 @@ function parseServerFromTool(tool: string): string | null {
 function decideMcp(req: McpRequest, store: Store): Decision {
   // Auto-allow if server is already approved
   if (store.hasAllowedMcpServer(req.server)) {
-    return { kind: "auto-allow" };
-  }
-
-  // Auto-allow if specific tool is already approved
-  if (store.hasAllowedMcpTool(`${req.server}:${req.tool}`)) {
     return { kind: "auto-allow" };
   }
 

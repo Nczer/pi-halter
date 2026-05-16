@@ -18,8 +18,6 @@ export interface Store {
   hasAllowedSubagent(name: string): boolean;
   /** Check if an MCP server is auto-allowed. */
   hasAllowedMcpServer(server: string): boolean;
-  /** Check if a specific MCP tool (server:tool) is auto-allowed. */
-  hasAllowedMcpTool(tool: string): boolean;
   /** Add auto-allow rules in bulk. */
   addAllowed(rules: AllowRules): void;
   /** Record that a command was just aborted (for retry-loop prevention). */
@@ -42,8 +40,6 @@ export interface Store {
   listAllowedSubagent(): Set<string>;
   /** Get a copy of all auto-allowed MCP servers. */
   listAllowedMcpServers(): Set<string>;
-  /** Get a copy of all auto-allowed MCP tools. */
-  listAllowedMcpTools(): Set<string>;
   /** Reset all state (session shutdown). */
   reset(): void;
 }
@@ -57,7 +53,6 @@ export interface AllowRules {
   writePaths?: string[];
   subagentNames?: string[];
   mcpServers?: string[];
-  mcpTools?: string[];
 }
 
 // ── Factory ──
@@ -74,7 +69,6 @@ export function createStore(nowFn = Date.now): Store {
   const writePaths = new Set<string>();
   const subagents = new Set<string>();
   const mcpServers = new Set<string>();
-  const mcpTools = new Set<string>();
   const aborted = new Map<string, number>();
   let pcount = 0;
 
@@ -86,7 +80,6 @@ export function createStore(nowFn = Date.now): Store {
     hasAllowedWritePath(p) { return writePaths.has(p); },
     hasAllowedSubagent(n) { return subagents.has(n); },
     hasAllowedMcpServer(s) { return mcpServers.has(s); },
-    hasAllowedMcpTool(t) { return mcpTools.has(t); },
 
     addAllowed(rules) {
       rules.bashSigs?.forEach(s => bashSigs.add(s));
@@ -96,7 +89,6 @@ export function createStore(nowFn = Date.now): Store {
       rules.writePaths?.forEach(p => writePaths.add(p));
       rules.subagentNames?.forEach(n => subagents.add(n));
       rules.mcpServers?.forEach(s => mcpServers.add(s));
-      rules.mcpTools?.forEach(t => mcpTools.add(t));
     },
 
     recordAbort(cmd) { aborted.set(cmd, nowFn()); },
@@ -109,7 +101,6 @@ export function createStore(nowFn = Date.now): Store {
     listAllowedWritePaths() { return new Set(writePaths); },
     listAllowedSubagent() { return new Set(subagents); },
     listAllowedMcpServers() { return new Set(mcpServers); },
-    listAllowedMcpTools() { return new Set(mcpTools); },
 
     incrementPromptCount() {
       pcount++;
@@ -124,7 +115,6 @@ export function createStore(nowFn = Date.now): Store {
       writePaths.clear();
       subagents.clear();
       mcpServers.clear();
-      mcpTools.clear();
       aborted.clear();
       pcount = 0;
     },
@@ -136,9 +126,4 @@ export function createStore(nowFn = Date.now): Store {
 /** The default store instance, used by handlers at runtime. */
 export const store: Store = createStore();
 
-// ── Test helper ──
 
-/** Create a store backed by fresh collections. For unit tests. */
-export function createFakeStore(): Store {
-  return createStore();
-}
