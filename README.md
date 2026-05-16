@@ -1,6 +1,6 @@
 # Permissions (pi extension)
 
-A permission gate for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, and `subagent` calls, auto-allowing safe operations and prompting the user for anything risky.
+A permission gate for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, `subagent`, and `mcp` calls, auto-allowing safe operations and prompting the user for anything risky.
 
 ## Features
 
@@ -11,8 +11,8 @@ A permission gate for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, a
 - **Auto-allow** — "Always" option grants session-scoped permission; status widget shows active allowances
 - **Retry-loop prevention** — recently-aborted commands are auto-blocked for 60 seconds
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
-- **No-UI fallback** — auto-blocks when no UI is available; subagents forward permission requests to the main session instead
-- **Subagent permission forwarding** — subagents without UI access forward `ask` permissions to the main interactive session via file-based IPC. The main session polls for pending requests, shows the confirmation prompt, and writes the response back (10-minute timeout).
+- **No-UI fallback** — auto-blocks when no UI is available
+- **DSP mode** — `/dsp` command toggles "Dangerously Skip Permissions" to bypass all checks (with persistent warning widget)
 
 ## How It Works
 
@@ -44,15 +44,13 @@ When the user selects "Always", a second prompt requires explicit confirmation b
 ## Architecture
 
 ```
-index.ts                          Extension entry — event registration
+index.ts                          Extension entry — event registration, /dsp command
 ├── handlers/                     Thin adapters (50–100 lines each)
+│   ├── index.ts                  Barrel re-export
 │   ├── bash.ts                   Bash command interceptor
 │   ├── file.ts                   File operation interceptor (incl. edit pre-validation)
-│   ├── mcp.ts                    MCP tool call interceptor
+│   ├── mcp.ts                    MCP tool call interceptor (proxy + direct tools)
 │   └── subagent.ts               Subagent spawning interceptor
-├── forwarding/                   File-based IPC for subagent permission forwarding
-│   ├── io.ts                     Types, atomic file I/O, session directory resolution
-│   └── polling.ts                Main-session polling + subagent wait-and-forward
 ├── bash-parser.ts                tree-sitter-bash wrapper — lazy WASM load, AST path extraction
 ├── decision-engine.ts            Pure policy — async decide(request, store) → Decision
 ├── command-analysis.ts           Fat analyzer — async analyzeCommand(cmd, cwd) → CommandAnalysis
@@ -61,22 +59,25 @@ index.ts                          Extension entry — event registration
 ├── prompt-builder.ts             Pure formatter — PromptDecision → BuiltPrompt (title/body)
 ├── prompts.ts                    Two-tier confirmation flow (orchestrates selector)
 ├── selector.ts                   Custom TUI components — showSelect + showReasonEditor
-├── store.ts                      Auto-allow state — Store interface + factory
+├── store.ts                      Auto-allow state — Store interface + singleton
 ├── widget.ts                     TUI rendering — permissions status bar
+├── dsp-mode.ts                   DSP mode toggle — bypass all permissions with warning widget
 ├── permission-state.ts           Session lifecycle — reset + re-export hub
 └── config/                       Focused configuration modules
+    ├── index.ts                  Barrel re-export
     ├── thresholds.ts             Time/count constants
     ├── bash-patterns.ts          Allowed commands, path-aware set, dangerous find flags
     ├── path-rules.ts             Allowed read paths, denied path names
-    └── dangerous-patterns.ts     Regex danger patterns (safety net)
+    ├── dangerous-patterns.ts     Regex danger patterns (safety net)
+    └── trusted-scripts.ts        Trusted script directories (skills, etc.)
 ```
 
 ### Key seams
 
-- **Store** — injected into `decide()` for testability. Runtime singleton + `createStore()` factory for tests
+- **Store** — injected into `decide()` and `showPrompt()`. Runtime singleton
 - **Decision Engine** — async pure function, no UI dependency. All policy logic concentrated here
-- **Bash Parser** — lazy-loaded tree-sitter WASM. Public API: `extractPathsFromBash()`, `hasSubshell()`
-- **Prompt Builder** — pure function. All prompt wording lives in one module
+- **Bash Parser** — lazy-loaded tree-sitter WASM. Public API: `extractPathsFromBash()`, `hasSubshell()`, `extractSegments()`
+- **Prompt Builder** — pure function. All prompt wording lives in one module. Truncates long commands to 20 lines to keep prompts compact
 - **Selector** — only module calling `ctx.ui.custom()`. UI seam for selection prompts and reason editor
 
 ## Configuration
@@ -86,13 +87,14 @@ All config lives in `config/` as focused modules, re-exported through `config/in
 | Module | What it controls |
 |--------|-----------------|
 | `thresholds.ts` | `ABORT_REMEMBER_MS` (60s), `PROMPT_WARNING_THRESHOLD` (20) |
-| `bash-patterns.ts` | Auto-allowed commands, path-aware commands, dangerous find flags |
+| `bash-patterns.ts` | Auto-allowed commands, path-aware commands, dangerous find/sed/perl flags |
 | `path-rules.ts` | Always-allowed read paths, always-denied path names |
 | `dangerous-patterns.ts` | Regex patterns for risk detection (safety net alongside token analysis) |
+| `trusted-scripts.ts` | Trusted script directories (e.g. skills) — bypasses dangerous-pattern check |
 
 ## Testing
 
-- **Decision engine** — unit-testable with `createStore()` fake. Async, no UI dependency
+- **Decision engine** — async, no UI dependency. Inject `Store` for testability
 - **Prompt builder** — pure function. Verify prompt content for each decision type
 - **Command analysis** — async pure function. Verify risk scoring, AST path extraction, obfuscation detection
 - **Bash parser** — lazy WASM loading. Verify path extraction across heredocs, comments, quotes, subshells
