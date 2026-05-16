@@ -33,6 +33,27 @@ export function buildPrompt(decision: PromptDecision): BuiltPrompt {
 
 // ── Bash prompt ──
 
+/**
+ * Truncate a long multiline command to keep the prompt compact.
+ * Shows first HEAD_LINES lines, ellipsis, last TAIL_LINES lines.
+ * Full command is visible in chat history above the prompt.
+ */
+function truncateLongCommand(command: string): string {
+  const HEAD_LINES = 8;
+  const TAIL_LINES = 4;
+  const MAX_LINES = 20;
+
+  const lines = command.split("\n");
+  if (lines.length <= MAX_LINES) return command;
+
+  const skipped = lines.length - HEAD_LINES - TAIL_LINES;
+  return [
+    lines.slice(0, HEAD_LINES),
+    `  ... (+${skipped} more lines)`,
+    lines.slice(-TAIL_LINES),
+  ].join("\n");
+}
+
 function buildBashPrompt(
   data: BashPromptData,
   _allowRules: { bashSigs?: string[]; readDirs?: string[] },
@@ -57,8 +78,11 @@ function buildBashPrompt(
     ? `\u26a0\ufe0f ${titlePrefix}`
     : titlePrefix;
 
+  // Truncate long commands to keep prompt compact (user can scroll above for full command)
+  const commandDisplay = truncateLongCommand(command);
+
   // Body
-  let body = `Command:\n  ${command}\n`;
+  let body = `Command:\n  ${commandDisplay}\n`;
 
   if (needsPathApproval) {
     body += `\n\u26a0\ufe0f Paths outside cwd:\n${outsideDirs.map(d => `  \u2022 ${d}`).join("\n")}`;
