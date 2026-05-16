@@ -47,6 +47,11 @@ export function updateWidget(ctx: ExtensionContext): void {
 
   if (bashItems.length === 0 && readPathItems.length === 0 && writePathItems.length === 0 && readDirItems.length === 0 && writeDirItems.length === 0 && subagentItems.length === 0 && mcpServerItems.length === 0) {
     ctx.ui.setWidget("permissions", undefined);
+    // Still show tools status even without active permissions
+    const expanded = ctx.ui.getToolsExpanded();
+    const icon = expanded ? "▼" : "▶";
+    const color = expanded ? "success" : "dim";
+    ctx.ui.setStatus("tools", ctx.ui.theme.fg(color, `${icon} Tools`));
     return;
   }
 
@@ -78,4 +83,15 @@ export function updateWidget(ctx: ExtensionContext): void {
 
     return { render: (width: number) => baseLines.map(l => truncateToWidth(l, width)), invalidate: () => {} };
   }, { placement: "belowEditor" });
+
+}
+
+// ── Tools panel expansion indicator ──
+
+/** Update the tools panel expansion status in the footer. */
+export function updateToolsStatus(ctx: ExtensionContext): void {
+  const expanded = ctx.ui.getToolsExpanded();
+  const icon = expanded ? "▼" : "▶";
+  const color = expanded ? "success" : "dim";
+  ctx.ui.setStatus("tools", ctx.ui.theme.fg(color, `${icon} Tools`));
 }
