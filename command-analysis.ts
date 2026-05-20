@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   allowedBashPatterns,
   dangerousFindFlags,
@@ -59,7 +60,9 @@ function stripQuotedStrings(cmd: string): string {
 // ── Segment helpers ──
 
 function getFirstWord(segment: string): string {
-  return segment.trim().split(/\s+/)[0].toLowerCase();
+  const word = segment.trim().split(/\s+/)[0].toLowerCase();
+  // Normalize path-prefixed binaries (e.g. /usr/bin/git → git)
+  return path.basename(word);
 }
 
 /**

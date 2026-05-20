@@ -24,7 +24,14 @@ export function resolvePathReal(inputPath: string, cwd: string): string {
     while (p !== path.dirname(p)) {
       try {
         const real = fs.realpathSync(p);
-        return path.join(real, suffix);
+        const result = suffix ? path.join(real, suffix) : real;
+        // Safety net: if original was inside cwd but resolution escaped,
+        // an unresolved symlink component in the suffix must have flipped.
+        // Return unresolved path to let the caller decide.
+        if (isChildOf(resolved, cwd) && !isChildOf(result, cwd)) {
+          return resolved;
+        }
+        return result;
       } catch {
         suffix = path.join(path.basename(p), suffix) || path.basename(p);
         p = path.dirname(p);
