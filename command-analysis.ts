@@ -63,6 +63,46 @@ function getFirstWord(segment: string): string {
 }
 
 /**
+ * Split a segment into pipeline parts (on |). Each part is one command in the pipeline.
+ * Returns trimmed command strings for each pipeline stage.
+ */
+function splitPipeline(segment: string): string[] {
+  return segment.split("|").map(s => s.trim()).filter(Boolean);
+}
+
+/** Check if ANY command in a pipeline has dangerous sed flags. */
+function hasDangerousSedInPipeline(segment: string): boolean {
+  return splitPipeline(segment).some(part => {
+    const cmd = getFirstWord(part);
+    return cmd === "sed" && dangerousSedFlags.test(part);
+  });
+}
+
+/** Check if ANY command in a pipeline has dangerous perl flags. */
+function hasDangerousPerlInPipeline(segment: string): boolean {
+  return splitPipeline(segment).some(part => {
+    const cmd = getFirstWord(part);
+    return cmd === "perl" && dangerousPerlFlags.test(part);
+  });
+}
+
+/** Check if a git command is dangerous (rm, clean, reset --hard, push --force, etc.). */
+function isGitDangerous(segment: string): boolean {
+  const args = segment.trim().split(/\s+/);
+  if (args.length < 2) return false;
+  const sub = args[1].toLowerCase();
+  const subArgs = args.slice(2);
+
+  if (sub === "rm") return true;
+  if (sub === "clean" && subArgs.some(a => /-[fdx]/.test(a))) return true;
+  if (sub === "reset" && subArgs.includes("--hard")) return true;
+  if (sub === "push" && subArgs.some(a => a === "--force" || a === "--force-with-lease" || a === "-f")) return true;
+  if (sub === "reflog" && subArgs.includes("expire")) return true;
+  if (sub === "gc" && subArgs.some(a => a.startsWith("--prune"))) return true;
+  return false;
+}
+
+/**
  * Extract a command signature from a segment, handling pipelines and redirects.
  * Strips shell redirections (2>&1, >, >>, etc.) before extracting command + flags.
  * For pipelines ("cmd1 | cmd2"), uses the first command's signature.
@@ -141,17 +181,20 @@ function isSegmentObfuscated(seg: string): boolean {
  */
 function isWrapperRunningWrite(segment: string): boolean {
   const args = segment.trim().split(/\s+/);
-  // Skip wrapper flags (-0, -r, -I, -n, etc.) to find the actual command
+  const firstWord = args[0].toLowerCase();
+  // Skip wrapper flags (-0, -r, -I, -n, etc.) and duration args (for timeout) to find the actual command
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith("-")) continue; // skip flags
+    // timeout has a duration argument before the command (e.g., "timeout 30 rm")
+    if (firstWord === "timeout" && /^\d+(\.\d+)?(?:[smhd])?$/.test(arg)) continue;
     const wrappedCmd = arg.toLowerCase();
     // Command itself writes
     if (writeCapableCommands.has(wrappedCmd)) {
       // Check for write-indicating flags on the wrapped command
       const rest = args.slice(i + 1);
-      if (wrappedCmd === "sed" && /\b-i(?:\s|$)/.test(segment)) return true;
-      if (wrappedCmd === "perl" && /\b-i(?:\s|$)/.test(segment)) return true;
+      if (wrappedCmd === "sed" && /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/.test(segment)) return true;
+      if (wrappedCmd === "perl" && /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/.test(segment)) return true;
       if (wrappedCmd === "rm" || wrappedCmd === "rmdir" || wrappedCmd === "unlink") return true;
       if (wrappedCmd === "mv" || wrappedCmd === "cp") return true;
       if (wrappedCmd === "chmod" || wrappedCmd === "chown") return true;
@@ -175,14 +218,14 @@ function isWrapperRunningWrite(segment: string): boolean {
  */
 function isFindExecWrite(segment: string): boolean {
   // Check for -exec or -execdir
-  const execMatch = segment.match(/\b-(?:exec|execdir)\b\s+(\S+)/);
+  const execMatch = segment.match(/-(?:exec|execdir)\b\s+(\S+)/);
   if (!execMatch) return false;
 
   const execCmd = execMatch[1].toLowerCase();
   if (writeCapableCommands.has(execCmd)) {
     // Check for write-indicating flags
-    if (execCmd === "sed" && /\b-i(?:\s|$)/.test(segment)) return true;
-    if (execCmd === "perl" && /\b-i(?:\s|$)/.test(segment)) return true;
+    if (execCmd === "sed" && /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/.test(segment)) return true;
+    if (execCmd === "perl" && /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/.test(segment)) return true;
     if (execCmd === "rm" || execCmd === "rmdir" || execCmd === "unlink") return true;
     if (execCmd === "mv" || execCmd === "cp") return true;
     if (execCmd === "chmod" || execCmd === "chown") return true;
@@ -212,10 +255,17 @@ async function isSimpleAllowedCommand(segment: string, cwd: string): Promise<boo
   if (firstWord === "find" && isFindExecWrite(segment)) return false;
   if (firstWord === "sed" && dangerousSedFlags.test(segment)) return false;
   if (firstWord === "perl" && dangerousPerlFlags.test(segment)) return false;
+  if (hasDangerousSedInPipeline(segment)) return false;
+  if (hasDangerousPerlInPipeline(segment)) return false;
+  if (firstWord === "git" && isGitDangerous(segment)) return false;
   if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment)) return false;
   if (hasWriteRedirect(segment)) return false;
   return true;
 }
+
+const LOOKUP_COMMANDS = new Set(["which", "type", "command", "hash", "whence"]);
+const ECHO_COMMANDS = new Set(["echo", "printf", "true", "false"]);
+const PROCESS_INSPECTION_COMMANDS = new Set(["pgrep", "pidof"]);
 
 async function isSegmentUnsafe(seg: string, cwd: string): Promise<boolean> {
   // Redirect-only segments are safe if they don't write to a real file
@@ -224,16 +274,24 @@ async function isSegmentUnsafe(seg: string, cwd: string): Promise<boolean> {
 
   // Trusted scripts: skip dangerous-pattern check for interpreter + script in trusted dir
   const trusted = isTrustedScriptCommand(seg, cwd);
+  const firstWord = getFirstWord(seg);
+
+  // Lookup commands (which, type, etc.), echo commands, and process inspection commands
+  // don't execute their arguments — skip dangerousPatterns for them
+  const isLookupOrEcho = LOOKUP_COMMANDS.has(firstWord) || ECHO_COMMANDS.has(firstWord) || PROCESS_INSPECTION_COMMANDS.has(firstWord);
 
   return (await hasSubshell(seg))
     || isSegmentObfuscated(seg)
-    || (getFirstWord(seg) === "find" && dangerousFindFlags.test(seg))
-    || (getFirstWord(seg) === "find" && isFindExecWrite(seg))
-    || (getFirstWord(seg) === "sed" && dangerousSedFlags.test(seg))
-    || (getFirstWord(seg) === "perl" && dangerousPerlFlags.test(seg))
-    || (wrapperCommands.has(getFirstWord(seg)) && isWrapperRunningWrite(seg))
+    || (firstWord === "find" && dangerousFindFlags.test(seg))
+    || (firstWord === "find" && isFindExecWrite(seg))
+    || (firstWord === "sed" && dangerousSedFlags.test(seg))
+    || (firstWord === "perl" && dangerousPerlFlags.test(seg))
+    || hasDangerousSedInPipeline(seg)
+    || hasDangerousPerlInPipeline(seg)
+    || (firstWord === "git" && isGitDangerous(seg))
+    || (wrapperCommands.has(firstWord) && isWrapperRunningWrite(seg))
     || hasWriteRedirect(seg)
-    || (!trusted && dangerousPatterns.some(({ pattern }) => pattern.test(seg)));
+    || (!trusted && !isLookupOrEcho && dangerousPatterns.some(({ pattern }) => pattern.test(seg)));
 }
 
 // ── Path extraction (tree-sitter AST) ──

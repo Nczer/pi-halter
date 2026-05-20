@@ -22,10 +22,14 @@ export const allowedBashPatterns: RegExp[] = [
   /^df\b/, /^du\b/, /^free\b/, /^ps\b/, /^pgrep\b/, /^pidof\b/,
   // Command lookup
   /^which\b/, /^command\b/, /^type\b/, /^hash\b/, /^whence\b/,
+  // Git (guarded by dangerous flag checks)
+  /^git\b/,
   // Safe file/dir creation (no overwriting — guarded by no-redirect check)
   /^mkdir\b/, /^touch\b/, /^mktemp\b/,
   // Calculator
   /^bc\b/, /^expr\b/, /^factor\b/, /^yes\b/,
+  // Wrapper commands (guarded by isWrapperRunningWrite check)
+  /^xargs\b/, /^watch\b/, /^timeout\b/, /^parallel\b/, /^nice\b/,
 ];
 
 /** Commands whose arguments include file/dir paths. */
@@ -40,7 +44,7 @@ export const pathAwareCommands = new Set([
   // File/dir ops
   "mkdir", "rm", "cp", "mv", "chmod", "chown", "mktemp",
   "find", "grep", "diff", "patch",
-  "cd", "pushd", "popd",
+  "pushd", "popd",
   "tar", "zip", "unzip", "gzip", "gunzip",
   "python", "python3", "node", "ruby", "perl", "php",
   "sed", "awk", "sort", "uniq", "cut", "tr", "tee",
@@ -51,13 +55,13 @@ export const pathAwareCommands = new Set([
 ]);
 
 /** Flags on `find` that make it dangerous (excluding -exec which depends on the subcommand). */
-export const dangerousFindFlags = /\b-(?:delete|empty|truncate)\b/;
+export const dangerousFindFlags = /-(?:delete|empty|truncate)\b/;
 
 /** Flags that make `sed` dangerous (in-place editing). */
-export const dangerousSedFlags = /\b-i(?:\s|$)/;
+export const dangerousSedFlags = /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/;
 
 /** Flags that make `perl` dangerous (in-place editing via -i). */
-export const dangerousPerlFlags = /\b-i(?:\s|$)/;
+export const dangerousPerlFlags = /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/;
 
 /** Wrapper commands that delegate to another command (xargs sed -i, timeout rm, etc.). */
 export const wrapperCommands = new Set([

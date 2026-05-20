@@ -312,6 +312,10 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
         if (!child) continue;
         if (child.type === "|" || child.type === "|&") {
           ops.add(child.type);
+        } else if (child.type === "redirected_statement") {
+          cmdTexts.push(child.text.trim());
+          const redirectOps = detectOpsInNode(child);
+          for (const op of redirectOps) ops.add(op);
         } else if (child.type === "command" || child.type === "file_redirect") {
           cmdTexts.push(child.text.trim());
         } else {
@@ -321,6 +325,8 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
             if (!gc) continue;
             if (gc.type === "|" || gc.type === "|&") {
               ops.add(gc.type);
+            } else if (gc.type === "redirected_statement") {
+              cmdTexts.push(gc.text.trim());
             } else if (gc.type === "command" || gc.type === "file_redirect") {
               cmdTexts.push(gc.text.trim());
             }
@@ -342,7 +348,29 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       return;
     }
 
-    // leaf: single command or redirect
+    // redirected_statement: group command + its redirects as one segment
+    // (e.g. "tr 'a-z' 'A-Z' < file.txt" should be one segment, not two)
+    if (n.type === "redirected_statement") {
+      const cmdTexts: string[] = [];
+      const ops = new Set<string>();
+      for (let i = 0; i < n.childCount; i++) {
+        const child = n.child(i);
+        if (!child) continue;
+        if (child.type === "command") {
+          cmdTexts.push(child.text.trim());
+        } else if (child.type === "file_redirect") {
+          cmdTexts.push(child.text.trim());
+          const redirectOps = detectOpsInNode(child);
+          for (const op of redirectOps) ops.add(op);
+        }
+      }
+      if (cmdTexts.length > 0) {
+        segments.push({ text: cmdTexts.join(" "), ops: [...ops] });
+      }
+      return;
+    }
+
+    // leaf: single command or redirect (standalone, not part of simple_command)
     if (n.type === "command" || n.type === "file_redirect") {
       const ops = detectOpsInNode(n);
       segments.push({ text: n.text.trim(), ops });
