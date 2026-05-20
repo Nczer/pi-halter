@@ -1,4 +1,4 @@
-import { PROMPT_WARNING_THRESHOLD } from "./config";
+import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "./config";
 
 // ── Interface ──
 
@@ -92,7 +92,17 @@ export function createStore(nowFn = Date.now): Store {
     },
 
     recordAbort(cmd) { aborted.set(cmd, nowFn()); },
-    getLastAbort(cmd) { return aborted.get(cmd) ?? null; },
+    getLastAbort(cmd) {
+      const ts = aborted.get(cmd) ?? null;
+      // Lazy cleanup: prune entries older than ABORT_REMEMBER_MS
+      if (aborted.size > 100) {
+        const cutoff = nowFn() - ABORT_REMEMBER_MS;
+        for (const [k, v] of aborted) {
+          if (v < cutoff) aborted.delete(k);
+        }
+      }
+      return ts;
+    },
 
     listAllowedBash() { return new Set(bashSigs); },
     listAllowedReadDirs() { return new Set(readDirs); },
