@@ -299,13 +299,21 @@ const cases: TestCase[] = [
   { cmd: "git gc --prune=now", simple: false, unsafe: true, decision: "prompt", desc: "git gc --prune" },
 
   // ═══════════════════════════════════════════════════════════
-  // outside cwd (all should prompt)
+  // outside cwd, in allowedReadPaths (auto-allow)
   // ═══════════════════════════════════════════════════════════
-  { cmd: "cat /tmp/other.txt", simple: true, unsafe: false, decision: "prompt", desc: "read, outside cwd" },
-  { cmd: "ls /tmp", simple: true, unsafe: false, decision: "prompt", desc: "ls, outside cwd" },
-  { cmd: "sed 's/a/b/' /tmp/file.txt", simple: true, unsafe: false, decision: "prompt", desc: "read (sed stdout), outside cwd" },
-  { cmd: "sed -i s/a/b/ /tmp/file.txt", simple: false, unsafe: true, decision: "prompt", desc: "write (sed -i), outside cwd" },
-  { cmd: "grep pattern /tmp/file.txt", simple: true, unsafe: false, decision: "prompt", desc: "grep, outside cwd" },
+  { cmd: "cat /tmp/other.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "read /tmp (allowedReadPaths)" },
+  { cmd: "ls /tmp", simple: true, unsafe: false, decision: "auto-allow", desc: "ls /tmp (allowedReadPaths)" },
+  { cmd: "sed 's/a/b/' /tmp/file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "read /tmp (allowedReadPaths)" },
+  { cmd: "grep pattern /tmp/file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "grep /tmp (allowedReadPaths)" },
+
+  // ═══════════════════════════════════════════════════════════
+  // outside cwd, NOT in allowedReadPaths (should prompt)
+  // ═══════════════════════════════════════════════════════════
+  { cmd: "cat /etc/passwd", simple: true, unsafe: false, decision: "prompt", desc: "cat, outside cwd" },
+  { cmd: "ls /var/log", simple: true, unsafe: false, decision: "prompt", desc: "ls, outside cwd" },
+  { cmd: "sed 's/a/b/' /etc/hosts", simple: true, unsafe: false, decision: "prompt", desc: "read (sed stdout), outside cwd" },
+  { cmd: "sed -i s/a/b/ /etc/hosts", simple: false, unsafe: true, decision: "prompt", desc: "write (sed -i), outside cwd" },
+  { cmd: "grep pattern /var/log/syslog", simple: true, unsafe: false, decision: "prompt", desc: "grep, outside cwd" },
 
   // ═══════════════════════════════════════════════════════════
   // false positive defenses

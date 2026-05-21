@@ -8,6 +8,7 @@ export const allowedReadPaths: string[] = [
   "/opt/pi-coding-agent",
   path.join(os.homedir(), ".pi"),
   path.join(os.homedir(), ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
+  os.tmpdir(),
 ];
 
 /** File/directory names that are always denied (credentials, secrets, caches). */
