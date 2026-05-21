@@ -4,7 +4,8 @@ import {
   dangerousFindFlags,
   dangerousPerlFlags,
   dangerousSedFlags,
-  dangerousPatterns,
+  dangerousCommandPatterns,
+  dangerousContextPatterns,
   isTrustedScriptCommand,
   wrapperCommands,
   writeCapableCommands,
@@ -226,9 +227,10 @@ function isFindExecWrite(segment: string): boolean {
 
   const execCmd = execMatch[1].toLowerCase();
   if (writeCapableCommands.has(execCmd)) {
-    // Check for write-indicating flags
-    if (execCmd === "sed" && /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/.test(segment)) return true;
-    if (execCmd === "perl" && /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/.test(segment)) return true;
+    // Only check flags after -exec <cmd> to avoid matching find's own flags
+    const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
+    if (execCmd === "sed" && /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/.test(afterExec)) return true;
+    if (execCmd === "perl" && /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/.test(afterExec)) return true;
     if (execCmd === "rm" || execCmd === "rmdir" || execCmd === "unlink") return true;
     if (execCmd === "mv" || execCmd === "cp") return true;
     if (execCmd === "chmod" || execCmd === "chown") return true;
@@ -294,7 +296,10 @@ async function isSegmentUnsafe(seg: string, cwd: string): Promise<boolean> {
     || (firstWord === "git" && isGitDangerous(seg))
     || (wrapperCommands.has(firstWord) && isWrapperRunningWrite(seg))
     || hasWriteRedirect(seg)
-    || (!trusted && !isLookupOrEcho && dangerousPatterns.some(({ pattern }) => pattern.test(seg)));
+    || (!trusted && !isLookupOrEcho && (
+      dangerousCommandPatterns.some(({ pattern }) => pattern.test(firstWord))
+      || dangerousContextPatterns.some(({ pattern }) => pattern.test(seg))
+    ));
 }
 
 // ── Path extraction (tree-sitter AST) ──
@@ -330,10 +335,15 @@ function analyzeSegmentRisk(text: string, ops: string[]): Risk | null {
   const cmd = args[0].toLowerCase();
   const rest = args.slice(1);
 
-  // Pipe to shell
-  if (ops.includes("|") && (args.includes("sh") || args.includes("bash") || args.includes("zsh") || args.includes("fish"))) {
-    reasons.push("pipe to a shell (possible remote code execution)");
-    severity = "high";
+  // Pipe to shell: check pipe targets (commands after |), not all args
+  if (ops.includes("|")) {
+    const parts = text.split("|").map(p => p.trim());
+    const pipeTargets = parts.slice(1);
+    const shellNames = new Set(["sh", "bash", "zsh", "fish"]);
+    if (pipeTargets.some(target => shellNames.has(getFirstWord(target)))) {
+      reasons.push("pipe to a shell (possible remote code execution)");
+      severity = "high";
+    }
   }
 
   // sudo
@@ -564,7 +574,16 @@ async function analyzeRisk(cmd: string, segments: { text: string; ops: string[] 
   }
 
   // Regex-based checks (safety net for patterns not caught by AST analysis)
-  for (const { pattern, label } of dangerousPatterns) {
+  // Command patterns: test against each segment's first word to avoid false positives in args
+  const cmdFirstWord = getFirstWord(cmd);
+  for (const { pattern, label } of dangerousCommandPatterns) {
+    if (pattern.test(cmdFirstWord) && !reasons.includes(label)) {
+      reasons.push(label);
+      if (!severity) severity = "medium";
+    }
+  }
+  // Context patterns: test against full command (need flags/args context)
+  for (const { pattern, label } of dangerousContextPatterns) {
     if (pattern.test(cmd) && !reasons.includes(label)) {
       reasons.push(label);
       if (!severity) severity = "medium";

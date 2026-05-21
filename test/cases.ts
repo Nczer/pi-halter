@@ -191,6 +191,8 @@ const cases: TestCase[] = [
   { cmd: "chown user:user file.txt", simple: false, unsafe: true, decision: "prompt", desc: "chown" },
   { cmd: "chown -R user:user .", simple: false, unsafe: true, decision: "prompt", desc: "chown -R" },
   { cmd: "dd if=/dev/zero of=/dev/sda", simple: false, unsafe: true, decision: "prompt", desc: "dd" },
+  { cmd: "dd of=/dev/sda", simple: false, unsafe: true, decision: "prompt", desc: "dd of= only (writes to raw device)" },
+  { cmd: "dd if=/dev/zero", simple: false, unsafe: true, decision: "prompt", desc: "dd if= only (reads from raw device)" },
   { cmd: "truncate -s 0 file.txt", simple: false, unsafe: true, decision: "prompt", desc: "truncate" },
   { cmd: "patch file.txt < patch.diff", simple: false, unsafe: true, decision: "prompt", desc: "patch" },
   { cmd: "install -m 644 src dst", simple: false, unsafe: true, decision: "prompt", desc: "install" },
@@ -316,6 +318,21 @@ const cases: TestCase[] = [
   { cmd: "true", simple: true, unsafe: false, decision: "auto-allow", desc: "true (no-op)" },
   { cmd: "false", simple: true, unsafe: false, decision: "auto-allow", desc: "false (no-op)" },
   { cmd: "test -f file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "test" },
+  // Dangerous command names in arguments — should NOT be flagged
+  { cmd: "grep rm file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "grep rm (rm is arg, not command)" },
+  { cmd: "cat file.txt | grep rm", simple: true, unsafe: false, decision: "auto-allow", desc: "cat | grep rm (rm is arg)" },
+  { cmd: "grep -rn 'rm' .", simple: true, unsafe: false, decision: "auto-allow", desc: "grep -rn rm (rm is search pattern)" },
+  { cmd: "sed -n /rm/p file.txt", simple: true, unsafe: false, desc: "sed /rm/p (rm in sed pattern; prompts because /rm/p looks like absolute path)" },
+  { cmd: "find . -name '*.rm'", simple: true, unsafe: false, decision: "auto-allow", desc: "find -name *.rm (rm in filename)" },
+  { cmd: "ps aux | grep python", simple: true, unsafe: false, decision: "auto-allow", desc: "ps | grep python (python is arg)" },
+  { cmd: "grep pkill", simple: true, unsafe: false, decision: "auto-allow", desc: "grep pkill (pkill is arg)" },
+  { cmd: "grep killall", simple: true, unsafe: false, decision: "auto-allow", desc: "grep killall (killall is arg)" },
+  { cmd: "cat | grep systemctl", simple: true, unsafe: false, decision: "auto-allow", desc: "cat | grep systemctl (systemctl is arg)" },
+  { cmd: "diff file1 file2", simple: true, unsafe: false, decision: "auto-allow", desc: "diff (safe, no dangerous pattern match)" },
+  // No false positive pipe-to-shell
+  { cmd: "echo bash | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "echo bash | cat (not actually pipe to shell)" },
+  { cmd: "grep fish file.txt | wc", simple: true, unsafe: false, decision: "auto-allow", desc: "grep fish | wc (not actually pipe to shell)" },
+  { cmd: "ps aux | grep bash", simple: true, unsafe: false, decision: "auto-allow", desc: "ps | grep bash (bash is search term, not pipe target)" },
 ];
 
 
