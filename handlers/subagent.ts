@@ -11,7 +11,8 @@ export async function handleSubagent(
   if (event.toolName !== "subagent") return;
 
   const agent = event.input.agent as string | undefined;
-  const tasks = event.input.tasks as Array<{ agent?: string }> | undefined;
+  const tasks = event.input.tasks as Array<{ agent?: string; paths?: string[]; task?: string }> | undefined;
+  const paths = event.input.paths as string[] | undefined;
   const agentNames: string[] = tasks
     ? tasks.map((t: { agent?: string }) => t.agent).filter((x): x is string => !!x)
     : agent
@@ -20,7 +21,19 @@ export async function handleSubagent(
 
   if (agentNames.length === 0) return;
 
-  const request: SubagentRequest = { type: "subagent", agentNames };
+  // For parallel mode, collect all paths from individual tasks
+  const mergedPaths = tasks
+    ? [...new Set((tasks as Array<{ paths?: string[] }>).flatMap(t => t.paths || []))]
+    : paths;
+
+  // Extract task description(s) for display
+  const task = agent
+    ? (event.input.task as string | undefined)
+    : tasks
+      ? tasks.map((t: { task?: string }) => t.task).filter(Boolean).join(" \n")
+      : undefined;
+
+  const request: SubagentRequest = { type: "subagent", agentNames, paths: mergedPaths, task };
   const decision = await decide(request, store);
 
   // Auto-allow: proceed without prompting

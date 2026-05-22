@@ -32,6 +32,8 @@ export interface FileRequest {
 export interface SubagentRequest {
   type: "subagent";
   agentNames: string[];
+  paths?: string[];
+  task?: string;
 }
 
 export interface McpRequest {
@@ -110,6 +112,8 @@ export interface SubagentPromptData {
   taskCount: number;
   agentNames: string[];
   hasWriteAccess: boolean;
+  paths?: string[];
+  task?: string;
 }
 
 export interface McpPromptData {
@@ -321,6 +325,8 @@ function decideSubagent(req: SubagentRequest, store: Store): Decision {
       taskCount: req.agentNames.length,
       agentNames: req.agentNames,
       hasWriteAccess,
+      paths: req.paths,
+      task: req.task,
     },
     allowRules: { subagentNames: req.agentNames },
   };
