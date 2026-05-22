@@ -55,8 +55,4 @@ export const dangerousContextPatterns: { pattern: RegExp; label: string }[] = [
   { pattern: /\bgit\s+clean\s+.*-[fdx]\b/i, label: "git clean (can delete untracked files)" },
 ];
 
-/** Combined list for backward compatibility and simple iteration (both categories). */
-export const dangerousPatterns: { pattern: RegExp; label: string }[] = [
-  ...dangerousCommandPatterns,
-  ...dangerousContextPatterns,
-];
+
