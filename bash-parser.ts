@@ -312,24 +312,16 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
         if (!child) continue;
         if (child.type === "|" || child.type === "|&") {
           ops.add(child.type);
-        } else if (child.type === "redirected_statement") {
-          cmdTexts.push(child.text.trim());
-          const redirectOps = detectOpsInNode(child);
-          for (const op of redirectOps) ops.add(op);
-        } else if (child.type === "command" || child.type === "file_redirect") {
+        } else if (child.type === "command") {
           cmdTexts.push(child.text.trim());
         } else {
-          // nested structure — recurse for commands
-          for (let j = 0; j < child.childCount; j++) {
-            const gc = child.child(j);
-            if (!gc) continue;
-            if (gc.type === "|" || gc.type === "|&") {
-              ops.add(gc.type);
-            } else if (gc.type === "redirected_statement") {
-              cmdTexts.push(gc.text.trim());
-            } else if (gc.type === "command" || gc.type === "file_redirect") {
-              cmdTexts.push(gc.text.trim());
-            }
+          // redirected_statement, subshell, etc. — recurse to extract commands
+          walk(child);
+          // Merge any newly added segments back into this pipeline segment
+          if (segments.length > 0) {
+            const last = segments.pop()!;
+            cmdTexts.push(last.text);
+            for (const op of last.ops) ops.add(op);
           }
         }
       }
@@ -350,8 +342,14 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
 
     // redirected_statement: group command + its redirects as one segment
     // (e.g. "tr 'a-z' 'A-Z' < file.txt" should be one segment, not two)
+    // Can also wrap list, pipeline, or loop constructs:
+    //   "rm a && ls b 2>/dev/null" → list + redirect
+    //   "cat a | grep b 2>/dev/null" → pipeline + redirect
+    //   "for f in a; do rm $f; done 2>/dev/null" → for_statement + redirect
     if (n.type === "redirected_statement") {
+      let hasCompoundChild = false;
       const cmdTexts: string[] = [];
+      const redirectTexts: string[] = [];
       const ops = new Set<string>();
       for (let i = 0; i < n.childCount; i++) {
         const child = n.child(i);
@@ -359,13 +357,23 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
         if (child.type === "command") {
           cmdTexts.push(child.text.trim());
         } else if (child.type === "file_redirect") {
-          cmdTexts.push(child.text.trim());
+          const redirText = child.text.trim();
+          cmdTexts.push(redirText);
+          redirectTexts.push(redirText);
           const redirectOps = detectOpsInNode(child);
           for (const op of redirectOps) ops.add(op);
+        } else {
+          // list, binary_expression, pipeline, for_statement, while_statement, if_statement, etc.
+          hasCompoundChild = true;
+          walk(child);
         }
       }
-      if (cmdTexts.length > 0) {
+      if (!hasCompoundChild && cmdTexts.length > 0) {
         segments.push({ text: cmdTexts.join(" "), ops: [...ops] });
+      } else if (hasCompoundChild && redirectTexts.length > 0 && segments.length > 0) {
+        // Propagate redirects to the last segment so hasWriteRedirect can detect them
+        segments[segments.length - 1].text += " " + redirectTexts.join(" ");
+        for (const op of ops) segments[segments.length - 1].ops.push(op);
       }
       return;
     }
