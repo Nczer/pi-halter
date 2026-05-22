@@ -29,7 +29,7 @@ export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
   if (tokens.length < 2) return false;
 
   const cmd = tokens[0].toLowerCase();
-  if (!/\b(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv)\b/i.test(cmd)) return false;
+  if (!/^(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv)/i.test(cmd)) return false;
 
   // Find the script file argument (first non-flag token that looks like a file)
   for (let i = 1; i < tokens.length; i++) {

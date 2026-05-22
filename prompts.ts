@@ -62,9 +62,10 @@ export async function twoTierAlwaysPrompt(
       continue;
     }
 
-    const tier2Body = tier2Everything.body +
-      "\n\n\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
-    const tier2 = await showSelect(ctx, tier2Everything.title, ["Always Yes", "Back"]);
+    const tier2Body = tier2Everything.body
+      ? tier2Everything.body + "\n\n\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts."
+      : "\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
+    const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Body, ["Always Yes", "Back"]);
     if (tier2 === "Always Yes") { onAlways(); return "always"; }
   }
 }

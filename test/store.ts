@@ -21,7 +21,6 @@ console.log("\n=== Store: Fresh state ===");
   assert(store.hasAllowedBash("ls") === false, "no bash allowed initially");
   assert(store.hasAllowedReadPath("/foo") === false, "no read path allowed initially");
   assert(store.hasAllowedWritePath("/foo") === false, "no write path allowed initially");
-  assert(store.hasAllowedSubagent("scout") === false, "no subagent allowed initially");
   assert(store.hasAllowedMcpServer("exa") === false, "no mcp allowed initially");
   assert(store.getLastAbort("ls") === null, "no aborts initially");
 }
@@ -71,15 +70,6 @@ console.log("\n=== Store: addAllowed (writePaths) ===");
   assert(store.hasAllowedWritePath("/tmp/other.txt") === false, "write path not allowed");
 }
 
-console.log("\n=== Store: addAllowed (subagentNames) ===");
-{
-  const store = createStore();
-  store.addAllowed({ subagentNames: ["scout", "worker"] });
-  assert(store.hasAllowedSubagent("scout") === true, "scout allowed");
-  assert(store.hasAllowedSubagent("worker") === true, "worker allowed");
-  assert(store.hasAllowedSubagent("researcher") === false, "researcher not allowed");
-}
-
 console.log("\n=== Store: addAllowed (mcpServers) ===");
 {
   const store = createStore();
@@ -98,7 +88,6 @@ console.log("\n=== Store: addAllowed (all at once) ===");
     writeDirs: ["/tmp"],
     readPaths: ["/a"],
     writePaths: ["/b"],
-    subagentNames: ["scout"],
     mcpServers: ["exa"],
   });
   assert(store.hasAllowedBash("ls") === true, "bash allowed");
@@ -106,7 +95,6 @@ console.log("\n=== Store: addAllowed (all at once) ===");
   assert(store.listAllowedWriteDirs().has("/tmp"), "write dir allowed");
   assert(store.hasAllowedReadPath("/a") === true, "read path allowed");
   assert(store.hasAllowedWritePath("/b") === true, "write path allowed");
-  assert(store.hasAllowedSubagent("scout") === true, "subagent allowed");
   assert(store.hasAllowedMcpServer("exa") === true, "mcp allowed");
 }
 
@@ -115,7 +103,6 @@ console.log("\n=== Store: addAllowed (partial — only some keys) ===");
   const store = createStore();
   store.addAllowed({ bashSigs: ["ls"] });
   assert(store.hasAllowedBash("ls") === true, "bash allowed");
-  assert(store.hasAllowedSubagent("scout") === false, "subagent still not allowed");
 }
 
 // ── Abort Tracking ──
@@ -178,7 +165,7 @@ console.log("\n=== Store: Prompt counter ===");
 console.log("\n=== Store: Reset ===");
 {
   const store = createStore();
-  store.addAllowed({ bashSigs: ["ls"], readDirs: ["/opt"], subagentNames: ["scout"] });
+  store.addAllowed({ bashSigs: ["ls"], readDirs: ["/opt"] });
   store.recordAbort("rm");
   store.incrementPromptCount();
 
@@ -189,7 +176,6 @@ console.log("\n=== Store: Reset ===");
   assert(store.listAllowedWriteDirs().size === 0, "write dirs cleared");
   assert(store.listAllowedReadPaths().size === 0, "read paths cleared");
   assert(store.listAllowedWritePaths().size === 0, "write paths cleared");
-  assert(store.hasAllowedSubagent("scout") === false, "subagent cleared");
   assert(store.hasAllowedMcpServer("exa") === false, "mcp cleared");
   assert(store.getLastAbort("rm") === null, "abort cleared");
   assert(store.incrementPromptCount().count === 1, "prompt count reset");

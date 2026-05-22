@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resetState, updateWidget } from "./permission-state";
-import { handleBash, handleSubagent, handleFile, handleMcp, handleMcpDirectTool } from "./handlers";
+import { handleBash, handleFile, handleMcp, handleMcpDirectTool } from "./handlers";
 import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
 
 // ── Main extension ──
@@ -41,7 +41,6 @@ export default function (pi: ExtensionAPI) {
     return await handleMcp(event, ctx)
       ?? await handleMcpDirectTool(event, ctx)
       ?? await handleBash(event, ctx)
-      ?? await handleSubagent(event, ctx)
       ?? await handleFile(event, ctx);
   });
 }

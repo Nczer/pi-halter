@@ -1,4 +1,4 @@
-import type { PromptDecision, BashPromptData, FilePromptData, SubagentPromptData, McpPromptData } from "./decision-engine";
+import type { PromptDecision, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
 
 // ── Output types (match twoTierAlwaysPrompt's expected inputs) ──
 
@@ -24,8 +24,6 @@ export function buildPrompt(decision: PromptDecision): BuiltPrompt {
       return buildBashPrompt(promptData, allowRules, includePathsOption);
     case "file":
       return buildFilePrompt(promptData, allowRules);
-    case "subagent":
-      return buildSubagentPrompt(promptData, allowRules);
     case "mcp":
       return buildMcpPrompt(promptData, allowRules);
   }
@@ -182,39 +180,6 @@ function buildFilePrompt(
     },
     includePathsOption: false,
     includeFileOption: true,
-  };
-}
-
-// ── Subagent prompt ──
-
-function buildSubagentPrompt(
-  data: SubagentPromptData,
-  _allowRules: { subagentNames?: string[] },
-): BuiltPrompt {
-  const { mode, taskCount, agentNames, hasWriteAccess, paths, task } = data;
-  const agentsDisplay = agentNames.length > 1 ? agentNames.join(", ") : agentNames[0];
-  const modeDisplay = mode === "parallel" ? `parallel (${taskCount} tasks)` : "single";
-  const writeWarning = hasWriteAccess
-    ? "\n\n\u26a0\ufe0f One or more agents can write files and execute commands."
-    : "";
-  const pathsDisplay = paths && paths.length > 0
-    ? `\n\nScoped paths:\n${paths.map(p => `  \u2022 ${p}`).join("\n")}`
-    : "";
-  const taskDisplay = task
-    ? `\n\nTask:${task.split("\n").map(l => `  ${l}`).join("\n")}`
-    : "";
-
-  return {
-    title: hasWriteAccess
-      ? `\u26a0\ufe0f Subagent`
-      : `Subagent`,
-    body: `Mode: ${modeDisplay}\nAgent${agentNames.length > 1 ? "s" : ""}: ${agentsDisplay}${writeWarning}${pathsDisplay}${taskDisplay}\n`,
-    tier2Everything: {
-      title: "Confirm Always Allow: Subagent spawning",
-      body: `"Always Yes" will auto-allow subagent spawning this session.\n\n"Back" returns to the previous prompt.`,
-    },
-    includePathsOption: false,
-    includeFileOption: false,
   };
 }
 

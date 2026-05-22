@@ -10,8 +10,6 @@ export interface Store {
   hasAllowedReadPath(path: string): boolean;
   /** Check if a file path is auto-allowed for write. */
   hasAllowedWritePath(path: string): boolean;
-  /** Check if a subagent name is auto-allowed. */
-  hasAllowedSubagent(name: string): boolean;
   /** Check if an MCP server is auto-allowed. */
   hasAllowedMcpServer(server: string): boolean;
   /** Add auto-allow rules in bulk. */
@@ -32,8 +30,6 @@ export interface Store {
   listAllowedReadPaths(): Set<string>;
   /** Get a copy of all auto-allowed write paths. */
   listAllowedWritePaths(): Set<string>;
-  /** Get a copy of all auto-allowed subagent names. */
-  listAllowedSubagent(): Set<string>;
   /** Get a copy of all auto-allowed MCP servers. */
   listAllowedMcpServers(): Set<string>;
   /** Reset all state (session shutdown). */
@@ -47,7 +43,6 @@ export interface AllowRules {
   writeDirs?: string[];
   readPaths?: string[];
   writePaths?: string[];
-  subagentNames?: string[];
   mcpServers?: string[];
 }
 
@@ -63,7 +58,6 @@ export function createStore(nowFn = Date.now): Store {
   const writeDirs = new Set<string>();
   const readPaths = new Set<string>();
   const writePaths = new Set<string>();
-  const subagents = new Set<string>();
   const mcpServers = new Set<string>();
   const aborted = new Map<string, number>();
   let pcount = 0;
@@ -72,7 +66,6 @@ export function createStore(nowFn = Date.now): Store {
     hasAllowedBash(s) { return bashSigs.has(s); },
     hasAllowedReadPath(p) { return readPaths.has(p); },
     hasAllowedWritePath(p) { return writePaths.has(p); },
-    hasAllowedSubagent(n) { return subagents.has(n); },
     hasAllowedMcpServer(s) { return mcpServers.has(s); },
 
     addAllowed(rules) {
@@ -81,7 +74,6 @@ export function createStore(nowFn = Date.now): Store {
       rules.writeDirs?.forEach(d => writeDirs.add(d));
       rules.readPaths?.forEach(p => readPaths.add(p));
       rules.writePaths?.forEach(p => writePaths.add(p));
-      rules.subagentNames?.forEach(n => subagents.add(n));
       rules.mcpServers?.forEach(s => mcpServers.add(s));
     },
 
@@ -103,7 +95,6 @@ export function createStore(nowFn = Date.now): Store {
     listAllowedWriteDirs() { return new Set(writeDirs); },
     listAllowedReadPaths() { return new Set(readPaths); },
     listAllowedWritePaths() { return new Set(writePaths); },
-    listAllowedSubagent() { return new Set(subagents); },
     listAllowedMcpServers() { return new Set(mcpServers); },
 
     incrementPromptCount() {
@@ -117,7 +108,6 @@ export function createStore(nowFn = Date.now): Store {
       writeDirs.clear();
       readPaths.clear();
       writePaths.clear();
-      subagents.clear();
       mcpServers.clear();
       aborted.clear();
       pcount = 0;
