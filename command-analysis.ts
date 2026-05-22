@@ -22,11 +22,6 @@ export interface CommandRisk {
   severity: Severity | null;
 }
 
-export interface ObfuscationResult {
-  detected: boolean;
-  techniques: string[];
-}
-
 /** Full analysis of a shell command — single source of truth for parsing, safety, and risk. */
 export interface CommandAnalysis {
   /** Raw segment strings, split on &&, ||, ;, |, etc. */
@@ -41,8 +36,6 @@ export interface CommandAnalysis {
   hasUnsafePattern: boolean;
   /** Detailed risk assessment from token-based and regex-based analysis. */
   risk: CommandRisk;
-  /** Obfuscation detection results. */
-  obfuscation: ObfuscationResult;
 }
 
 // ── Segment helpers (string-based, for signature extraction) ──
@@ -90,6 +83,23 @@ function hasDangerousPerlInPipeline(segment: string): boolean {
   });
 }
 
+/** Check if ANY command in a pipeline is a wrapper running a write-capable command. */
+function hasWrapperRunningWriteInPipeline(segment: string): boolean {
+  return splitPipeline(segment).some(part => {
+    const cmd = getFirstWord(part);
+    return wrapperCommands.has(cmd) && isWrapperRunningWrite(part);
+  });
+}
+
+/** Check if ANY command in a pipeline matches dangerous command/context patterns. */
+function hasDangerousCommandInPipeline(segment: string): boolean {
+  return splitPipeline(segment).some(part => {
+    const cmd = getFirstWord(part);
+    return dangerousCommandPatterns.some(({ pattern }) => pattern.test(cmd))
+      || dangerousContextPatterns.some(({ pattern }) => pattern.test(part));
+  });
+}
+
 /** Check if a git command is dangerous (rm, clean, reset --hard, push --force, etc.). */
 function isGitDangerous(segment: string): boolean {
   const args = segment.trim().split(/\s+/);
@@ -129,7 +139,9 @@ function getCommandSignature(segment: string): string {
 
 async function hasSubshell(cmd: string): Promise<boolean> {
   // Quick regex check for common patterns (fast path)
-  if (/\$\s*\(/.test(cmd) || /`/.test(cmd) || /<\s*\(/.test(cmd)) return true;
+  // Strip quoted strings first to avoid false positives inside single quotes
+  const stripped = stripQuotedStrings(cmd);
+  if (/\$\s*\(/.test(stripped) || /`/.test(stripped) || /<\s*\(/.test(stripped)) return true;
   // Full AST check for edge cases
   return hasSubshellAST(cmd);
 }
@@ -186,12 +198,18 @@ function isSegmentObfuscated(seg: string): boolean {
 function isWrapperRunningWrite(segment: string): boolean {
   const args = segment.trim().split(/\s+/);
   const firstWord = args[0].toLowerCase();
-  // Skip wrapper flags (-0, -r, -I, -n, etc.) and duration args (for timeout) to find the actual command
+  // Skip wrapper flags (-0, -r, -I, -n, etc.) and special args to find the actual command
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith("-")) continue; // skip flags
     // timeout has a duration argument before the command (e.g., "timeout 30 rm")
     if (firstWord === "timeout" && /^\d+(\.\d+)?(?:[smhd])?$/.test(arg)) continue;
+    // nice has numeric priority arg after -n (e.g., "nice -n 10 rm")
+    if (firstWord === "nice" && /^\d+$/.test(arg)) continue;
+    // ionice has numeric class/data args after -n, -c, -n (e.g., "ionice -n 7 rm")
+    if (firstWord === "ionice" && /^\d+$/.test(arg)) continue;
+    // env has VAR=value assignments before the command (e.g., "env PATH=/usr/bin rm")
+    if (firstWord === "env" && /=/.test(arg) && !arg.startsWith("/")) continue;
     const wrappedCmd = arg.toLowerCase();
     // Command itself writes
     if (writeCapableCommands.has(wrappedCmd)) {
@@ -264,7 +282,32 @@ async function isSimpleAllowedCommand(segment: string, cwd: string): Promise<boo
   if (hasDangerousPerlInPipeline(segment)) return false;
   if (firstWord === "git" && isGitDangerous(segment)) return false;
   if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment)) return false;
+  if (hasWrapperRunningWriteInPipeline(segment)) return false;
   if (hasWriteRedirect(segment)) return false;
+  // All pipeline stages must be simple allowed commands
+  if (!await areAllPipelineStagesSimple(segment, cwd)) return false;
+  return true;
+}
+
+/** Check that every stage in a pipeline is a simple allowed command. */
+async function areAllPipelineStagesSimple(segment: string, cwd: string): Promise<boolean> {
+  const stages = splitPipeline(segment);
+  if (stages.length <= 1) return true; // no pipeline, nothing extra to check
+  for (let i = 1; i < stages.length; i++) {
+    const stage = stages[i];
+    const stageCmd = getFirstWord(stage);
+    if (!allowedBashPatterns.some(p => p.test(stageCmd))) return false;
+    if (await hasSubshell(stage)) return false;
+    if (stageCmd === "find" && (dangerousFindFlags.test(stage) || isFindExecWrite(stage))) return false;
+    if (stageCmd === "sed" && dangerousSedFlags.test(stage)) return false;
+    if (stageCmd === "perl" && dangerousPerlFlags.test(stage)) return false;
+    if (stageCmd === "git" && isGitDangerous(stage)) return false;
+    if (wrapperCommands.has(stageCmd) && isWrapperRunningWrite(stage)) return false;
+    if (hasWriteRedirect(stage)) return false;
+    // Check dangerous patterns for this stage
+    if (dangerousCommandPatterns.some(({ pattern }) => pattern.test(stageCmd))) return false;
+    if (dangerousContextPatterns.some(({ pattern }) => pattern.test(stage))) return false;
+  }
   return true;
 }
 
@@ -295,10 +338,12 @@ async function isSegmentUnsafe(seg: string, cwd: string): Promise<boolean> {
     || hasDangerousPerlInPipeline(seg)
     || (firstWord === "git" && isGitDangerous(seg))
     || (wrapperCommands.has(firstWord) && isWrapperRunningWrite(seg))
+    || hasWrapperRunningWriteInPipeline(seg)
     || hasWriteRedirect(seg)
     || (!trusted && !isLookupOrEcho && (
       dangerousCommandPatterns.some(({ pattern }) => pattern.test(firstWord))
       || dangerousContextPatterns.some(({ pattern }) => pattern.test(seg))
+      || hasDangerousCommandInPipeline(seg)
     ));
 }
 
@@ -449,6 +494,7 @@ function analyzeSegmentRisk(text: string, ops: string[]): Risk | null {
     reasons.push(`${cmd} (disk/partition management)`);
   }
   if (cmd === "lsblk") {
+    severity = "medium";
     reasons.push("lsblk (disk listing)");
   }
   if (cmd === "cryptsetup") {
@@ -612,7 +658,6 @@ export async function analyzeCommand(cmd: string, cwd: string): Promise<CommandA
   const allSimple = (await Promise.all(segmentTexts.map(seg => isSimpleAllowedCommand(seg, cwd)))).every(Boolean);
   const hasUnsafe = (await Promise.all(segmentTexts.map(seg => isSegmentUnsafe(seg, cwd)))).some(Boolean);
   const risk = await analyzeRisk(cmd, astSegments);
-  const obfuscation = detectObfuscation(cmd);
 
-  return { segments: segmentTexts, signatures, paths, allSimple, hasUnsafePattern: hasUnsafe, risk, obfuscation };
+  return { segments: segmentTexts, signatures, paths, allSimple, hasUnsafePattern: hasUnsafe, risk };
 }

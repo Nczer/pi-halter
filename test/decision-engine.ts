@@ -1,9 +1,9 @@
 /**
- * Tests for the decision engine (file, subagent, mcp decisions).
+ * Tests for the decision engine (file, mcp decisions).
  * Run: npx tsx test/decision-engine.ts
  */
 
-import { decide, FileRequest, SubagentRequest, McpRequest } from "../decision-engine";
+import { decide, FileRequest, McpRequest } from "../decision-engine";
 import { createStore } from "../store";
 
 let passed = 0;
@@ -64,12 +64,12 @@ console.log("\n=== File: Write inside cwd (first time) ===");
 console.log("\n=== File: Write outside cwd ===");
 {
   const store = createStore();
-  const req: FileRequest = { type: "file", toolName: "write", filePath: "/tmp/out.txt", cwd };
+  const req: FileRequest = { type: "file", toolName: "write", filePath: "/var/log/out.txt", cwd };
   const d = await decide(req, store);
   assert(d.kind === "prompt", "write outside cwd prompts");
   if (d.kind === "prompt") {
     assert(d.promptData.isWriteOp === true, "write op flag set");
-    assert(d.promptData.outsideDir === "/tmp", "outside dir is /tmp");
+    assert(d.promptData.outsideDir === "/var/log", "outside dir is /var/log");
   }
 }
 
@@ -150,87 +150,13 @@ console.log("\n=== File: allowRules for write inside cwd ===");
 console.log("\n=== File: allowFileRules for write outside cwd ===");
 {
   const store = createStore();
-  const req: FileRequest = { type: "file", toolName: "write", filePath: "/tmp/out.txt", cwd };
+  const req: FileRequest = { type: "file", toolName: "write", filePath: "/var/log/out.txt", cwd };
   const d = await decide(req, store);
   if (d.kind === "prompt") {
     assert(d.allowFileRules !== undefined, "outside cwd has allowFileRules");
     if (d.allowFileRules) {
-      assert(d.allowFileRules.writePaths?.[0] === "/tmp/out.txt", "file rule targets specific file");
+      assert(d.allowFileRules.writePaths?.[0] === "/var/log/out.txt", "file rule targets specific file");
     }
-  }
-}
-
-// ── Subagent Decision Tests ──
-
-console.log("\n=== Subagent: Single scout (first time) ===");
-{
-  const store = createStore();
-  const req: SubagentRequest = { type: "subagent", agentNames: ["scout"] };
-  const d = await decide(req, store);
-  assert(d.kind === "prompt", "subagent first time prompts");
-  if (d.kind === "prompt") {
-    assert(d.promptData.type === "subagent", "prompt data is subagent type");
-    assert(d.promptData.mode === "single", "single mode");
-    assert(d.promptData.taskCount === 1, "task count is 1");
-    assert(d.promptData.hasWriteAccess === false, "scout has no write access");
-  }
-}
-
-console.log("\n=== Subagent: Single worker (first time) ===");
-{
-  const store = createStore();
-  const req: SubagentRequest = { type: "subagent", agentNames: ["worker"] };
-  const d = await decide(req, store);
-  assert(d.kind === "prompt", "worker first time prompts");
-  if (d.kind === "prompt") {
-    assert(d.promptData.hasWriteAccess === true, "worker has write access");
-  }
-}
-
-console.log("\n=== Subagent: Parallel (scout + worker) ===");
-{
-  const store = createStore();
-  const req: SubagentRequest = { type: "subagent", agentNames: ["scout", "worker"] };
-  const d = await decide(req, store);
-  assert(d.kind === "prompt", "parallel subagent prompts");
-  if (d.kind === "prompt") {
-    assert(d.promptData.mode === "parallel", "parallel mode");
-    assert(d.promptData.taskCount === 2, "task count is 2");
-    assert(d.promptData.hasWriteAccess === true, "has write access (worker)");
-  }
-}
-
-console.log("\n=== Subagent: Auto-allow after approval ===");
-{
-  const store = createStore();
-  store.addAllowed({ subagentNames: ["scout"] });
-  const req: SubagentRequest = { type: "subagent", agentNames: ["scout"] };
-  const d = await decide(req, store);
-  assert(d.kind === "auto-allow", "subagent auto-allowed after approval");
-}
-
-console.log("\n=== Subagent: Partial approval (parallel) ===");
-{
-  const store = createStore();
-  store.addAllowed({ subagentNames: ["scout"] });
-  const req: SubagentRequest = { type: "subagent", agentNames: ["scout", "worker"] };
-  const d = await decide(req, store);
-  assert(d.kind === "prompt", "parallel prompts if any agent not approved");
-}
-
-console.log("\n=== Subagent: With paths and task ===");
-{
-  const store = createStore();
-  const req: SubagentRequest = {
-    type: "subagent",
-    agentNames: ["scout"],
-    paths: ["/home/nczer/Projects/myapp"],
-    task: "find all TODO comments",
-  };
-  const d = await decide(req, store);
-  if (d.kind === "prompt") {
-    assert(d.promptData.paths?.[0] === "/home/nczer/Projects/myapp", "paths passed through");
-    assert(d.promptData.task === "find all TODO comments", "task passed through");
   }
 }
 

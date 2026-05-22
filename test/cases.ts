@@ -243,6 +243,10 @@ const cases: TestCase[] = [
   { cmd: "ruby script.rb", simple: false, unsafe: true, decision: "prompt", desc: "ruby (code exec)" },
   { cmd: "php script.php", simple: false, unsafe: true, decision: "prompt", desc: "php (code exec)" },
   { cmd: "lua script.lua", simple: false, unsafe: true, decision: "prompt", desc: "lua (code exec)" },
+  // Trusted scripts — auto-allow when standalone, prompt when compound
+  { cmd: "python3 ~/.pi/agent/skills/test.py", simple: true, unsafe: false, decision: "auto-allow", desc: "standalone trusted script auto-allows" },
+  { cmd: "node ~/.pi/agent/skills/test.js", simple: true, unsafe: false, decision: "auto-allow", desc: "standalone trusted node script auto-allows" },
+  { cmd: "python3.12 ~/.pi/agent/skills/test.py", simple: true, unsafe: false, decision: "auto-allow", desc: "python3.12 (versioned) trusted script auto-allows" },
 
   // ═══════════════════════════════════════════════════════════
   // subshells (always unsafe)
@@ -367,7 +371,7 @@ const cases: TestCase[] = [
   { cmd: "grep rm file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "grep rm (rm is arg, not command)" },
   { cmd: "cat file.txt | grep rm", simple: true, unsafe: false, decision: "auto-allow", desc: "cat | grep rm (rm is arg)" },
   { cmd: "grep -rn 'rm' .", simple: true, unsafe: false, decision: "auto-allow", desc: "grep -rn rm (rm is search pattern)" },
-  { cmd: "sed -n /rm/p file.txt", simple: true, unsafe: false, desc: "sed /rm/p (rm in sed pattern; prompts because /rm/p looks like absolute path)" },
+  { cmd: "sed -n /rm/p file.txt", simple: true, unsafe: false, decision: "prompt", desc: "sed /rm/p (rm in sed pattern; prompts because /rm/p looks like absolute path)" },
   { cmd: "find . -name '*.rm'", simple: true, unsafe: false, decision: "auto-allow", desc: "find -name *.rm (rm in filename)" },
   { cmd: "ps aux | grep python", simple: true, unsafe: false, decision: "auto-allow", desc: "ps | grep python (python is arg)" },
   { cmd: "grep pkill", simple: true, unsafe: false, decision: "auto-allow", desc: "grep pkill (pkill is arg)" },
@@ -378,6 +382,48 @@ const cases: TestCase[] = [
   { cmd: "echo bash | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "echo bash | cat (not actually pipe to shell)" },
   { cmd: "grep fish file.txt | wc", simple: true, unsafe: false, decision: "auto-allow", desc: "grep fish | wc (not actually pipe to shell)" },
   { cmd: "ps aux | grep bash", simple: true, unsafe: false, decision: "auto-allow", desc: "ps | grep bash (bash is search term, not pipe target)" },
+
+  // ═══════════════════════════════════════════════════════════
+  // rm -r / rm -rf — MUST NEVER auto-allow in any situation
+  // ═══════════════════════════════════════════════════════════
+  // Basic recursive deletes
+  { cmd: "rm -r dir", simple: false, unsafe: true, decision: "prompt", desc: "rm -r (recursive delete)" },
+  { cmd: "rm -R dir", simple: false, unsafe: true, decision: "prompt", desc: "rm -R (recursive delete uppercase)" },
+  { cmd: "rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "rm -rf (recursive force)" },
+  { cmd: "rm -fr dir", simple: false, unsafe: true, decision: "prompt", desc: "rm -fr (force recursive)" },
+  { cmd: "rm -r -f dir", simple: false, unsafe: true, decision: "prompt", desc: "rm -r -f (separate flags)" },
+  { cmd: "rm --recursive dir", simple: false, unsafe: true, decision: "prompt", desc: "rm --recursive (long form)" },
+  // Trusted script compound bypass (Bug #1)
+  { cmd: "python3 ~/.pi/agent/skills/test.py && rm -rf /tmp/data", simple: false, unsafe: true, decision: "prompt", desc: "trusted script && rm -rf (compound must NOT auto-allow)" },
+  { cmd: "python3 ~/.pi/agent/skills/test.py ; rm -r /tmp/data", simple: false, unsafe: true, decision: "prompt", desc: "trusted script ; rm -r (compound must NOT auto-allow)" },
+  { cmd: "node ~/.pi/agent/skills/test.js && rm -rf /tmp/data", simple: false, unsafe: true, decision: "prompt", desc: "trusted node script && rm -rf (compound must NOT auto-allow)" },
+  // Wrapper command bypass (Bug #2)
+  { cmd: "nice -n 10 rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "nice -n 10 rm -rf (wrapper must not skip numeric arg)" },
+  { cmd: "nice rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "nice rm -rf (wrapper)" },
+  { cmd: "env PATH=/usr/bin rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "env VAR=val rm -rf (wrapper must not treat var as cmd)" },
+  { cmd: "ionice -n 7 rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "ionice -n 7 rm -rf (wrapper must not skip numeric arg)" },
+  { cmd: "stdbuf -oL rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "stdbuf -oL rm -rf (wrapper)" },
+  { cmd: "xargs -0 rm -rf", simple: false, unsafe: true, decision: "prompt", desc: "xargs rm -rf (wrapper)" },
+  { cmd: "timeout 30 rm -r dir", simple: false, unsafe: true, decision: "prompt", desc: "timeout rm -r (wrapper)" },
+  // find -exec rm -r
+  { cmd: "find . -exec rm -rf {} \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec rm -rf" },
+  { cmd: "find . -exec rm -r {} \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec rm -r" },
+  // Subshell with rm -r
+  { cmd: "(rm -rf /tmp/data)", simple: false, unsafe: true, decision: "prompt", desc: "subshell rm -rf" },
+  { cmd: "(ls && rm -r dir)", simple: false, unsafe: true, decision: "prompt", desc: "subshell ls && rm -r" },
+  // rm -r with redirects
+  { cmd: "rm -rf dir 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "rm -rf 2>/dev/null (redirect doesn't hide unsafe)" },
+  { cmd: "rm -r dir >/dev/null 2>&1", simple: false, unsafe: true, decision: "prompt", desc: "rm -r with multiple redirects" },
+  // rm -r in pipelines
+  { cmd: "echo dir | xargs rm -rf", simple: false, unsafe: true, decision: "prompt", desc: "echo | xargs rm -rf (pipeline)" },
+  { cmd: "ls | rm -rf", simple: false, unsafe: true, decision: "prompt", desc: "ls | rm -rf (pipeline)" },
+  // Quoted rm -r in echo/printf — these ARE safe (just strings)
+  { cmd: "echo 'rm -rf /'", simple: true, unsafe: false, decision: "auto-allow", desc: "echo with rm -rf in single quotes (safe string)" },
+  { cmd: "echo \"rm -rf /\"", simple: true, unsafe: false, decision: "auto-allow", desc: "echo with rm -rf in double quotes (safe string)" },
+  { cmd: "printf '%s' 'rm -rf /tmp'", simple: true, unsafe: false, decision: "auto-allow", desc: "printf with rm -rf in quotes (safe string)" },
+  // rm -r with outside cwd paths
+  { cmd: "rm -rf /etc/config", simple: false, unsafe: true, decision: "prompt", desc: "rm -rf outside cwd (double prompt: unsafe + path)" },
+  { cmd: "rm -r /var/log/old", simple: false, unsafe: true, decision: "prompt", desc: "rm -r outside cwd" },
 ];
 
 

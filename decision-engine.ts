@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
-import { ABORT_REMEMBER_MS, allowedBashPatterns, isTrustedScriptCommand } from "./config";
+import { ABORT_REMEMBER_MS, allowedBashPatterns } from "./config";
 import { analyzeCommand } from "./command-analysis";
 import {
   resolvePathReal,
@@ -8,6 +8,7 @@ import {
   isInsideCwd,
   isInsideAutoAllowedDir,
   isAllowedReadPath,
+  isAllowedWritePath,
   isProjectPiPath,
   isPathDenied,
   getOutsideCwdPaths,
@@ -29,13 +30,6 @@ export interface FileRequest {
   cwd: string;
 }
 
-export interface SubagentRequest {
-  type: "subagent";
-  agentNames: string[];
-  paths?: string[];
-  task?: string;
-}
-
 export interface McpRequest {
   type: "mcp";
   server: string;
@@ -44,7 +38,7 @@ export interface McpRequest {
   argsPreview?: string;
 }
 
-type PermissionRequest = BashRequest | FileRequest | SubagentRequest | McpRequest;
+type PermissionRequest = BashRequest | FileRequest | McpRequest;
 
 // ── Decision types (discriminated union) ──
 
@@ -106,16 +100,6 @@ export interface FilePromptData {
   symlinkHint: string | null; // e.g. "/home/user/data → /mnt/storage"
 }
 
-export interface SubagentPromptData {
-  type: "subagent";
-  mode: "single" | "parallel";
-  taskCount: number;
-  agentNames: string[];
-  hasWriteAccess: boolean;
-  paths?: string[];
-  task?: string;
-}
-
 export interface McpPromptData {
   type: "mcp";
   server: string;
@@ -125,7 +109,7 @@ export interface McpPromptData {
   argsPreview?: string;
 }
 
-export type PromptData = BashPromptData | FilePromptData | SubagentPromptData | McpPromptData;
+export type PromptData = BashPromptData | FilePromptData | McpPromptData;
 
 // ── Decision engine ──
 
@@ -142,8 +126,6 @@ export async function decide(request: PermissionRequest, store: Store): Promise<
       return decideBash(request, store);
     case "file":
       return decideFile(request, store);
-    case "subagent":
-      return decideSubagent(request, store);
     case "mcp":
       return decideMcp(request, store);
   }
@@ -183,13 +165,6 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
     if (!analysis.hasUnsafePattern && outsidePaths.length === 0) {
       return { kind: "auto-allow" };
     }
-  }
-
-  // Auto-allow: command has at least one trusted script segment and no outside paths
-  // (covers compound commands like `source venv/bin/activate && python3 script.py`)
-  const hasTrustedScript = analysis.segments.some(seg => isTrustedScriptCommand(seg, req.cwd));
-  if (hasTrustedScript && outsidePaths.length === 0) {
-    return { kind: "auto-allow" };
   }
 
   // For directories, use the path itself; for files, use the parent directory.
@@ -272,6 +247,7 @@ function decideFile(req: FileRequest, store: Store): Decision {
     return { kind: "auto-allow" };
   }
   if (req.toolName === "read" && isAllowedReadPath(resolved)) return { kind: "auto-allow" };
+  if (req.toolName !== "read" && isAllowedWritePath(resolved)) return { kind: "auto-allow" };
   if (req.toolName === "read" && isInsideCwd(resolved, req.cwd)) return { kind: "auto-allow" };
 
   const deniedResult = isPathDenied(req.filePath, req.cwd);
@@ -306,30 +282,6 @@ function decideFile(req: FileRequest, store: Store): Decision {
     : (isWriteOp ? { writePaths: [resolved] } : { readPaths: [resolved] });
 
   return { kind: "prompt", promptData, allowRules, allowFileRules };
-}
-
-// ── Subagent decision ──
-
-function decideSubagent(req: SubagentRequest, store: Store): Decision {
-  if (req.agentNames.every(name => store.hasAllowedSubagent(name))) {
-    return { kind: "auto-allow" };
-  }
-
-  const hasWriteAccess = req.agentNames.some(name => name === "worker");
-
-  return {
-    kind: "prompt",
-    promptData: {
-      type: "subagent",
-      mode: req.agentNames.length > 1 ? "parallel" : "single",
-      taskCount: req.agentNames.length,
-      agentNames: req.agentNames,
-      hasWriteAccess,
-      paths: req.paths,
-      task: req.task,
-    },
-    allowRules: { subagentNames: req.agentNames },
-  };
 }
 
 // ── MCP decision ──────────────────────────────────────────────────────────

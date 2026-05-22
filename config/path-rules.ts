@@ -11,6 +11,11 @@ export const allowedReadPaths: string[] = [
   os.tmpdir(),
 ];
 
+/** Directories always allowed for write/edit access. */
+export const allowedWritePaths: string[] = [
+  os.tmpdir(),
+];
+
 /** File/directory names that are always denied (credentials, secrets, caches). */
 export const deniedPaths: string[] = [
   ".env", ".env.local",
