@@ -250,6 +250,9 @@ const cases: TestCase[] = [
   { cmd: "$(cat /etc/passwd)", simple: false, unsafe: true, decision: "prompt", desc: "command substitution" },
   { cmd: "`whoami`", simple: false, unsafe: true, decision: "prompt", desc: "backtick substitution" },
   { cmd: "cat <(ls)", simple: false, unsafe: true, decision: "prompt", desc: "process substitution" },
+  { cmd: "(rm a && ls b) | cat", simple: false, unsafe: true, decision: "prompt", desc: "subshell with rm in pipeline (subshell not dropped)" },
+  { cmd: "(ls a && ls b) | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "subshell with safe cmds in pipeline (segments extracted)" },
+  { cmd: "(rm a && ls b 2>/dev/null) | cat", simple: false, unsafe: true, decision: "prompt", desc: "subshell with redirect in pipeline (redirect propagated)" },
 
   // ═══════════════════════════════════════════════════════════
   // write redirects
@@ -314,6 +317,40 @@ const cases: TestCase[] = [
   { cmd: "sed 's/a/b/' /etc/hosts", simple: true, unsafe: false, decision: "prompt", desc: "read (sed stdout), outside cwd" },
   { cmd: "sed -i s/a/b/ /etc/hosts", simple: false, unsafe: true, decision: "prompt", desc: "write (sed -i), outside cwd" },
   { cmd: "grep pattern /var/log/syslog", simple: true, unsafe: false, decision: "prompt", desc: "grep, outside cwd" },
+
+  // ═══════════════════════════════════════════════════════════
+  // compound commands with trailing redirects (redirected_statement wraps list/pipeline/loop)
+  // regression: redirected_statement handler must recurse into compound children
+  // ═══════════════════════════════════════════════════════════
+  { cmd: "rm a && ls b 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "&& chain with trailing 2>/dev/null (unsafe cmd not dropped)" },
+  { cmd: "rm a && rmdir b 2>/dev/null; echo done", simple: false, unsafe: true, decision: "prompt", desc: "rm && rmdir 2>/dev/null; echo (all segments present)" },
+  { cmd: "ls a && ls b 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "&& chain safe cmds with trailing 2>/dev/null" },
+  { cmd: "ls a || ls b 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "|| chain with trailing 2>/dev/null" },
+  { cmd: "ls a; ls b 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "; chain with trailing 2>/dev/null" },
+  { cmd: "rm a 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "single rm with 2>/dev/null" },
+  { cmd: "rmdir a 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "single rmdir with 2>/dev/null" },
+  { cmd: "cat a && rm b 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "safe && unsafe with trailing redirect" },
+  { cmd: "rm a && cat b 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "unsafe && safe with trailing redirect" },
+  { cmd: "rm a && rm b 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "unsafe && unsafe with trailing redirect" },
+  { cmd: "ls a && ls b && ls c 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "triple safe && with trailing redirect" },
+  { cmd: "ls a && rm b && ls c 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "safe && unsafe && safe with trailing redirect" },
+  { cmd: "cat a 2>/dev/null && ls b", simple: true, unsafe: false, decision: "auto-allow", desc: "single redirect + && chain" },
+  { cmd: "rm a && ls b >/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "&& chain with >/dev/null" },
+  { cmd: "rm a && ls b &>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "&& chain with &>/dev/null" },
+  { cmd: "rm a && ls b 2>&1", simple: false, unsafe: true, decision: "prompt", desc: "&& chain with 2>&1 (fd dup, safe redirect but unsafe cmd)" },
+  { cmd: "echo a && rm b 2>/dev/null; echo done", simple: false, unsafe: true, decision: "prompt", desc: "echo && rm 2>/dev/null; echo (real-world pattern)" },
+  { cmd: "mkdir -p a && rm b 2>/dev/null; echo done", simple: false, unsafe: true, decision: "prompt", desc: "mkdir && rm 2>/dev/null; echo" },
+  // pipeline with trailing redirect
+  { cmd: "cat a | grep b 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "pipeline with trailing 2>/dev/null (pipeline not dropped)" },
+  { cmd: "cat a | grep rm 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "pipeline with rm in arg + redirect (no false positive)" },
+  { cmd: "cat a | sed -i s/x/y/ 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "pipeline to sed -i with redirect (unsafe not dropped)" },
+  // loop constructs with trailing redirect
+  { cmd: "for f in a b; do rm $f; done 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "for loop with redirect (loop body not dropped)" },
+  { cmd: "while true; do ls; done 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "while loop with redirect (segments: true, ls — both simple)" },
+  { cmd: "if true; then rm a; fi 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "if statement with redirect (body not dropped)" },
+  // multiple redirects on compound
+  { cmd: "rm a && ls b > out 2>&1", simple: false, unsafe: true, decision: "prompt", desc: "&& chain with multiple redirects" },
+  { cmd: "ls a && ls b > out 2>&1", simple: false, unsafe: true, decision: "prompt", desc: "safe && chain with write redirect (prompts on redirect)" },
 
   // ═══════════════════════════════════════════════════════════
   // false positive defenses
