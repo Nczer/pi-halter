@@ -6,10 +6,6 @@ import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "./config";
 export interface Store {
   /** Check if a bash command signature is auto-allowed. */
   hasAllowedBash(signature: string): boolean;
-  /** Check if a directory is auto-allowed for read. */
-  hasAllowedReadDir(dir: string): boolean;
-  /** Check if a directory is auto-allowed for write. */
-  hasAllowedWriteDir(dir: string): boolean;
   /** Check if a file path is auto-allowed for read. */
   hasAllowedReadPath(path: string): boolean;
   /** Check if a file path is auto-allowed for write. */
@@ -74,8 +70,6 @@ export function createStore(nowFn = Date.now): Store {
 
   return {
     hasAllowedBash(s) { return bashSigs.has(s); },
-    hasAllowedReadDir(d) { return readDirs.has(d); },
-    hasAllowedWriteDir(d) { return writeDirs.has(d); },
     hasAllowedReadPath(p) { return readPaths.has(p); },
     hasAllowedWritePath(p) { return writePaths.has(p); },
     hasAllowedSubagent(n) { return subagents.has(n); },
