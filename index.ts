@@ -5,7 +5,7 @@ import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
 
 // ── Main extension ──
 
-export default function (pi: ExtensionAPI) {
+export default function permissionExtension(pi: ExtensionAPI) {
   // ── Session shutdown ──
   pi.on("session_shutdown", async (_event, ctx) => {
     resetState();
