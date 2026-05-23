@@ -45,13 +45,14 @@ function hasUsefulObjectContent(value: unknown): boolean {
 export function formatMcpProxyToolCallLines(
   args: McpProxyToolCallInput,
   maxInputChars = DEFAULT_MAX_CALL_INPUT_CHARS,
+  includeArgs = true,
 ): string[] {
   if (args.action === "ui-messages") return [`mcp ${args.action}`];
 
   if (args.tool) {
     const target = args.server ? `${args.tool} @ ${args.server}` : args.tool;
     const lines = [`mcp call ${target}`];
-    if (args.args) lines.push(formatJsonish(args.args, maxInputChars));
+    if (includeArgs && args.args) lines.push(formatJsonish(args.args, maxInputChars));
     return lines;
   }
 
@@ -76,8 +77,10 @@ export function formatMcpDirectToolCallLines(
   displayName: string,
   args: Record<string, unknown>,
   maxInputChars = DEFAULT_MAX_CALL_INPUT_CHARS,
+  includeArgs = true,
 ): string[] {
   if (!hasUsefulObjectContent(args)) return [displayName];
+  if (!includeArgs) return [displayName];
   return [displayName, formatJsonish(args, maxInputChars)];
 }
 
