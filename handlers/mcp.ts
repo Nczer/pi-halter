@@ -4,6 +4,7 @@ import type { McpRequest } from "../decision-engine";
 import { decide } from "../decision-engine";
 import { showPrompt } from "../prompt-flow";
 import { store } from "../store";
+import { formatMcpProxyToolCallLines, formatMcpDirectToolCallLines, buildArgsPreview, McpProxyToolCallInput } from "../mcp-format";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -161,42 +162,7 @@ function loadDirectToolMap(): Map<string, { server: string; originalName: string
   return map;
 }
 
-// ── Argument preview ───────────────────────────────────────────────────
-
-/**
- * Build a human-readable preview of tool arguments for permission prompts.
- */
-function buildArgsPreview(params: Record<string, unknown>): string | undefined {
-  // For proxy tool calls, args come as a JSON string
-  const argsParam = typeof params.args === "string" ? params.args : null;
-  if (argsParam) {
-    try {
-      const parsed = JSON.parse(argsParam);
-      const entries = Object.entries(parsed as Record<string, unknown>).slice(0, 5);
-      let preview = entries.map(([k, v]) =>
-        `${k}: ${typeof v === "string" ? v.slice(0, 80) : JSON.stringify(v).slice(0, 80)}`,
-      ).join(", ");
-      if (Object.keys(parsed).length > 5) preview += ", ...";
-      return preview;
-    } catch {
-      return argsParam.slice(0, 120);
-    }
-  }
-
-  // For direct tool calls, params ARE the arguments
-  const meaningfulKeys = Object.keys(params).filter(k =>
-    typeof params[k] !== "undefined" && params[k] !== null && params[k] !== "",
-  );
-  if (meaningfulKeys.length === 0) return undefined;
-
-  const entries = meaningfulKeys.slice(0, 5).map(k => {
-    const v = params[k];
-    return `${k}: ${typeof v === "string" ? v.slice(0, 80) : JSON.stringify(v).slice(0, 80)}`;
-  });
-  let preview = entries.join(", ");
-  if (meaningfulKeys.length > 5) preview += ", ...";
-  return preview;
-}
+// ── Argument preview delegated to mcp-format.ts ────────────────────────
 
 // ── Proxy tool handling ────────────────────────────────────────────────
 
@@ -319,6 +285,7 @@ export async function handleMcp(
   // Only tool calls need permission
   if (op !== "call") return;
 
+  const callLabel = formatMcpProxyToolCallLines(params as McpProxyToolCallInput).join(": ");
   const argsPreview = buildArgsPreview(params);
 
   // Resolve server from tool name if not explicitly provided
@@ -332,14 +299,14 @@ export async function handleMcp(
 
   return await checkMcpPermission(
     resolvedServer,
-    tool ?? "unknown",
+    callLabel,
     argsPreview,
     ctx,
   );
 }
 
 /**
- * Handle direct MCP tool calls (e.g., exa_web_search_exa, context7_...).
+ * Handle direct MCP tool calls (e.g., exa_web_search_exa, context7_...);
  * These are MCP tools registered as individual pi tools, bypassing the proxy.
  * Detects direct tools by matching tool name against known MCP server names.
  */
@@ -356,11 +323,12 @@ export async function handleMcpDirectTool(
   if (!resolvedServer) return;
 
   const params = event.input ?? {};
+  const callLabel = formatMcpDirectToolCallLines(toolName, params).join(": ");
   const argsPreview = buildArgsPreview(params);
 
   return await checkMcpPermission(
     resolvedServer,
-    toolName,
+    callLabel,
     argsPreview,
     ctx,
   );

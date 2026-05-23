@@ -190,11 +190,14 @@ function buildMcpPrompt(
   _allowRules: { mcpServers?: string[] },
 ): BuiltPrompt {
   const { server, tool, op, argsPreview } = data;
-  const toolDisplay = tool.includes(":") ? tool : `${server}:${tool}`;
+
+  // tool is now a formatted call label (e.g. "mcp call foo @ server" or "tool_name")
+  const isCallLabel = tool.startsWith("mcp ") || tool.includes(": ");
+  const toolDisplay = isCallLabel ? tool : `${server}:${tool}`;
 
   let body = `Server: ${server}\nTool: ${toolDisplay}\nOperation: ${op}`;
   if (argsPreview) {
-    body += `\nArguments: ${argsPreview}`;
+    body += `\nArguments:\n${argsPreview}`;
   }
   body += `\n\n⚠️ This MCP tool will be called through an external server.\n`;
 
