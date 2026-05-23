@@ -323,9 +323,15 @@ export async function handleMcp(
 
   // Resolve server from tool name if not explicitly provided
   const resolvedServer = resolveServerFromToolName(tool ?? "", server);
+  if (!resolvedServer) {
+    return {
+      block: true,
+      reason: `[Permission Policy] Could not resolve MCP server for tool '${tool ?? "unknown"}'. Refusing to proceed with unresolvable server identifier. Specify the server explicitly.`,
+    };
+  }
 
   return await checkMcpPermission(
-    resolvedServer ?? "unknown",
+    resolvedServer,
     tool ?? "unknown",
     argsPreview,
     ctx,

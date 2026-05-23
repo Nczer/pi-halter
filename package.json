@@ -3,9 +3,15 @@
   "version": "3.7.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
   "dependencies": {
     "tree-sitter-bash": "^0.25.1",
     "web-tree-sitter": "^0.26.8"
+  },
+  "devDependencies": {
+    "vitest": "*"
   },
   "pi": {
     "extensions": ["./index.ts"]

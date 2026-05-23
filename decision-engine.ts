@@ -234,6 +234,12 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
 function decideFile(req: FileRequest, store: Store): Decision {
   const resolved = resolvePathReal(expandTilde(req.filePath), req.cwd);
 
+  // Denied paths block everything — check before any auto-allow
+  const deniedResult = isPathDenied(req.filePath, req.cwd);
+  if (deniedResult.denied) {
+    return { kind: "block", reason: `Blocked: '${deniedResult.matchedRule}' is a denied path (credentials/secrets)` };
+  }
+
   // Auto-allow checks
   if (isProjectPiPath(req.filePath, req.cwd)) return { kind: "auto-allow" };
   if (req.toolName === "read" && store.hasAllowedReadPath(resolved)) return { kind: "auto-allow" };
@@ -249,8 +255,6 @@ function decideFile(req: FileRequest, store: Store): Decision {
   if (req.toolName === "read" && isAllowedReadPath(resolved)) return { kind: "auto-allow" };
   if (req.toolName !== "read" && isAllowedWritePath(resolved)) return { kind: "auto-allow" };
   if (req.toolName === "read" && isInsideCwd(resolved, req.cwd)) return { kind: "auto-allow" };
-
-  const deniedResult = isPathDenied(req.filePath, req.cwd);
   const action = req.toolName.charAt(0).toUpperCase() + req.toolName.slice(1);
   const isWriteOp = req.toolName !== "read";
 
@@ -306,6 +310,14 @@ function decideMcp(req: McpRequest, store: Store): Decision {
   // Try to extract server from tool name if not explicitly provided
   const toolServer = parseServerFromTool(req.tool);
   const effectiveServer = toolServer ?? req.server;
+
+  // Never allow "unknown" servers — they would auto-allow all unresolvable tools
+  if (effectiveServer === "unknown") {
+    return {
+      kind: "block",
+      reason: `Blocked: cannot resolve MCP server for tool '${req.tool}'. Refusing unresolvable server identifier.`,
+    };
+  }
 
   return {
     kind: "prompt",
