@@ -12,18 +12,18 @@ import {
 } from "./config";
 import { extractPathsFromBash, hasSubshell as hasSubshellAST, extractSegments as extractSegmentsAST } from "./bash-parser";
 
-// ── Public types ──
+// ── Internal types ──
 
-export type Severity = "high" | "medium";
+type Severity = "high" | "medium";
 
-export interface CommandRisk {
+interface CommandRisk {
   dangerous: boolean;
   reasons: string[];
   severity: Severity | null;
 }
 
 /** Full analysis of a shell command — single source of truth for parsing, safety, and risk. */
-export interface CommandAnalysis {
+interface CommandAnalysis {
   /** Raw segment strings, split on &&, ||, ;, |, etc. */
   segments: string[];
   /** Command signatures for auto-allow matching (e.g. "git -R", "ls"). */
@@ -167,7 +167,7 @@ function hasWriteRedirect(cmd: string): boolean {
   return false;
 }
 
-function detectObfuscation(cmd: string): ObfuscationResult {
+function detectObfuscation(cmd: string): { detected: boolean; techniques: string[] } {
   const techniques: string[] = [];
   if (/\$\{!/.test(cmd) || /\$[A-Z_]+\s/.test(cmd)) {
     techniques.push("variable indirection");

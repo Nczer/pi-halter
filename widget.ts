@@ -2,6 +2,21 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { store } from "./store";
 
+// ── Path deduplication ──
+
+/** Remove paths that are sub-paths of another entry in the same list. */
+function filterSubPaths(paths: string[]): string[] {
+  const sorted = [...paths].sort((a, b) => a.length - b.length);
+  const result: string[] = [];
+  for (const p of sorted) {
+    const isSubPath = result.some(parent => p.startsWith(parent.endsWith('/') ? parent : parent + '/'));
+    if (!isSubPath) {
+      result.push(p);
+    }
+  }
+  return result;
+}
+
 // ── Widget rendering ──
 
 /** Group command signature variants for compact display (e.g. "git[-m, -am]"). */
@@ -38,10 +53,10 @@ function groupCommandVariants(items: string[]): string[] {
  */
 export function updateWidget(ctx: ExtensionContext): void {
   const bashItems = [...store.listAllowedBash()];
-  const readPathItems = [...store.listAllowedReadPaths()];
-  const writePathItems = [...store.listAllowedWritePaths()];
-  const readDirItems = [...store.listAllowedReadDirs()];
-  const writeDirItems = [...store.listAllowedWriteDirs()];
+  const readPathItems = filterSubPaths([...store.listAllowedReadPaths()]);
+  const writePathItems = filterSubPaths([...store.listAllowedWritePaths()]);
+  const readDirItems = filterSubPaths([...store.listAllowedReadDirs()]);
+  const writeDirItems = filterSubPaths([...store.listAllowedWriteDirs()]);
   const mcpServerItems = [...store.listAllowedMcpServers()];
 
   if (bashItems.length === 0 && readPathItems.length === 0 && writePathItems.length === 0 && readDirItems.length === 0 && writeDirItems.length === 0 && mcpServerItems.length === 0) {

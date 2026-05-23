@@ -4,7 +4,7 @@ import { store } from "./store";
 import { showSelect, showReasonEditor } from "./selector";
 
 /** User's response to a two-tier prompt. */
-export type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | { kind: "no"; reason: string };
+type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | { kind: "no"; reason: string };
 
 /**
  * Two-tier "always" confirmation flow.

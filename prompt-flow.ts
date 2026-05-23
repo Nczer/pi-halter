@@ -6,7 +6,7 @@ import { twoTierAlwaysPrompt } from "./prompts";
 import { updateWidget } from "./widget";
 
 /** Result of showing a permission prompt to the user. */
-export interface PromptFlowResult {
+interface PromptFlowResult {
   /** User confirmed (yes or always). */
   allowed: boolean;
   /** Optional rejection reason from user. */
