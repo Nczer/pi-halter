@@ -285,7 +285,7 @@ export async function handleMcp(
   // Only tool calls need permission
   if (op !== "call") return;
 
-  const callLabel = formatMcpProxyToolCallLines(params as McpProxyToolCallInput).join(": ");
+  const callLabel = formatMcpProxyToolCallLines(params as McpProxyToolCallInput, 1500, false).join(": ");
   const argsPreview = buildArgsPreview(params);
 
   // Resolve server from tool name if not explicitly provided
@@ -323,7 +323,7 @@ export async function handleMcpDirectTool(
   if (!resolvedServer) return;
 
   const params = event.input ?? {};
-  const callLabel = formatMcpDirectToolCallLines(toolName, params).join(": ");
+  const callLabel = formatMcpDirectToolCallLines(toolName, params, 1500, false).join(": ");
   const argsPreview = buildArgsPreview(params);
 
   return await checkMcpPermission(
