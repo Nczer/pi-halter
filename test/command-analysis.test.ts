@@ -1,3 +1,12 @@
+/**
+ * Command analysis unit tests.
+ *
+ * Maps to governing principles (see cases.test.ts):
+ * - allSimple → principle 1 (write), principle 3 (code exec)
+ * - hasUnsafePattern → principle 5 (always-prompt patterns)
+ * - paths → principle 4 (outside cwd)
+ */
+
 import { describe, expect, it } from "vitest";
 import { analyzeCommand, type CommandAnalysis } from "../command-analysis";
 

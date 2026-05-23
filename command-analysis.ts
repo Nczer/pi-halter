@@ -141,7 +141,7 @@ async function hasSubshell(cmd: string): Promise<boolean> {
   // Quick regex check for common patterns (fast path)
   // Strip quoted strings first to avoid false positives inside single quotes
   const stripped = stripQuotedStrings(cmd);
-  if (/\$\s*\(/.test(stripped) || /`/.test(stripped) || /<\s*\(/.test(stripped)) return true;
+  if (/\$\s*\((?!\s*\()/m.test(stripped) || /`/.test(stripped) || /<\s*\(/.test(stripped)) return true;
   // Full AST check for edge cases
   return hasSubshellAST(cmd);
 }
