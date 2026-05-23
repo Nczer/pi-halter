@@ -1,3 +1,14 @@
+/**
+ * Decision engine tests — file and MCP requests.
+ *
+ * Governing principles (see cases.test.ts for full bash matrix):
+ *   1. Write → prompt (mkdir/touch are safe creation, auto-allow)
+ *   2. Read inside cwd → auto-allow
+ *   3. Code execution → prompt (unless trusted script)
+ *   4. Outside cwd → prompt first time, remembered → auto-allow
+ *   5. Unsafe patterns → always prompt (DSP bypasses)
+ */
+
 import { describe, expect, it } from "vitest";
 import { decide, FileRequest, McpRequest } from "../decision-engine";
 import { createStore } from "../store";

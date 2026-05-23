@@ -344,8 +344,18 @@ const cases: TestCase[] = [
 	{ cmd: "cat a | sed -i s/x/y/ 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "pipeline to sed -i with redirect (unsafe not dropped)" },
 	// loop constructs with trailing redirect
 	{ cmd: "for f in a b; do rm $f; done 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "for loop with redirect (loop body not dropped)" },
+	{ cmd: "for f in a b; do echo $f; rm $f; done 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "for loop: safe cmd then unsafe (mixed body not auto-allowed)" },
+	{ cmd: "for f in a b; do rm $f; echo $f; done 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "for loop: unsafe cmd then safe (mixed body not auto-allowed)" },
+	{ cmd: "for f in a b c; do echo start; cat $f; rm $f; echo done; done", simple: false, unsafe: true, decision: "prompt", desc: "for loop: multiple safe + one unsafe (any unsafe kills auto-allow)" },
+	{ cmd: "for f in a b; do cat $f; done", simple: true, unsafe: false, decision: "auto-allow", desc: "for loop: all safe commands auto-allow" },
 	{ cmd: "while true; do ls; done 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "while loop with redirect (segments: true, ls — both simple)" },
+	{ cmd: "while true; do rm a; done", simple: false, unsafe: true, decision: "prompt", desc: "while loop with rm (unsafe in body)" },
+	{ cmd: "while true; do echo a; rm b; done", simple: false, unsafe: true, decision: "prompt", desc: "while loop: safe then unsafe (mixed body)" },
 	{ cmd: "if true; then rm a; fi 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "if statement with redirect (body not dropped)" },
+	{ cmd: "if true; then cat a; rm b; fi", simple: false, unsafe: true, decision: "prompt", desc: "if statement: safe then unsafe (mixed body)" },
+	{ cmd: "if false; then rm a; else cat b; fi", simple: false, unsafe: true, decision: "prompt", desc: "if/else with rm in true branch (both branches scanned)" },
+	{ cmd: "case x in a) rm b;; b) cat c;; esac", simple: false, unsafe: true, decision: "prompt", desc: "case statement with rm (body not dropped)" },
+	{ cmd: "case x in a) cat b;; b) cat c;; esac", simple: true, unsafe: false, decision: "auto-allow", desc: "case statement all safe (auto-allow)" },
 	// multiple redirects on compound
 	{ cmd: "rm a && ls b > out 2>&1", simple: false, unsafe: true, decision: "prompt", desc: "&& chain with multiple redirects" },
 	{ cmd: "ls a && ls b > out 2>&1", simple: false, unsafe: true, decision: "prompt", desc: "safe && chain with write redirect (prompts on redirect)" },
@@ -418,6 +428,146 @@ const cases: TestCase[] = [
 	// rm -r with outside cwd paths
 	{ cmd: "rm -rf /etc/config", simple: false, unsafe: true, decision: "prompt", desc: "rm -rf outside cwd (double prompt: unsafe + path)" },
 	{ cmd: "rm -r /var/log/old", simple: false, unsafe: true, decision: "prompt", desc: "rm -r outside cwd" },
+
+	// ═══════════════════════════════════════════════════════════
+	// nested control flow
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "for f in a; do for g in b; do rm $g; done; done", simple: false, unsafe: true, decision: "prompt", desc: "nested for loops with rm (inner body not dropped)" },
+	{ cmd: "for f in a; do for g in b; do cat $g; done; done", simple: true, unsafe: false, decision: "auto-allow", desc: "nested for loops all safe" },
+	{ cmd: "{ rm a; }", simple: false, unsafe: true, decision: "prompt", desc: "brace group with rm (body not dropped)" },
+	{ cmd: "{ cat a; }", simple: true, unsafe: false, decision: "auto-allow", desc: "brace group all safe" },
+	{ cmd: "{ cat a; rm b; }", simple: false, unsafe: true, decision: "prompt", desc: "brace group: safe then unsafe" },
+
+	// ═══════════════════════════════════════════════════════════
+	// backgrounding
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "rm a &", simple: false, unsafe: true, decision: "prompt", desc: "background rm (unsafe not hidden by &)" },
+	{ cmd: "cat a &", simple: true, unsafe: false, decision: "auto-allow", desc: "background cat (safe with &)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// heredoc / here-string — content is data, not commands
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "cat << 'EOF'\nrm -rf /\nEOF", simple: true, unsafe: false, decision: "auto-allow", desc: "heredoc with 'rm -rf /' inside (data, not command)" },
+	{ cmd: "cat << 'EOF'\nsed -i s/a/b/\nEOF", simple: true, unsafe: false, decision: "auto-allow", desc: "heredoc with sed -i inside (data, not command)" },
+	{ cmd: "cat <<< 'rm -rf /'", simple: true, unsafe: false, decision: "auto-allow", desc: "here-string with rm (data, not command)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// comments — dangerous text in comments should NOT trigger
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "cat a # rm b", simple: true, unsafe: false, decision: "auto-allow", desc: "rm in comment (not a command)" },
+	{ cmd: "cat a # sed -i s/a/b/ file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "sed -i in comment (not a command)" },
+	{ cmd: "ls # this would be dangerous: rm -rf /", simple: true, unsafe: false, decision: "auto-allow", desc: "rm -rf in comment (not a command)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// variable obfuscation
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "CMD=rm; $CMD a", simple: false, unsafe: true, decision: "prompt", desc: "variable holding rm (variable indirection obfuscation)" },
+	{ cmd: "CMD=sudo; $CMD rm a", simple: false, unsafe: true, decision: "prompt", desc: "variable holding sudo (variable indirection obfuscation)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// traps — deferred execution
+	// trap is not in allowedBashPatterns → prompts (body is a quoted string, not scanned)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "trap 'rm a' EXIT", simple: false, unsafe: false, decision: "prompt", desc: "trap with rm (not in allowlist, body not scanned)" },
+	{ cmd: "trap 'cat a' EXIT", simple: false, unsafe: false, decision: "prompt", desc: "trap with cat (not in allowlist)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// arithmetic expansion
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "echo $((1+1))", simple: true, unsafe: false, decision: "auto-allow", desc: "arithmetic expansion (safe, not a subshell)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// array expansion
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "cmds=(cat ls); echo ${cmds[@]}", simple: true, unsafe: false, decision: "auto-allow", desc: "array of safe commands in echo (data, not exec)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// glob wildcards
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "rm *", simple: false, unsafe: true, decision: "prompt", desc: "rm with glob wildcard" },
+	{ cmd: "rm *.log", simple: false, unsafe: true, decision: "prompt", desc: "rm with glob pattern" },
+	{ cmd: "rm -rf *", simple: false, unsafe: true, decision: "prompt", desc: "rm -rf with glob wildcard" },
+	{ cmd: "cat *", simple: true, unsafe: false, decision: "auto-allow", desc: "cat with glob (read-only)" },
+	{ cmd: "ls *", simple: true, unsafe: false, decision: "auto-allow", desc: "ls with glob (read-only)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// absolute path commands — getFirstWord uses path.basename
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "/bin/rm file.txt", simple: false, unsafe: true, decision: "prompt", desc: "/bin/rm (absolute path, basename resolves to rm)" },
+	{ cmd: "/usr/bin/rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "/usr/bin/rm -rf (absolute path)" },
+	{ cmd: "/bin/cat file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "/bin/cat (absolute path, safe)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// eval — always dangerous (executes its argument as code)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "eval 'echo hello'", simple: false, unsafe: true, decision: "prompt", desc: "eval (always dangerous, even with benign arg)" },
+	{ cmd: "eval 'rm -rf /'", simple: false, unsafe: true, decision: "prompt", desc: "eval with rm (double dangerous)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// exec — replaces shell with the command (not in allowlist → prompts)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "exec rm file.txt", simple: false, unsafe: false, decision: "prompt", desc: "exec rm (not in allowlist, prompts on safe default)" },
+	{ cmd: "exec cat file.txt", simple: false, unsafe: false, decision: "prompt", desc: "exec cat (not in allowlist, prompts on safe default)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// source / . — loads and executes a file (not in allowlist → prompts)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "source script.sh", simple: false, unsafe: false, decision: "prompt", desc: "source (not in allowlist, prompts on safe default)" },
+	{ cmd: ". script.sh", simple: false, unsafe: false, decision: "prompt", desc: ". script.sh (dot command, not in allowlist)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// xargs with -I (inline replacement)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "echo files | xargs -I{} rm {}", simple: false, unsafe: true, decision: "prompt", desc: "xargs -I{} rm (wrapper running write)" },
+	{ cmd: "find . -print0 | xargs -0 -I{} rm {}", simple: false, unsafe: true, decision: "prompt", desc: "find | xargs -0 -I{} rm (pipeline wrapper)" },
+	{ cmd: "echo files | xargs -I{} cat {}", simple: true, unsafe: false, decision: "auto-allow", desc: "xargs -I{} cat (wrapper running read)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// select loop
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "select f in a b; do rm $f; done", simple: false, unsafe: true, decision: "prompt", desc: "select loop with rm (body not dropped)" },
+	{ cmd: "select f in a b; do cat $f; done", simple: true, unsafe: false, decision: "auto-allow", desc: "select loop all safe" },
+
+	// ═══════════════════════════════════════════════════════════
+	// until loop
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "until false; do rm a; done", simple: false, unsafe: true, decision: "prompt", desc: "until loop with rm (body not dropped)" },
+	{ cmd: "until false; do cat a; done", simple: true, unsafe: false, decision: "auto-allow", desc: "until loop all safe" },
+
+	// ═══════════════════════════════════════════════════════════
+	// time prefix (not in allowlist → prompts)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "time rm file.txt", simple: false, unsafe: false, decision: "prompt", desc: "time rm (not in allowlist, prompts on safe default)" },
+	{ cmd: "time cat file.txt", simple: false, unsafe: false, decision: "prompt", desc: "time cat (not in allowlist, prompts on safe default)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// env with dangerous command
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "env rm file.txt", simple: false, unsafe: true, decision: "prompt", desc: "env rm (wrapper running write)" },
+	{ cmd: "env cat file.txt", simple: false, unsafe: false, decision: "prompt", desc: "env cat — prompts: env can alter PATH/LD_PRELOAD, so inner command is not trustworthy unlike nice/timeout" },
+
+	// ═══════════════════════════════════════════════════════════
+	// let — arithmetic evaluation (not in allowlist → prompts)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "let x=1+2", simple: false, unsafe: false, decision: "prompt", desc: "let (not in allowlist, prompts on safe default)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// shell builtins — not in allowlist → prompt on safe default
+	// (shift, wait, break, continue, return, set, shopt)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "echo $PATH", simple: true, unsafe: false, decision: "auto-allow", desc: "echo $VAR (variable expansion, safe)" },
+	{ cmd: "export FOO=bar", simple: true, unsafe: false, decision: "auto-allow", desc: "export (variable assignment, safe)" },
+	{ cmd: "unset FOO", simple: true, unsafe: false, decision: "auto-allow", desc: "unset (variable removal, safe)" },
+	{ cmd: "shift", simple: false, unsafe: false, decision: "prompt", desc: "shift (not in allowlist, prompts on safe default)" },
+	{ cmd: "wait", simple: false, unsafe: false, decision: "prompt", desc: "wait (not in allowlist, prompts on safe default)" },
+	{ cmd: "break", simple: false, unsafe: false, decision: "prompt", desc: "break (not in allowlist, prompts on safe default)" },
+	{ cmd: "continue", simple: false, unsafe: false, decision: "prompt", desc: "continue (not in allowlist, prompts on safe default)" },
+	{ cmd: "return 0", simple: false, unsafe: false, decision: "prompt", desc: "return (not in allowlist, prompts on safe default)" },
+	{ cmd: "set -e", simple: false, unsafe: false, decision: "prompt", desc: "set -e (not in allowlist, prompts on safe default)" },
+	{ cmd: "shopt -s globstar", simple: false, unsafe: false, decision: "prompt", desc: "shopt (not in allowlist, prompts on safe default)" },
+	{ cmd: "declare -a arr", simple: true, unsafe: false, decision: "auto-allow", desc: "declare (variable declaration, safe)" },
+	{ cmd: "readonly FOO=bar", simple: true, unsafe: false, decision: "auto-allow", desc: "readonly (variable flag, safe)" },
+	{ cmd: "local x=1", simple: true, unsafe: false, decision: "auto-allow", desc: "local (function scope var, safe)" },
 ];
 
 // ─── Run tests ───
