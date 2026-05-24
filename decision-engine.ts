@@ -160,12 +160,22 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
 
   // Auto-allow if all signatures are either previously approved or in the static allowlist
   // Relative path signatures (./scripts/foo) must not match the allowlist
-  const isSigApproved = (sig: string) => {
+  // Segments with relative path arguments (timeout 30 ./scripts/foo.sh) must also be blocked
+  const hasRelativePathArg = (seg: string) => {
+    const tokens = seg.trim().split(/\s+/);
+    for (let i = 1; i < tokens.length; i++) {
+      if (isFirstTokenRelativePath(tokens[i])) return true;
+    }
+    return false;
+  };
+  const isSigApproved = (sig: string, segIdx: number) => {
     if (store.hasAllowedBash(sig)) return true;
     if (isFirstTokenRelativePath(sig)) return false;
+    // Check if the segment has relative path arguments
+    if (hasRelativePathArg(analysis.segments[segIdx])) return false;
     return allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0]));
   };
-  if (analysis.signatures.every(isSigApproved)) {
+  if (analysis.signatures.every((sig, i) => isSigApproved(sig, i))) {
     if (!analysis.hasUnsafePattern && outsidePaths.length === 0) {
       return { kind: "auto-allow" };
     }

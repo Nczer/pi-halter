@@ -246,8 +246,14 @@ function isWrapperRunningWrite(segment: string): boolean {
 }
 
 /**
+ * Shell interpreters that can execute arbitrary code when used with -c or similar flags.
+ */
+const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh"]);
+
+/**
  * Check if `find -exec` or `find -execdir` runs a write-capable command.
  * e.g. "find . -exec sed -i ... {} \;" → true, "find . -exec grep -l ... {} \;" → false
+ * Also catches shell interpreters (bash -c, sh -c) which can execute anything.
  */
 function isFindExecWrite(segment: string): boolean {
   // Check for -exec or -execdir
@@ -255,6 +261,10 @@ function isFindExecWrite(segment: string): boolean {
   if (!execMatch) return false;
 
   const execCmd = execMatch[1].toLowerCase();
+
+  // Shell interpreters can execute arbitrary code — treat as write-capable
+  if (SHELL_INTERPRETERS.has(execCmd)) return true;
+
   if (writeCapableCommands.has(execCmd)) {
     // Only check flags after -exec <cmd> to avoid matching find's own flags
     const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
@@ -268,6 +278,27 @@ function isFindExecWrite(segment: string): boolean {
     if (execCmd === "patch" || execCmd === "install") return true;
     if (["tar", "zip", "unzip", "gzip", "gunzip"].includes(execCmd)) return true;
     if (["pip", "npm", "yarn", "cargo", "go", "uv"].includes(execCmd)) return true;
+  }
+  return false;
+}
+
+/**
+ * Check if a wrapper command is running a relative path script.
+ * e.g. "timeout 30 ./scripts/foo.sh" → true
+ */
+function isWrapperRunningRelativePath(segment: string): boolean {
+  const args = segment.trim().split(/\s+/);
+  const firstWord = args[0].toLowerCase();
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("-")) continue;
+    if (firstWord === "timeout" && /^\d+(\.\d+)?(?:[smhd])?$/.test(arg)) continue;
+    if (firstWord === "nice" && /^\d+$/.test(arg)) continue;
+    if (firstWord === "ionice" && /^\d+$/.test(arg)) continue;
+    if (firstWord === "env" && /=/.test(arg) && !arg.startsWith("/")) continue;
+    // First non-flag token — check if it's a relative path
+    if (isFirstTokenRelativePath(arg)) return true;
+    break;
   }
   return false;
 }
@@ -298,6 +329,7 @@ async function isSimpleAllowedCommand(segment: string, cwd: string): Promise<boo
   if (hasDangerousPerlInPipeline(segment)) return false;
   if (firstWord === "git" && isGitDangerous(segment)) return false;
   if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment)) return false;
+  if (wrapperCommands.has(firstWord) && isWrapperRunningRelativePath(segment)) return false;
   if (hasWrapperRunningWriteInPipeline(segment)) return false;
   if (hasWriteRedirect(segment)) return false;
   // All pipeline stages must be simple allowed commands

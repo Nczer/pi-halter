@@ -1,12 +1,11 @@
 # Permissions (pi extension)
 
-A permission gate for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, `subagent`, and `mcp` calls, auto-allowing safe operations and prompting the user for anything risky.
+A permission gate for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, and `mcp` calls, auto-allowing safe operations and prompting the user for anything risky.
 
 ## Features
 
 - **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.)
 - **File access** — auto-allows reads inside cwd and trusted paths; prompts for paths outside cwd, denied names (`.env`, `.ssh`, etc.)
-- **Subagent spawning** — prompts before spawning subagents, with warnings for write-capable agents
 - **MCP tool calls** — intercepts both proxy tool calls (`mcp({tool: "..."})`) and direct tools (e.g., `exa_web_search_exa`); auto-allows metadata operations; prompts for tool invocations showing server, tool, and argument preview; server-level "Always" approval (e.g., `exa:*`)
 - **Auto-allow** — "Always" option grants session-scoped permission; status widget shows active allowances
 - **Retry-loop prevention** — recently-aborted commands are auto-blocked for 60 seconds
@@ -37,8 +36,7 @@ When the user selects "Always", a second prompt requires explicit confirmation b
 | Bash signatures | Command + flags (e.g. `git -am`) | "Always" on bash prompt |
 | Read directories | Any read in that directory | "Always" on file/bash path prompt |
 | Write directories | Any write/edit in that directory | "Always" on file write prompt |
-| File paths | Specific resolved path | "Always" on file-inside-cwd prompt |
-| Subagent names | Agent name (e.g. `scout`) | "Always" on subagent prompt |
+| File paths | Specific resolved path (read/write split) | "Always" on file-inside-cwd prompt |
 | MCP servers | All tools from a server (e.g. `exa:*`) | "Always" on MCP prompt |
 
 ## Architecture
@@ -49,8 +47,7 @@ index.ts                          Extension entry — event registration, /dsp c
 │   ├── index.ts                  Barrel re-export
 │   ├── bash.ts                   Bash command interceptor
 │   ├── file.ts                   File operation interceptor (incl. edit pre-validation)
-│   ├── mcp.ts                    MCP tool call interceptor (proxy + direct tools)
-│   └── subagent.ts               Subagent spawning interceptor
+│   └── mcp.ts                    MCP tool call interceptor (proxy + direct tools)
 ├── bash-parser.ts                tree-sitter-bash wrapper — lazy WASM load, AST path extraction
 ├── decision-engine.ts            Pure policy — async decide(request, store) → Decision
 ├── command-analysis.ts           Fat analyzer — async analyzeCommand(cmd, cwd) → CommandAnalysis
@@ -88,7 +85,7 @@ All config lives in `config/` as focused modules, re-exported through `config/in
 |--------|-----------------|
 | `thresholds.ts` | `ABORT_REMEMBER_MS` (60s), `PROMPT_WARNING_THRESHOLD` (20) |
 | `bash-patterns.ts` | Auto-allowed commands, path-aware commands, dangerous find/sed/perl flags |
-| `path-rules.ts` | Always-allowed read paths, always-denied path names |
+| `path-rules.ts` | Always-allowed read/write paths, always-denied path names |
 | `dangerous-patterns.ts` | Regex patterns for risk detection (safety net alongside token analysis) |
 | `trusted-scripts.ts` | Trusted script directories (e.g. skills) — bypasses dangerous-pattern check |
 
