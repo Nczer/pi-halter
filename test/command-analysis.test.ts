@@ -226,6 +226,104 @@ describe("Risk: no risk", () => {
 	});
 });
 
+describe("isFirstTokenRelativePath: direct unit tests", () => {
+	it("./foo is relative", async () => {
+		const a = await analyzeCommand("./foo", cwd);
+		expect(a.allSimple).toBe(false);
+	});
+
+	it("../foo is relative", async () => {
+		const a = await analyzeCommand("../foo", cwd);
+		expect(a.allSimple).toBe(false);
+	});
+
+	it("./bar/baz is relative", async () => {
+		const a = await analyzeCommand("./bar/baz", cwd);
+		expect(a.allSimple).toBe(false);
+	});
+
+	it("/absolute/foo is NOT relative", async () => {
+		const a = await analyzeCommand("/bin/cat file.txt", cwd);
+		expect(a.allSimple).toBe(true);
+	});
+
+	it("bare command is NOT relative", async () => {
+		const a = await analyzeCommand("cat file.txt", cwd);
+		expect(a.allSimple).toBe(true);
+	});
+});
+
+describe("allSimple: relative path edge cases", () => {
+	it("./scripts/foo.sh | grep bar — pipeline stage with relative path is not simple", async () => {
+		const a = await analyzeCommand("ls | ./scripts/foo.sh | grep bar", cwd);
+		expect(a.allSimple).toBe(false);
+	});
+
+	it("./scripts/foo.sh && ls — compound with relative path is not simple", async () => {
+		const a = await analyzeCommand("./scripts/foo.sh && ls", cwd);
+		expect(a.allSimple).toBe(false);
+	});
+
+	it("./scripts/foo.sh 2>/dev/null — relative path with redirect is not simple", async () => {
+		const a = await analyzeCommand("./scripts/foo.sh 2>/dev/null", cwd);
+		expect(a.allSimple).toBe(false);
+	});
+
+	it("bash -c './scripts/foo.sh' — nested script execution is not simple (bash not in allowlist)", async () => {
+		const a = await analyzeCommand("bash -c './scripts/foo.sh'", cwd);
+		expect(a.allSimple).toBe(false);
+	});
+
+	it("timeout 30 ./scripts/foo.sh — wrapper + relative path is not simple", async () => {
+		const a = await analyzeCommand("timeout 30 ./scripts/foo.sh", cwd);
+		expect(a.allSimple).toBe(false);
+	});
+
+	it("timeout 30 ls — wrapper + allowed command is simple", async () => {
+		const a = await analyzeCommand("timeout 30 ls", cwd);
+		expect(a.allSimple).toBe(true);
+	});
+
+	it("find . -exec bash -c 'rm {}' \\; — find exec bash IS caught (shell interpreters treated as write-capable)", async () => {
+		const a = await analyzeCommand("find . -exec bash -c 'rm {}' \\;", cwd);
+		expect(a.allSimple).toBe(false);
+		expect(a.hasUnsafePattern).toBe(true);
+	});
+
+	it("find . -exec rm {} \\; — find exec rm IS caught", async () => {
+		const a = await analyzeCommand("find . -exec rm {} \\;", cwd);
+		expect(a.allSimple).toBe(false);
+	});
+});
+
+describe("hasUnsafePattern: relative path edge cases", () => {
+	it("./scripts/foo.sh is not flagged as unsafe (just not simple)", async () => {
+		const a = await analyzeCommand("./scripts/foo.sh", cwd);
+		expect(a.hasUnsafePattern).toBe(false);
+	});
+
+	it("bash -c './scripts/foo.sh' is unsafe (bash -c pattern)", async () => {
+		const a = await analyzeCommand("bash -c './scripts/foo.sh'", cwd);
+		expect(a.hasUnsafePattern).toBe(true);
+	});
+});
+
+describe("Signature store round-trip: relative paths", () => {
+	it("relative path signature is stored correctly", async () => {
+		const a = await analyzeCommand("./scripts/foo.sh", cwd);
+		expect(a.signatures).toContain("./scripts/foo.sh");
+	});
+
+	it("relative path signature after approval auto-allows via store", async () => {
+		const { decide } = await import("../decision-engine");
+		const { createStore } = await import("../store");
+		const store = createStore();
+		store.addAllowed({ bashSigs: ["./scripts/foo.sh"] });
+		const d = await decide({ type: "bash", command: "./scripts/foo.sh", cwd }, store);
+		expect(d.kind).toBe("auto-allow");
+	});
+});
+
 describe("Paths: extraction", () => {
 	it("extracts absolute path", async () => {
 		expect((await analyzeCommand("cat /etc/hosts", cwd)).paths).toContain("/etc/hosts");

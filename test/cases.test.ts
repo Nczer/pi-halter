@@ -584,6 +584,14 @@ const cases: TestCase[] = [
 	{ cmd: "./scripts/ghidra-analyze.sh -s ExportAll.java -o ./analysis binary", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (ghidra wrapper, not in allowlist)" },
 	{ cmd: "bash ~/.pi/agent/skills/tmux/scripts/wait-for-text.sh -t 30", simple: false, unsafe: false, decision: "prompt", desc: ".sh in skills dir still prompts (bash not an interpreter match)" },
 	{ cmd: "./scripts/find-ghidra.sh", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (path-like token excluded from allowlist)" },
+	{ cmd: "../scripts/foo.sh", simple: false, unsafe: false, decision: "prompt", desc: "../ relative path (not in allowlist → prompt)" },
+	{ cmd: "./scripts/foo.sh && ls", simple: false, unsafe: false, decision: "prompt", desc: "./ script && compound (relative path blocks allowlist)" },
+	{ cmd: "./scripts/foo.sh 2>/dev/null", simple: false, unsafe: false, decision: "prompt", desc: "./ script with redirect (relative path blocks allowlist)" },
+	{ cmd: "timeout 30 ./scripts/foo.sh", simple: false, unsafe: false, decision: "prompt", desc: "timeout + ./ script (wrapper + relative path)" },
+	{ cmd: "timeout 30 ls", simple: true, unsafe: false, decision: "auto-allow", desc: "timeout + allowed command (wrapper passes through)" },
+	{ cmd: "bash -c './scripts/foo.sh'", simple: false, unsafe: true, decision: "prompt", desc: "bash -c with relative path (bash -c pattern triggers unsafe)" },
+	{ cmd: "find . -exec bash -c 'rm {}' \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec bash -c (caught: shell interpreters treated as write-capable)" },
+	{ cmd: "find . -exec rm {} \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec rm (caught by isFindExecWrite)" },
 ];
 
 // ─── Run tests ───
