@@ -1,7 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { ABORT_REMEMBER_MS, allowedBashPatterns } from "./config";
-import { analyzeCommand } from "./command-analysis";
+import { analyzeCommand, isFirstTokenRelativePath } from "./command-analysis";
 import {
   resolvePathReal,
   expandTilde,
@@ -159,8 +159,12 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   }
 
   // Auto-allow if all signatures are either previously approved or in the static allowlist
-  const isSigApproved = (sig: string) =>
-    store.hasAllowedBash(sig) || allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0]));
+  // Relative path signatures (./scripts/foo) must not match the allowlist
+  const isSigApproved = (sig: string) => {
+    if (store.hasAllowedBash(sig)) return true;
+    if (isFirstTokenRelativePath(sig)) return false;
+    return allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0]));
+  };
   if (analysis.signatures.every(isSigApproved)) {
     if (!analysis.hasUnsafePattern && outsidePaths.length === 0) {
       return { kind: "auto-allow" };

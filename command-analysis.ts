@@ -60,6 +60,17 @@ function getFirstWord(segment: string): string {
 }
 
 /**
+ * Check if the first token is a relative path (./foo, ../foo).
+ * Absolute paths (/bin/cat, /usr/bin/find) are allowed through — they're system binaries.
+ * Relative paths are scripts and must not match the allowlist (e.g., ./scripts/find-sessions.sh
+ * should not match /^find\b/).
+ */
+export function isFirstTokenRelativePath(segment: string): boolean {
+  const token = segment.trim().split(/\s+/)[0];
+  return /^\.\/?|^\.\./.test(token);
+}
+
+/**
  * Split a segment into pipeline parts (on |). Each part is one command in the pipeline.
  * Returns trimmed command strings for each pipeline stage.
  */
@@ -271,6 +282,11 @@ async function isSimpleAllowedCommand(segment: string, cwd: string): Promise<boo
   // Trusted scripts in known directories are simple-allowed
   if (isTrustedScriptCommand(segment, cwd)) return true;
 
+  // Relative paths (./scripts/foo, ../foo) must not match the allowlist.
+  // Otherwise ./scripts/find-sessions.sh would match /^find\b/.
+  // Absolute paths (/bin/cat) are fine — they resolve to real system binaries.
+  if (isFirstTokenRelativePath(segment)) return false;
+
   const firstWord = getFirstWord(segment);
   if (!allowedBashPatterns.some(p => p.test(firstWord))) return false;
   if (await hasSubshell(segment)) return false;
@@ -295,6 +311,8 @@ async function areAllPipelineStagesSimple(segment: string, cwd: string): Promise
   if (stages.length <= 1) return true; // no pipeline, nothing extra to check
   for (let i = 1; i < stages.length; i++) {
     const stage = stages[i];
+    // Relative paths must not match the allowlist
+    if (isFirstTokenRelativePath(stage)) return false;
     const stageCmd = getFirstWord(stage);
     if (!allowedBashPatterns.some(p => p.test(stageCmd))) return false;
     if (await hasSubshell(stage)) return false;
