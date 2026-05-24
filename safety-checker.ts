@@ -190,6 +190,28 @@ function hasDangerousCommandInPipeline(segment: string): boolean {
   });
 }
 
+// ── Shared danger checks ──
+
+/**
+ * 11 shared checks that both isSimpleAllowedCommand and isSegmentUnsafe need.
+ * Extracted to eliminate duplication.
+ */
+function hasKnownDanger(seg: BashSegment): boolean {
+  const segment = seg.text;
+  const firstWord = getFirstWord(segment);
+  return seg.hasSubshell
+    || (firstWord === "find" && dangerousFindFlags.test(segment))
+    || (firstWord === "find" && isFindExecWrite(segment))
+    || (firstWord === "sed" && dangerousSedFlags.test(segment))
+    || (firstWord === "perl" && dangerousPerlFlags.test(segment))
+    || hasDangerousSedInPipeline(segment)
+    || hasDangerousPerlInPipeline(segment)
+    || (firstWord === "git" && isGitDangerous(segment))
+    || (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment))
+    || hasWrapperRunningWriteInPipeline(segment)
+    || hasWriteRedirect(segment);
+}
+
 // ── Safety check entry points ──
 
 /**
@@ -209,18 +231,8 @@ export async function isSimpleAllowedCommand(seg: BashSegment, cwd: string): Pro
 
   const firstWord = getFirstWord(segment);
   if (!allowedBashPatterns.some(p => p.test(firstWord))) return false;
-  if (seg.hasSubshell) return false;
-  if (firstWord === "find" && dangerousFindFlags.test(segment)) return false;
-  if (firstWord === "find" && isFindExecWrite(segment)) return false;
-  if (firstWord === "sed" && dangerousSedFlags.test(segment)) return false;
-  if (firstWord === "perl" && dangerousPerlFlags.test(segment)) return false;
-  if (hasDangerousSedInPipeline(segment)) return false;
-  if (hasDangerousPerlInPipeline(segment)) return false;
-  if (firstWord === "git" && isGitDangerous(segment)) return false;
-  if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment)) return false;
+  if (hasKnownDanger(seg)) return false;
   if (wrapperCommands.has(firstWord) && isWrapperRunningRelativePath(segment)) return false;
-  if (hasWrapperRunningWriteInPipeline(segment)) return false;
-  if (hasWriteRedirect(segment)) return false;
   if (!await areAllPipelineStagesSimple(segment, cwd)) return false;
   return true;
 }
@@ -258,18 +270,8 @@ export async function isSegmentUnsafe(seg: BashSegment, cwd: string): Promise<bo
   const firstWord = getFirstWord(segment);
   const isLookupOrEcho = LOOKUP_COMMANDS.has(firstWord) || ECHO_COMMANDS.has(firstWord) || PROCESS_INSPECTION_COMMANDS.has(firstWord);
 
-  return seg.hasSubshell
+  return hasKnownDanger(seg)
     || isSegmentObfuscated(segment)
-    || (firstWord === "find" && dangerousFindFlags.test(segment))
-    || (firstWord === "find" && isFindExecWrite(segment))
-    || (firstWord === "sed" && dangerousSedFlags.test(segment))
-    || (firstWord === "perl" && dangerousPerlFlags.test(segment))
-    || hasDangerousSedInPipeline(segment)
-    || hasDangerousPerlInPipeline(segment)
-    || (firstWord === "git" && isGitDangerous(segment))
-    || (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment))
-    || hasWrapperRunningWriteInPipeline(segment)
-    || hasWriteRedirect(segment)
     || (!trusted && !isLookupOrEcho && (
       dangerousCommandPatterns.some(({ pattern }) => pattern.test(firstWord))
       || dangerousContextPatterns.some(({ pattern }) => pattern.test(segment))
