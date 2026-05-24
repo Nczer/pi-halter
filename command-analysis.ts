@@ -1,7 +1,8 @@
 import { parseCommand, type BashSegment } from "./bash-parser";
 import { isSimpleAllowedCommand, isSegmentUnsafe } from "./safety-checker";
 import { analyzeRisk, type CommandRisk } from "./risk-analyzer";
-import { getCommandSignature, isFirstTokenRelativePath } from "./segment-helpers";
+import { hasRelativePath } from "./path-analysis";
+import { getCommandSignature } from "./segment-helpers";
 
 // ── Types ──
 
@@ -19,12 +20,11 @@ interface CommandAnalysis {
   hasUnsafePattern: boolean;
   /** Detailed risk assessment from token-based and regex-based analysis. */
   risk: CommandRisk;
+  /** Indices of segments that contain relative path tokens (./foo, ../foo). */
+  relativePathSegmentIndices: number[];
 }
 
 // ── Public interface ──
-
-/** Re-export for decision-engine.ts which needs relative-path checks. */
-export { isFirstTokenRelativePath };
 
 /**
  * Analyze a shell command. Single source of truth for parsing, path extraction,
@@ -44,5 +44,10 @@ export async function analyzeCommand(cmd: string, cwd: string): Promise<CommandA
   const hasUnsafe = (await Promise.all(segments.map(seg => isSegmentUnsafe(seg, cwd)))).some(Boolean);
   const risk = await analyzeRisk(cmd, segments);
 
-  return { segments: segmentTexts, signatures, paths, allSimple, hasUnsafePattern: hasUnsafe, risk };
+  // Pre-compute relative path indices — decision engine consumes this instead of scanning tokens
+  const relativePathSegmentIndices = segmentTexts
+    .map((seg, i) => hasRelativePath(seg) ? i : -1)
+    .filter(i => i >= 0);
+
+  return { segments: segmentTexts, signatures, paths, allSimple, hasUnsafePattern: hasUnsafe, risk, relativePathSegmentIndices };
 }

@@ -3,6 +3,29 @@ import os from "node:os";
 import fs from "node:fs";
 import { allowedReadPaths, allowedWritePaths, deniedPaths, isTrustedScriptPath } from "./config";
 
+// ── Relative path detection ──
+
+/**
+ * Check if the first token is a relative path (./foo, ../foo).
+ * Absolute paths (/bin/cat, /usr/bin/find) are allowed through.
+ */
+export function isFirstTokenRelativePath(segment: string): boolean {
+  const token = segment.trim().split(/\s+/)[0];
+  return /^\.\/|^\.\./.test(token);
+}
+
+/**
+ * Check if a segment string contains any relative path token (./foo, ../foo).
+ * Covers both the first token and arguments.
+ */
+export function hasRelativePath(segment: string): boolean {
+  const tokens = segment.trim().split(/\s+/);
+  for (const token of tokens) {
+    if (/^\.\/|^\.\./.test(token)) return true;
+  }
+  return false;
+}
+
 // ── Path resolution ──
 
 export function expandTilde(p: string): string {

@@ -18,15 +18,6 @@ export function getFirstWord(segment: string): string {
   return path.basename(word);
 }
 
-/**
- * Check if the first token is a relative path (./foo, ../foo).
- * Absolute paths (/bin/cat, /usr/bin/find) are allowed through.
- */
-export function isFirstTokenRelativePath(segment: string): boolean {
-  const token = segment.trim().split(/\s+/)[0];
-  return /^\.\/?|^\.\./.test(token);
-}
-
 /** Split a segment into pipeline parts (on |). */
 export function splitPipeline(segment: string): string[] {
   return segment.split("|").map(s => s.trim()).filter(Boolean);
