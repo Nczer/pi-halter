@@ -1,7 +1,10 @@
+import path from "node:path";
+import os from "node:os";
 import { describe, expect, it } from "vitest";
 import { extractPathsFromBash, extractSegments, hasSubshell } from "../bash-parser";
 
-const cwd = "/home/nczer/Projects";
+const home = os.homedir();
+const cwd = path.join(home, "Projects");
 
 describe("extractPathsFromBash: basic paths", () => {
 	it("does not extract relative paths (always inside cwd)", async () => {
@@ -17,7 +20,7 @@ describe("extractPathsFromBash: basic paths", () => {
 	it("expands tilde", async () => {
 		const paths = await extractPathsFromBash("ls ~/foo", cwd);
 		expect(paths.length).toBeGreaterThan(0);
-		expect(paths[0]).toMatch(/^\/home\//);
+		expect(paths[0]).toBe(path.join(home, "foo"));
 	});
 
 	it("flags-only command has no paths", async () => {

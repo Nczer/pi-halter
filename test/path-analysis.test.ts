@@ -1,5 +1,6 @@
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	expandTilde,
@@ -13,7 +14,8 @@ import {
 } from "../path-analysis";
 
 const home = os.homedir();
-const cwd = "/home/nczer/Projects";
+const tmpdir = os.tmpdir();
+const cwd = fs.realpathSync(path.join(home, "Projects"));
 
 describe("expandTilde", () => {
 	it("expands ~/foo", () => {
@@ -65,11 +67,11 @@ describe("isInsideCwd", () => {
 	});
 
 	it("sibling dir is outside cwd", () => {
-		expect(isInsideCwd("/home/nczer/Other", cwd)).toBe(false);
+		expect(isInsideCwd(path.join(home, "Other"), cwd)).toBe(false);
 	});
 
 	it("parent dir is outside cwd", () => {
-		expect(isInsideCwd("/home/nczer", cwd)).toBe(false);
+		expect(isInsideCwd(home, cwd)).toBe(false);
 	});
 });
 
@@ -106,8 +108,8 @@ describe("isInsideAutoAllowedDir", () => {
 });
 
 describe("isAllowedReadPath", () => {
-	it("/tmp is allowed read path", () => {
-		expect(isAllowedReadPath("/tmp/foo")).toBe(true);
+	it("tmpdir is allowed read path", () => {
+		expect(isAllowedReadPath(path.join(tmpdir, "foo"))).toBe(true);
 	});
 
 	it(".pi is allowed read path", () => {
@@ -136,7 +138,7 @@ describe("getOutsideCwdPaths", () => {
 	});
 
 	it("excludes allowed read paths", () => {
-		const outside = getOutsideCwdPaths([`${cwd}/a`, "/tmp/foo", "/etc/hosts"], cwd, new Set(), new Set());
+		const outside = getOutsideCwdPaths([`${cwd}/a`, path.join(tmpdir, "foo"), "/etc/hosts"], cwd, new Set(), new Set());
 		expect(outside).toEqual(["/etc/hosts"]);
 	});
 });

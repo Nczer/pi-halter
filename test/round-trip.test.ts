@@ -12,11 +12,14 @@
  *   5. Unsafe patterns → always prompt (DSP bypasses, never auto-allowed after approval)
  */
 
+import path from "node:path";
+import os from "node:os";
 import { describe, expect, it } from "vitest";
 import { decide, BashRequest, FileRequest, McpRequest } from "../decision-engine";
 import { createStore } from "../store";
 
-const cwd = "/home/nczer/Projects";
+const home = os.homedir();
+const cwd = path.join(home, "Projects");
 
 // ─── Bash: unsafe commands never auto-allow (principle 5) ───
 // Unsafe patterns → always prompt, even after "approval".
