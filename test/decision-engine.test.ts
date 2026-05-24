@@ -9,11 +9,15 @@
  *   5. Unsafe patterns → always prompt (DSP bypasses)
  */
 
+import path from "node:path";
+import os from "node:os";
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { decide, FileRequest, McpRequest } from "../decision-engine";
 import { createStore } from "../store";
 
-const cwd = "/home/nczer/Projects";
+const home = os.homedir();
+const cwd = fs.realpathSync(path.join(home, "Projects"));
 
 describe("File: Read inside cwd", () => {
 	it("auto-allowed", async () => {

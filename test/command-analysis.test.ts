@@ -7,10 +7,13 @@
  * - paths → principle 4 (outside cwd)
  */
 
+import path from "node:path";
+import os from "node:os";
 import { describe, expect, it } from "vitest";
 import { analyzeCommand, type CommandAnalysis } from "../command-analysis";
 
-const cwd = "/home/nczer/Projects";
+const home = os.homedir();
+const cwd = path.join(home, "Projects");
 
 describe("Signatures: basic", () => {
 	it("single command → 1 signature", async () => {
@@ -231,7 +234,7 @@ describe("Paths: extraction", () => {
 	it("resolves tilde path", async () => {
 		const a = await analyzeCommand("cat ~/foo", cwd);
 		expect(a.paths.length).toBeGreaterThan(0);
-		expect(a.paths[0]).toMatch(/^\/home\//);
+		expect(a.paths[0]).toBe(path.join(home, "foo"));
 	});
 
 	it("does not extract relative paths", async () => {
