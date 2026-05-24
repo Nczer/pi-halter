@@ -9,12 +9,16 @@
  *   5. Unsafe patterns → always prompt (DSP bypasses)
  */
 
+import path from "node:path";
+import os from "node:os";
 import { describe, expect, it } from "vitest";
 import { analyzeCommand } from "../command-analysis";
 import { decide } from "../decision-engine";
 import { createStore } from "../store";
 
-const cwd = "/home/nczer/Projects";
+const home = os.homedir();
+const tmpdir = os.tmpdir();
+const cwd = path.join(home, "Projects");
 
 type TestCase = {
 	cmd: string;
@@ -303,10 +307,10 @@ const cases: TestCase[] = [
 	// ═══════════════════════════════════════════════════════════
 	// outside cwd, in allowedReadPaths (auto-allow)
 	// ═══════════════════════════════════════════════════════════
-	{ cmd: "cat /tmp/other.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "read /tmp (allowedReadPaths)" },
-	{ cmd: "ls /tmp", simple: true, unsafe: false, decision: "auto-allow", desc: "ls /tmp (allowedReadPaths)" },
-	{ cmd: "sed 's/a/b/' /tmp/file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "read /tmp (allowedReadPaths)" },
-	{ cmd: "grep pattern /tmp/file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "grep /tmp (allowedReadPaths)" },
+	{ cmd: `cat ${tmpdir}/other.txt`, simple: true, unsafe: false, decision: "auto-allow", desc: "read tmpdir (allowedReadPaths)" },
+	{ cmd: `ls ${tmpdir}`, simple: true, unsafe: false, decision: "auto-allow", desc: "ls tmpdir (allowedReadPaths)" },
+	{ cmd: `sed 's/a/b/' ${tmpdir}/file.txt`, simple: true, unsafe: false, decision: "auto-allow", desc: "read tmpdir (allowedReadPaths)" },
+	{ cmd: `grep pattern ${tmpdir}/file.txt`, simple: true, unsafe: false, decision: "auto-allow", desc: "grep tmpdir (allowedReadPaths)" },
 
 	// ═══════════════════════════════════════════════════════════
 	// outside cwd, NOT in allowedReadPaths (should prompt)
@@ -568,6 +572,18 @@ const cases: TestCase[] = [
 	{ cmd: "declare -a arr", simple: true, unsafe: false, decision: "auto-allow", desc: "declare (variable declaration, safe)" },
 	{ cmd: "readonly FOO=bar", simple: true, unsafe: false, decision: "auto-allow", desc: "readonly (variable flag, safe)" },
 	{ cmd: "local x=1", simple: true, unsafe: false, decision: "auto-allow", desc: "local (function scope var, safe)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// .sh scripts — NOT auto-passed (not interpreter-based trusted scripts)
+	// Path-like tokens (./scripts/foo, /usr/bin/foo) are excluded from allowlist matching
+	// to prevent ./scripts/find-sessions.sh from matching /^find\b/
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "./scripts/wait-for-text.sh -t 30 -p python", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (not in allowlist → prompt)" },
+	{ cmd: "bash scripts/wait-for-text.sh -t 30", simple: false, unsafe: false, decision: "prompt", desc: "bash script.sh (bash not in allowlist → prompt)" },
+	{ cmd: "./scripts/find-sessions.sh", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (path-like token excluded from allowlist)" },
+	{ cmd: "./scripts/ghidra-analyze.sh -s ExportAll.java -o ./analysis binary", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (ghidra wrapper, not in allowlist)" },
+	{ cmd: "bash ~/.pi/agent/skills/tmux/scripts/wait-for-text.sh -t 30", simple: false, unsafe: false, decision: "prompt", desc: ".sh in skills dir still prompts (bash not an interpreter match)" },
+	{ cmd: "./scripts/find-ghidra.sh", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (path-like token excluded from allowlist)" },
 ];
 
 // ─── Run tests ───
