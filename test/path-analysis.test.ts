@@ -1,6 +1,5 @@
 import path from "node:path";
 import os from "node:os";
-import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	expandTilde,
@@ -15,7 +14,7 @@ import {
 
 const home = os.homedir();
 const tmpdir = os.tmpdir();
-const cwd = fs.realpathSync(path.join(home, "Projects"));
+const cwd = path.join(home, "Projects");
 
 describe("expandTilde", () => {
 	it("expands ~/foo", () => {
