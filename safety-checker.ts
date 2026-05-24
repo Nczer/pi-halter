@@ -10,7 +10,8 @@ import {
   writeCapableCommands,
 } from "./config";
 import type { BashSegment } from "./bash-parser";
-import { getFirstWord, isFirstTokenRelativePath, splitPipeline } from "./segment-helpers";
+import { isFirstTokenRelativePath } from "./path-analysis";
+import { getFirstWord, splitPipeline } from "./segment-helpers";
 
 // ── Constants ──
 

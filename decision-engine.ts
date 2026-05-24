@@ -1,7 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { ABORT_REMEMBER_MS, allowedBashPatterns } from "./config";
-import { analyzeCommand, isFirstTokenRelativePath } from "./command-analysis";
+import { analyzeCommand } from "./command-analysis";
 import {
   resolvePathReal,
   expandTilde,
@@ -159,20 +159,11 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   }
 
   // Auto-allow if all signatures are either previously approved or in the static allowlist
-  // Relative path signatures (./scripts/foo) must not match the allowlist
-  // Segments with relative path arguments (timeout 30 ./scripts/foo.sh) must also be blocked
-  const hasRelativePathArg = (seg: string) => {
-    const tokens = seg.trim().split(/\s+/);
-    for (let i = 1; i < tokens.length; i++) {
-      if (isFirstTokenRelativePath(tokens[i])) return true;
-    }
-    return false;
-  };
+  // Segments with relative paths (./scripts/foo or timeout 30 ./scripts/foo.sh) must not match
+  const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
   const isSigApproved = (sig: string, segIdx: number) => {
     if (store.hasAllowedBash(sig)) return true;
-    if (isFirstTokenRelativePath(sig)) return false;
-    // Check if the segment has relative path arguments
-    if (hasRelativePathArg(analysis.segments[segIdx])) return false;
+    if (relPathIdxSet.has(segIdx)) return false;
     return allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0]));
   };
   if (analysis.signatures.every((sig, i) => isSigApproved(sig, i))) {
