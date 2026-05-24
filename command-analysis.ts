@@ -10,7 +10,7 @@ import {
   wrapperCommands,
   writeCapableCommands,
 } from "./config";
-import { extractPathsFromBash, hasSubshell as hasSubshellAST, extractSegments as extractSegmentsAST } from "./bash-parser";
+import { parseCommand, type BashSegment } from "./bash-parser";
 
 // ── Internal types ──
 
@@ -148,14 +148,8 @@ function getCommandSignature(segment: string): string {
 
 // ── Safety checks ──
 
-async function hasSubshell(cmd: string): Promise<boolean> {
-  // Quick regex check for common patterns (fast path)
-  // Strip quoted strings first to avoid false positives inside single quotes
-  const stripped = stripQuotedStrings(cmd);
-  if (/\$\s*\((?!\s*\()/m.test(stripped) || /`/.test(stripped) || /<\s*\(/.test(stripped)) return true;
-  // Full AST check for edge cases
-  return hasSubshellAST(cmd);
-}
+// hasSubshell is now provided per-segment from parseCommand().
+// The regex fast-path was folded into the AST parse — single source of truth.
 
 function hasWriteRedirect(cmd: string): boolean {
   // If the segment is ONLY a redirect (no command name), check if it's safe
@@ -303,7 +297,8 @@ function isWrapperRunningRelativePath(segment: string): boolean {
   return false;
 }
 
-async function isSimpleAllowedCommand(segment: string, cwd: string): Promise<boolean> {
+async function isSimpleAllowedCommand(seg: BashSegment, cwd: string): Promise<boolean> {
+  const segment = seg.text;
   // Redirect-only segments (e.g. 2>/dev/null, >&1) are safe modifiers, not commands
   const trimmed = segment.trim();
   if (/^[0-9]*&?>+/.test(trimmed)) {
@@ -320,7 +315,7 @@ async function isSimpleAllowedCommand(segment: string, cwd: string): Promise<boo
 
   const firstWord = getFirstWord(segment);
   if (!allowedBashPatterns.some(p => p.test(firstWord))) return false;
-  if (await hasSubshell(segment)) return false;
+  if (seg.hasSubshell) return false;
   if (firstWord === "find" && dangerousFindFlags.test(segment)) return false;
   if (firstWord === "find" && isFindExecWrite(segment)) return false;
   if (firstWord === "sed" && dangerousSedFlags.test(segment)) return false;
@@ -347,7 +342,7 @@ async function areAllPipelineStagesSimple(segment: string, cwd: string): Promise
     if (isFirstTokenRelativePath(stage)) return false;
     const stageCmd = getFirstWord(stage);
     if (!allowedBashPatterns.some(p => p.test(stageCmd))) return false;
-    if (await hasSubshell(stage)) return false;
+    // hasSubshell already checked at segment level in isSimpleAllowedCommand
     if (stageCmd === "find" && (dangerousFindFlags.test(stage) || isFindExecWrite(stage))) return false;
     if (stageCmd === "sed" && dangerousSedFlags.test(stage)) return false;
     if (stageCmd === "perl" && dangerousPerlFlags.test(stage)) return false;
@@ -365,35 +360,36 @@ const LOOKUP_COMMANDS = new Set(["which", "type", "command", "hash", "whence"]);
 const ECHO_COMMANDS = new Set(["echo", "printf", "true", "false"]);
 const PROCESS_INSPECTION_COMMANDS = new Set(["pgrep", "pidof"]);
 
-async function isSegmentUnsafe(seg: string, cwd: string): Promise<boolean> {
+async function isSegmentUnsafe(seg: BashSegment, cwd: string): Promise<boolean> {
+  const segment = seg.text;
   // Redirect-only segments are safe if they don't write to a real file
-  const trimmed = seg.trim();
-  if (/^[0-9]*&?>+/.test(trimmed) && !hasWriteRedirect(seg)) return false;
+  const trimmed = segment.trim();
+  if (/^[0-9]*&?>+/.test(trimmed) && !hasWriteRedirect(segment)) return false;
 
   // Trusted scripts: skip dangerous-pattern check for interpreter + script in trusted dir
-  const trusted = isTrustedScriptCommand(seg, cwd);
-  const firstWord = getFirstWord(seg);
+  const trusted = isTrustedScriptCommand(segment, cwd);
+  const firstWord = getFirstWord(segment);
 
   // Lookup commands (which, type, etc.), echo commands, and process inspection commands
   // don't execute their arguments — skip dangerousPatterns for them
   const isLookupOrEcho = LOOKUP_COMMANDS.has(firstWord) || ECHO_COMMANDS.has(firstWord) || PROCESS_INSPECTION_COMMANDS.has(firstWord);
 
-  return (await hasSubshell(seg))
-    || isSegmentObfuscated(seg)
-    || (firstWord === "find" && dangerousFindFlags.test(seg))
-    || (firstWord === "find" && isFindExecWrite(seg))
-    || (firstWord === "sed" && dangerousSedFlags.test(seg))
-    || (firstWord === "perl" && dangerousPerlFlags.test(seg))
-    || hasDangerousSedInPipeline(seg)
-    || hasDangerousPerlInPipeline(seg)
-    || (firstWord === "git" && isGitDangerous(seg))
-    || (wrapperCommands.has(firstWord) && isWrapperRunningWrite(seg))
-    || hasWrapperRunningWriteInPipeline(seg)
-    || hasWriteRedirect(seg)
+  return seg.hasSubshell
+    || isSegmentObfuscated(segment)
+    || (firstWord === "find" && dangerousFindFlags.test(segment))
+    || (firstWord === "find" && isFindExecWrite(segment))
+    || (firstWord === "sed" && dangerousSedFlags.test(segment))
+    || (firstWord === "perl" && dangerousPerlFlags.test(segment))
+    || hasDangerousSedInPipeline(segment)
+    || hasDangerousPerlInPipeline(segment)
+    || (firstWord === "git" && isGitDangerous(segment))
+    || (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment))
+    || hasWrapperRunningWriteInPipeline(segment)
+    || hasWriteRedirect(segment)
     || (!trusted && !isLookupOrEcho && (
       dangerousCommandPatterns.some(({ pattern }) => pattern.test(firstWord))
-      || dangerousContextPatterns.some(({ pattern }) => pattern.test(seg))
-      || hasDangerousCommandInPipeline(seg)
+      || dangerousContextPatterns.some(({ pattern }) => pattern.test(segment))
+      || hasDangerousCommandInPipeline(segment)
     ));
 }
 
@@ -700,14 +696,14 @@ async function analyzeRisk(cmd: string, segments: { text: string; ops: string[] 
  * and redirects correctly).
  */
 export async function analyzeCommand(cmd: string, cwd: string): Promise<CommandAnalysis> {
-  // Extract segments from AST (splits on &&, ||, ;, |, |&, &)
-  const astSegments = await extractSegmentsAST(cmd);
-  const segmentTexts = astSegments.map(s => s.text);
+  // Single AST parse: segments, paths, and subshell flags in one pass
+  const result = await parseCommand(cmd, cwd);
+  const { segments, paths, hasSubshell } = result;
+  const segmentTexts = segments.map(s => s.text);
   const signatures = segmentTexts.map(getCommandSignature);
-  const paths = await extractPathsFromBash(cmd, cwd);
-  const allSimple = (await Promise.all(segmentTexts.map(seg => isSimpleAllowedCommand(seg, cwd)))).every(Boolean);
-  const hasUnsafe = (await Promise.all(segmentTexts.map(seg => isSegmentUnsafe(seg, cwd)))).some(Boolean);
-  const risk = await analyzeRisk(cmd, astSegments);
+  const allSimple = (await Promise.all(segments.map(seg => isSimpleAllowedCommand(seg, cwd)))).every(Boolean);
+  const hasUnsafe = (await Promise.all(segments.map(seg => isSegmentUnsafe(seg, cwd)))).some(Boolean);
+  const risk = await analyzeRisk(cmd, segments);
 
   return { segments: segmentTexts, signatures, paths, allSimple, hasUnsafePattern: hasUnsafe, risk };
 }

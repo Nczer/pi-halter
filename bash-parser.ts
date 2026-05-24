@@ -251,6 +251,8 @@ export interface BashSegment {
   text: string;
   /** Operators present within the segment (e.g. "|", ">", "2>"). */
   ops: string[];
+  /** Whether this segment contains subshell constructs ($(), ``). */
+  hasSubshell: boolean;
 }
 
 /** Node types that are shell operators (split points or internal ops). */
@@ -307,6 +309,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
     if (n.type === "pipeline") {
       const cmdTexts: string[] = [];
       const ops = new Set<string>();
+      let segHasSubshell = false;
       for (let i = 0; i < n.childCount; i++) {
         const child = n.child(i);
         if (!child) continue;
@@ -314,6 +317,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
           ops.add(child.type);
         } else if (child.type === "command") {
           cmdTexts.push(child.text.trim());
+          if (nodeHasSubshell(child)) segHasSubshell = true;
         } else {
           // redirected_statement, subshell, etc. — recurse to extract commands
           walk(child);
@@ -321,12 +325,13 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
           if (segments.length > 0) {
             const last = segments.pop()!;
             cmdTexts.push(last.text);
+            segHasSubshell = segHasSubshell || last.hasSubshell;
             for (const op of last.ops) ops.add(op);
           }
         }
       }
       if (cmdTexts.length > 0) {
-        segments.push({ text: cmdTexts.join(" | "), ops: [...ops] });
+        segments.push({ text: cmdTexts.join(" | "), ops: [...ops], hasSubshell: segHasSubshell });
       }
       return;
     }
@@ -351,11 +356,13 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       const cmdTexts: string[] = [];
       const redirectTexts: string[] = [];
       const ops = new Set<string>();
+      let segHasSubshell = false;
       for (let i = 0; i < n.childCount; i++) {
         const child = n.child(i);
         if (!child) continue;
         if (child.type === "command") {
           cmdTexts.push(child.text.trim());
+          if (nodeHasSubshell(child)) segHasSubshell = true;
         } else if (child.type === "file_redirect") {
           const redirText = child.text.trim();
           cmdTexts.push(redirText);
@@ -369,7 +376,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
         }
       }
       if (!hasCompoundChild && cmdTexts.length > 0) {
-        segments.push({ text: cmdTexts.join(" "), ops: [...ops] });
+        segments.push({ text: cmdTexts.join(" "), ops: [...ops], hasSubshell: segHasSubshell });
       } else if (hasCompoundChild && redirectTexts.length > 0 && segments.length > 0) {
         // Propagate redirects to the last segment so hasWriteRedirect can detect them
         segments[segments.length - 1].text += " " + redirectTexts.join(" ");
@@ -381,7 +388,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
     // leaf: single command or redirect (standalone, not part of simple_command)
     if (n.type === "command" || n.type === "file_redirect") {
       const ops = detectOpsInNode(n);
-      segments.push({ text: n.text.trim(), ops });
+      segments.push({ text: n.text.trim(), ops, hasSubshell: nodeHasSubshell(n) });
       return;
     }
 
@@ -394,6 +401,19 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
 
   walk(node);
   return segments;
+}
+
+/** Check if an AST node subtree contains subshell constructs. */
+function nodeHasSubshell(node: TSNode): boolean {
+  if (
+    node.type === "command_substitution" ||
+    node.type === "process_substitution"
+  ) return true;
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child && nodeHasSubshell(child)) return true;
+  }
+  return false;
 }
 
 /** Detect operators within a command/redirect node. */
@@ -416,12 +436,89 @@ function detectOpsInNode(node: TSNode): string[] {
   return [...ops];
 }
 
+// ── Combined parse result ───────────────────────────────────────────────────
+
+/** Unified result of a single tree-sitter parse. Replaces triple-parse in analyzeCommand. */
+export interface ParseResult {
+  segments: BashSegment[];
+  paths: string[];
+  /** Whether any segment contains subshell constructs. */
+  hasSubshell: boolean;
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
+
+/**
+ * Single parse that extracts segments, paths, and subshell flags.
+ * Replaces calling extractSegments, extractPathsFromBash, and hasSubshell separately.
+ */
+export async function parseCommand(command: string, cwd: string): Promise<ParseResult> {
+  const parser = await getParser();
+  const tree = parser.parse(command);
+  if (!tree) return { segments: [], paths: [], hasSubshell: false };
+
+  try {
+    // Extract segments (includes per-segment hasSubshell)
+    const segments = extractSegmentsFromNode(tree.rootNode);
+
+    // Extract paths from command nodes
+    const commandNodes = collectCommandNodes(tree.rootNode);
+    const allPaths: string[] = [];
+
+    for (const cmdNode of commandNodes) {
+      const cmdName = getCommandName(cmdNode);
+      const args = extractCommandArgs(cmdNode);
+
+      if (cmdName && pathAwareCommands.has(cmdName)) {
+        for (const arg of args) {
+          if (isPathCandidate(arg)) {
+            allPaths.push(resolvePathReal(expandTilde(arg), cwd));
+          }
+        }
+      }
+    }
+
+    // Extract redirect paths
+    const redirectPaths: string[] = [];
+    const extractRedirects = (node: TSNode): void => {
+      if (SKIP_TYPES.has(node.type)) return;
+      if (node.type === "file_redirect") {
+        for (const p of extractRedirectPaths(node)) {
+          if (isPathCandidate(p)) {
+            redirectPaths.push(resolvePathReal(expandTilde(p), cwd));
+          }
+        }
+      }
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (child) extractRedirects(child);
+      }
+    };
+    extractRedirects(tree.rootNode);
+    allPaths.push(...redirectPaths);
+
+    // Deduplicate, filter safe system paths
+    const seen = new Set<string>();
+    const paths = allPaths.filter(p => {
+      if (SAFE_SYSTEM_PATHS.has(p)) return false;
+      if (seen.has(p)) return false;
+      seen.add(p);
+      return true;
+    });
+
+    const hasSubshell = segments.some(s => s.hasSubshell);
+
+    return { segments, paths, hasSubshell };
+  } finally {
+    tree.delete();
+  }
+}
 
 /**
  * Extract paths from a bash command using tree-sitter AST parsing.
  * Correctly handles heredocs, comments, quotes, subshells, and redirects.
  * Returns resolved absolute paths that are outside cwd.
+ * @deprecated Use parseCommand() for combined parse.
  */
 export async function extractPathsFromBash(
   command: string,
