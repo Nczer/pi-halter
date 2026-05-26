@@ -1,5 +1,5 @@
 import path from "node:path";
-import fs from "node:fs";
+import { promises as fs } from "node:fs";
 import { ABORT_REMEMBER_MS, allowedBashPatterns } from "./config";
 import { analyzeCommand } from "./command-analysis";
 import {
@@ -153,8 +153,12 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
     store.listAllowedWriteDirs(),
   );
 
-  // Auto-allow: all segments simple + no unsafe patterns + no unapproved outside paths
-  if (analysis.allSimple && !analysis.hasUnsafePattern && outsidePaths.length === 0) {
+  // Auto-allow: all segments simple + no unsafe patterns + no unapproved outside paths + non-empty segments
+  // Empty segments (e.g., heredoc body dropped by parser) → vacuous truth on every() → must NOT auto-allow
+  if (analysis.segments.length === 0 && req.command.trim().length > 0) {
+    // Command exists but produced zero segments — parser couldn't extract commands (heredoc to interpreter, etc.)
+    // Fall through to prompt with risk data
+  } else if (analysis.allSimple && !analysis.hasUnsafePattern && outsidePaths.length === 0) {
     return { kind: "auto-allow" };
   }
 
@@ -173,14 +177,15 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   }
 
   // For directories, use the path itself; for files, use the parent directory.
-  const outsideDirs = [...new Set(outsidePaths.map(p => {
+  const outsideDirResults = await Promise.all(outsidePaths.map(async p => {
     try {
-      const stat = fs.statSync(p);
+      const stat = await fs.stat(p);
       return stat.isDirectory() ? p : path.dirname(p);
     } catch {
       return path.dirname(p); // Assume directory if stat fails (e.g. non-existent)
     }
-  }))].sort();
+  }));
+  const outsideDirs = [...new Set(outsideDirResults)].sort();
   const needsCommandApproval = !analysis.allSimple;
   const needsPathApproval = outsidePaths.length > 0;
 

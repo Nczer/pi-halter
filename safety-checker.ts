@@ -7,15 +7,15 @@ import {
   dangerousContextPatterns,
   isTrustedScriptCommand,
   wrapperCommands,
-  writeCapableCommands,
+  isWriteOperation,
+  SHELL_INTERPRETERS,
 } from "./config";
 import type { BashSegment } from "./bash-parser";
 import { isFirstTokenRelativePath } from "./path-analysis";
-import { getFirstWord, splitPipeline } from "./segment-helpers";
+import { containsCommandSubstitution, getFirstWord, splitPipeline } from "./segment-helpers";
 
 // ── Constants ──
 
-const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh"]);
 const LOOKUP_COMMANDS = new Set(["which", "type", "command", "hash", "whence"]);
 const ECHO_COMMANDS = new Set(["echo", "printf", "true", "false"]);
 const PROCESS_INSPECTION_COMMANDS = new Set(["pgrep", "pidof"]);
@@ -45,8 +45,11 @@ function hasWriteRedirect(cmd: string): boolean {
 
 function detectObfuscation(cmd: string): { detected: boolean; techniques: string[] } {
   const techniques: string[] = [];
-  if (/\$\{!/.test(cmd) || /\$[A-Z_]+\s/.test(cmd)) {
+  if (/\$\{!/.test(cmd)) {
     techniques.push("variable indirection");
+  }
+  if (/(?:^|;|\|\||&&)\s*\$[A-Z_][A-Z0-9_]*\s+\w/.test(cmd)) {
+    techniques.push("variable holding command");
   }
   if (/[a-z]"[a-z]/.test(cmd) || /[a-z]'[a-z]/.test(cmd)) {
     techniques.push("character concatenation");
@@ -64,8 +67,7 @@ function detectObfuscation(cmd: string): { detected: boolean; techniques: string
 }
 
 function isSegmentObfuscated(seg: string): boolean {
-  // stripQuotedStrings is in segment-helpers but not exported — check inline
-  return /__CMD_SUBST__/.test(seg) || detectObfuscation(seg).detected;
+  return containsCommandSubstitution(seg) || detectObfuscation(seg).detected;
 }
 
 // ── Git ──
@@ -103,20 +105,7 @@ function isWrapperRunningWrite(segment: string): boolean {
     const arg = args[i];
     if (skipWrapperArg(firstWord, arg)) continue;
     const wrappedCmd = arg.toLowerCase();
-    if (writeCapableCommands.has(wrappedCmd)) {
-      const rest = args.slice(i + 1);
-      if (wrappedCmd === "sed" && /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/.test(segment)) return true;
-      if (wrappedCmd === "perl" && /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/.test(segment)) return true;
-      if (wrappedCmd === "rm" || wrappedCmd === "rmdir" || wrappedCmd === "unlink") return true;
-      if (wrappedCmd === "mv" || wrappedCmd === "cp") return true;
-      if (wrappedCmd === "chmod" || wrappedCmd === "chown") return true;
-      if (wrappedCmd === "touch" || wrappedCmd === "mkdir") return true;
-      if (wrappedCmd === "dd" || wrappedCmd === "truncate") return true;
-      if (wrappedCmd === "patch" || wrappedCmd === "install") return true;
-      if (["tar", "zip", "unzip", "gzip", "gunzip"].includes(wrappedCmd)) return true;
-      if (["pip", "npm", "yarn", "cargo", "go", "uv"].includes(wrappedCmd)) return true;
-      if (wrappedCmd === "tee" && /\btee\b.*\S/.test(segment)) return true;
-    }
+    if (isWriteOperation(wrappedCmd, segment)) return true;
     break;
   }
   return false;
@@ -141,22 +130,8 @@ function isFindExecWrite(segment: string): boolean {
   if (!execMatch) return false;
 
   const execCmd = execMatch[1].toLowerCase();
-  if (SHELL_INTERPRETERS.has(execCmd)) return true;
-
-  if (writeCapableCommands.has(execCmd)) {
-    const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
-    if (execCmd === "sed" && /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/.test(afterExec)) return true;
-    if (execCmd === "perl" && /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/.test(afterExec)) return true;
-    if (execCmd === "rm" || execCmd === "rmdir" || execCmd === "unlink") return true;
-    if (execCmd === "mv" || execCmd === "cp") return true;
-    if (execCmd === "chmod" || execCmd === "chown") return true;
-    if (execCmd === "touch" || execCmd === "mkdir") return true;
-    if (execCmd === "dd" || execCmd === "truncate") return true;
-    if (execCmd === "patch" || execCmd === "install") return true;
-    if (["tar", "zip", "unzip", "gzip", "gunzip"].includes(execCmd)) return true;
-    if (["pip", "npm", "yarn", "cargo", "go", "uv"].includes(execCmd)) return true;
-  }
-  return false;
+  const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
+  return isWriteOperation(execCmd, afterExec);
 }
 
 // ── Pipeline checks ──
@@ -199,6 +174,9 @@ function hasDangerousCommandInPipeline(segment: string): boolean {
 function hasKnownDanger(seg: BashSegment): boolean {
   const segment = seg.text;
   const firstWord = getFirstWord(segment);
+  const hasHeredoc = seg.ops.includes("<<") || seg.ops.includes("<<<");
+  // Heredoc to an interpreter = executable code (not data like cat << 'EOF')
+  const isInterpreterWithHeredoc = hasHeredoc && /^(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv|bash|sh|zsh|fish|csh|tcsh|ksh)/i.test(firstWord);
   return seg.hasSubshell
     || (firstWord === "find" && dangerousFindFlags.test(segment))
     || (firstWord === "find" && isFindExecWrite(segment))
@@ -209,7 +187,8 @@ function hasKnownDanger(seg: BashSegment): boolean {
     || (firstWord === "git" && isGitDangerous(segment))
     || (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment))
     || hasWrapperRunningWriteInPipeline(segment)
-    || hasWriteRedirect(segment);
+    || hasWriteRedirect(segment)
+    || isInterpreterWithHeredoc;
 }
 
 // ── Safety check entry points ──

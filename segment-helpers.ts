@@ -2,9 +2,16 @@ import path from "node:path";
 
 // ── Segment helpers (pure string utilities) ──
 
+export const CMD_SUBST_MARKER = "__CMD_SUBST__";
+
+/** Check if a string contains command substitution markers from stripQuotedStrings. */
+export function containsCommandSubstitution(s: string): boolean {
+  return s.includes(CMD_SUBST_MARKER);
+}
+
 function stripQuotedStrings(cmd: string): string {
   let s = cmd.replace(/"(?:[^"\\]|\\.)*"/g, (match) => {
-    if (/\$\s*\(/.test(match) || /`/.test(match)) return "__CMD_SUBST__";
+    if (/\$\s*\(/.test(match) || /`/.test(match)) return CMD_SUBST_MARKER;
     return "__STR__";
   });
   s = s.replace(/'[^']*'/g, "__STR__");
