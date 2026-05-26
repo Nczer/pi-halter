@@ -83,3 +83,39 @@ export const writeCapableCommands = new Set([
   "pip", "npm", "yarn", "cargo", "go",
   "uv",
 ]);
+
+/** Shell interpreters used by find -exec and similar constructs. */
+export const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh"]);
+
+/** Commands that always perform write operations (unconditional — no flag-dependent behavior). */
+const ALWAYS_WRITE = new Set([
+  "rm", "rmdir", "unlink", "mv", "cp", "chmod", "chown",
+  "touch", "mkdir", "dd", "truncate", "patch", "install", "ln",
+]);
+
+/** Archive/package-manager commands that always write. */
+const ALWAYS_WRITE_ARCHIVE_PKG = new Set([
+  "tar", "zip", "unzip", "gzip", "gunzip",
+  "pip", "npm", "yarn", "cargo", "go", "uv",
+]);
+
+/**
+ * Check whether a given command + surrounding context is a write operation.
+ * Consolidates the duplicated logic from isWrapperRunningWrite and isFindExecWrite.
+ *
+ * @param command  The command name to check (lowercase).
+ * @param context  The full segment text after the command (for flag-dependent checks like sed -i).
+ */
+export function isWriteOperation(command: string, context: string): boolean {
+  if (ALWAYS_WRITE.has(command)) return true;
+  if (ALWAYS_WRITE_ARCHIVE_PKG.has(command)) return true;
+
+  if (command === "sed") return dangerousSedFlags.test(context);
+  if (command === "perl") return dangerousPerlFlags.test(context);
+  if (command === "tee") return /\btee\b.*\S/.test(context);
+
+  // Shell interpreters running via exec are inherently write-capable
+  if (SHELL_INTERPRETERS.has(command)) return true;
+
+  return false;
+}

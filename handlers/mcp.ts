@@ -5,9 +5,34 @@ import { decide } from "../decision-engine";
 import { showPrompt } from "../prompt-flow";
 import { store } from "../store";
 import { formatMcpProxyToolCallLines, formatMcpDirectToolCallLines, buildArgsPreview, McpProxyToolCallInput } from "../mcp-format";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+
+// ── Cache helpers ──────────────────────────────────────────────────────
+
+/** Simple mtime-based cache for lazily-loaded data derived from config files. */
+class FileCache<T> {
+  private cached: { mtime: number; value: T } | null = null;
+
+  get(files: string[], build: () => T): T {
+    let latestMtime = 0;
+    for (const f of files) {
+      try {
+        const mtime = statSync(f).mtimeMs;
+        if (mtime > latestMtime) latestMtime = mtime;
+      } catch {
+        // File doesn't exist — skip
+      }
+    }
+    if (this.cached && latestMtime <= this.cached.mtime) {
+      return this.cached.value;
+    }
+    const value = build();
+    this.cached = { mtime: latestMtime || Date.now(), value };
+    return value;
+  }
+}
 
 // ── Metadata cache resolution ──────────────────────────────────────────
 
@@ -29,63 +54,72 @@ interface McpCache {
   servers: Record<string, McpCacheServer>;
 }
 
+const toolMapCache = new FileCache<Map<string, string>>();
+const configFilePaths = [
+  join(homedir(), ".pi", "agent", "mcp-cache.json"),
+  join(homedir(), ".pi", "agent", "mcp.json"),
+  join(homedir(), ".config", "mcp", "mcp.json"),
+];
+
 function loadToolToServerMap(): Map<string, string> {
-  const map = new Map<string, string>();
-  const cachePaths = [
-    join(homedir(), ".pi", "agent", "mcp-cache.json"),
-  ];
+  return toolMapCache.get(configFilePaths, () => {
+    const map = new Map<string, string>();
 
-  // Load prefix mode from mcp.json settings
-  let prefixMode: "server" | "none" | "short" = "server"; // default
-  const configPaths = [
-    join(homedir(), ".pi", "agent", "mcp.json"),
-    join(homedir(), ".config", "mcp", "mcp.json"),
-  ];
-  for (const configPath of configPaths) {
-    if (!existsSync(configPath)) continue;
-    try {
-      const config = JSON.parse(readFileSync(configPath, "utf-8"));
-      const settings = config.settings ?? {};
-      if (settings.toolPrefix) {
-        prefixMode = settings.toolPrefix;
+    // Load prefix mode from mcp.json settings
+    let prefixMode: "server" | "none" | "short" = "server"; // default
+    const configPaths = [
+      join(homedir(), ".pi", "agent", "mcp.json"),
+      join(homedir(), ".config", "mcp", "mcp.json"),
+    ];
+    for (const configPath of configPaths) {
+      if (!existsSync(configPath)) continue;
+      try {
+        const config = JSON.parse(readFileSync(configPath, "utf-8"));
+        const settings = config.settings ?? {};
+        if (settings.toolPrefix) {
+          prefixMode = settings.toolPrefix;
+        }
+        break;
+      } catch {
+        // Try next config path
       }
-      break;
-    } catch {
-      // Try next config path
     }
-  }
 
-  for (const cachePath of cachePaths) {
-    if (!existsSync(cachePath)) continue;
-    try {
-      const cache = JSON.parse(readFileSync(cachePath, "utf-8")) as McpCache;
-      if (!cache?.servers || typeof cache.servers !== "object") continue;
+    const cachePaths = [
+      join(homedir(), ".pi", "agent", "mcp-cache.json"),
+    ];
+    for (const cachePath of cachePaths) {
+      if (!existsSync(cachePath)) continue;
+      try {
+        const cache = JSON.parse(readFileSync(cachePath, "utf-8")) as McpCache;
+        if (!cache?.servers || typeof cache.servers !== "object") continue;
 
-      for (const [serverName, entry] of Object.entries(cache.servers)) {
-        if (!entry?.tools || !Array.isArray(entry.tools)) continue;
-        for (const tool of entry.tools) {
-          if (!tool?.name) continue;
+        for (const [serverName, entry] of Object.entries(cache.servers)) {
+          if (!entry?.tools || !Array.isArray(entry.tools)) continue;
+          for (const tool of entry.tools) {
+            if (!tool?.name) continue;
 
-          // Store raw name
-          map.set(tool.name, serverName);
+            // Store raw name
+            map.set(tool.name, serverName);
 
-          // Store prefixed names based on toolPrefix setting
-          if (prefixMode === "server") {
-            map.set(`${serverName}_${tool.name}`, serverName);
-          } else if (prefixMode === "none") {
-            map.set(`${tool.name}_${serverName}`, serverName);
-          } else if (prefixMode === "short") {
-            const shortName = serverName.split("/").pop() ?? serverName;
-            map.set(`${shortName}_${tool.name}`, serverName);
+            // Store prefixed names based on toolPrefix setting
+            if (prefixMode === "server") {
+              map.set(`${serverName}_${tool.name}`, serverName);
+            } else if (prefixMode === "none") {
+              map.set(`${tool.name}_${serverName}`, serverName);
+            } else if (prefixMode === "short") {
+              const shortName = serverName.split("/").pop() ?? serverName;
+              map.set(`${shortName}_${tool.name}`, serverName);
+            }
           }
         }
+      } catch {
+        // Skip invalid cache files
       }
-    } catch {
-      // Skip invalid cache files
     }
-  }
 
-  return map;
+    return map;
+  });
 }
 
 /**
@@ -130,36 +164,44 @@ const METADATA_OPS = new Set(["connect", "describe", "search", "list", "status"]
 
 // ── Direct tool detection ──────────────────────────────────────────────
 
+const directToolMapCache = new FileCache<Map<string, { server: string; originalName: string }>>();
+const mcpConfigPaths = [
+  join(homedir(), ".pi", "agent", "mcp.json"),
+  join(homedir(), ".config", "mcp", "mcp.json"),
+];
+
 /**
  * Load the MCP config and build a map of direct tool names to server info.
- * Reloads on each call — config file is small JSON, overhead is negligible.
+ * Cached with mtime-based invalidation — re-reads only when files change.
  */
 function loadDirectToolMap(): Map<string, { server: string; originalName: string }> {
-  const map = new Map<string, { server: string; originalName: string }>();
-  const configPaths = [
-    join(homedir(), ".pi", "agent", "mcp.json"),
-    join(homedir(), ".config", "mcp", "mcp.json"),
-  ];
+  return directToolMapCache.get(mcpConfigPaths, () => {
+    const map = new Map<string, { server: string; originalName: string }>();
+    const configPaths = [
+      join(homedir(), ".pi", "agent", "mcp.json"),
+      join(homedir(), ".config", "mcp", "mcp.json"),
+    ];
 
-  for (const configPath of configPaths) {
-    if (!existsSync(configPath)) continue;
-    try {
-      const config = JSON.parse(readFileSync(configPath, "utf-8"));
-      const servers = config.mcpServers ?? {};
+    for (const configPath of configPaths) {
+      if (!existsSync(configPath)) continue;
+      try {
+        const config = JSON.parse(readFileSync(configPath, "utf-8"));
+        const servers = config.mcpServers ?? {};
 
-      for (const [serverName, definition] of Object.entries(servers)) {
-        const def = definition as Record<string, unknown>;
-        const directTools = def.directTools;
-        if (directTools !== true && !Array.isArray(directTools)) continue;
+        for (const [serverName, definition] of Object.entries(servers)) {
+          const def = definition as Record<string, unknown>;
+          const directTools = def.directTools;
+          if (directTools !== true && !Array.isArray(directTools)) continue;
 
-        map.set(`__server__:${serverName}`, { server: serverName, originalName: "" });
+          map.set(`__server__:${serverName}`, { server: serverName, originalName: "" });
+        }
+      } catch {
+        // Skip invalid configs
       }
-    } catch {
-      // Skip invalid configs
     }
-  }
 
-  return map;
+    return map;
+  });
 }
 
 // ── Argument preview delegated to mcp-format.ts ────────────────────────

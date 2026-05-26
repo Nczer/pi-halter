@@ -237,3 +237,24 @@ describe("MCP: unknown server blocked", () => {
 		}
 	});
 });
+
+describe("Bash: empty segments guard", () => {
+	it("does not auto-allow command with zero segments (heredoc to interpreter)", async () => {
+		const store = createStore();
+		const d = await decide(
+			{ type: "bash", command: "python3 << 'PYEOF'\nimport os\nPYEOF", cwd },
+			store,
+		);
+		// Even if parser produces zero segments, should NOT vacuously auto-allow
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("does not auto-allow bash heredoc with zero segments", async () => {
+		const store = createStore();
+		const d = await decide(
+			{ type: "bash", command: "bash << 'EOF'\nrm -rf /\nEOF", cwd },
+			store,
+		);
+		expect(d.kind).toBe("prompt");
+	});
+});

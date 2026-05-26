@@ -456,6 +456,17 @@ const cases: TestCase[] = [
 	{ cmd: "cat <<< 'rm -rf /'", simple: true, unsafe: false, decision: "auto-allow", desc: "here-string with rm (data, not command)" },
 
 	// ═══════════════════════════════════════════════════════════
+	// heredoc to interpreters — content IS executable code, not data
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "python3 << 'PYEOF'\nimport json\nPYEOF", simple: false, unsafe: true, decision: "prompt", desc: "python3 heredoc (code execution via heredoc)" },
+	{ cmd: "python3 << 'PYEOF'\nimport os\nos.remove('/tmp/x')\nPYEOF", simple: false, unsafe: true, decision: "prompt", desc: "python3 heredoc with file deletion" },
+	{ cmd: "node << 'EOF'\nconsole.log('hi')\nEOF", simple: false, unsafe: true, decision: "prompt", desc: "node heredoc (code execution via heredoc)" },
+	{ cmd: "ruby << 'EOF'\nputs 'hi'\nEOF", simple: false, unsafe: true, decision: "prompt", desc: "ruby heredoc (code execution via heredoc)" },
+	{ cmd: "python3 << 'PYEOF'\nimport json, os\nwith open('/some/file.json') as f:\n    data = json.load(f)\nwith open('/some/file.json', 'w') as f:\n    json.dump(data, f)\nPYEOF", simple: false, unsafe: true, decision: "prompt", desc: "python3 heredoc that reads and writes files (real-world bypass case)" },
+	{ cmd: "bash << 'EOF'\nrm -rf /tmp/data\nEOF", simple: false, unsafe: true, decision: "prompt", desc: "bash heredoc (shell code execution via heredoc)" },
+	{ cmd: "sh << 'EOF'\necho hello\nEOF", simple: false, unsafe: true, decision: "prompt", desc: "sh heredoc (shell code execution via heredoc)" },
+
+	// ═══════════════════════════════════════════════════════════
 	// comments — dangerous text in comments should NOT trigger
 	// ═══════════════════════════════════════════════════════════
 	{ cmd: "cat a # rm b", simple: true, unsafe: false, decision: "auto-allow", desc: "rm in comment (not a command)" },

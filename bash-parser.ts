@@ -369,6 +369,26 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
           redirectTexts.push(redirText);
           const redirectOps = detectOpsInNode(child);
           for (const op of redirectOps) ops.add(op);
+        } else if (child.type === "heredoc_redirect") {
+          // For heredoc, only include the operator + delimiter (e.g. "<< 'PYEOF'"), not the body.
+          // The body is opaque data/code that the parser skips — including it would cause
+          // dangerousContextPatterns to match content that isn't actually shell commands.
+          const heredocParts: string[] = [];
+          for (let j = 0; j < child.childCount; j++) {
+            const gc = child.child(j);
+            if (!gc) continue;
+            if (gc.type === "<<" || gc.type === "<<<" || gc.type === "heredoc_start") {
+              heredocParts.push(gc.text);
+            }
+            // Skip heredoc_body and heredoc_end — they are opaque to shell analysis
+          }
+          const heredocShort = heredocParts.join(" ").trim();
+          if (heredocShort) {
+            cmdTexts.push(heredocShort);
+            redirectTexts.push(heredocShort);
+          }
+          const redirectOps = detectOpsInNode(child);
+          for (const op of redirectOps) ops.add(op);
         } else {
           // list, binary_expression, pipeline, for_statement, while_statement, if_statement, etc.
           hasCompoundChild = true;
@@ -424,7 +444,7 @@ function detectOpsInNode(node: TSNode): string[] {
     if (n.type === "|" || n.type === "|&") {
       ops.add(n.type);
     }
-    if (n.type === "redirect_operator") {
+    if (n.type === "redirect_operator" || n.type === "<<" || n.type === "<<<") {
       ops.add(n.text);
     }
     for (let i = 0; i < n.childCount; i++) {
