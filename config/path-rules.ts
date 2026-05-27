@@ -9,11 +9,13 @@ export const allowedReadPaths: string[] = [
   path.join(os.homedir(), ".pi"),
   path.join(os.homedir(), ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
   os.tmpdir(),
+  "/tmp", // macOS: os.tmpdir() returns /var/folders/.../T, but skill scripts write to /tmp → /private/tmp
 ];
 
 /** Directories always allowed for write/edit access. */
 export const allowedWritePaths: string[] = [
   os.tmpdir(),
+  "/tmp", // macOS: same reason as above
 ];
 
 /** File/directory names that are always denied (credentials, secrets, caches). */
