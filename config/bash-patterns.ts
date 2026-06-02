@@ -1,3 +1,5 @@
+import path from "node:path";
+
 // ── Bash command patterns ──
 
 /** Commands always allowed when simple (no subshells, redirects, or dangerous flags). */
@@ -62,6 +64,43 @@ export const dangerousSedFlags = /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/;
 
 /** Flags that make `perl` dangerous (in-place editing via -i). */
 export const dangerousPerlFlags = /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/;
+
+/** Command + subcommand pairs that are always safe (read-only, no side effects). */
+export const allowedBashSubcommands = new Set([
+  "npm ls", "npm view", "npm info",
+  "yarn ls", "yarn info",
+  "pnpm ls",
+  "tsc",
+  "cargo check", "cargo clippy", "cargo doc",
+]);
+
+/**
+ * Check if a segment is a safe command+subcommand pair (or safe standalone command).
+ * e.g. "npm test -- --coverage" → "npm test" → match.
+ *      "tsc" → match (standalone).
+ *      "tsc --noEmit" → match (standalone + flags).
+ */
+export function isSafeSubcommand(segment: string): boolean {
+  const tokens = segment.trim().split(/\s+/);
+  const cmd = path.basename(tokens[0].toLowerCase());
+
+  // Standalone command in allowlist (e.g. "tsc", "tsc --noEmit")
+  if (allowedBashSubcommands.has(cmd)) {
+    // If there's a second token and it's not a flag, it's a subcommand — require exact match
+    if (tokens.length >= 2 && !tokens[1].startsWith("-")) {
+      return allowedBashSubcommands.has(`${cmd} ${tokens[1].toLowerCase()}`);
+    }
+    return true;
+  }
+
+  // Command + subcommand pair (e.g. "npm test")
+  if (tokens.length >= 2) {
+    const sub = tokens[1].toLowerCase();
+    return allowedBashSubcommands.has(`${cmd} ${sub}`);
+  }
+
+  return false;
+}
 
 /** Wrapper commands that delegate to another command (xargs sed -i, timeout rm, etc.). */
 export const wrapperCommands = new Set([

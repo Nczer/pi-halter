@@ -10,6 +10,7 @@ import {
 	getOutsideCwdPaths,
 	isProjectPiPath,
 	isPathDenied,
+	isPathWarned,
 } from "../path-analysis";
 
 const home = os.homedir();
@@ -161,44 +162,8 @@ describe("isProjectPiPath", () => {
 });
 
 describe("isPathDenied", () => {
-	it("denies .env", () => {
-		const result = isPathDenied(".env", cwd);
-		expect(result.denied).toBe(true);
-		expect(result.matchedRule).toBe(".env");
-	});
-
-	it("denies .env.local", () => {
-		expect(isPathDenied(".env.local", cwd).denied).toBe(true);
-	});
-
-	it("denies .env.production (glob match)", () => {
-		const result = isPathDenied(".env.production", cwd);
-		expect(result.denied).toBe(true);
-		expect(result.matchedRule).toBe(".env.*");
-	});
-
-	it("denies node_modules", () => {
-		expect(isPathDenied("node_modules/pkg/index.js", cwd).denied).toBe(true);
-	});
-
 	it("denies .ssh", () => {
 		expect(isPathDenied("~/.ssh/id_rsa", cwd).denied).toBe(true);
-	});
-
-	it("denies .aws", () => {
-		expect(isPathDenied("~/.aws/credentials", cwd).denied).toBe(true);
-	});
-
-	it("denies .netrc", () => {
-		expect(isPathDenied("~/.netrc", cwd).denied).toBe(true);
-	});
-
-	it("denies .npmrc", () => {
-		expect(isPathDenied("~/.npmrc", cwd).denied).toBe(true);
-	});
-
-	it("denies .docker/config.json", () => {
-		expect(isPathDenied("~/.docker/config.json", cwd).denied).toBe(true);
 	});
 
 	it("allows src/index.ts", () => {
@@ -207,5 +172,47 @@ describe("isPathDenied", () => {
 
 	it("allows README.md", () => {
 		expect(isPathDenied("README.md", cwd).denied).toBe(false);
+	});
+
+	it("allows node_modules", () => {
+		expect(isPathDenied("node_modules/pkg/index.js", cwd).denied).toBe(false);
+	});
+});
+
+describe("isPathWarned", () => {
+	it("warns .env", () => {
+		const result = isPathWarned(".env", cwd);
+		expect(result.warned).toBe(true);
+		expect(result.matchedRule).toBe(".env");
+	});
+
+	it("warns .env.local", () => {
+		expect(isPathWarned(".env.local", cwd).warned).toBe(true);
+	});
+
+	it("warns .env.production (glob match)", () => {
+		const result = isPathWarned(".env.production", cwd);
+		expect(result.warned).toBe(true);
+		expect(result.matchedRule).toBe(".env.*");
+	});
+
+	it("warns .aws", () => {
+		expect(isPathWarned("~/.aws/credentials", cwd).warned).toBe(true);
+	});
+
+	it("warns .netrc", () => {
+		expect(isPathWarned("~/.netrc", cwd).warned).toBe(true);
+	});
+
+	it("warns .npmrc", () => {
+		expect(isPathWarned("~/.npmrc", cwd).warned).toBe(true);
+	});
+
+	it("warns .docker/config.json", () => {
+		expect(isPathWarned("~/.docker/config.json", cwd).warned).toBe(true);
+	});
+
+	it("does not warn src/index.ts", () => {
+		expect(isPathWarned("src/index.ts", cwd).warned).toBe(false);
 	});
 });

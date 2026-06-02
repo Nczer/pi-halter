@@ -138,9 +138,11 @@ function buildFilePrompt(
   data: FilePromptData,
   _allowRules: { readPaths?: string[]; writePaths?: string[]; readDirs?: string[]; writeDirs?: string[] },
 ): BuiltPrompt {
-  const { action, filePath, resolved, cwd, outsideDir, isWriteOp, deniedRule, symlinkHint } = data;
+  const { action, filePath, resolved, cwd, outsideDir, isWriteOp, deniedRule, warnedRule, symlinkHint } = data;
   const insideCwd = outsideDir === null;
   const symlinkLine = symlinkHint ? `\n\n🔗 Resolved via symlink: ${symlinkHint}` : "";
+  const warnLine = warnedRule ? `\n\n⚠️ Matches credential pattern "${warnedRule}" — may contain secrets or tokens.` : "";
+  const deniedLine = deniedRule ? `\n\n⚠️ Matches denied rule "${deniedRule}" — typically contains credentials or generated files.` : "";
 
   if (insideCwd) {
     const scopeNote = isWriteOp
@@ -148,7 +150,7 @@ function buildFilePrompt(
       : `"Always Yes" will auto-allow read on this file this session (write/edit will still prompt).`;
     return {
       title: action,
-      body: `Path:\n  ${filePath}${deniedRule ? `\n\n⚠️ Matches denied rule "${deniedRule}" — typically contains credentials or generated files.` : ""}${symlinkLine}\n`,
+      body: `Path:\n  ${filePath}${warnLine}${deniedLine}${symlinkLine}\n`,
       tier2Everything: {
         title: `Confirm Always Allow: ${action} ${resolved.split("/").pop() || resolved}`,
         body: `${scopeNote}\n\n  ${resolved}\n\n"Back" returns to the previous prompt.`,
@@ -169,7 +171,7 @@ function buildFilePrompt(
 
   return {
     title: `⚠️ ${action} outside cwd`,
-    body: `Path:\n  ${filePath}\n\n⚠️ Outside cwd: ${outsideDir}${symlinkLine}${deniedRule ? `\n\n⚠️ Matches denied rule "${deniedRule}" — typically contains credentials or generated files.` : ""}\n`,
+    body: `Path:\n  ${filePath}\n\n⚠️ Outside cwd: ${outsideDir}${warnLine}${deniedLine}${symlinkLine}\n`,
     tier2Everything: {
       title: `Confirm Always Allow: ${tier2Label}`,
       body: `"Always Yes" will ${scope}:\n\n  ${outsideDir}\n\n"Back" returns to the previous prompt.`,
