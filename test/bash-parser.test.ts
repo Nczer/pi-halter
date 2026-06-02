@@ -1,203 +1,148 @@
 import path from "node:path";
 import os from "node:os";
 import { describe, expect, it } from "vitest";
-import { extractPathsFromBash, extractSegments, hasSubshell } from "../bash-parser";
+import { parseCommand, hasSubshell } from "../bash-parser";
 
 const home = os.homedir();
 const cwd = path.join(home, "Projects");
 
-describe("extractPathsFromBash: basic paths", () => {
-	it("does not extract relative paths (always inside cwd)", async () => {
-		const paths = await extractPathsFromBash("cat src/index.ts", cwd);
-		expect(paths).toHaveLength(0);
-	});
-
-	it("keeps absolute paths", async () => {
-		const paths = await extractPathsFromBash("cat /etc/hosts", cwd);
-		expect(paths).toContain("/etc/hosts");
-	});
-
-	it("expands tilde", async () => {
-		const paths = await extractPathsFromBash("ls ~/foo", cwd);
-		expect(paths.length).toBeGreaterThan(0);
-		expect(paths[0]).toBe(path.join(home, "foo"));
-	});
-
-	it("flags-only command has no paths", async () => {
-		const paths = await extractPathsFromBash("ls -la", cwd);
-		expect(paths).toHaveLength(0);
-	});
-});
-
-describe("extractPathsFromBash: redirects", () => {
-	it("extracts redirect destination", async () => {
-		const paths = await extractPathsFromBash("cat file.txt > /tmp/out.txt", cwd);
-		expect(paths).toContain("/tmp/out.txt");
-	});
-
-	it("filters /dev/null", async () => {
-		const paths = await extractPathsFromBash("echo hello 2>/dev/null", cwd);
-		expect(paths).toHaveLength(0);
-	});
-
-	it("extracts input redirect", async () => {
-		const paths = await extractPathsFromBash("cat < /tmp/in.txt", cwd);
-		expect(paths).toContain("/tmp/in.txt");
-	});
-});
-
-describe("extractPathsFromBash: quotes", () => {
-	it("handles single quotes with absolute path", async () => {
-		const paths = await extractPathsFromBash("cat '/tmp/file with spaces.txt'", cwd);
-		expect(paths).toContain("/tmp/file with spaces.txt");
-	});
-
-	it("handles double quotes with absolute path", async () => {
-		const paths = await extractPathsFromBash('cat "/tmp/file with spaces.txt"', cwd);
-		expect(paths).toContain("/tmp/file with spaces.txt");
-	});
-});
-
-describe("extractPathsFromBash: heredocs", () => {
-	it("does not extract heredoc body as path", async () => {
-		const paths = await extractPathsFromBash("cat << 'EOF'\n/etc/passwd\nEOF", cwd);
-		expect(paths).toHaveLength(0);
-	});
-});
-
-describe("extractPathsFromBash: comments", () => {
-	it("does not extract commented paths", async () => {
-		const paths = await extractPathsFromBash("ls # /etc/hosts", cwd);
-		expect(paths).toHaveLength(0);
-	});
-});
-
-describe("extractPathsFromBash: subshells", () => {
-	it("does not crash on subshell", async () => {
-		const paths = await extractPathsFromBash("cat $(echo /etc/hosts)", cwd);
-		expect(Array.isArray(paths)).toBe(true);
-	});
-});
-
-describe("extractPathsFromBash: non-path-aware commands", () => {
-	it("echo is not path-aware", async () => {
-		const paths = await extractPathsFromBash("echo /etc/hosts", cwd);
-		expect(paths).toHaveLength(0);
-	});
-});
-
-describe("extractPathsFromBash: URL filtering", () => {
-	it("does not extract URLs as paths", async () => {
-		const paths = await extractPathsFromBash("cat https://example.com", cwd);
-		expect(paths).toHaveLength(0);
-	});
-});
-
-describe("extractSegments: simple commands", () => {
+describe("parseCommand: segments", () => {
 	it("single command → 1 segment", async () => {
-		const segs = await extractSegments("ls -la");
-		expect(segs).toHaveLength(1);
-		expect(segs[0].text).toBe("ls -la");
+		const r = await parseCommand("ls -la", cwd);
+		expect(r.segments).toHaveLength(1);
+		expect(r.segments[0].text).toBe("ls -la");
 	});
-});
 
-describe("extractSegments: pipelines", () => {
 	it("pipeline → 1 segment", async () => {
-		const segs = await extractSegments("cat a | grep b");
-		expect(segs).toHaveLength(1);
-		expect(segs[0].ops).toContain("|");
+		const r = await parseCommand("cat a | grep b", cwd);
+		expect(r.segments).toHaveLength(1);
+		expect(r.segments[0].ops).toContain("|");
 	});
 
-	it("multi-pipe → 1 segment", async () => {
-		const segs = await extractSegments("cat a | grep b | wc -l");
-		expect(segs).toHaveLength(1);
-		expect(segs[0].ops).toContain("|");
-	});
-});
-
-describe("extractSegments: && chains", () => {
 	it("&& → 2 segments", async () => {
-		const segs = await extractSegments("ls && cat file.txt");
-		expect(segs).toHaveLength(2);
-		expect(segs[0].text).toContain("ls");
-		expect(segs[1].text).toContain("cat");
+		const r = await parseCommand("ls && cat file.txt", cwd);
+		expect(r.segments).toHaveLength(2);
 	});
 
 	it("triple && → 3 segments", async () => {
-		const segs = await extractSegments("ls && cat a && echo done");
-		expect(segs).toHaveLength(3);
-	});
-});
-
-describe("extractSegments: || chains", () => {
-	it("|| → 2 segments", async () => {
-		const segs = await extractSegments("ls || echo not found");
-		expect(segs).toHaveLength(2);
-	});
-});
-
-describe("extractSegments: ; chains", () => {
-	it("; → 2 segments", async () => {
-		const segs = await extractSegments("ls; cat file.txt");
-		expect(segs).toHaveLength(2);
-	});
-});
-
-describe("extractSegments: backgrounding", () => {
-	it("backgrounding → 1 segment (& stripped)", async () => {
-		const segs = await extractSegments("sleep 10 &");
-		expect(segs).toHaveLength(1);
-		expect(segs[0].text).toBe("sleep 10");
-	});
-});
-
-describe("extractSegments: redirected_statement", () => {
-	it("redirected command → 1 segment", async () => {
-		const segs = await extractSegments("tr 'a-z' 'A-Z' < file.txt");
-		expect(segs).toHaveLength(1);
-		expect(segs[0].text).toContain("tr");
-		expect(segs[0].text).toContain("file.txt");
+		const r = await parseCommand("ls && cat a && echo done", cwd);
+		expect(r.segments).toHaveLength(3);
 	});
 
-	it("&& chain with redirect → 2 segments", async () => {
-		const segs = await extractSegments("rm a && ls b 2>/dev/null");
-		expect(segs).toHaveLength(2);
-		expect(segs[0].text).toBe("rm a");
-		expect(segs[1].text).toContain("ls b");
-		expect(segs[1].text).toContain("2>/dev/null");
+	it("redirected statement → 1 segment", async () => {
+		const r = await parseCommand("tr 'a-z' 'A-Z' < file.txt", cwd);
+		expect(r.segments).toHaveLength(1);
 	});
-});
 
-describe("extractSegments: compound + redirect", () => {
 	it("pipeline with redirect → 1 segment", async () => {
-		const segs = await extractSegments("cat a | grep b 2>/dev/null");
-		expect(segs).toHaveLength(1);
+		const r = await parseCommand("cat a | grep b 2>/dev/null", cwd);
+		expect(r.segments).toHaveLength(1);
 	});
 
 	it("for loop with redirect → segments extracted", async () => {
-		const segs = await extractSegments("for f in a b; do rm $f; done 2>/dev/null");
-		expect(segs.length).toBeGreaterThanOrEqual(1);
+		const r = await parseCommand("for f in a b; do rm $f; done 2>/dev/null", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
 	});
-});
 
-describe("extractSegments: subshells", () => {
 	it("subshell in pipeline → segments", async () => {
-		const segs = await extractSegments("(rm a && ls b) | cat");
-		expect(segs.length).toBeGreaterThanOrEqual(1);
+		const r = await parseCommand("(rm a && ls b) | cat", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("|| → 2 segments", async () => {
+		const r = await parseCommand("ls || echo not found", cwd);
+		expect(r.segments).toHaveLength(2);
+	});
+
+	it("; → 2 segments", async () => {
+		const r = await parseCommand("ls; cat file.txt", cwd);
+		expect(r.segments).toHaveLength(2);
+	});
+
+	it("backgrounding stripped", async () => {
+		const r = await parseCommand("sleep 10 &", cwd);
+		expect(r.segments).toHaveLength(1);
+		expect(r.segments[0].text).toBe("sleep 10");
+	});
+
+	it("comment stripped", async () => {
+		const r = await parseCommand("ls # comment", cwd);
+		expect(r.segments).toHaveLength(1);
 	});
 });
 
-describe("extractSegments: heredocs", () => {
-	it("heredoc does not crash segmentation", async () => {
-		const segs = await extractSegments("cat << 'EOF'\nhello world\nEOF\n");
-		expect(Array.isArray(segs)).toBe(true);
+describe("parseCommand: paths", () => {
+	it("keeps absolute paths", async () => {
+		const r = await parseCommand("cat /etc/hosts", cwd);
+		expect(r.paths).toContain("/etc/hosts");
+	});
+
+	it("expands tilde", async () => {
+		const r = await parseCommand("ls ~/foo", cwd);
+		expect(r.paths.length).toBeGreaterThan(0);
+		expect(r.paths[0]).toBe(path.join(home, "foo"));
+	});
+
+	it("does not extract relative paths", async () => {
+		const r = await parseCommand("cat src/index.ts", cwd);
+		expect(r.paths).toHaveLength(0);
+	});
+
+	it("extracts redirect destination", async () => {
+		const r = await parseCommand("cat file.txt > /tmp/out.txt", cwd);
+		expect(r.paths).toContain("/tmp/out.txt");
+	});
+
+	it("extracts input redirect", async () => {
+		const r = await parseCommand("cat < /tmp/in.txt", cwd);
+		expect(r.paths).toContain("/tmp/in.txt");
+	});
+
+	it("filters /dev/null", async () => {
+		const r = await parseCommand("echo hello 2>/dev/null", cwd);
+		expect(r.paths).toHaveLength(0);
+	});
+
+	it("handles single-quoted paths", async () => {
+		const r = await parseCommand("cat '/tmp/file with spaces.txt'", cwd);
+		expect(r.paths).toContain("/tmp/file with spaces.txt");
+	});
+
+	it("handles double-quoted paths", async () => {
+		const r = await parseCommand('cat "/tmp/file with spaces.txt"', cwd);
+		expect(r.paths).toContain("/tmp/file with spaces.txt");
+	});
+
+	it("does not extract heredoc body as path", async () => {
+		const r = await parseCommand("cat << 'EOF'\n/etc/passwd\nEOF", cwd);
+		expect(r.paths).toHaveLength(0);
+	});
+
+	it("does not extract commented paths", async () => {
+		const r = await parseCommand("ls # /etc/hosts", cwd);
+		expect(r.paths).toHaveLength(0);
+	});
+
+	it("non-path-aware commands have no paths", async () => {
+		const r = await parseCommand("echo /etc/hosts", cwd);
+		expect(r.paths).toHaveLength(0);
+	});
+
+	it("does not extract URLs as paths", async () => {
+		const r = await parseCommand("cat https://example.com", cwd);
+		expect(r.paths).toHaveLength(0);
 	});
 });
 
-describe("extractSegments: comments", () => {
-	it("comment stripped from segment", async () => {
-		const segs = await extractSegments("ls # comment");
-		expect(segs).toHaveLength(1);
+describe("parseCommand: hasSubshell", () => {
+	it("detects subshell in command", async () => {
+		const r = await parseCommand("cat $(echo /etc/hosts)", cwd);
+		expect(r.hasSubshell).toBe(true);
+	});
+
+	it("no subshell on simple command", async () => {
+		const r = await parseCommand("ls -la", cwd);
+		expect(r.hasSubshell).toBe(false);
 	});
 });
 

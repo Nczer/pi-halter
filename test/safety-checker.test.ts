@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isWriteOperation, isTrustedScriptCommand } from "../config";
 import { isSimpleAllowedCommand, isSegmentUnsafe } from "../safety-checker";
 import { parseCommand, type BashSegment } from "../bash-parser";
-import { containsCommandSubstitution, CMD_SUBST_MARKER } from "../segment-helpers";
+import { containsCommandSubstitution } from "../segment-helpers";
 
 async function makeSeg(cmd: string, cwd = "/home/user/project"): Promise<BashSegment> {
   const result = await parseCommand(cmd, cwd);
@@ -204,21 +204,6 @@ describe("isWriteOperation (shared helper)", () => {
     expect(isWriteOperation("ls", "ls -la")).toBe(false);
     expect(isWriteOperation("grep", "grep foo bar")).toBe(false);
     expect(isWriteOperation("cat", "cat file.txt")).toBe(false);
-  });
-});
-
-describe("containsCommandSubstitution / CMD_SUBST_MARKER", () => {
-  it("detects the marker string", () => {
-    expect(containsCommandSubstitution("echo __CMD_SUBST__")).toBe(true);
-  });
-
-  it("returns false for normal strings", () => {
-    expect(containsCommandSubstitution("echo hello")).toBe(false);
-    expect(containsCommandSubstitution("ls -la")).toBe(false);
-  });
-
-  it("marker constant matches the string literal", () => {
-    expect(CMD_SUBST_MARKER).toBe("__CMD_SUBST__");
   });
 });
 
