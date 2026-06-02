@@ -168,13 +168,13 @@ function buildFilePrompt(
       title: action,
       body: `Path:\n  ${filePath}${warnLine}${deniedLine}${symlinkLine}\n`,
       tier2Everything: {
-        title: `Confirm Always Allow: ${action} ${fileName}/*`,
-        body: `${scopeNote}\n\n  ${resolved}/*\n\n"Back" returns to the previous prompt.`,
+        title: `Confirm Always Allow: ${action} ${fileName}`,
+        body: `${scopeNote}\n\n  ${resolved}\n\n"Back" returns to the previous prompt.`,
       },
       includePathsOption: false,
       includeFileOption: false,
       includeBroaderOption: false,
-      alwaysLabel: `${action} ${fileName}/*`,
+      alwaysLabel: `${action} ${fileName}`,
     };
   }
 
@@ -195,14 +195,14 @@ function buildFilePrompt(
       body: `"Always Yes" will ${scope}:\n\n  ${outsideDir}/*\n\n"Back" returns to the previous prompt.`,
     },
     tier2File: {
-      title: `Confirm Always Allow: ${action} ${fileName}/*`,
-      body: `"Always Yes" will ${fileScope}:\n\n  ${resolved}/*\n\nOther files in ${outsideDir} will still prompt.\n\n"Back" returns to the previous prompt.`,
+      title: `Confirm Always Allow: ${action} ${fileName}`,
+      body: `"Always Yes" will ${fileScope}:\n\n  ${resolved}\n\nOther files in ${outsideDir} will still prompt.\n\n"Back" returns to the previous prompt.`,
     },
     includePathsOption: false,
     includeFileOption: true,
     includeBroaderOption: false,
     alwaysLabel: tier2Label,
-    alwaysFileLabel: `${action} ${fileName}/*`,
+    alwaysFileLabel: `${action} ${fileName}`,
   };
 }
 
