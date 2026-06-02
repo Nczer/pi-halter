@@ -23,19 +23,19 @@ export async function twoTierAlwaysPrompt(
   onAlwaysFile: () => void,
   onAlwaysBroader?: () => void,
 ): Promise<PromptResult> {
-  const { title, body, tier2Everything, tier2Paths, tier2File, includePathsOption, includeFileOption, includeBroaderOption } = prompt;
+  const { title, body, tier2Everything, tier2Paths, tier2File, includePathsOption, includeFileOption, includeBroaderOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel } = prompt;
 
   while (true) {
     const { over, count } = store.incrementPromptCount();
     let choices: string[];
     if (includeBroaderOption) {
-      choices = ["Yes", "Always (subcommand)", "Always (everything)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, "No (with reason)", "No"];
     } else if (includePathsOption) {
-      choices = ["Yes", "Always (everything)", "Always (paths only)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "No (with reason)", "No"];
     } else if (includeFileOption) {
-      choices = ["Yes", "Always (this session)", "Always (this file only)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "No (with reason)", "No"];
     } else {
-      choices = ["Yes", "Always (this session)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, "No (with reason)", "No"];
     }
     const warningPrefix = over
       ? `\u26a0\ufe0f High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
@@ -51,28 +51,28 @@ export async function twoTierAlwaysPrompt(
       return { kind: "no", reason: reason?.trim() || "No reason provided" };
     }
 
-    if (includeBroaderOption && answer === "Always (subcommand)") {
+    if (includeBroaderOption && answer === `Always: ${alwaysLabel}`) {
       const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,
         ["Always Yes", "Back"]);
       if (tier2 === "Always Yes") { onAlways(); return "always"; }
       continue;
     }
 
-    if (includeBroaderOption && answer === "Always (everything)") {
+    if (includeBroaderOption && answer === `Always: ${alwaysBroaderLabel}`) {
       const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,
         ["Always Yes", "Back"]);
       if (tier2 === "Always Yes") { onAlwaysBroader?.(); return "always"; }
       continue;
     }
 
-    if (includeFileOption && answer === "Always (this file only)") {
+    if (includeFileOption && answer === `Always (file): ${alwaysFileLabel}`) {
       const config = tier2File!;
       const tier2 = await showSelect(ctx, config.title, ["Always Yes", "Back"]);
       if (tier2 === "Always Yes") { onAlwaysFile(); return "alwaysFile"; }
       continue;
     }
 
-    if (includePathsOption && answer === "Always (paths only)") {
+    if (includePathsOption && answer === `Always (paths): ${alwaysPathsLabel}`) {
       const config = tier2Paths ?? tier2Everything;
       const tier2 = await showSelect(ctx, config.title, ["Always Yes", "Back"]);
       if (tier2 === "Always Yes") { onAlwaysPaths(); return "alwaysPaths"; }
