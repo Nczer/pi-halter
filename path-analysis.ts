@@ -1,7 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import { allowedReadPaths, allowedWritePaths, deniedPaths, isTrustedScriptPath } from "./config";
+import { allowedReadPaths, allowedWritePaths, deniedPaths, warnPaths, isTrustedScriptPath } from "./config";
 
 // ── Relative path detection ──
 
@@ -123,9 +123,27 @@ export function isPathDenied(filePath: string, cwd: string): { denied: boolean; 
         return { denied: true, matchedRule: denied };
       }
     }
-    if (/^\.env\.[^/]*$/.test(nameToCheck)) {
-      return { denied: true, matchedRule: ".env.*" };
-    }
   }
   return { denied: false, matchedRule: null };
+}
+
+export function isPathWarned(filePath: string, cwd: string): { warned: boolean; matchedRule: string | null } {
+  const resolved = resolvePathReal(expandTilde(filePath), cwd);
+  const basename = path.basename(filePath);
+  const resolvedBasename = path.basename(resolved);
+  const basenamesToCheck = new Set([basename, resolvedBasename]);
+
+  for (const nameToCheck of basenamesToCheck) {
+    for (const warn of warnPaths) {
+      if (nameToCheck === warn) return { warned: true, matchedRule: warn };
+      if (resolved.includes(`/${warn}/`) || resolved.endsWith(`/${warn}`)) {
+        return { warned: true, matchedRule: warn };
+      }
+    }
+    // .env.* pattern (e.g. .env.production, .env.development)
+    if (/^\.env\.[^/]*$/.test(nameToCheck)) {
+      return { warned: true, matchedRule: ".env.*" };
+    }
+  }
+  return { warned: false, matchedRule: null };
 }

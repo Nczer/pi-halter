@@ -18,13 +18,15 @@ export const allowedWritePaths: string[] = [
   "/tmp", // macOS: same reason as above
 ];
 
-/** File/directory names that are always denied (credentials, secrets, caches). */
+/** File/directory names that are always denied — hard block, no prompt. */
 export const deniedPaths: string[] = [
-  ".env", ".env.local",
-  "node_modules", ".npm", ".pnpm-store", ".yarn",
   ".ssh", ".gnupg", ".gpg",
-  ".aws", ".gcloud", ".azure",
+  ".vault", ".secret", ".secrets",
+];
+
+/** File/directory names that may contain credentials — prompt with warning instead of hard block. */
+export const warnPaths: string[] = [
+  ".env", ".aws", ".gcloud", ".azure",
   ".git-credentials", ".hg/hgrc",
   ".netrc", ".npmrc", ".pypirc", ".docker/config.json",
-  ".vault", ".secret", ".secrets",
 ];

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { ABORT_REMEMBER_MS, allowedBashPatterns } from "./config";
+import { ABORT_REMEMBER_MS, allowedBashPatterns, isSafeSubcommand } from "./config";
 import { analyzeCommand } from "./command-analysis";
 import {
   resolvePathReal,
@@ -11,6 +11,7 @@ import {
   isAllowedWritePath,
   isProjectPiPath,
   isPathDenied,
+  isPathWarned,
   getOutsideCwdPaths,
 } from "./path-analysis";
 import type { Store, AllowRules } from "./store";
@@ -97,6 +98,7 @@ export interface FilePromptData {
   outsideDir: string | null; // null if inside cwd
   isWriteOp: boolean;
   deniedRule: string | null;
+  warnedRule: string | null; // credential warning (prompt, not block)
   symlinkHint: string | null; // e.g. "/home/user/data → /mnt/storage"
 }
 
@@ -162,12 +164,18 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
     return { kind: "auto-allow" };
   }
 
+  // Auto-allow if all segments are safe subcommands (npm test, tsc, etc.)
+  if (analysis.segments.every(seg => isSafeSubcommand(seg)) && !analysis.hasUnsafePattern && outsidePaths.length === 0) {
+    return { kind: "auto-allow" };
+  }
+
   // Auto-allow if all signatures are either previously approved or in the static allowlist
   // Segments with relative paths (./scripts/foo or timeout 30 ./scripts/foo.sh) must not match
   const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
   const isSigApproved = (sig: string, segIdx: number) => {
     if (store.hasAllowedBash(sig)) return true;
     if (relPathIdxSet.has(segIdx)) return false;
+    if (isSafeSubcommand(analysis.segments[segIdx])) return true;
     return allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0]));
   };
   if (analysis.signatures.every((sig, i) => isSigApproved(sig, i))) {
@@ -200,6 +208,8 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   const nonAllowlistedSegmentIndices = analysis.signatures
     .map((sig, i) =>
       isRedirectOnly(analysis.segments[i])
+        ? -1
+        : isSafeSubcommand(analysis.segments[i])
         ? -1
         : allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0])) ? -1 : i,
     )
@@ -250,6 +260,9 @@ function decideFile(req: FileRequest, store: Store): Decision {
     return { kind: "block", reason: `Blocked: '${deniedResult.matchedRule}' is a denied path (credentials/secrets)` };
   }
 
+  // Warned paths — may contain credentials, prompt with warning
+  const warnResult = isPathWarned(req.filePath, req.cwd);
+
   // Auto-allow checks
   if (isProjectPiPath(req.filePath, req.cwd)) return { kind: "auto-allow" };
   if (req.toolName === "read" && store.hasAllowedReadPath(resolved)) return { kind: "auto-allow" };
@@ -264,7 +277,7 @@ function decideFile(req: FileRequest, store: Store): Decision {
   }
   if (req.toolName === "read" && isAllowedReadPath(resolved)) return { kind: "auto-allow" };
   if (req.toolName !== "read" && isAllowedWritePath(resolved)) return { kind: "auto-allow" };
-  if (req.toolName === "read" && isInsideCwd(resolved, req.cwd)) return { kind: "auto-allow" };
+  if (req.toolName === "read" && isInsideCwd(resolved, req.cwd) && !warnResult.warned) return { kind: "auto-allow" };
   const action = req.toolName.charAt(0).toUpperCase() + req.toolName.slice(1);
   const isWriteOp = req.toolName !== "read";
 
@@ -284,6 +297,7 @@ function decideFile(req: FileRequest, store: Store): Decision {
     outsideDir: isInsideCwd(resolved, req.cwd) ? null : path.dirname(resolved),
     isWriteOp,
     deniedRule: deniedResult.matchedRule,
+    warnedRule: warnResult.matchedRule,
     symlinkHint,
   };
 

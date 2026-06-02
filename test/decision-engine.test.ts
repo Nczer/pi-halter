@@ -88,30 +88,6 @@ describe("File: Edit inside cwd", () => {
 });
 
 describe("File: Denied paths (inside cwd)", () => {
-	it("blocks .env", async () => {
-		const store = createStore();
-		const req: FileRequest = { type: "file", toolName: "read", filePath: ".env", cwd };
-		const d = await decide(req, store);
-		expect(d.kind).toBe("block");
-		if (d.kind === "block") {
-			expect(d.reason).toContain(".env");
-		}
-	});
-
-	it("blocks .env.local", async () => {
-		const store = createStore();
-		const req: FileRequest = { type: "file", toolName: "read", filePath: ".env.local", cwd };
-		const d = await decide(req, store);
-		expect(d.kind).toBe("block");
-	});
-
-	it("blocks .env.production (glob match)", async () => {
-		const store = createStore();
-		const req: FileRequest = { type: "file", toolName: "read", filePath: ".env.production", cwd };
-		const d = await decide(req, store);
-		expect(d.kind).toBe("block");
-	});
-
 	it("blocks .ssh/id_rsa", async () => {
 		const store = createStore();
 		const req: FileRequest = { type: "file", toolName: "read", filePath: "~/.ssh/id_rsa", cwd };
@@ -121,12 +97,44 @@ describe("File: Denied paths (inside cwd)", () => {
 			expect(d.reason).toContain(".ssh");
 		}
 	});
+});
 
-	it("blocks node_modules/package.json", async () => {
+describe("File: Warned paths (inside cwd)", () => {
+	it("prompts for .env with credential warning", async () => {
+		const store = createStore();
+		const req: FileRequest = { type: "file", toolName: "read", filePath: ".env", cwd };
+		const d = await decide(req, store);
+		expect(d.kind).toBe("prompt");
+		if (d.kind === "prompt") {
+			expect(d.promptData.type).toBe("file");
+			expect(d.promptData.warnedRule).toBe(".env");
+		}
+	});
+
+	it("prompts for .env.local", async () => {
+		const store = createStore();
+		const req: FileRequest = { type: "file", toolName: "read", filePath: ".env.local", cwd };
+		const d = await decide(req, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("prompts for .env.production (glob match)", async () => {
+		const store = createStore();
+		const req: FileRequest = { type: "file", toolName: "read", filePath: ".env.production", cwd };
+		const d = await decide(req, store);
+		expect(d.kind).toBe("prompt");
+		if (d.kind === "prompt") {
+			expect(d.promptData.warnedRule).toBe(".env.*");
+		}
+	});
+});
+
+describe("File: node_modules allowed", () => {
+	it("auto-allows node_modules/package.json (inside cwd)", async () => {
 		const store = createStore();
 		const req: FileRequest = { type: "file", toolName: "read", filePath: "node_modules/package.json", cwd };
 		const d = await decide(req, store);
-		expect(d.kind).toBe("block");
+		expect(d.kind).toBe("auto-allow");
 	});
 });
 
@@ -255,6 +263,44 @@ describe("Bash: empty segments guard", () => {
 			{ type: "bash", command: "bash << 'EOF'\nrm -rf /\nEOF", cwd },
 			store,
 		);
+		expect(d.kind).toBe("prompt");
+	});
+});
+
+describe("Bash: safe subcommands", () => {
+	it("prompts for npm test (arbitrary script)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "npm test", cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("prompts for npm run build (arbitrary script)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "npm run build", cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("auto-allows tsc", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "tsc", cwd }, store);
+		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("auto-allows tsc --noEmit", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "tsc --noEmit", cwd }, store);
+		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("prompts for npm install (not a safe subcommand)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "npm install", cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("prompts for npm publish", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "npm publish", cwd }, store);
 		expect(d.kind).toBe("prompt");
 	});
 });
