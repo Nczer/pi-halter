@@ -65,7 +65,7 @@ function buildBashPrompt(
   includeBroaderOption: boolean,
 ): BuiltPrompt {
   const { command, cwd, outsideDirs, segments, signatures,
-          riskDangerous, riskSeverity, riskReasons,
+          riskDangerous, riskSeverity, riskReasons, hasUnsafePattern,
           needsCommandApproval, needsPathApproval, nonAllowedSegmentIndices } = data;
   const nonAllowedSet = new Set(nonAllowedSegmentIndices);
 
@@ -103,7 +103,7 @@ function buildBashPrompt(
       body += `  ${i + 1}.${marker} ${s}\n`;
     });
   }
-  if (riskDangerous) {
+  if (hasUnsafePattern) {
     body += `\n⚠️ Commands matching danger patterns always prompt, even after auto-allowing.`;
   }
   body += "\n";
@@ -115,33 +115,35 @@ function buildBashPrompt(
   }
   const tier2Everything = hasBoth
     ? {
-        title: `Confirm Always: ${uniqueSigs.map(s => s + " *").join(", ")} + ${outsideDirs.map(d => d + "/*").join(", ")}`,
-        body: `"Always Yes" will auto-allow:\n\nCommands:\n${uniqueSigs.map(s => `  \u2022 ${s} *`).join("\n")}\n\nPaths:\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}${dangerWarning}\n\n"Back" returns to the previous prompt.`,
+        title: `Confirm Always Allow`,
+        body: `"Always Yes" will auto-allow:\n\nCommands:\n${uniqueSigs.map(s => `  \u2022 ${s} *`).join("\n")}\n\nPaths:\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}${dangerWarning}`,
       }
     : needsPathApproval
     ? {
-        title: `Confirm Always Allow: ${outsideDirs.map(d => d + "/*").join(", ")}`,
-        body: `"Always Yes" will auto-allow read access for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}\n\n"Back" returns to the previous prompt.`,
+        title: `Confirm Always Allow`,
+        body: `"Always Yes" will auto-allow read access for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}`,
       }
     : {
-        title: `Confirm Always Allow: ${uniqueSigs.map(s => s + " *").join(", ")}`,
-        body: `"Always Yes" will auto-allow each of these command signatures this session:\n\n${uniqueSigs.map(s => `  \u2022 ${s} *`).join("\n")}${dangerWarning}\n\n"Back" returns to the previous prompt.`,
+        title: `Confirm Always Allow`,
+        body: `"Always Yes" will auto-allow each of these command signatures this session:\n\n${uniqueSigs.map(s => `  \u2022 ${s} *`).join("\n")}${dangerWarning}`,
       };
 
   // Tier 2 — "always (paths only)" confirmation
   const tier2Paths = hasBoth
     ? {
-        title: `Confirm Always (paths only): ${outsideDirs.map(d => d + "/*").join(", ")}`,
-        body: `"Always Yes" will auto-allow read access for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}\n\nThe command will still prompt next time.\n\n"Back" returns to the previous prompt.`,
+        title: `Confirm Always (paths only)`,
+        body: `"Always Yes" will auto-allow read access for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}\n\nThe command will still prompt next time.`,
       }
     : undefined;
 
-  const alwaysLabel = uniqueSigs.map(s => s + " *").join(", ");
+  const alwaysLabel = uniqueSigs.length > 0
+    ? uniqueSigs.map(s => s + " *").join(", ")
+    : (needsPathApproval ? outsideDirs.map(d => `Read ${d}/*`).join(", ") : "");
   const alwaysBroaderLabel = includeBroaderOption
     ? uniqueSigs.map(s => s.split(" ")[0] + " *").join(", ")
     : undefined;
   const alwaysPathsLabel = hasBoth
-    ? outsideDirs.map(d => d + "/*").join(", ")
+    ? outsideDirs.map(d => `Read ${d}/*`).join(", ")
     : undefined;
 
   return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel };
@@ -168,8 +170,8 @@ function buildFilePrompt(
       title: action,
       body: `Path:\n  ${filePath}${warnLine}${deniedLine}${symlinkLine}\n`,
       tier2Everything: {
-        title: `Confirm Always Allow: ${action} ${fileName}`,
-        body: `${scopeNote}\n\n  ${resolved}\n\n"Back" returns to the previous prompt.`,
+        title: `Confirm Always Allow`,
+        body: `${scopeNote}\n\n  ${resolved}`,
       },
       includePathsOption: false,
       includeFileOption: false,
@@ -181,7 +183,7 @@ function buildFilePrompt(
   const scope = isWriteOp
     ? `auto-allow ${action} for this directory this session`
     : `auto-allow read for this directory this session (write/edit will still prompt)`;
-  const tier2Label = isWriteOp ? `${action} ${outsideDir}/*` : `read ${outsideDir}/*`;
+  const tier2Label = isWriteOp ? `${action} ${outsideDir}/*` : `Read ${outsideDir}/*`;
   const fileName = resolved.split("/").pop() || resolved;
   const fileScope = isWriteOp
     ? `auto-allow ${action.toLowerCase()} on this file this session (read will still prompt)`
@@ -191,12 +193,12 @@ function buildFilePrompt(
     title: `⚠️ ${action} outside cwd`,
     body: `Path:\n  ${filePath}\n\n⚠️ Outside cwd: ${outsideDir}${warnLine}${deniedLine}${symlinkLine}\n`,
     tier2Everything: {
-      title: `Confirm Always Allow: ${tier2Label}`,
-      body: `"Always Yes" will ${scope}:\n\n  ${outsideDir}/*\n\n"Back" returns to the previous prompt.`,
+      title: `Confirm Always Allow`,
+      body: `"Always Yes" will ${scope}:\n\n  ${outsideDir}/*`,
     },
     tier2File: {
-      title: `Confirm Always Allow: ${action} ${fileName}`,
-      body: `"Always Yes" will ${fileScope}:\n\n  ${resolved}\n\nOther files in ${outsideDir} will still prompt.\n\n"Back" returns to the previous prompt.`,
+      title: `Confirm Always Allow`,
+      body: `"Always Yes" will ${fileScope}:\n\n  ${resolved}\n\nOther files in ${outsideDir} will still prompt.`,
     },
     includePathsOption: false,
     includeFileOption: true,
@@ -228,8 +230,8 @@ function buildMcpPrompt(
     title: `\u26a0\ufe0f MCP`,
     body,
     tier2Everything: {
-      title: `Confirm Always Allow: ${server}:*`,
-      body: `"Always Yes" will auto-allow all tools from MCP server '${server}' this session:\n\n  ${server}:*\n\n"Back" returns to the previous prompt.`,
+      title: `Confirm Always Allow`,
+      body: `"Always Yes" will auto-allow all tools from MCP server '${server}' this session:\n\n  ${server}:*`,
     },
     includePathsOption: false,
     includeFileOption: false,

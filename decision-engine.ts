@@ -89,6 +89,8 @@ export interface BashPromptData {
   riskDangerous: boolean;
   riskSeverity: "high" | "medium" | null;
   riskReasons: string[];
+  /** Patterns that block auto-allow (subshells, write redirects, obfuscation) — excludes display-only risks like pipes. */
+  hasUnsafePattern: boolean;
   needsCommandApproval: boolean;
   needsPathApproval: boolean;
 }
@@ -271,6 +273,7 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
       riskDangerous: analysis.risk.dangerous,
       riskSeverity: analysis.risk.severity,
       riskReasons: analysis.risk.reasons,
+      hasUnsafePattern: analysis.hasUnsafePattern,
       needsCommandApproval,
       needsPathApproval,
     },

@@ -8,10 +8,14 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 
+interface Theme {
+  fg(color: string, text: string): string;
+}
+
 /**
  * Create an editor theme matching the selection UI.
  */
-function createEditorTheme(theme: any): EditorTheme {
+function createEditorTheme(theme: Theme): EditorTheme {
   return {
     borderColor: (s) => theme.fg("accent", s),
     selectList: {
