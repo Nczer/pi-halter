@@ -31,7 +31,7 @@ export function splitPipeline(segment: string): string[] {
 }
 
 /** Package manager commands that use subcommands (npm install, cargo check, etc.). */
-const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "cargo", "pip", "pip3", "uv", "go", "bun"]);
+export const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "cargo", "pip", "pip3", "uv", "go", "bun"]);
 
 /**
  * Extract a command signature, stripping redirects and quotes.
