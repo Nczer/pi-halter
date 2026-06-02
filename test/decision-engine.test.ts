@@ -355,4 +355,14 @@ describe("Bash: granular allow (subcommand vs broader)", () => {
 		const dTest = await decide({ type: "bash", command: "npm test", cwd }, store);
 		expect(dTest.kind).toBe("auto-allow");
 	});
+
+	it("non-package-manager commands do not get broader option", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "sed -i 's/foo/bar/' file.txt", cwd }, store);
+		if (d.kind === "prompt") {
+			// sed is not a package manager — no broader option
+			expect(d.includeBroaderOption).toBe(false);
+			expect(d.allowBroaderRules).toBeUndefined();
+		}
+	});
 });

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { ABORT_REMEMBER_MS, allowedBashPatterns, isSafeSubcommand } from "./config";
+import { ABORT_REMEMBER_MS, allowedBashPatterns, isSafeSubcommand, PACKAGE_MANAGERS } from "./config";
 import { analyzeCommand } from "./command-analysis";
 import {
   resolvePathReal,
@@ -235,10 +235,15 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   }
   if (needsCommandApproval && nonAllowlistedSigs.length > 0) {
     allowRules.bashSigs = nonAllowlistedSigs;
-    // Compute broader signatures: "npm test" → "npm", "cargo check" → "cargo"
-    const broaderSigs = [...new Set(
-      nonAllowlistedSigs.map(sig => sig.split(" ")[0]),
-    )];
+    // Compute broader signatures for package managers: "npm test" → "npm", "cargo check" → "cargo"
+    // Only package managers get the broader option — other commands use exact signatures.
+    const pmSigs = nonAllowlistedSigs.filter(sig => {
+      const cmd = sig.split(" ")[0];
+      return PACKAGE_MANAGERS.has(cmd);
+    });
+    const broaderSigs = pmSigs.length > 0
+      ? [...new Set(pmSigs.map(sig => sig.split(" ")[0]))]
+      : [];
     // Only include broader sigs if they differ from specific sigs
     if (broaderSigs.some(s => !nonAllowlistedSigs.includes(s))) {
       allowBroaderRules = {
