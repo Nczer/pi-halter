@@ -60,6 +60,9 @@ function detectObfuscation(cmd: string): { detected: boolean; techniques: string
   if (/xargs\s.*\brm\b/.test(cmd)) {
     techniques.push("indirect command via xargs");
   }
+  if (/xargs\s+sh\s+-c\b/.test(cmd) || /xargs\s+bash\s+-c\b/.test(cmd)) {
+    techniques.push("xargs piping to shell interpreter");
+  }
   if (/\b(alias|declare|typeset)\s+\w+=\s*(rm|sudo|curl|wget|ssh)\b/i.test(cmd)) {
     techniques.push("alias/function obfuscation");
   }

@@ -39,8 +39,6 @@ export interface Store {
 /** Structured rules for what to auto-allow on "always" confirmation. */
 export interface AllowRules {
   bashSigs?: string[];
-  /** Broader bash signatures (e.g. `npm` for `npm test`). Used for "Always (everything)". */
-  broaderBashSigs?: string[];
   readDirs?: string[];
   writeDirs?: string[];
   readPaths?: string[];
@@ -79,7 +77,16 @@ export function createStore(nowFn = Date.now): Store {
       rules.mcpServers?.forEach(s => mcpServers.add(s));
     },
 
-    recordAbort(cmd) { aborted.set(cmd, nowFn()); },
+    recordAbort(cmd) {
+      aborted.set(cmd, nowFn());
+      // Bounded cleanup on write to prevent unbounded growth
+      if (aborted.size > 100) {
+        const cutoff = nowFn() - ABORT_REMEMBER_MS;
+        for (const [k, v] of aborted) {
+          if (v < cutoff) aborted.delete(k);
+        }
+      }
+    },
     getLastAbort(cmd) {
       const ts = aborted.get(cmd) ?? null;
       // Lazy cleanup: prune entries older than ABORT_REMEMBER_MS

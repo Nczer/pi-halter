@@ -6,6 +6,8 @@ const trustedScriptDirs: string[] = [
   path.join(os.homedir(), ".pi", "agent", "skills"),
 ];
 
+// Local copy — importing from path-analysis would create a circular dependency
+// (path-analysis → config → trusted-scripts → path-analysis)
 function expandTilde(p: string): string {
   if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
   if (p === "~") return os.homedir();

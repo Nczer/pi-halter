@@ -33,7 +33,7 @@ export async function twoTierAlwaysPrompt(
     } else if (includePathsOption) {
       choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "No (with reason)", "No"];
     } else if (includeFileOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "No (with reason)", "No"];
+      choices = ["Yes", `Always (path): ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "No (with reason)", "No"];
     } else {
       choices = ["Yes", `Always: ${alwaysLabel}`, "No (with reason)", "No"];
     }
@@ -62,6 +62,13 @@ export async function twoTierAlwaysPrompt(
       const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,
         ["Always Yes", "Back"]);
       if (tier2 === "Always Yes") { onAlwaysBroader?.(); return "always"; }
+      continue;
+    }
+
+    if (includeFileOption && answer === `Always (path): ${alwaysLabel}`) {
+      const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,
+        ["Always Yes", "Back"]);
+      if (tier2 === "Always Yes") { onAlways(); return "always"; }
       continue;
     }
 

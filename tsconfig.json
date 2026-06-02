@@ -8,5 +8,5 @@
     "noEmit": true,
     "esModuleInterop": true
   },
-  "include": ["*.ts", "handlers/*.ts", "config/*.ts", "forwarding/*.ts"]
+  "include": ["*.ts", "handlers/*.ts", "config/*.ts"]
 }

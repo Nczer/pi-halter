@@ -5,7 +5,7 @@ import { store } from "./store";
 // ── Path deduplication ──
 
 /** Remove paths that are sub-paths of another entry in the same list. */
-function filterSubPaths(paths: string[]): string[] {
+export function filterSubPaths(paths: string[]): string[] {
   const sorted = [...paths].sort((a, b) => a.length - b.length);
   const result: string[] = [];
   for (const p of sorted) {
@@ -20,7 +20,7 @@ function filterSubPaths(paths: string[]): string[] {
 // ── Widget rendering ──
 
 /** Group command signature variants for compact display (e.g. "git[-m, -am]"). */
-function groupCommandVariants(items: string[]): string[] {
+export function groupCommandVariants(items: string[]): string[] {
   const groups = new Map<string, Set<string>>();
   for (const sig of items) {
     const [cmd, ...flags] = sig.split(/\s+/);

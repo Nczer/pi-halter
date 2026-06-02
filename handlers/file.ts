@@ -76,6 +76,9 @@ export async function handleFile(
   try {
     const result = await showPrompt(decision, ctx, store);
     if (!result.allowed) {
+      // Note: unlike bash, we don't call store.recordAbort() here.
+      // File accesses are deterministic (same path → same result) and the
+      // agent's rejection reason is sufficient to prevent retry loops.
       const pd = decision.promptData;
       const action = (pd.type === "file" ? pd.action : "Access").toLowerCase();
       const resolved = pd.type === "file" ? pd.resolved : filePath;

