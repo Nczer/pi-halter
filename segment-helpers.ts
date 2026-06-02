@@ -30,9 +30,13 @@ export function splitPipeline(segment: string): string[] {
   return segment.split("|").map(s => s.trim()).filter(Boolean);
 }
 
+/** Package manager commands that use subcommands (npm install, cargo check, etc.). */
+const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "cargo", "pip", "pip3", "uv", "go", "bun"]);
+
 /**
  * Extract a command signature, stripping redirects and quotes.
  * For pipelines, uses the first command's signature.
+ * For package managers, includes the subcommand for granular allow control.
  */
 export function getCommandSignature(segment: string): string {
   const firstCmd = segment.split("|")[0].trim();
@@ -42,6 +46,20 @@ export function getCommandSignature(segment: string): string {
     .trim();
   const tokens = stripQuotedStrings(cleaned).split(/\s+/);
   const cmd = tokens[0].toLowerCase();
+
+  // Package managers: include subcommand for granular control
+  // npm test → "npm test", npm install → "npm install"
+  // npm -v → "npm" (flag only, no subcommand)
+  const cmdBase = path.basename(cmd);
+  if (PACKAGE_MANAGERS.has(cmdBase)) {
+    const subIdx = tokens.findIndex((t, i) => i > 0 && !t.startsWith("-"));
+    if (subIdx >= 0) {
+      const sub = tokens[subIdx];
+      return `${cmdBase} ${sub}`;
+    }
+    return cmdBase; // e.g. "npm" with only flags
+  }
+
   const flags = tokens.slice(1).filter(t => t.startsWith("-")).sort();
   return flags.length === 0 ? cmd : `${cmd} ${flags.join(" ")}`;
 }

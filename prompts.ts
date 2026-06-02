@@ -21,13 +21,16 @@ export async function twoTierAlwaysPrompt(
   onAlways: () => void,
   onAlwaysPaths: () => void,
   onAlwaysFile: () => void,
+  onAlwaysBroader?: () => void,
 ): Promise<PromptResult> {
-  const { title, body, tier2Everything, tier2Paths, tier2File, includePathsOption, includeFileOption } = prompt;
+  const { title, body, tier2Everything, tier2Paths, tier2File, includePathsOption, includeFileOption, includeBroaderOption } = prompt;
 
   while (true) {
     const { over, count } = store.incrementPromptCount();
     let choices: string[];
-    if (includePathsOption) {
+    if (includeBroaderOption) {
+      choices = ["Yes", "Always (subcommand)", "Always (everything)", "No (with reason)", "No"];
+    } else if (includePathsOption) {
       choices = ["Yes", "Always (everything)", "Always (paths only)", "No (with reason)", "No"];
     } else if (includeFileOption) {
       choices = ["Yes", "Always (this session)", "Always (this file only)", "No (with reason)", "No"];
@@ -46,6 +49,20 @@ export async function twoTierAlwaysPrompt(
       const reason = await showReasonEditor(ctx, "Reason for rejection:");
       if (reason === null) continue; // Escaped — back to selector
       return { kind: "no", reason: reason?.trim() || "No reason provided" };
+    }
+
+    if (includeBroaderOption && answer === "Always (subcommand)") {
+      const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,
+        ["Always Yes", "Back"]);
+      if (tier2 === "Always Yes") { onAlways(); return "always"; }
+      continue;
+    }
+
+    if (includeBroaderOption && answer === "Always (everything)") {
+      const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,
+        ["Always Yes", "Back"]);
+      if (tier2 === "Always Yes") { onAlwaysBroader?.(); return "always"; }
+      continue;
     }
 
     if (includeFileOption && answer === "Always (this file only)") {

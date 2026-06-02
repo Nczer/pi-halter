@@ -59,14 +59,18 @@ export interface PromptDecision {
   kind: "prompt";
   /** Structured data for the PromptBuilder to format into title/body. */
   promptData: PromptData;
-  /** Rules to apply if user selects "Always (everything)". */
+  /** Rules to apply if user selects "Always (subcommand)" (specific sigs). */
   allowRules: AllowRules;
+  /** Rules to apply if user selects "Always (everything)" (broader sigs). */
+  allowBroaderRules?: AllowRules;
   /** Rules to apply if user selects "Always (paths only)" (bash only). */
   allowPathsRules?: AllowRules;
   /** Rules to apply if user selects "This file only" (file only). */
   allowFileRules?: AllowRules;
   /** Whether to include the "Always (paths only)" option. */
   includePathsOption?: boolean;
+  /** Whether to show broader allow option (npm test vs npm *). */
+  includeBroaderOption?: boolean;
 }
 
 export type Decision = AutoAllowDecision | BlockDecision | PromptDecision;
@@ -174,6 +178,11 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
   const isSigApproved = (sig: string, segIdx: number) => {
     if (store.hasAllowedBash(sig)) return true;
+    // Prefix match: "npm" in store matches "npm test", "npm install", etc.
+    const allowedSigs = store.listAllowedBash();
+    for (const allowed of allowedSigs) {
+      if (sig === allowed || sig.startsWith(allowed + " ")) return true;
+    }
     if (relPathIdxSet.has(segIdx)) return false;
     if (isSafeSubcommand(analysis.segments[segIdx])) return true;
     return allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0]));
@@ -218,9 +227,26 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   const uniqueSigs = [...new Set(nonAllowlistedSigs)];
 
   // Build allow rules for "always" confirmation
+  // bashSigs = specific signatures (npm test), broader = parent commands (npm)
   const allowRules: AllowRules = {};
-  if (needsPathApproval) allowRules.readDirs = outsideDirs;
-  if (needsCommandApproval && nonAllowlistedSigs.length > 0) allowRules.bashSigs = nonAllowlistedSigs;
+  let allowBroaderRules: AllowRules | undefined;
+  if (needsPathApproval) {
+    allowRules.readDirs = outsideDirs;
+  }
+  if (needsCommandApproval && nonAllowlistedSigs.length > 0) {
+    allowRules.bashSigs = nonAllowlistedSigs;
+    // Compute broader signatures: "npm test" → "npm", "cargo check" → "cargo"
+    const broaderSigs = [...new Set(
+      nonAllowlistedSigs.map(sig => sig.split(" ")[0]),
+    )];
+    // Only include broader sigs if they differ from specific sigs
+    if (broaderSigs.some(s => !nonAllowlistedSigs.includes(s))) {
+      allowBroaderRules = {
+        bashSigs: broaderSigs,
+        ...(needsPathApproval ? { readDirs: outsideDirs } : {}),
+      };
+    }
+  }
 
   const hasBoth = needsCommandApproval && needsPathApproval;
   const allowPathsRules = hasBoth
@@ -244,8 +270,10 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
       needsPathApproval,
     },
     allowRules,
+    allowBroaderRules,
     allowPathsRules,
     includePathsOption: hasBoth,
+    includeBroaderOption: !!allowBroaderRules,
   };
 }
 
