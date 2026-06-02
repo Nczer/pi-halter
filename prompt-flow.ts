@@ -44,6 +44,11 @@ export async function showPrompt(
       store.addAllowed(decision.allowFileRules);
       updateWidget(ctx);
     }
+  }, () => {
+    if (decision.allowBroaderRules) {
+      store.addAllowed(decision.allowBroaderRules);
+      updateWidget(ctx);
+    }
   });
 
   if (result === "no") {

@@ -39,6 +39,8 @@ export interface Store {
 /** Structured rules for what to auto-allow on "always" confirmation. */
 export interface AllowRules {
   bashSigs?: string[];
+  /** Broader bash signatures (e.g. `npm` for `npm test`). Used for "Always (everything)". */
+  broaderBashSigs?: string[];
   readDirs?: string[];
   writeDirs?: string[];
   readPaths?: string[];

@@ -10,6 +10,7 @@ export interface BuiltPrompt {
   tier2File?: { title: string; body: string };
   includePathsOption: boolean;
   includeFileOption: boolean;
+  includeBroaderOption: boolean;
 }
 
 /**
@@ -17,11 +18,11 @@ export interface BuiltPrompt {
  * for the two-tier prompt flow. All prompt wording lives here.
  */
 export function buildPrompt(decision: PromptDecision): BuiltPrompt {
-  const { promptData, allowRules, allowPathsRules, includePathsOption = false } = decision;
+  const { promptData, allowRules, allowPathsRules, includePathsOption = false, includeBroaderOption = false } = decision;
 
   switch (promptData.type) {
     case "bash":
-      return buildBashPrompt(promptData, allowRules, includePathsOption);
+      return buildBashPrompt(promptData, allowRules, includePathsOption, includeBroaderOption ?? false);
     case "file":
       return buildFilePrompt(promptData, allowRules);
     case "mcp":
@@ -56,6 +57,7 @@ function buildBashPrompt(
   data: BashPromptData,
   _allowRules: { bashSigs?: string[]; readDirs?: string[] },
   includePathsOption: boolean,
+  includeBroaderOption: boolean,
 ): BuiltPrompt {
   const { command, cwd, outsideDirs, segments, signatures,
           riskDangerous, riskSeverity, riskReasons,
@@ -129,7 +131,7 @@ function buildBashPrompt(
       }
     : undefined;
 
-  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false };
+  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption };
 }
 
 // ── File prompt ──
@@ -157,6 +159,7 @@ function buildFilePrompt(
       },
       includePathsOption: false,
       includeFileOption: false,
+      includeBroaderOption: false,
     };
   }
 
@@ -182,6 +185,7 @@ function buildFilePrompt(
     },
     includePathsOption: false,
     includeFileOption: true,
+    includeBroaderOption: false,
   };
 }
 
@@ -212,5 +216,6 @@ function buildMcpPrompt(
     },
     includePathsOption: false,
     includeFileOption: false,
+    includeBroaderOption: false,
   };
 }

@@ -268,16 +268,10 @@ describe("Bash: empty segments guard", () => {
 });
 
 describe("Bash: safe subcommands", () => {
-	it("prompts for npm test (arbitrary script)", async () => {
+	it("auto-allows npm ls (read-only)", async () => {
 		const store = createStore();
-		const d = await decide({ type: "bash", command: "npm test", cwd }, store);
-		expect(d.kind).toBe("prompt");
-	});
-
-	it("prompts for npm run build (arbitrary script)", async () => {
-		const store = createStore();
-		const d = await decide({ type: "bash", command: "npm run build", cwd }, store);
-		expect(d.kind).toBe("prompt");
+		const d = await decide({ type: "bash", command: "npm ls", cwd }, store);
+		expect(d.kind).toBe("auto-allow");
 	});
 
 	it("auto-allows tsc", async () => {
@@ -292,6 +286,18 @@ describe("Bash: safe subcommands", () => {
 		expect(d.kind).toBe("auto-allow");
 	});
 
+	it("prompts for npm test (arbitrary script)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "npm test", cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("prompts for npm run build (arbitrary script)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "npm run build", cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
 	it("prompts for npm install (not a safe subcommand)", async () => {
 		const store = createStore();
 		const d = await decide({ type: "bash", command: "npm install", cwd }, store);
@@ -302,5 +308,51 @@ describe("Bash: safe subcommands", () => {
 		const store = createStore();
 		const d = await decide({ type: "bash", command: "npm publish", cwd }, store);
 		expect(d.kind).toBe("prompt");
+	});
+});
+
+describe("Bash: granular allow (subcommand vs broader)", () => {
+	it("npm test signature is 'npm test', not 'npm'", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "npm test", cwd }, store);
+		if (d.kind === "prompt") {
+			expect(d.promptData.signatures).toContain("npm test");
+		}
+	});
+
+	it("npm install signature is 'npm install', not 'npm'", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "npm install", cwd }, store);
+		if (d.kind === "prompt") {
+			expect(d.promptData.signatures).toContain("npm install");
+		}
+	});
+
+	it("allowRules has specific sigs, allowBroaderRules has parent command", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "npm test", cwd }, store);
+		if (d.kind === "prompt") {
+			expect(d.allowRules.bashSigs).toContain("npm test");
+			expect(d.allowBroaderRules).toBeDefined();
+			expect(d.allowBroaderRules!.bashSigs).toContain("npm");
+			expect(d.includeBroaderOption).toBe(true);
+		}
+	});
+
+	it("allowing 'npm test' does not auto-allow 'npm install'", async () => {
+		const store = createStore();
+		store.addAllowed({ bashSigs: ["npm test"] });
+		const dTest = await decide({ type: "bash", command: "npm test", cwd }, store);
+		expect(dTest.kind).toBe("auto-allow");
+
+		const dInstall = await decide({ type: "bash", command: "npm install", cwd }, store);
+		expect(dInstall.kind).toBe("prompt");
+	});
+
+	it("allowing 'npm' auto-allows all npm commands", async () => {
+		const store = createStore();
+		store.addAllowed({ bashSigs: ["npm"] });
+		const dTest = await decide({ type: "bash", command: "npm test", cwd }, store);
+		expect(dTest.kind).toBe("auto-allow");
 	});
 });
