@@ -2,7 +2,7 @@ import path from "node:path";
 
 // ── Segment helpers (pure string utilities) ──
 
-export const CMD_SUBST_MARKER = "__CMD_SUBST__";
+const CMD_SUBST_MARKER = "__CMD_SUBST__";
 
 /** Check if a string contains command substitution markers from stripQuotedStrings. */
 export function containsCommandSubstitution(s: string): boolean {
