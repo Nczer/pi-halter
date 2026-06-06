@@ -13,7 +13,7 @@ export interface UserPermissions {
   write: UserRule[];
 }
 
-let CONFIG_PATH = path.join(os.homedir(), ".config", "pi", "permissions.json");
+let CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "permissions.json");
 
 export function setPersistencePath(newPath: string) {
   CONFIG_PATH = newPath;
