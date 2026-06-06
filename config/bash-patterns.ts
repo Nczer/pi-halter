@@ -108,22 +108,6 @@ export const wrapperCommands = new Set([
   "xargs", "watch", "timeout", "parallel", "env", "nice", "ionice", "stdbuf",
 ]);
 
-/** Commands that write to files when given certain flags. */
-export const writeCapableCommands = new Set([
-  // In-place editors
-  "sed", "perl", "awk", "python", "python3", "node", "ruby", "php",
-  // File modification
-  "rm", "rmdir", "unlink", "mv", "cp", "chmod", "chown",
-  "touch", "mkdir", "dd", "truncate", "patch", "install", "ln",
-  // Archives (can write)
-  "tar", "zip", "unzip", "gzip", "gunzip",
-  // File writing
-  "tee",
-  // Package managers
-  "pip", "npm", "yarn", "cargo", "go",
-  "uv",
-]);
-
 /** Shell interpreters used by find -exec and similar constructs. */
 export const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh"]);
 
