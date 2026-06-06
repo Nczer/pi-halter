@@ -142,6 +142,18 @@ export async function decide(request: PermissionRequest, store: Store): Promise<
 // ── Bash decision ──
 
 async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
+  // 1. User Rule Check (Priority 1)
+  const userAction = store.getUserRuleAction("bash", req.command);
+  if (userAction === "deny") {
+    return {
+      kind: "block",
+      reason: `Blocked by user rule: command matches a denied pattern.`,
+    };
+  }
+  if (userAction === "allow") {
+    return { kind: "auto-allow" };
+  }
+
   // Retry-loop prevention
   const lastAbort = store.getLastAbort(req.command);
   if (lastAbort && Date.now() - lastAbort < ABORT_REMEMBER_MS) {
@@ -289,6 +301,19 @@ async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
 
 function decideFile(req: FileRequest, store: Store): Decision {
   const resolved = resolvePathReal(expandTilde(req.filePath), req.cwd);
+
+  // 1. User Rule Check (Priority 1)
+  const type = req.toolName === "read" ? "read" : "write";
+  const userActionRaw = store.getUserRuleAction(type, req.filePath);
+  const userActionResolved = store.getUserRuleAction(type, resolved);
+  const finalUserAction = userActionRaw || userActionResolved;
+
+  if (finalUserAction === "deny") {
+    return { kind: "block", reason: `Blocked by user rule: path matches a denied pattern for ${type}.` };
+  }
+  if (finalUserAction === "allow") {
+    return { kind: "auto-allow" };
+  }
 
   // Denied paths block everything — check before any auto-allow
   const deniedResult = isPathDenied(req.filePath, req.cwd);

@@ -2,10 +2,14 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { resetState, updateWidget } from "./permission-state";
 import { handleBash, handleFile, handleMcp, handleMcpDirectTool } from "./handlers";
 import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
+import { store } from "./store";
 
 // ── Main extension ──
 
-export default function permissionExtension(pi: ExtensionAPI) {
+export default async function permissionExtension(pi: ExtensionAPI) {
+  // Initialize user permissions from disk
+  await store.init();
+
   // ── Session shutdown ──
   pi.on("session_shutdown", async (_event, ctx) => {
     resetState();
