@@ -7,6 +7,7 @@ A permission gate for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, a
 - **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.)
 - **File access** — auto-allows reads inside cwd and trusted paths; prompts for paths outside cwd, denied names (`.env`, `.ssh`, etc.)
 - **MCP tool calls** — intercepts both proxy tool calls (`mcp({tool: "..."})`) and direct tools (e.g., `exa_web_search_exa`); auto-allows metadata operations; prompts for tool invocations showing server, tool, and argument preview; server-level "Always" approval (e.g., `exa:*`)
+- **Permanent rules** — define wildcard patterns in `~/.config/pi/permissions.json` for permanent allow/deny. Manage via `/perms` command
 - **Auto-allow** — "Always" option grants session-scoped permission; status widget shows active allowances
 - **Retry-loop prevention** — recently-aborted commands are auto-blocked for 60 seconds
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
@@ -49,7 +50,11 @@ index.ts                          Extension entry — event registration, /dsp c
 │   ├── file.ts                   File operation interceptor (incl. edit pre-validation)
 │   └── mcp.ts                    MCP tool call interceptor (proxy + direct tools)
 ├── bash-parser.ts                tree-sitter-bash wrapper — lazy WASM load, AST path extraction
-├── decision-engine.ts            Pure policy — async decide(request, store) → Decision
+├── decision-engine.ts            Pure policy dispatcher — async decide(request, store) → Decision
+├── policies/                     Request-specific decision logic
+│   ├── bash.ts                   Bash policy
+│   ├── file.ts                   File policy
+│   └── mcp.ts                    MCP policy
 ├── command-analysis.ts           Fat analyzer — async analyzeCommand(cmd, cwd) → CommandAnalysis
 ├── path-analysis.ts              Pure path utilities (resolve, deny rules, cwd checks)
 ├── prompt-flow.ts                UI interaction loop — showPrompt(decision, ctx, store)

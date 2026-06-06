@@ -30,13 +30,13 @@ export async function twoTierAlwaysPrompt(
     const { over, count } = store.incrementPromptCount();
     let choices: string[];
     if (includeBroaderOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, "Permanent Always (Config)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, "Permanent always (config)", "No (with reason)", "No"];
     } else if (includePathsOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "Permanent Always (Config)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "Permanent always (config)", "No (with reason)", "No"];
     } else if (includeFileOption) {
-      choices = ["Yes", `Always (path): ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "Permanent Always (Config)", "No (with reason)", "No"];
+      choices = ["Yes", `Always (path): ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "Permanent always (config)", "No (with reason)", "No"];
     } else {
-      choices = ["Yes", `Always: ${alwaysLabel}`, "Permanent Always (Config)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, "Permanent always (config)", "No (with reason)", "No"];
     }
     const warningPrefix = over
       ? `\u26a0\ufe0f High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
@@ -46,8 +46,8 @@ export async function twoTierAlwaysPrompt(
 
     if (answer === "Yes") return "yes";
     if (!answer || answer === "No") return "no";
-    if (answer === "Permanent Always (Config)") {
-      const pattern = await showReasonEditor(ctx, "Enter wildcard pattern for PERMANENT allow (saved to ~/.config/pi/permissions.json).\nExample: git checkout *.lock");
+    if (answer === "Permanent always (config)") {
+      const pattern = await showReasonEditor(ctx, "Enter a wildcard pattern for permanent allow (saved to ~/.config/pi/permissions.json).\n\nPatterns are case-insensitive:\n• '*' matches any characters (e.g. 'git checkout *.lock')\n• '?' matches one character\n\nExample: 'npm test *' or '/mnt/data/logs/*'");
       if (pattern === null || pattern.trim().length === 0) continue;
       const p = pattern.trim();
       if (onCustomAlways) await onCustomAlways(p);
