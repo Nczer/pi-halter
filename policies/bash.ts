@@ -8,7 +8,7 @@ import {
 import type { Store, AllowRules, BashRequest, Decision, BashPromptData } from "../decision-engine";
 
 export async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
-  // 1. User Rule Check (Priority 1)
+  // 1. User Rule Check (Priority 1) — deny only, applied to full command
   const userAction = store.getUserRuleAction("bash", req.command);
   if (userAction === "deny") {
     return {
@@ -16,9 +16,10 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
       reason: `Blocked by user rule: command matches a denied pattern.`,
     };
   }
-  if (userAction === "allow") {
-    return { kind: "auto-allow" };
-  }
+  // Note: user ALLOW is NOT checked against the full command here.
+  // "ls *" must not match "ls x && rm -rf y" — allow rules are checked
+  // per-segment (signature) below so each part of a compound command
+  // must be individually approved.
 
   // Retry-loop prevention
   const lastAbort = store.getLastAbort(req.command);
@@ -55,6 +56,8 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
   const isSigApproved = (sig: string, segIdx: number) => {
     if (store.hasAllowedBash(sig)) return true;
+    // User rule: getUserRuleAction handles trailing wildcard stripping
+    if (store.getUserRuleAction("bash", sig) === "allow") return true;
     const allowedSigs = store.listAllowedBash();
     for (const allowed of allowedSigs) {
       if (sig === allowed || sig.startsWith(allowed + " ")) return true;
@@ -63,6 +66,13 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
     if (isSafeSubcommand(analysis.segments[segIdx])) return true;
     return allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0]));
   };
+
+  // User rules approved every segment — explicit user intent, bypass safety heuristics
+  const allByUserRule = analysis.signatures.every(sig => store.getUserRuleAction("bash", sig) === "allow");
+  if (allByUserRule) {
+    return { kind: "auto-allow" };
+  }
+
   if (analysis.signatures.every((sig, i) => isSigApproved(sig, i))) {
     if (!analysis.hasUnsafePattern && outsidePaths.length === 0) {
       return { kind: "auto-allow" };

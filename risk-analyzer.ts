@@ -291,8 +291,12 @@ export async function analyzeRisk(cmd: string, segments: BashSegment[]): Promise
       if (!severity) severity = "medium";
     }
   }
+  // Test context patterns against joined segment texts (excludes heredoc bodies)
+  // instead of raw cmd string — prevents false positives like:
+  //   cat << 'EOF'\nsed -i 's/foo/bar/g'\nEOF
+  const segmentText = segments.map(seg => seg.text).join(" ");
   for (const { pattern, label } of dangerousContextPatterns) {
-    if (pattern.test(cmd) && !reasons.includes(label)) {
+    if (pattern.test(segmentText) && !reasons.includes(label)) {
       reasons.push(label);
       if (!severity) severity = "medium";
     }

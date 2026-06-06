@@ -58,33 +58,51 @@ export function updateWidget(ctx: ExtensionContext): void {
   const readDirItems = filterSubPaths([...store.listAllowedReadDirs()]);
   const writeDirItems = filterSubPaths([...store.listAllowedWriteDirs()]);
   const mcpServerItems = [...store.listAllowedMcpServers()];
+  const userRules = store.listUserRulesSync();
 
-  if (bashItems.length === 0 && readPathItems.length === 0 && writePathItems.length === 0 && readDirItems.length === 0 && writeDirItems.length === 0 && mcpServerItems.length === 0) {
+  const hasSessionRules = bashItems.length > 0 || readPathItems.length > 0 || writePathItems.length > 0 || readDirItems.length > 0 || writeDirItems.length > 0 || mcpServerItems.length > 0;
+  const hasPermRules = userRules.bash.length > 0 || userRules.read.length > 0 || userRules.write.length > 0;
+
+  if (!hasSessionRules && !hasPermRules) {
     ctx.ui.setWidget("permissions", undefined);
     return;
   }
 
   ctx.ui.setWidget("permissions", (_tui, theme) => {
-    const baseLines: string[] = [theme.fg("accent", theme.bold("Permissions (this session)"))];
+    const baseLines: string[] = [theme.fg("accent", theme.bold("Permissions"))];
 
-    if (bashItems.length > 0) {
-      const grouped = groupCommandVariants(bashItems);
-      baseLines.push(theme.fg("muted", "Bash:") + " " + theme.fg("dim", grouped.join(" ")));
+    if (hasSessionRules) {
+      if (bashItems.length > 0) {
+        const grouped = groupCommandVariants(bashItems);
+        baseLines.push(theme.fg("muted", "Bash:") + " " + theme.fg("dim", grouped.join(" ")));
+      }
+      if (readDirItems.length > 0) {
+        baseLines.push(theme.fg("muted", "Read dirs:") + " " + theme.fg("dim", readDirItems.join(" ")));
+      }
+      if (writeDirItems.length > 0) {
+        baseLines.push(theme.fg("muted", "Write dirs:") + " " + theme.fg("dim", writeDirItems.join(" ")));
+      }
+      if (readPathItems.length > 0) {
+        baseLines.push(theme.fg("muted", "Read paths:") + " " + theme.fg("dim", readPathItems.join(" ")));
+      }
+      if (writePathItems.length > 0) {
+        baseLines.push(theme.fg("muted", "Write paths:") + " " + theme.fg("dim", writePathItems.join(" ")));
+      }
+      if (mcpServerItems.length > 0) {
+        baseLines.push(theme.fg("muted", "MCP:") + " " + theme.fg("dim", mcpServerItems.map(s => `${s}:*`).join(", ")));
+      }
     }
-    if (readDirItems.length > 0) {
-      baseLines.push(theme.fg("muted", "Read dirs:") + " " + theme.fg("dim", readDirItems.join(" ")));
-    }
-    if (writeDirItems.length > 0) {
-      baseLines.push(theme.fg("muted", "Write dirs:") + " " + theme.fg("dim", writeDirItems.join(" ")));
-    }
-    if (readPathItems.length > 0) {
-      baseLines.push(theme.fg("muted", "Read paths:") + " " + theme.fg("dim", readPathItems.join(" ")));
-    }
-    if (writePathItems.length > 0) {
-      baseLines.push(theme.fg("muted", "Write paths:") + " " + theme.fg("dim", writePathItems.join(" ")));
-    }
-    if (mcpServerItems.length > 0) {
-      baseLines.push(theme.fg("muted", "MCP:") + " " + theme.fg("dim", mcpServerItems.map(s => `${s}:*`).join(", ")));
+
+    if (hasPermRules) {
+      if (userRules.bash.length > 0) {
+        baseLines.push(theme.fg("muted", "⚙ Bash:") + " " + theme.fg("dim", userRules.bash.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
+      }
+      if (userRules.read.length > 0) {
+        baseLines.push(theme.fg("muted", "⚙ Read:") + " " + theme.fg("dim", userRules.read.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
+      }
+      if (userRules.write.length > 0) {
+        baseLines.push(theme.fg("muted", "⚙ Write:") + " " + theme.fg("dim", userRules.write.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
+      }
     }
 
     return { render: (width: number) => baseLines.map(l => truncateToWidth(l, width)), invalidate: () => {} };

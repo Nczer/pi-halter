@@ -24,14 +24,15 @@ export function decideFile(req: FileRequest, store: Store): Decision {
   if (finalUserAction === "deny") {
     return { kind: "block", reason: `Blocked by user rule: path matches a denied pattern for ${type}.` };
   }
-  if (finalUserAction === "allow") {
-    return { kind: "auto-allow" };
-  }
 
   // Denied paths block everything — check before any auto-allow
   const deniedResult = isPathDenied(req.filePath, req.cwd);
   if (deniedResult.denied) {
     return { kind: "block", reason: `Blocked: '${deniedResult.matchedRule}' is a denied path (credentials/secrets)` };
+  }
+
+  if (finalUserAction === "allow") {
+    return { kind: "auto-allow" };
   }
 
   // Warned paths — may contain credentials, prompt with warning

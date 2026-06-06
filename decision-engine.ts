@@ -2,6 +2,7 @@ import { decideBash } from "./policies/bash";
 import { decideFile } from "./policies/file";
 import { decideMcp } from "./policies/mcp";
 import type { Store, AllowRules } from "./store";
+export type { Store, AllowRules };
 
 // ── Request types (discriminated union) ──
 

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "./config";
-import { match } from "./wildcard";
+import { match, stripTrailingWildcard } from "./wildcard";
 import { loadUserPermissions, saveUserPermissions, type UserRule, type UserPermissions } from "./persistence";
 
 // ── Interface ──
@@ -25,6 +25,8 @@ export interface Store {
   getUserRuleAction(type: "bash" | "read" | "write", pattern: string): "allow" | "deny" | null;
   /** List all permanent user rules. */
   listUserRules(): Promise<UserPermissions>;
+  /** Sync snapshot of user rules for UI rendering (may be stale if not loaded). */
+  listUserRulesSync(): UserPermissions;
   /** Remove a permanent user rule by type and index. */
   removeUserRule(type: "bash" | "read" | "write", index: number): Promise<void>;
   /** Record that a command was just aborted (for retry-loop prevention). */
@@ -115,6 +117,10 @@ export function createStore(nowFn = Date.now): Store {
       return { ...userPerms };
     },
 
+    listUserRulesSync() {
+      return { bash: [...userPerms.bash], read: [...userPerms.read], write: [...userPerms.write] };
+    },
+
     async removeUserRule(type, index) {
       await ensureLoaded();
       if (userPerms[type][index]) {
@@ -123,12 +129,15 @@ export function createStore(nowFn = Date.now): Store {
       }
     },
 
-    getUserRuleAction(type, pattern) {
+    getUserRuleAction(type, target) {
       // Note: This is sync. If not loaded yet, it returns null.
       // In practice, we will trigger ensureLoaded() at agent startup.
       const rules = userPerms[type];
       for (const rule of rules) {
-        if (match(rule.pattern, pattern)) return rule.action;
+        if (match(rule.pattern, target)) return rule.action;
+        // "npm test *" should also match "npm test" (trailing * is optional)
+        const stripped = stripTrailingWildcard(rule.pattern);
+        if (stripped && match(stripped, target)) return rule.action;
       }
       return null;
     },

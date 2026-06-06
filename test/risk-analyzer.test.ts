@@ -147,4 +147,13 @@ describe("analyzeRisk", () => {
     expect(risk.dangerous).toBe(true);
     expect(risk.reasons.some(r => r.includes("pipe"))).toBe(true);
   });
+
+  it("does not match dangerousContextPatterns against heredoc body", async () => {
+    // Heredoc body contains "sed -i" which matches dangerousContextPatterns.
+    // But since we test against segment texts (excluding heredoc), it should NOT match.
+    const risk = await analyze(`cat << 'EOF'
+sed -i 's/foo/bar/g' file.txt
+EOF`);
+    expect(risk.reasons.some(r => r.includes("sed -i"))).toBe(false);
+  });
 });
