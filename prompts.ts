@@ -22,20 +22,21 @@ export async function twoTierAlwaysPrompt(
   onAlwaysPaths: () => void,
   onAlwaysFile: () => void,
   onAlwaysBroader?: () => void,
-): Promise<PromptResult> {
+  onCustomAlways?: (pattern: string) => Promise<void>,
+): Promise<PromptResult | { kind: "custom"; pattern: string }> {
   const { title, body, tier2Everything, tier2Paths, tier2File, includePathsOption, includeFileOption, includeBroaderOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel } = prompt;
 
   while (true) {
     const { over, count } = store.incrementPromptCount();
     let choices: string[];
     if (includeBroaderOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, "Permanent Always (Config)", "No (with reason)", "No"];
     } else if (includePathsOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "Permanent Always (Config)", "No (with reason)", "No"];
     } else if (includeFileOption) {
-      choices = ["Yes", `Always (path): ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "No (with reason)", "No"];
+      choices = ["Yes", `Always (path): ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "Permanent Always (Config)", "No (with reason)", "No"];
     } else {
-      choices = ["Yes", `Always: ${alwaysLabel}`, "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, "Permanent Always (Config)", "No (with reason)", "No"];
     }
     const warningPrefix = over
       ? `\u26a0\ufe0f High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
@@ -45,11 +46,19 @@ export async function twoTierAlwaysPrompt(
 
     if (answer === "Yes") return "yes";
     if (!answer || answer === "No") return "no";
+    if (answer === "Permanent Always (Config)") {
+      const pattern = await showReasonEditor(ctx, "Enter wildcard pattern for PERMANENT allow (saved to ~/.config/pi/permissions.json).\nExample: git checkout *.lock");
+      if (pattern === null || pattern.trim().length === 0) continue;
+      const p = pattern.trim();
+      if (onCustomAlways) await onCustomAlways(p);
+      return { kind: "custom", pattern: p };
+    }
     if (answer === "No (with reason)") {
       const reason = await showReasonEditor(ctx, "Reason for rejection:");
       if (reason === null) continue; // Escaped — back to selector
       return { kind: "no", reason: reason?.trim() || "No reason provided" };
     }
+
 
     if (includeBroaderOption && answer === `Always: ${alwaysLabel}`) {
       const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,

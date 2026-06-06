@@ -1,4 +1,7 @@
+import { promises as fs } from "node:fs";
 import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "./config";
+import { match } from "./wildcard";
+import { loadUserPermissions, saveUserPermissions, type UserRule, type UserPermissions } from "./persistence";
 
 // ── Interface ──
 
@@ -14,6 +17,12 @@ export interface Store {
   hasAllowedMcpServer(server: string): boolean;
   /** Add auto-allow rules in bulk. */
   addAllowed(rules: AllowRules): void;
+  /** Initialize store from disk. */
+  init(): Promise<void>;
+  /** Add a user-defined rule for persistent allow/deny. */
+  addUserRule(type: "bash" | "read" | "write", rule: UserRule): Promise<void>;
+  /** Check if a pattern matches a user-defined rule. Returns "allow", "deny", or null. */
+  getUserRuleAction(type: "bash" | "read" | "write", pattern: string): "allow" | "deny" | null;
   /** Record that a command was just aborted (for retry-loop prevention). */
   recordAbort(command: string): void;
   /** Get the timestamp of the last abort for a command, or null. */
@@ -62,6 +71,16 @@ export function createStore(nowFn = Date.now): Store {
   const aborted = new Map<string, number>();
   let pcount = 0;
 
+  // User rules cache
+  let userPerms: UserPermissions = { bash: [], read: [], write: [] };
+  let isLoaded = false;
+
+  const ensureLoaded = async () => {
+    if (isLoaded) return;
+    userPerms = await loadUserPermissions();
+    isLoaded = true;
+  };
+
   return {
     hasAllowedBash(s) { return bashSigs.has(s); },
     hasAllowedReadPath(p) { return readPaths.has(p); },
@@ -75,6 +94,26 @@ export function createStore(nowFn = Date.now): Store {
       rules.readPaths?.forEach(p => readPaths.add(p));
       rules.writePaths?.forEach(p => writePaths.add(p));
       rules.mcpServers?.forEach(s => mcpServers.add(s));
+    },
+
+    async init() {
+      await ensureLoaded();
+    },
+
+    async addUserRule(type, rule) {
+      await ensureLoaded();
+      userPerms[type].push(rule);
+      await saveUserPermissions(userPerms);
+    },
+
+    getUserRuleAction(type, pattern) {
+      // Note: This is sync. If not loaded yet, it returns null.
+      // In practice, we will trigger ensureLoaded() at agent startup.
+      const rules = userPerms[type];
+      for (const rule of rules) {
+        if (match(rule.pattern, pattern)) return rule.action;
+      }
+      return null;
     },
 
     recordAbort(cmd) {
