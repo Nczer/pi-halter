@@ -6,7 +6,7 @@ import path from "node:path";
 export const allowedBashPatterns: RegExp[] = [
   // Inspection / read-only
   /^find\b/, /^grep\b/, /^ls\b/, /^cat\b/, /^head\b/, /^tail\b/, /^wc\b/, /^file\b/,
-  /^sort\b/, /^uniq\b/, /^cut\b/, /^tr\b/, /^diff\b/,
+  /^sort\b/, /^uniq\b/, /^cut\b/, /^tr\b/, /^diff\b/, /^rg\b/, /^fd\b/,
   /^tac\b/, /^rev\b/, /^nl\b/, /^fold\b/, /^expand\b/, /^unexpand\b/, /^fmt\b/,
   /^join\b/, /^comm\b/, /^paste\b/, /^column\b/, /^seq\b/,
   // Text transform (safe stdout — guarded by dangerous flag checks)
@@ -40,6 +40,7 @@ export const pathAwareCommands = new Set([
   "ls", "cat", "head", "tail", "wc", "file", "stat", "touch",
   "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
   "join", "comm", "paste", "column", "split", "shuf",
+  "rg", "fd",
   // Hashing / binary
   "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
   "xxd", "hexdump", "od", "strings",

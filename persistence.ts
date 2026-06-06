@@ -13,7 +13,11 @@ export interface UserPermissions {
   write: UserRule[];
 }
 
-const CONFIG_PATH = path.join(os.homedir(), ".config", "pi", "permissions.json");
+let CONFIG_PATH = path.join(os.homedir(), ".config", "pi", "permissions.json");
+
+export function setPersistencePath(newPath: string) {
+  CONFIG_PATH = newPath;
+}
 
 export async function loadUserPermissions(): Promise<UserPermissions> {
   try {

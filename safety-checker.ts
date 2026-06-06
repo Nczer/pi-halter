@@ -137,6 +137,24 @@ function isFindExecWrite(segment: string): boolean {
   return isWriteOperation(execCmd, afterExec);
 }
 
+function isFdExecWrite(segment: string): boolean {
+  const execMatch = segment.match(/-(?:x|X)\b\s+(\S+)/);
+  if (!execMatch) return false;
+
+  const execCmd = execMatch[1].toLowerCase();
+  const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
+  return isWriteOperation(execCmd, afterExec);
+}
+
+function isRgPreWrite(segment: string): boolean {
+  const preMatch = segment.match(/--pre(?:=|\s+)(\S+)/);
+  if (!preMatch) return false;
+
+  const preCmd = preMatch[1].toLowerCase();
+  const afterPre = segment.slice(preMatch.index! + preMatch[0].length);
+  return isWriteOperation(preCmd, afterPre);
+}
+
 // ── Pipeline checks ──
 
 function hasDangerousSedInPipeline(segment: string): boolean {
@@ -183,6 +201,8 @@ function hasKnownDanger(seg: BashSegment): boolean {
   return seg.hasSubshell
     || (firstWord === "find" && dangerousFindFlags.test(segment))
     || (firstWord === "find" && isFindExecWrite(segment))
+    || (firstWord === "fd" && isFdExecWrite(segment))
+    || (firstWord === "rg" && isRgPreWrite(segment))
     || (firstWord === "sed" && dangerousSedFlags.test(segment))
     || (firstWord === "perl" && dangerousPerlFlags.test(segment))
     || hasDangerousSedInPipeline(segment)
@@ -229,6 +249,8 @@ async function areAllPipelineStagesSimple(segment: string, cwd: string): Promise
     const stageCmd = getFirstWord(stage);
     if (!allowedBashPatterns.some(p => p.test(stageCmd))) return false;
     if (stageCmd === "find" && (dangerousFindFlags.test(stage) || isFindExecWrite(stage))) return false;
+    if (stageCmd === "fd" && isFdExecWrite(stage)) return false;
+    if (stageCmd === "rg" && isRgPreWrite(stage)) return false;
     if (stageCmd === "sed" && dangerousSedFlags.test(stage)) return false;
     if (stageCmd === "perl" && dangerousPerlFlags.test(stage)) return false;
     if (stageCmd === "git" && isGitDangerous(stage)) return false;

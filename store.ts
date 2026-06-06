@@ -23,6 +23,10 @@ export interface Store {
   addUserRule(type: "bash" | "read" | "write", rule: UserRule): Promise<void>;
   /** Check if a pattern matches a user-defined rule. Returns "allow", "deny", or null. */
   getUserRuleAction(type: "bash" | "read" | "write", pattern: string): "allow" | "deny" | null;
+  /** List all permanent user rules. */
+  listUserRules(): Promise<UserPermissions>;
+  /** Remove a permanent user rule by type and index. */
+  removeUserRule(type: "bash" | "read" | "write", index: number): Promise<void>;
   /** Record that a command was just aborted (for retry-loop prevention). */
   recordAbort(command: string): void;
   /** Get the timestamp of the last abort for a command, or null. */
@@ -104,6 +108,19 @@ export function createStore(nowFn = Date.now): Store {
       await ensureLoaded();
       userPerms[type].push(rule);
       await saveUserPermissions(userPerms);
+    },
+
+    async listUserRules() {
+      await ensureLoaded();
+      return { ...userPerms };
+    },
+
+    async removeUserRule(type, index) {
+      await ensureLoaded();
+      if (userPerms[type][index]) {
+        userPerms[type].splice(index, 1);
+        await saveUserPermissions(userPerms);
+      }
     },
 
     getUserRuleAction(type, pattern) {

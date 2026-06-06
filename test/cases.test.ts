@@ -66,6 +66,23 @@ const cases: TestCase[] = [
 	{ cmd: "grep -rn --include='*.ts' pattern .", simple: true, unsafe: false, decision: "auto-allow", desc: "grep -rn --include" },
 
 	// ═══════════════════════════════════════════════════════════
+	// rg (ripgrep)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "rg pattern file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "rg simple search" },
+	{ cmd: "rg -r pattern .", simple: true, unsafe: false, decision: "auto-allow", desc: "rg recursive search" },
+	{ cmd: "rg --pre cat file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "rg --pre with read-only cmd" },
+	{ cmd: "rg --pre rm file.txt", simple: false, unsafe: true, decision: "prompt", desc: "rg --pre with write cmd" },
+
+	// ═══════════════════════════════════════════════════════════
+	// fd (fd-find)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "fd pattern", simple: true, unsafe: false, decision: "auto-allow", desc: "fd simple find" },
+	{ cmd: "fd -e txt", simple: true, unsafe: false, decision: "auto-allow", desc: "fd extension filter" },
+	{ cmd: "fd -x cat", simple: true, unsafe: false, decision: "auto-allow", desc: "fd -x with read-only cmd" },
+	{ cmd: "fd -x rm", simple: false, unsafe: true, decision: "prompt", desc: "fd -x with write cmd" },
+	{ cmd: "fd -X rm", simple: false, unsafe: true, decision: "prompt", desc: "fd -X with write cmd" },
+
+	// ═══════════════════════════════════════════════════════════
 	// find
 	// ═══════════════════════════════════════════════════════════
 	{ cmd: "find . -name '*.txt'", simple: true, unsafe: false, decision: "auto-allow", desc: "find -name" },
