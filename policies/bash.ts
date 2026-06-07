@@ -1,11 +1,53 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { ABORT_REMEMBER_MS, allowedBashPatterns, isSafeSubcommand, PACKAGE_MANAGERS } from "../config";
+import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, PACKAGE_MANAGERS, unconditionallySafeCommands } from "../config";
 import { analyzeCommand } from "../command-analysis";
 import {
   getOutsideCwdPaths,
 } from "../path-analysis";
 import type { Store, AllowRules, BashRequest, Decision, BashPromptData } from "../decision-engine";
+
+// ── Fast pre-check (avoids tree-sitter for trivial commands) ──
+
+/**
+ * Detect compound shell operators with a simple string scan.
+ * Not perfect (doesn't handle quotes/escapes) — used only as a fast
+ * reject filter. False positives fall through to full tree-sitter parse.
+ */
+const COMPOUND_RE = /\$\(|`|&&|\|\||[|;&<>]/;
+
+/**
+ * Fast pre-check: if the command is a single allowed command with no
+ * compound operators and no path arguments, auto-allow before touching tree-sitter.
+ * Returns true if we can short-circuit, false if full analysis is needed.
+ *
+ * Only safe for commands with no path arguments — any path could be outside cwd
+ * and require approval. Relative paths (./foo, ../foo) also require path analysis.
+ */
+function fastAllow(command: string): boolean {
+  // Quick reject: compound operators
+  if (COMPOUND_RE.test(command)) return false;
+
+  const tokens = command.trim().split(/\s+/);
+  if (tokens.length < 1) return false;
+
+  // Extract first word
+  const firstWord = tokens[0].toLowerCase();
+  // Strip path prefix if present (e.g. "./ls" → "ls")
+  const bare = firstWord.replace(/^.*\//, "");
+
+  if (!unconditionallySafeCommands.has(bare)) return false;
+
+  // Reject if any argument looks like a path (could be outside cwd)
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith("/") || token.startsWith("~/") || token.startsWith("./") || token.startsWith("../")) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 export async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   // 1. User Rule Check (Priority 1) — deny only, applied to full command
@@ -32,6 +74,11 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
     };
   }
 
+  // Fast pre-check: single allowed command, no compound operators → skip tree-sitter
+  if (fastAllow(req.command)) {
+    return { kind: "auto-allow" };
+  }
+
   const analysis = await analyzeCommand(req.command, req.cwd);
   const outsidePaths = getOutsideCwdPaths(
     analysis.paths,
@@ -56,15 +103,12 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
   const isSigApproved = (sig: string, segIdx: number) => {
     if (store.hasAllowedBash(sig)) return true;
+    if (store.hasAllowedBashPrefix(sig)) return true;
     // User rule: getUserRuleAction handles trailing wildcard stripping
     if (store.getUserRuleAction("bash", sig) === "allow") return true;
-    const allowedSigs = store.listAllowedBash();
-    for (const allowed of allowedSigs) {
-      if (sig === allowed || sig.startsWith(allowed + " ")) return true;
-    }
     if (relPathIdxSet.has(segIdx)) return false;
     if (isSafeSubcommand(analysis.segments[segIdx])) return true;
-    return allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0]));
+    return isAllowedCommand(sig.split(/\s+/)[0]);
   };
 
   // User rules approved every segment — explicit user intent, bypass safety heuristics
@@ -102,7 +146,7 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
         ? -1
         : isSafeSubcommand(analysis.segments[i])
         ? -1
-        : allowedBashPatterns.some(p => p.test(sig.split(/\s+/)[0])) ? -1 : i,
+        : isAllowedCommand(sig.split(/\s+/)[0]) ? -1 : i,
     )
     .filter(i => i >= 0);
   const nonAllowlistedSigs = nonAllowlistedSegmentIndices.map(i => analysis.signatures[i]);

@@ -1,7 +1,14 @@
 import { promises as fs } from "node:fs";
 import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "./config";
-import { match, stripTrailingWildcard } from "./wildcard";
+import { compilePattern, stripTrailingWildcard } from "./wildcard";
 import { loadUserPermissions, saveUserPermissions, type UserRule, type UserPermissions } from "./persistence";
+
+/** Cached compiled pattern for a user rule. */
+interface CompiledRule {
+  regex: RegExp;
+  strippedRegex: RegExp | null;
+  action: "allow" | "deny";
+}
 
 // ── Interface ──
 
@@ -9,6 +16,8 @@ import { loadUserPermissions, saveUserPermissions, type UserRule, type UserPermi
 export interface Store {
   /** Check if a bash command signature is auto-allowed. */
   hasAllowedBash(signature: string): boolean;
+  /** Check if a signature starts with an allowed prefix (e.g. "npm test --coverage" matches "npm test "). */
+  hasAllowedBashPrefix(signature: string): boolean;
   /** Check if a file path is auto-allowed for read. */
   hasAllowedReadPath(path: string): boolean;
   /** Check if a file path is auto-allowed for write. */
@@ -80,15 +89,36 @@ export function createStore(nowFn = Date.now): Store {
   // User rules cache
   let userPerms: UserPermissions = { bash: [], read: [], write: [] };
   let isLoaded = false;
+  // Compiled rules cache — keyed by type, invalidated on rule change
+  const compiledCache = new Map<"bash" | "read" | "write", CompiledRule[]>();
+
+  const compileRules = (type: "bash" | "read" | "write") => {
+    const rules = userPerms[type];
+    compiledCache.set(type, rules.map(rule => {
+      const stripped = stripTrailingWildcard(rule.pattern);
+      return {
+        regex: compilePattern(rule.pattern),
+        strippedRegex: stripped ? compilePattern(stripped) : null,
+        action: rule.action,
+      };
+    }));
+  };
 
   const ensureLoaded = async () => {
     if (isLoaded) return;
     userPerms = await loadUserPermissions();
+    for (const type of ["bash", "read", "write"] as const) compileRules(type);
     isLoaded = true;
   };
 
   return {
     hasAllowedBash(s) { return bashSigs.has(s); },
+    hasAllowedBashPrefix(s) {
+      for (const allowed of bashSigs) {
+        if (s.startsWith(allowed + " ")) return true;
+      }
+      return false;
+    },
     hasAllowedReadPath(p) { return readPaths.has(p); },
     hasAllowedWritePath(p) { return writePaths.has(p); },
     hasAllowedMcpServer(s) { return mcpServers.has(s); },
@@ -109,6 +139,7 @@ export function createStore(nowFn = Date.now): Store {
     async addUserRule(type, rule) {
       await ensureLoaded();
       userPerms[type].push(rule);
+      compileRules(type);
       await saveUserPermissions(userPerms);
     },
 
@@ -125,6 +156,7 @@ export function createStore(nowFn = Date.now): Store {
       await ensureLoaded();
       if (userPerms[type][index]) {
         userPerms[type].splice(index, 1);
+        compileRules(type);
         await saveUserPermissions(userPerms);
       }
     },
@@ -132,12 +164,11 @@ export function createStore(nowFn = Date.now): Store {
     getUserRuleAction(type, target) {
       // Note: This is sync. If not loaded yet, it returns null.
       // In practice, we will trigger ensureLoaded() at agent startup.
-      const rules = userPerms[type];
-      for (const rule of rules) {
-        if (match(rule.pattern, target)) return rule.action;
-        // "npm test *" should also match "npm test" (trailing * is optional)
-        const stripped = stripTrailingWildcard(rule.pattern);
-        if (stripped && match(stripped, target)) return rule.action;
+      const compiled = compiledCache.get(type);
+      if (!compiled) return null;
+      for (const rule of compiled) {
+        if (rule.regex.test(target)) return rule.action;
+        if (rule.strippedRegex?.test(target)) return rule.action;
       }
       return null;
     },
@@ -185,6 +216,8 @@ export function createStore(nowFn = Date.now): Store {
       mcpServers.clear();
       aborted.clear();
       pcount = 0;
+      compiledCache.clear();
+      isLoaded = false;
     },
   };
 }

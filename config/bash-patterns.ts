@@ -3,36 +3,72 @@ import path from "node:path";
 // ── Bash command patterns ──
 
 /** Commands always allowed when simple (no subshells, redirects, or dangerous flags). */
-export const allowedBashPatterns: RegExp[] = [
+const allowedBashPatternStrings: string[] = [
   // Inspection / read-only
-  /^find\b/, /^grep\b/, /^ls\b/, /^cat\b/, /^head\b/, /^tail\b/, /^wc\b/, /^file\b/,
-  /^sort\b/, /^uniq\b/, /^cut\b/, /^tr\b/, /^diff\b/, /^rg\b/, /^fd\b/,
-  /^tac\b/, /^rev\b/, /^nl\b/, /^fold\b/, /^expand\b/, /^unexpand\b/, /^fmt\b/,
-  /^join\b/, /^comm\b/, /^paste\b/, /^column\b/, /^seq\b/,
+  "find", "grep", "ls", "cat", "head", "tail", "wc", "file",
+  "sort", "uniq", "cut", "tr", "diff", "rg", "fd",
+  "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
+  "join", "comm", "paste", "column", "seq",
   // Text transform (safe stdout — guarded by dangerous flag checks)
-  /^sed\b/, /^perl\b/,
+  "sed", "perl",
   // Hashing / binary inspection
-  /^md5sum\b/, /^sha1sum\b/, /^sha256sum\b/, /^sha512sum\b/, /^cksum\b/,
-  /^hexdump\b/, /^od\b/, /^strings\b/,
+  "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
+  "hexdump", "od", "strings",
   // Strings / formatting
-  /^echo\b/, /^printf\b/, /^basename\b/, /^dirname\b/, /^realpath\b/, /^readlink\b/,
-  /^test\b/, /^true\b/, /^false\b/,
+  "echo", "printf", "basename", "dirname", "realpath", "readlink",
+  "test", "true", "false",
   // System info (read-only, no file side effects)
-  /^pwd\b/, /^cd\b/, /^date\b/, /^whoami\b/, /^id\b/, /^uname\b/, /^hostname\b/,
-  /^groups\b/, /^printenv\b/, /^uptime\b/, /^tty\b/, /^tput\b/,
+  "pwd", "cd", "date", "whoami", "id", "uname", "hostname",
+  "groups", "printenv", "uptime", "tty", "tput",
   // Disk / process inspection (read-only)
-  /^df\b/, /^du\b/, /^free\b/, /^ps\b/, /^pgrep\b/, /^pidof\b/,
+  "df", "du", "free", "ps", "pgrep", "pidof",
   // Command lookup
-  /^which\b/, /^command\b/, /^type\b/, /^hash\b/, /^whence\b/,
+  "which", "command", "type", "hash", "whence",
   // Git (guarded by dangerous flag checks)
-  /^git\b/,
+  "git",
   // Safe file/dir creation (no overwriting — guarded by no-redirect check)
-  /^mkdir\b/, /^touch\b/, /^mktemp\b/,
+  "mkdir", "touch", "mktemp",
   // Calculator
-  /^bc\b/, /^expr\b/, /^factor\b/, /^yes\b/,
+  "bc", "expr", "factor", "yes",
   // Wrapper commands (guarded by isWrapperRunningWrite check)
-  /^xargs\b/, /^watch\b/, /^timeout\b/, /^parallel\b/, /^nice\b/,
+  "xargs", "watch", "timeout", "parallel", "nice",
 ];
+
+/** O(1) first-word allowlist — pre-built from pattern strings. */
+export const allowedBashCommands = new Set(allowedBashPatternStrings);
+
+/**
+ * Subset of allowed commands that are unconditionally safe — no flag-dependent
+ * danger behavior. Used for the fast pre-check that skips tree-sitter parsing.
+ * Commands like sed (-i), git (push --force), find (-delete), etc. are excluded.
+ */
+export const unconditionallySafeCommands = new Set([
+  // Inspection / read-only
+  "ls", "cat", "head", "tail", "wc", "file",
+  "sort", "uniq", "cut", "tr", "diff",
+  "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
+  "join", "comm", "paste", "column", "seq",
+  // Hashing / binary inspection
+  "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
+  "hexdump", "od", "strings",
+  // Strings / formatting
+  "echo", "printf", "basename", "dirname", "realpath", "readlink",
+  "test", "true", "false",
+  // System info (read-only, no file side effects)
+  "pwd", "cd", "date", "whoami", "id", "uname", "hostname",
+  "groups", "printenv", "uptime", "tty", "tput",
+  // Disk / process inspection (read-only)
+  "df", "du", "free", "ps", "pgrep", "pidof",
+  // Command lookup
+  "which", "command", "type", "hash", "whence",
+  // Calculator
+  "bc", "expr", "factor", "yes",
+]);
+
+/** Legacy regex array (kept for pipeline stage checks that need word-boundary matching). */
+export const allowedBashPatterns: RegExp[] = allowedBashPatternStrings.map(
+  cmd => new RegExp(`^${cmd}$`),
+);
 
 /** Commands whose arguments include file/dir paths. */
 export const pathAwareCommands = new Set([
@@ -74,6 +110,11 @@ export const allowedBashSubcommands = new Set([
   "tsc",
   "cargo check", "cargo clippy", "cargo doc",
 ]);
+
+/** Check if a first word matches the static allowlist (O(1)). */
+export function isAllowedCommand(firstWord: string): boolean {
+  return allowedBashCommands.has(firstWord);
+}
 
 /**
  * Check if a segment is a safe command+subcommand pair (or safe standalone command).
