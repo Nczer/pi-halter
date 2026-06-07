@@ -35,7 +35,7 @@ const allowedBashPatternStrings: string[] = [
 ];
 
 /** O(1) first-word allowlist — pre-built from pattern strings. */
-export const allowedBashCommands = new Set(allowedBashPatternStrings);
+const allowedBashCommands = new Set(allowedBashPatternStrings);
 
 /**
  * Subset of allowed commands that are unconditionally safe — no flag-dependent
@@ -64,11 +64,6 @@ export const unconditionallySafeCommands = new Set([
   // Calculator
   "bc", "expr", "factor", "yes",
 ]);
-
-/** Legacy regex array (kept for pipeline stage checks that need word-boundary matching). */
-export const allowedBashPatterns: RegExp[] = allowedBashPatternStrings.map(
-  cmd => new RegExp(`^${cmd}$`),
-);
 
 /** Commands whose arguments include file/dir paths. */
 export const pathAwareCommands = new Set([
