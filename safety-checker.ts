@@ -1,5 +1,5 @@
 import {
-  allowedBashPatterns,
+  isAllowedCommand,
   dangerousFindFlags,
   dangerousPerlFlags,
   dangerousSedFlags,
@@ -190,9 +190,9 @@ function hasDangerousCommandInPipeline(segment: string): boolean {
 
 /**
  * 11 shared checks that both isSimpleAllowedCommand and isSegmentUnsafe need.
- * Extracted to eliminate duplication.
+ * Exported so analyzeCommand can compute once and reuse.
  */
-function hasKnownDanger(seg: BashSegment): boolean {
+export function hasKnownDanger(seg: BashSegment): boolean {
   const segment = seg.text;
   const firstWord = getFirstWord(segment);
   const hasHeredoc = seg.ops.includes("<<") || seg.ops.includes("<<<");
@@ -220,8 +220,9 @@ function hasKnownDanger(seg: BashSegment): boolean {
  * Check if a segment is a simple allowed command.
  * Returns true only when the command is on the allowlist, has no subshells,
  * no dangerous flags, no write redirects, and no unsafe pipeline stages.
+ * @param danger  Cached hasKnownDanger result (optional; computed if omitted).
  */
-export async function isSimpleAllowedCommand(seg: BashSegment, cwd: string): Promise<boolean> {
+export async function isSimpleAllowedCommand(seg: BashSegment, cwd: string, danger?: boolean): Promise<boolean> {
   const segment = seg.text;
   const trimmed = segment.trim();
   if (/^[0-9]*&?>+/.test(trimmed)) {
@@ -232,8 +233,8 @@ export async function isSimpleAllowedCommand(seg: BashSegment, cwd: string): Pro
   if (isFirstTokenRelativePath(segment)) return false;
 
   const firstWord = getFirstWord(segment);
-  if (!allowedBashPatterns.some(p => p.test(firstWord))) return false;
-  if (hasKnownDanger(seg)) return false;
+  if (!isAllowedCommand(firstWord)) return false;
+  if (danger ?? hasKnownDanger(seg)) return false;
   if (wrapperCommands.has(firstWord) && isWrapperRunningRelativePath(segment)) return false;
   if (!await areAllPipelineStagesSimple(segment, cwd)) return false;
   return true;
@@ -247,7 +248,7 @@ async function areAllPipelineStagesSimple(segment: string, cwd: string): Promise
     const stage = stages[i];
     if (isFirstTokenRelativePath(stage)) return false;
     const stageCmd = getFirstWord(stage);
-    if (!allowedBashPatterns.some(p => p.test(stageCmd))) return false;
+    if (!isAllowedCommand(stageCmd)) return false;
     if (stageCmd === "find" && (dangerousFindFlags.test(stage) || isFindExecWrite(stage))) return false;
     if (stageCmd === "fd" && isFdExecWrite(stage)) return false;
     if (stageCmd === "rg" && isRgPreWrite(stage)) return false;
@@ -264,8 +265,9 @@ async function areAllPipelineStagesSimple(segment: string, cwd: string): Promise
 
 /**
  * Check if a segment matches any unsafe pattern (subshell, obfuscation, dangerous flags, etc.).
+ * @param danger  Cached hasKnownDanger result (optional; computed if omitted).
  */
-export async function isSegmentUnsafe(seg: BashSegment, cwd: string): Promise<boolean> {
+export async function isSegmentUnsafe(seg: BashSegment, cwd: string, danger?: boolean): Promise<boolean> {
   const segment = seg.text;
   const trimmed = segment.trim();
   if (/^[0-9]*&?>+/.test(trimmed) && !hasWriteRedirect(segment)) return false;
@@ -274,7 +276,8 @@ export async function isSegmentUnsafe(seg: BashSegment, cwd: string): Promise<bo
   const firstWord = getFirstWord(segment);
   const isLookupOrEcho = LOOKUP_COMMANDS.has(firstWord) || ECHO_COMMANDS.has(firstWord) || PROCESS_INSPECTION_COMMANDS.has(firstWord);
 
-  return hasKnownDanger(seg)
+  const isDanger = danger ?? hasKnownDanger(seg);
+  return isDanger
     || isSegmentObfuscated(segment)
     || (!trusted && !isLookupOrEcho && (
       dangerousCommandPatterns.some(({ pattern }) => pattern.test(firstWord))

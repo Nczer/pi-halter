@@ -12,8 +12,9 @@ export function stripTrailingWildcard(pattern: string): string | null {
   return m ? m[1] : null;
 }
 
-export function match(pattern: string, text: string): boolean {
-  const regex = new RegExp(
+/** Compile a wildcard pattern into a RegExp (call once, reuse). */
+export function compilePattern(pattern: string): RegExp {
+  return new RegExp(
     "^" + pattern
       .replace(/[.+^${}()|[\]\\]/g, "\\$&") // Escape regex special chars except * and ?
       .replace(/\*/g, ".*")                // * -> match any characters
@@ -21,5 +22,8 @@ export function match(pattern: string, text: string): boolean {
       + "$",
     "i"
   );
-  return regex.test(text);
+}
+
+export function match(pattern: string, text: string): boolean {
+  return compilePattern(pattern).test(text);
 }

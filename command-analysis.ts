@@ -1,5 +1,5 @@
 import { parseCommand, type BashSegment } from "./bash-parser";
-import { isSimpleAllowedCommand, isSegmentUnsafe } from "./safety-checker";
+import { isSimpleAllowedCommand, isSegmentUnsafe, hasKnownDanger } from "./safety-checker";
 import { analyzeRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath } from "./path-analysis";
 import { getCommandSignature } from "./segment-helpers";
@@ -40,8 +40,21 @@ export async function analyzeCommand(cmd: string, cwd: string): Promise<CommandA
   const { segments, paths } = result;
   const segmentTexts = segments.map(s => s.text);
   const signatures = segmentTexts.map(getCommandSignature);
-  const allSimple = (await Promise.all(segments.map(seg => isSimpleAllowedCommand(seg, cwd)))).every(Boolean);
-  const hasUnsafe = (await Promise.all(segments.map(seg => isSegmentUnsafe(seg, cwd)))).some(Boolean);
+
+  // Compute all safety checks in one pass per segment to avoid running
+  // hasKnownDanger() twice (once for isSimple, once for isUnsafe)
+  const safetyResults = await Promise.all(segments.map(async (seg, i) => {
+    const danger = hasKnownDanger(seg);
+    const [simple, unsafe] = await Promise.all([
+      // Pass cached danger result to avoid recomputation
+      isSimpleAllowedCommand(seg, cwd, danger),
+      isSegmentUnsafe(seg, cwd, danger),
+    ]);
+    return { simple, unsafe };
+  }));
+
+  const allSimple = safetyResults.every(r => r.simple);
+  const hasUnsafe = safetyResults.some(r => r.unsafe);
   const risk = await analyzeRisk(cmd, segments);
 
   // Pre-compute relative path indices — decision engine consumes this instead of scanning tokens
