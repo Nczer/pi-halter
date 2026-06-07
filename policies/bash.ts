@@ -135,10 +135,6 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   const needsCommandApproval = !analysis.allSimple;
   const needsPathApproval = outsidePaths.length > 0;
 
-  if (!needsCommandApproval && !needsPathApproval) {
-    return { kind: "auto-allow" };
-  }
-
   const isRedirectOnly = (text: string) => /^[0-9]*&?>+/.test(text.trim());
   const nonAllowlistedSegmentIndices = analysis.signatures
     .map((sig, i) =>
