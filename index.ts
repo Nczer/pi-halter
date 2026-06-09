@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resetState, updateWidget } from "./permission-state";
+import { updateWidget } from "./widget";
 import { handleBash, handleFile, handleMcp, handleMcpDirectTool } from "./handlers";
 import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
 import { store } from "./store";
@@ -12,7 +12,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
 
   // ── Session shutdown ──
   pi.on("session_shutdown", async (_event, ctx) => {
-    resetState();
+    store.reset();
     setDspActive(false);
     ctx.ui.setWidget("permissions", undefined);
     ctx.ui.setWidget("dsp-warning", undefined);

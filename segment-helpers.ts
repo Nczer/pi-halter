@@ -30,6 +30,13 @@ export function splitPipeline(segment: string): string[] {
   return segment.split("|").map(s => s.trim()).filter(Boolean);
 }
 
+/** Strip /dev/null, /dev/stderr redirects and fd-to-fd redirects from a command string. */
+export function stripNullRedirects(cmd: string): string {
+  return cmd
+    .replace(/[0-9]*&?>+\s*(?:\/dev\/(?:null|stderr))\b/g, "")
+    .replace(/[0-9]*>&[0-9]+/g, "");
+}
+
 /** Package manager commands that use subcommands (npm install, cargo check, etc.). */
 export const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "npx", "cargo", "pip", "pip3", "uv", "go", "bun"]);
 

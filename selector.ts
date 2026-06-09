@@ -43,12 +43,12 @@ function addWrapped(lines: string[], text: string, width: number, indent = ""): 
  *
  * Returns the selected choice or null if cancelled.
  */
-export async function showSelect(
+export async function showSelectIndex(
   ctx: ExtensionContext,
   title: string,
   choices: string[],
-): Promise<string | null> {
-  return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+): Promise<number | null> {
+  return ctx.ui.custom<number | null>((tui, theme, _kb, done) => {
     let selectedIndex = 0;
     let cachedLines: string[] | undefined;
 
@@ -69,7 +69,7 @@ export async function showSelect(
         return;
       }
       if (matchesKey(data, Key.enter)) {
-        done(choices[selectedIndex]);
+        done(selectedIndex);
         return;
       }
       if (matchesKey(data, Key.escape)) {

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { createStore } from "../store";
-import { setPersistencePath } from "../persistence";
+import { setPersistencePath } from "../store";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";

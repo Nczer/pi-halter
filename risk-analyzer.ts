@@ -1,9 +1,10 @@
 import {
   dangerousCommandPatterns,
   dangerousContextPatterns,
+  isAllowedCommand,
 } from "./config";
 import type { BashSegment } from "./bash-parser";
-import { getFirstWord } from "./segment-helpers";
+import { getFirstWord, splitPipeline, stripNullRedirects } from "./segment-helpers";
 
 // ── Types ──
 
@@ -44,7 +45,7 @@ function analyzeSegmentRisk(text: string, ops: string[]): Risk | null {
 
   // Pipe to shell
   if (ops.includes("|")) {
-    const parts = text.split("|").map(p => p.trim());
+    const parts = splitPipeline(text);
     const pipeTargets = parts.slice(1);
     const shellNames = new Set(["sh", "bash", "zsh", "fish"]);
     if (pipeTargets.some(target => shellNames.has(getFirstWord(target)))) {
@@ -258,9 +259,7 @@ export async function analyzeRisk(cmd: string, segments: BashSegment[]): Promise
   }
 
   // Whole-command operator checks
-  let cmdNoNullRedirect = cmd
-    .replace(/[0-9]*&?>+\s*\/dev\/(?:null|stderr)\b/g, "");
-  cmdNoNullRedirect = cmdNoNullRedirect.replace(/[0-9]*>&[0-9]+/g, "");
+  const cmdNoNullRedirect = stripNullRedirects(cmd);
   const hasRealWriteRedirect = /[0-9]*&?>+\s*\S/.test(cmdNoNullRedirect);
   if (hasRealWriteRedirect) {
     reasons.push("shell output redirection (can overwrite files)");
@@ -269,7 +268,16 @@ export async function analyzeRisk(cmd: string, segments: BashSegment[]): Promise
     reasons.push("shell input redirection");
   }
   if (allOps.has("|") || allOps.has("|&")) {
-    reasons.push("pipe operator (chained commands)");
+    // Only flag pipe if at least one stage is NOT an allowed command
+    // "wc | sort" is harmless; "cat | bash" is not
+    const allStagesSafe = splitPipeline(cmd).every(part => {
+      const stage = stripNullRedirects(part).trim();
+      if (!stage) return true;
+      return isAllowedCommand(getFirstWord(stage));
+    });
+    if (!allStagesSafe) {
+      reasons.push("pipe operator (chained commands)");
+    }
   }
 
   // Per-segment risk

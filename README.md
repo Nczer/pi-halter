@@ -7,7 +7,7 @@ A permission gate for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, a
 - **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.)
 - **File access** — auto-allows reads inside cwd and trusted paths; prompts for paths outside cwd, denied names (`.env`, `.ssh`, etc.)
 - **MCP tool calls** — intercepts both proxy tool calls (`mcp({tool: "..."})`) and direct tools (e.g., `exa_web_search_exa`); auto-allows metadata operations; prompts for tool invocations showing server, tool, and argument preview; server-level "Always" approval (e.g., `exa:*`)
-- **Permanent rules** — define wildcard patterns in `~/.config/pi/permissions.json` for permanent allow/deny. Manage via `/perms` command
+- **Permanent rules** — define wildcard patterns in `~/.pi/agent/permissions.json` for permanent allow/deny. Manage via `/perms` command
 - **Auto-allow** — "Always" option grants session-scoped permission; status widget shows active allowances
 - **Retry-loop prevention** — recently-aborted commands are auto-blocked for 60 seconds
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
