@@ -12,7 +12,7 @@ import {
 } from "./config";
 import type { BashSegment } from "./bash-parser";
 import { isFirstTokenRelativePath } from "./path-analysis";
-import { containsCommandSubstitution, getFirstWord, splitPipeline } from "./segment-helpers";
+import { containsCommandSubstitution, getFirstWord, splitPipeline, stripNullRedirects } from "./segment-helpers";
 
 // ── Constants ──
 
@@ -25,15 +25,9 @@ const PROCESS_INSPECTION_COMMANDS = new Set(["pgrep", "pidof"]);
 function hasWriteRedirect(cmd: string): boolean {
   const trimmed = cmd.trim();
   if (/^[0-9]*&?>+/.test(trimmed)) {
-    let stripped = trimmed;
-    stripped = stripped.replace(/[0-9]*&?>+\s*(?:\/dev\/(?:null|stderr))\b/g, "");
-    stripped = stripped.replace(/[0-9]*>&[0-9]+/g, "");
-    if (!stripped.trim()) return false;
+    if (!stripNullRedirects(trimmed).trim()) return false;
   }
-
-  let stripped = cmd;
-  stripped = stripped.replace(/[0-9]*&?>+\s*(?:\/dev\/(?:null|stderr))\b/g, "");
-  stripped = stripped.replace(/[0-9]*>&[0-9]+/g, "");
+  const stripped = stripNullRedirects(cmd);
   if (/>+\s*\S/.test(stripped)) {
     const inTest = /\[\s.*\]/.test(stripped) || /test\s/.test(stripped);
     if (!inTest) return true;

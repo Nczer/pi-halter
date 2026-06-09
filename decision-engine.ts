@@ -59,6 +59,8 @@ export interface PromptDecision {
   includePathsOption?: boolean;
   /** Whether to show broader allow option (npm test vs npm *). */
   includeBroaderOption?: boolean;
+  /** Whether to show any "Always" option (false when nothing can be auto-allowed). */
+  includeAlwaysOption?: boolean;
 }
 
 export type Decision = AutoAllowDecision | BlockDecision | PromptDecision;

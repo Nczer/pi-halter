@@ -5,6 +5,7 @@ import { analyzeCommand } from "../command-analysis";
 import {
   getOutsideCwdPaths,
 } from "../path-analysis";
+import { getFirstWord } from "../segment-helpers";
 import type { Store, AllowRules, BashRequest, Decision, BashPromptData } from "../decision-engine";
 
 // ── Fast pre-check (avoids tree-sitter for trivial commands) ──
@@ -31,10 +32,7 @@ function fastAllow(command: string): boolean {
   const tokens = command.trim().split(/\s+/);
   if (tokens.length < 1) return false;
 
-  // Extract first word
-  const firstWord = tokens[0].toLowerCase();
-  // Strip path prefix if present (e.g. "./ls" → "ls")
-  const bare = firstWord.replace(/^.*\//, "");
+  const bare = getFirstWord(command);
 
   if (!unconditionallySafeCommands.has(bare)) return false;
 
@@ -108,7 +106,7 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
     if (store.getUserRuleAction("bash", sig) === "allow") return true;
     if (relPathIdxSet.has(segIdx)) return false;
     if (isSafeSubcommand(analysis.segments[segIdx])) return true;
-    return isAllowedCommand(sig.split(/\s+/)[0]);
+    return isAllowedCommand(getFirstWord(sig));
   };
 
   // User rules approved every segment — explicit user intent, bypass safety heuristics
@@ -142,7 +140,7 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
         ? -1
         : isSafeSubcommand(analysis.segments[i])
         ? -1
-        : isAllowedCommand(sig.split(/\s+/)[0]) ? -1 : i,
+        : isAllowedCommand(getFirstWord(sig)) ? -1 : i,
     )
     .filter(i => i >= 0);
   const nonAllowlistedSigs = nonAllowlistedSegmentIndices.map(i => analysis.signatures[i]);
@@ -156,11 +154,11 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   if (needsCommandApproval && nonAllowlistedSigs.length > 0) {
     allowRules.bashSigs = nonAllowlistedSigs;
     const pmSigs = nonAllowlistedSigs.filter(sig => {
-      const cmd = sig.split(" ")[0];
+      const cmd = getFirstWord(sig);
       return PACKAGE_MANAGERS.has(cmd);
     });
     const broaderSigs = pmSigs.length > 0
-      ? [...new Set(pmSigs.map(sig => sig.split(" ")[0]))]
+      ? [...new Set(pmSigs.map(getFirstWord))]
       : [];
     if (broaderSigs.some(s => !nonAllowlistedSigs.includes(s))) {
       allowBroaderRules = {
@@ -197,5 +195,6 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
     allowPathsRules,
     includePathsOption: hasBoth,
     includeBroaderOption: !!allowBroaderRules,
+    includeAlwaysOption: uniqueSigs.length > 0 || outsideDirs.length > 0,
   };
 }

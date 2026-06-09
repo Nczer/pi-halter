@@ -1,10 +1,26 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BuiltPrompt } from "./prompt-builder";
 import { store } from "./store";
-import { showSelect, showReasonEditor } from "./selector";
+import { showSelectIndex, showReasonEditor } from "./selector";
 
 /** User's response to a two-tier prompt. */
 type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | { kind: "no"; reason: string };
+
+/** Choice action tags — decoupled from display labels. */
+enum Choice {
+  Yes = 0,
+  Always = 1,
+  AlwaysAlt = 2,   // broader / paths / file (variant by layout)
+  Permanent = 3,
+  NoWithReason = 4,
+  No = 5,
+}
+
+/** Tier-2 choice indices. */
+enum Tier2 {
+  Confirm = 0,
+  Back = 1,
+}
 
 /**
  * Two-tier "always" confirmation flow.
@@ -14,6 +30,9 @@ type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | { k
  *
  * Consumes a BuiltPrompt for all content — no string concatenation at call sites.
  * Calls the appropriate mutation callback on confirmed "always".
+ *
+ * Uses index-based choice dispatch (not string matching) so label changes
+ * cannot break the decision logic.
  */
 export async function twoTierAlwaysPrompt(
   prompt: BuiltPrompt,
@@ -24,12 +43,19 @@ export async function twoTierAlwaysPrompt(
   onAlwaysBroader?: () => void,
   onCustomAlways?: (pattern: string) => Promise<void>,
 ): Promise<PromptResult | { kind: "custom"; pattern: string }> {
-  const { title, body, tier2Everything, tier2Paths, tier2File, includePathsOption, includeFileOption, includeBroaderOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel } = prompt;
+  const { title, body, tier2Everything, tier2Paths, tier2File, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel } = prompt;
 
   while (true) {
     const { over, count } = store.incrementPromptCount();
+
+    // Build choices and a dispatch map: index → handler
+    type DispatchFn = () => PromptResult | { kind: "custom"; pattern: string } | null | Promise<PromptResult | { kind: "custom"; pattern: string } | null>;
     let choices: string[];
-    if (includeBroaderOption) {
+    let dispatch: Map<number, DispatchFn>;
+
+    if (!includeAlwaysOption) {
+      choices = ["Yes", "Permanent always (config)", "No (with reason)", "No"];
+    } else if (includeBroaderOption) {
       choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, "Permanent always (config)", "No (with reason)", "No"];
     } else if (includePathsOption) {
       choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "Permanent always (config)", "No (with reason)", "No"];
@@ -38,67 +64,91 @@ export async function twoTierAlwaysPrompt(
     } else {
       choices = ["Yes", `Always: ${alwaysLabel}`, "Permanent always (config)", "No (with reason)", "No"];
     }
+
     const warningPrefix = over
       ? `\u26a0\ufe0f High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
       : "";
 
-    const answer = await showSelect(ctx, warningPrefix + title + "\n---\n" + body, choices);
+    const idx = await showSelectIndex(ctx, warningPrefix + title + "\n---\n" + body, choices);
+    if (idx === null) return "no"; // cancelled
 
-    if (answer === "Yes") return "yes";
-    if (!answer || answer === "No") return "no";
-    if (answer === "Permanent always (config)") {
-      const pattern = await showReasonEditor(ctx, "Enter a wildcard pattern for permanent allow (saved to ~/.config/pi/permissions.json).\n\nPatterns are case-insensitive:\n• '*' matches any characters (e.g. 'git checkout *.lock')\n• '?' matches one character\n\nExample: 'npm test *' or '/mnt/data/logs/*'");
+    // ── Adjust indices when Always options are suppressed ──
+    const effectiveIdx = !includeAlwaysOption
+      ? idx // [Yes, Permanent, NoWithReason, No] → 0,1,2,3
+      : idx; // [Yes, Always, ..., Permanent, NoWithReason, No] → enum indices
+
+    // ── Direct actions (no tier-2) ──
+    if (effectiveIdx === Choice.Yes) return "yes";
+
+    // No index depends on layout; compute from end
+    const noIdx = choices.length - 1;
+    const noWithReasonIdx = choices.length - 2;
+    if (effectiveIdx === noIdx) return "no";
+
+    // Permanent always: index shifts when Always is suppressed
+    const permanentIdx = includeAlwaysOption ? Choice.Permanent : 1;
+    if (effectiveIdx === permanentIdx) {
+      const pattern = await showReasonEditor(ctx, "Enter a wildcard pattern for permanent allow (saved to ~/.pi/agent/permissions.json).\n\nPatterns are case-insensitive:\n• '*' matches any characters (e.g. 'git checkout *.lock')\n• '?' matches one character\n\nExample: 'npm test *' or '/mnt/data/logs/*'");
       if (pattern === null || pattern.trim().length === 0) continue;
       const p = pattern.trim();
       if (onCustomAlways) await onCustomAlways(p);
       return { kind: "custom", pattern: p };
     }
-    if (answer === "No (with reason)") {
+
+    if (effectiveIdx === noWithReasonIdx) {
       const reason = await showReasonEditor(ctx, "Reason for rejection:");
-      if (reason === null) continue; // Escaped — back to selector
+      if (reason === null) continue;
       return { kind: "no", reason: reason?.trim() || "No reason provided" };
     }
 
+    // ── Tier-2 confirmation for "Always" choices ──
+    // Resolve which callback and tier-2 config to use based on layout + index
+    let tier2Config: { title: string; body: string };
+    let callback: () => PromptResult;
 
-    if (includeBroaderOption && answer === `Always: ${alwaysLabel}`) {
-      const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,
-        ["Always Yes", "Back"]);
-      if (tier2 === "Always Yes") { onAlways(); return "always"; }
-      continue;
+    if (includeBroaderOption) {
+      if (idx === Choice.Always) {
+        // Always: specific sigs
+        tier2Config = tier2Everything;
+        callback = () => { onAlways(); return "always" as PromptResult; };
+      } else {
+        // Always: broader sigs
+        tier2Config = tier2Everything;
+        callback = () => { onAlwaysBroader?.(); return "always" as PromptResult; };
+      }
+    } else if (includeFileOption) {
+      if (idx === Choice.Always) {
+        // Always (path)
+        tier2Config = tier2Everything;
+        callback = () => { onAlways(); return "always" as PromptResult; };
+      } else {
+        // Always (file)
+        tier2Config = tier2File!;
+        callback = () => { onAlwaysFile(); return "alwaysFile" as PromptResult; };
+      }
+    } else if (includePathsOption) {
+      if (idx === Choice.Always) {
+        // Always: sigs + paths
+        tier2Config = tier2Everything;
+        callback = () => { onAlways(); return "always" as PromptResult; };
+      } else {
+        // Always (paths)
+        tier2Config = tier2Paths ?? tier2Everything;
+        callback = () => { onAlwaysPaths(); return "alwaysPaths" as PromptResult; };
+      }
+    } else {
+      // Default: single Always option
+      const tier2Body = tier2Everything.body
+        ? tier2Everything.body + "\n\n\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts."
+        : "\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
+      tier2Config = { title: tier2Everything.title, body: tier2Body };
+      callback = () => { onAlways(); return "always" as PromptResult; };
     }
 
-    if (includeBroaderOption && answer === `Always: ${alwaysBroaderLabel}`) {
-      const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,
-        ["Always Yes", "Back"]);
-      if (tier2 === "Always Yes") { onAlwaysBroader?.(); return "always"; }
-      continue;
-    }
-
-    if (includeFileOption && answer === `Always (path): ${alwaysLabel}`) {
-      const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Everything.body,
-        ["Always Yes", "Back"]);
-      if (tier2 === "Always Yes") { onAlways(); return "always"; }
-      continue;
-    }
-
-    if (includeFileOption && answer === `Always (file): ${alwaysFileLabel}`) {
-      const config = tier2File!;
-      const tier2 = await showSelect(ctx, config.title, ["Always Yes", "Back"]);
-      if (tier2 === "Always Yes") { onAlwaysFile(); return "alwaysFile"; }
-      continue;
-    }
-
-    if (includePathsOption && answer === `Always (paths): ${alwaysPathsLabel}`) {
-      const config = tier2Paths ?? tier2Everything;
-      const tier2 = await showSelect(ctx, config.title, ["Always Yes", "Back"]);
-      if (tier2 === "Always Yes") { onAlwaysPaths(); return "alwaysPaths"; }
-      continue;
-    }
-
-    const tier2Body = tier2Everything.body
-      ? tier2Everything.body + "\n\n\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts."
-      : "\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
-    const tier2 = await showSelect(ctx, tier2Everything.title + "\n---\n" + tier2Body, ["Always Yes", "Back"]);
-    if (tier2 === "Always Yes") { onAlways(); return "always"; }
+    // Show tier-2 confirmation
+    const tier2Idx = await showSelectIndex(ctx, tier2Config.title + "\n---\n" + tier2Config.body, ["Always Yes", "Back"]);
+    if (tier2Idx === Tier2.Confirm) return callback();
+    // tier2Idx === Back || null → loop
   }
 }
+

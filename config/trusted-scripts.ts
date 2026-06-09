@@ -1,18 +1,11 @@
 import path from "node:path";
 import os from "node:os";
+import { expandTilde } from "../path-util";
 
 /** Directories whose scripts are auto-trusted (interpreter + script in this dir bypasses dangerous-pattern check). */
 const trustedScriptDirs: string[] = [
   path.join(os.homedir(), ".pi", "agent", "skills"),
 ];
-
-// Local copy — importing from path-analysis would create a circular dependency
-// (path-analysis → config → trusted-scripts → path-analysis)
-function expandTilde(p: string): string {
-  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
-  if (p === "~") return os.homedir();
-  return p;
-}
 
 /** Check if a resolved absolute path is inside any trusted script directory. */
 export function isTrustedScriptPath(resolvedPath: string): boolean {
@@ -23,11 +16,67 @@ export function isTrustedScriptPath(resolvedPath: string): boolean {
 }
 
 /**
+ * Tokenize a shell segment respecting single and double quotes.
+ * Handles: python "my script.py", node '/path/with space/file.js'
+ */
+function tokenizeSegment(segment: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  const s = segment.trim();
+
+  while (i < s.length) {
+    // Skip whitespace
+    if (/\s/.test(s[i])) { i++; continue; }
+
+    // Double-quoted string
+    if (s[i] === '"') {
+      let token = "";
+      i++; // skip opening quote
+      while (i < s.length && s[i] !== '"') {
+        if (s[i] === '\\' && i + 1 < s.length) {
+          token += s[i + 1];
+          i += 2;
+        } else {
+          token += s[i];
+          i++;
+        }
+      }
+      i++; // skip closing quote
+      tokens.push(token);
+      continue;
+    }
+
+    // Single-quoted string
+    if (s[i] === "'") {
+      let token = "";
+      i++; // skip opening quote
+      while (i < s.length && s[i] !== "'") {
+        token += s[i];
+        i++;
+      }
+      i++; // skip closing quote
+      tokens.push(token);
+      continue;
+    }
+
+    // Unquoted token
+    let token = "";
+    while (i < s.length && !/\s/.test(s[i]) && s[i] !== '"' && s[i] !== "'") {
+      token += s[i];
+      i++;
+    }
+    tokens.push(token);
+  }
+
+  return tokens;
+}
+
+/**
  * Check if a command segment is an interpreter (python, node, etc.) running
  * a script file from a trusted directory.
  */
 export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
-  const tokens = segment.trim().split(/\s+/);
+  const tokens = tokenizeSegment(segment);
   if (tokens.length < 2) return false;
 
   const cmd = tokens[0].toLowerCase();

@@ -142,10 +142,27 @@ describe("analyzeRisk", () => {
     expect(risk.severity).toBe("high");
   });
 
-  it("reports pipe operator risk", async () => {
-    const risk = await analyze("cat file.txt | grep foo | wc -l");
+  it("reports pipe operator risk when stage is not allowed", async () => {
+    const risk = await analyze("cat file.txt | bash");
     expect(risk.dangerous).toBe(true);
     expect(risk.reasons.some(r => r.includes("pipe"))).toBe(true);
+  });
+
+  it("does not flag pipe when all stages are allowed", async () => {
+    const risk = await analyze("cat file.txt | grep foo | wc -l");
+    expect(risk.reasons.some(r => r.includes("pipe"))).toBe(false);
+  });
+
+  it("flags pipe to tee (write operation, not in allowlist)", async () => {
+    const risk = await analyze("cat file.txt | tee output.txt");
+    expect(risk.dangerous).toBe(true);
+    expect(risk.reasons.some(r => r.includes("pipe"))).toBe(true);
+  });
+
+  it("flags pipe to sed -i (dangerous sed in pipeline)", async () => {
+    const risk = await analyze("cat file.txt | sed -i s/a/b/");
+    expect(risk.dangerous).toBe(true);
+    expect(risk.reasons.some(r => r.includes("sed -i") || r.includes("pipe"))).toBe(true);
   });
 
   it("does not match dangerousContextPatterns against heredoc body", async () => {

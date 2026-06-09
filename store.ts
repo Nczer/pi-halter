@@ -1,7 +1,65 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "./config";
-import { compilePattern, stripTrailingWildcard } from "./wildcard";
-import { loadUserPermissions, saveUserPermissions, type UserRule, type UserPermissions } from "./persistence";
+
+// ── Wildcard matching (inlined from wildcard.ts) ──
+
+/** Compile a wildcard pattern into a RegExp (call once, reuse). */
+function compilePattern(pattern: string): RegExp {
+  return new RegExp(
+    "^" + pattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&") // Escape regex special chars except * and ?
+      .replace(/\*/g, ".*")                // * -> match any characters
+      .replace(/\?/g, ".")                 // ? -> match one character
+    + "$",
+    "i",
+  );
+}
+
+/** Strip trailing " *" from a pattern so "npm test *" also matches "npm test". */
+function stripTrailingWildcard(pattern: string): string | null {
+  const m = pattern.match(/^(.*) \*$/);
+  return m ? m[1] : null;
+}
+
+// ── Persistence (inlined from persistence.ts) ──
+
+export interface UserRule {
+  pattern: string;
+  action: "allow" | "deny";
+}
+
+export interface UserPermissions {
+  bash: UserRule[];
+  read: UserRule[];
+  write: UserRule[];
+}
+
+let CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "permissions.json");
+
+/** Override persistence path (for tests). */
+export function setPersistencePath(newPath: string) {
+  CONFIG_PATH = newPath;
+}
+
+async function loadUserPermissions(): Promise<UserPermissions> {
+  try {
+    const data = await fs.readFile(CONFIG_PATH, "utf8");
+    return JSON.parse(data);
+  } catch {
+    return { bash: [], read: [], write: [] };
+  }
+}
+
+async function saveUserPermissions(permissions: UserPermissions): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
+    await fs.writeFile(CONFIG_PATH, JSON.stringify(permissions, null, 2), "utf8");
+  } catch (e) {
+    console.error(`Failed to save permissions to ${CONFIG_PATH}:`, e);
+  }
+}
 
 /** Cached compiled pattern for a user rule. */
 interface CompiledRule {
@@ -56,7 +114,9 @@ export interface Store {
   listAllowedWritePaths(): Set<string>;
   /** Get a copy of all auto-allowed MCP servers. */
   listAllowedMcpServers(): Set<string>;
-  /** Reset all state (session shutdown). */
+  /** Reset volatile session state (auto-allow, abort history, prompt counter). Preserves user rules. */
+  resetSessionState(): void;
+  /** Reset all state including user rules (session shutdown only). */
   reset(): void;
 }
 
@@ -95,12 +155,21 @@ export function createStore(nowFn = Date.now): Store {
   const compileRules = (type: "bash" | "read" | "write") => {
     const rules = userPerms[type];
     compiledCache.set(type, rules.map(rule => {
-      const stripped = stripTrailingWildcard(rule.pattern);
-      return {
-        regex: compilePattern(rule.pattern),
-        strippedRegex: stripped ? compilePattern(stripped) : null,
-        action: rule.action,
-      };
+      try {
+        const stripped = stripTrailingWildcard(rule.pattern);
+        return {
+          regex: compilePattern(rule.pattern),
+          strippedRegex: stripped ? compilePattern(stripped) : null,
+          action: rule.action,
+        };
+      } catch (e) {
+        console.error(`[permissions] Invalid pattern '${rule.pattern}': ${(e as Error).message}`);
+        return {
+          regex: new RegExp("^$"), // never matches — skip silently
+          strippedRegex: null,
+          action: rule.action,
+        };
+      }
     }));
   };
 
@@ -137,6 +206,12 @@ export function createStore(nowFn = Date.now): Store {
     },
 
     async addUserRule(type, rule) {
+      // Validate pattern before saving — fail fast on malformed regex
+      try {
+        compilePattern(rule.pattern);
+      } catch (e) {
+        throw new Error(`Invalid pattern '${rule.pattern}': ${(e as Error).message}`);
+      }
       await ensureLoaded();
       userPerms[type].push(rule);
       compileRules(type);
@@ -207,7 +282,7 @@ export function createStore(nowFn = Date.now): Store {
       return { over: pcount > PROMPT_WARNING_THRESHOLD, count: pcount };
     },
 
-    reset() {
+    resetSessionState() {
       bashSigs.clear();
       readDirs.clear();
       writeDirs.clear();
@@ -216,8 +291,14 @@ export function createStore(nowFn = Date.now): Store {
       mcpServers.clear();
       aborted.clear();
       pcount = 0;
+      // Preserve userPerms and compiledCache — they are persistent, not session-scoped
+    },
+
+    reset() {
+      this.resetSessionState();
       compiledCache.clear();
       isLoaded = false;
+      userPerms = { bash: [], read: [], write: [] };
     },
   };
 }

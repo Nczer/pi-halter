@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import { decide } from "../decision-engine";
 import { createStore } from "../store";
-import { setPersistencePath } from "../persistence";
+import { setPersistencePath } from "../store";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";

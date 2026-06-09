@@ -11,6 +11,7 @@ export interface BuiltPrompt {
   includePathsOption: boolean;
   includeFileOption: boolean;
   includeBroaderOption: boolean;
+  includeAlwaysOption: boolean;
   /** Labels for "Always" choices (e.g. "npm test *", "npm *", "/path/*") */
   alwaysLabel: string;
   alwaysBroaderLabel?: string;
@@ -23,11 +24,11 @@ export interface BuiltPrompt {
  * for the two-tier prompt flow. All prompt wording lives here.
  */
 export function buildPrompt(decision: PromptDecision): BuiltPrompt {
-  const { promptData, allowRules, allowPathsRules, includePathsOption = false, includeBroaderOption = false } = decision;
+  const { promptData, allowRules, allowPathsRules, includePathsOption = false, includeBroaderOption = false, includeAlwaysOption = true } = decision;
 
   switch (promptData.type) {
     case "bash":
-      return buildBashPrompt(promptData, allowRules, includePathsOption, includeBroaderOption ?? false);
+      return buildBashPrompt(promptData, allowRules, includePathsOption, includeBroaderOption ?? false, includeAlwaysOption);
     case "file":
       return buildFilePrompt(promptData, allowRules);
     case "mcp":
@@ -63,6 +64,7 @@ function buildBashPrompt(
   _allowRules: { bashSigs?: string[]; readDirs?: string[] },
   includePathsOption: boolean,
   includeBroaderOption: boolean,
+  includeAlwaysOption: boolean,
 ): BuiltPrompt {
   const { command, cwd, outsideDirs, segments, signatures,
           riskDangerous, riskSeverity, riskReasons, hasUnsafePattern,
@@ -146,7 +148,7 @@ function buildBashPrompt(
     ? outsideDirs.map(d => `Read ${d}/*`).join(", ")
     : undefined;
 
-  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel };
+  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel };
 }
 
 // ── File prompt ──
@@ -176,6 +178,7 @@ function buildFilePrompt(
       includePathsOption: false,
       includeFileOption: false,
       includeBroaderOption: false,
+      includeAlwaysOption: true,
       alwaysLabel: `${action} ${fileName}`,
     };
   }
@@ -203,6 +206,7 @@ function buildFilePrompt(
     includePathsOption: false,
     includeFileOption: true,
     includeBroaderOption: false,
+    includeAlwaysOption: true,
     alwaysLabel: tier2Label,
     alwaysFileLabel: `${action} ${fileName}`,
   };
@@ -236,6 +240,7 @@ function buildMcpPrompt(
     includePathsOption: false,
     includeFileOption: false,
     includeBroaderOption: false,
+    includeAlwaysOption: true,
     alwaysLabel: `${server}:*`,
   };
 }
