@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { analyzeRisk } from "../risk-analyzer";
+import { analyzeWholeCommandRisk } from "../risk-analyzer";
+import { analyzeSegment } from "../segment-analysis";
 import { parseCommand } from "../bash-parser";
 
 async function analyze(cmd: string, cwd = "/home/user/project") {
   const result = await parseCommand(cmd, cwd);
-  return analyzeRisk(cmd, result.segments);
+  const segmentRisks = await Promise.all(result.segments.map(seg => analyzeSegment(seg, cwd).then(a => a.risk)));
+  return analyzeWholeCommandRisk(cmd, segmentRisks);
 }
 
 describe("analyzeRisk", () => {

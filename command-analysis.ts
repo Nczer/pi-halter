@@ -1,6 +1,6 @@
 import { parseCommand, type BashSegment } from "./bash-parser";
-import { isSimpleAllowedCommand, isSegmentUnsafe, hasKnownDanger } from "./safety-checker";
-import { analyzeRisk, type CommandRisk } from "./risk-analyzer";
+import { analyzeSegment, type SegmentRisk } from "./segment-analysis";
+import { analyzeWholeCommandRisk } from "./risk-analyzer";
 import { hasRelativePath } from "./path-analysis";
 import { getCommandSignature } from "./segment-helpers";
 
@@ -24,6 +24,12 @@ interface CommandAnalysis {
   relativePathSegmentIndices: number[];
 }
 
+export interface CommandRisk {
+  dangerous: boolean;
+  reasons: string[];
+  severity: "high" | "medium" | null;
+}
+
 // ── Public interface ──
 
 /**
@@ -41,26 +47,21 @@ export async function analyzeCommand(cmd: string, cwd: string): Promise<CommandA
   const segmentTexts = segments.map(s => s.text);
   const signatures = segmentTexts.map(getCommandSignature);
 
-  // Compute all safety checks in one pass per segment to avoid running
-  // hasKnownDanger() twice (once for isSimple, once for isUnsafe)
-  const safetyResults = await Promise.all(segments.map(async (seg, i) => {
-    const danger = hasKnownDanger(seg);
-    const [simple, unsafe] = await Promise.all([
-      // Pass cached danger result to avoid recomputation
-      isSimpleAllowedCommand(seg, cwd, danger),
-      isSegmentUnsafe(seg, cwd, danger),
-    ]);
-    return { simple, unsafe };
-  }));
+  // Unified segment analysis: one call per segment replaces
+  // hasKnownDanger + isSimpleAllowedCommand + isSegmentUnsafe + analyzeSegmentRisk
+  const segmentAnalyses = await Promise.all(segments.map(seg => analyzeSegment(seg, cwd)));
 
-  const allSimple = safetyResults.every(r => r.simple);
-  const hasUnsafe = safetyResults.some(r => r.unsafe);
-  const risk = await analyzeRisk(cmd, segments);
+  const allSimple = segmentAnalyses.every(a => a.isSimple);
+  const hasUnsafe = segmentAnalyses.some(a => a.isUnsafe);
+
+  // Merge per-segment risks with whole-command risk
+  const segmentRisks = segmentAnalyses.map(a => a.risk);
+  const wholeRisk = await analyzeWholeCommandRisk(cmd, segmentRisks);
 
   // Pre-compute relative path indices — decision engine consumes this instead of scanning tokens
   const relativePathSegmentIndices = segmentTexts
     .map((seg, i) => hasRelativePath(seg) ? i : -1)
     .filter(i => i >= 0);
 
-  return { segments: segmentTexts, signatures, paths, allSimple, hasUnsafePattern: hasUnsafe, risk, relativePathSegmentIndices };
+  return { segments: segmentTexts, signatures, paths, allSimple, hasUnsafePattern: hasUnsafe, risk: wholeRisk, relativePathSegmentIndices };
 }
