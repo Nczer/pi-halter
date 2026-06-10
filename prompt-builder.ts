@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { PromptDecision, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
 
 // ── Output types (match twoTierAlwaysPrompt's expected inputs) ──
@@ -8,6 +9,7 @@ export interface BuiltPrompt {
   tier2Everything: { title: string; body: string };
   tier2Paths?: { title: string; body: string };
   tier2File?: { title: string; body: string };
+  tier2Broader?: { title: string; body: string };
   includePathsOption: boolean;
   includeFileOption: boolean;
   includeBroaderOption: boolean;
@@ -17,6 +19,8 @@ export interface BuiltPrompt {
   alwaysBroaderLabel?: string;
   alwaysPathsLabel?: string;
   alwaysFileLabel?: string;
+  /** Context-aware examples for the permanent allow pattern editor. */
+  permanentAllowExamples?: string;
 }
 
 /**
@@ -148,7 +152,16 @@ function buildBashPrompt(
     ? outsideDirs.map(d => `Read ${d}/*`).join(", ")
     : undefined;
 
-  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel };
+  const cmdFirst = command.split(" ")[0];
+  const sigExample = uniqueSigs.length > 0 ? uniqueSigs[0] + " *" : cmdFirst + " *";
+  const broaderExample = cmdFirst + " *";
+  let permExamples = sigExample !== broaderExample
+    ? `Try: '${sigExample}' (these commands) or '${broaderExample}' (all ${cmdFirst} commands)`
+    : `Try: '${broaderExample}' (all ${cmdFirst} commands)`;
+  if (needsPathApproval) {
+    permExamples += `\nFor path access: '${outsideDirs[0]}/*' (add as read rule)`;
+  }
+  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, permanentAllowExamples: permExamples };
 }
 
 // ── File prompt ──
@@ -167,7 +180,11 @@ function buildFilePrompt(
     const scopeNote = isWriteOp
       ? `"Always Yes" will auto-allow ${action.toLowerCase()} on this file this session (read will still prompt).`
       : `"Always Yes" will auto-allow read on this file this session (write/edit will still prompt).`;
+    const dirScope = isWriteOp
+      ? `auto-allow ${action.toLowerCase()} for this directory this session (read will still prompt)`
+      : `auto-allow read for this directory this session (write/edit will still prompt)`;
     const fileName = resolved.split("/").pop() || resolved;
+    const parentDir = path.dirname(resolved);
     return {
       title: action,
       body: `Path:\n  ${filePath}${warnLine}${deniedLine}${symlinkLine}\n`,
@@ -175,11 +192,17 @@ function buildFilePrompt(
         title: `Confirm Always Allow`,
         body: `${scopeNote}\n\n  ${resolved}`,
       },
+      tier2Broader: {
+        title: `Confirm Always Allow`,
+        body: `"Always Yes" will ${dirScope}:\n\n  ${parentDir}/*`,
+      },
       includePathsOption: false,
       includeFileOption: false,
-      includeBroaderOption: false,
+      includeBroaderOption: true,
       includeAlwaysOption: true,
       alwaysLabel: `${action} ${fileName}`,
+      alwaysBroaderLabel: `${action} ${parentDir}/*`,
+      permanentAllowExamples: `Try: '${fileName}' (anywhere) or '${parentDir}/*' (this directory)`,
     };
   }
 
@@ -209,6 +232,7 @@ function buildFilePrompt(
     includeAlwaysOption: true,
     alwaysLabel: tier2Label,
     alwaysFileLabel: `${action} ${fileName}`,
+    permanentAllowExamples: `Try: '${fileName}' (anywhere) or '${outsideDir}/*' (this directory)`,
   };
 }
 

@@ -84,5 +84,10 @@ export function decideFile(req: FileRequest, store: Store): Decision {
     ? undefined
     : (isWriteOp ? { writePaths: [resolved] } : { readPaths: [resolved] });
 
-  return { kind: "prompt", promptData, allowRules, allowFileRules };
+  // Directory-level allow for inside-cwd files (broader than file-only)
+  const allowBroaderRules = isInsideCwd(resolved, req.cwd)
+    ? (isWriteOp ? { writeDirs: [path.dirname(resolved)] } : { readDirs: [path.dirname(resolved)] })
+    : undefined;
+
+  return { kind: "prompt", promptData, allowRules, allowFileRules, allowBroaderRules, includeBroaderOption: isInsideCwd(resolved, req.cwd) };
 }

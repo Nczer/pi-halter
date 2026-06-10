@@ -43,7 +43,7 @@ export async function twoTierAlwaysPrompt(
   onAlwaysBroader?: () => void,
   onCustomAlways?: (pattern: string) => Promise<void>,
 ): Promise<PromptResult | { kind: "custom"; pattern: string }> {
-  const { title, body, tier2Everything, tier2Paths, tier2File, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel } = prompt;
+  const { title, body, tier2Everything, tier2Paths, tier2File, tier2Broader, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel, permanentAllowExamples } = prompt;
 
   while (true) {
     const { over, count } = store.incrementPromptCount();
@@ -85,10 +85,11 @@ export async function twoTierAlwaysPrompt(
     const noWithReasonIdx = choices.length - 2;
     if (effectiveIdx === noIdx) return "no";
 
-    // Permanent always: index shifts when Always is suppressed
-    const permanentIdx = includeAlwaysOption ? Choice.Permanent : 1;
+    // Permanent always: always 3rd from end (before NoWithReason and No)
+    const permanentIdx = choices.length - 3;
     if (effectiveIdx === permanentIdx) {
-      const pattern = await showReasonEditor(ctx, "Enter a wildcard pattern for permanent allow (saved to ~/.pi/agent/permissions.json).\n\nPatterns are case-insensitive:\n• '*' matches any characters (e.g. 'git checkout *.lock')\n• '?' matches one character\n\nExample: 'npm test *' or '/mnt/data/logs/*'");
+      const examples = permanentAllowExamples || "Example: 'npm test *' or '/mnt/data/logs/*'";
+      const pattern = await showReasonEditor(ctx, `Enter a wildcard pattern for permanent allow (saved to ~/.pi/agent/permissions.json).\n\nPatterns are case-insensitive:\n• '*' matches any characters\n• '?' matches one character\n\n${examples}`);
       if (pattern === null || pattern.trim().length === 0) continue;
       const p = pattern.trim();
       if (onCustomAlways) await onCustomAlways(p);
@@ -106,14 +107,23 @@ export async function twoTierAlwaysPrompt(
     let tier2Config: { title: string; body: string };
     let callback: () => PromptResult;
 
-    if (includeBroaderOption) {
+    if (includeBroaderOption && includeFileOption) {
+      // File with both directory and file options
+      if (idx === Choice.Always) {
+        tier2Config = tier2Everything;
+        callback = () => { onAlways(); return "always" as PromptResult; };
+      } else {
+        tier2Config = tier2Broader ?? tier2Everything;
+        callback = () => { onAlwaysBroader?.(); return "always" as PromptResult; };
+      }
+    } else if (includeBroaderOption) {
       if (idx === Choice.Always) {
         // Always: specific sigs
         tier2Config = tier2Everything;
         callback = () => { onAlways(); return "always" as PromptResult; };
       } else {
         // Always: broader sigs
-        tier2Config = tier2Everything;
+        tier2Config = tier2Broader ?? tier2Everything;
         callback = () => { onAlwaysBroader?.(); return "always" as PromptResult; };
       }
     } else if (includeFileOption) {
