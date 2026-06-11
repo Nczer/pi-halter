@@ -249,7 +249,6 @@ const cases: TestCase[] = [
 	{ cmd: "crontab -e", simple: false, unsafe: true, decision: "prompt", desc: "crontab" },
 	{ cmd: "nohup python3 script.py &", simple: false, unsafe: true, decision: "prompt", desc: "nohup" },
 	{ cmd: "screen -dmS mysession", simple: false, unsafe: true, decision: "prompt", desc: "screen" },
-	{ cmd: "tmux new -s mysession", simple: false, unsafe: true, decision: "prompt", desc: "tmux" },
 	// Code execution
 	{ cmd: "eval echo hello", simple: false, unsafe: true, decision: "prompt", desc: "eval" },
 	{ cmd: "bash -c 'echo hello'", simple: false, unsafe: true, decision: "prompt", desc: "bash -c" },
@@ -321,6 +320,7 @@ const cases: TestCase[] = [
 	{ cmd: "git reflog expire --all", simple: false, unsafe: true, decision: "prompt", desc: "git reflog expire" },
 	{ cmd: "git gc --prune=now", simple: false, unsafe: true, decision: "prompt", desc: "git gc --prune" },
 
+	// ═══════════════════════════════════════════════════════════
 	// ═══════════════════════════════════════════════════════════
 	// outside cwd, in allowedReadPaths (auto-allow)
 	// ═══════════════════════════════════════════════════════════

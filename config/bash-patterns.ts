@@ -26,6 +26,8 @@ const allowedBashPatternStrings: string[] = [
   "which", "command", "type", "hash", "whence",
   // Git (guarded by dangerous flag checks)
   "git",
+  // Tmux (guarded by dangerous subcommand checks)
+  "tmux",
   // Safe file/dir creation (no overwriting — guarded by no-redirect check)
   "mkdir", "touch", "mktemp",
   // Calculator
