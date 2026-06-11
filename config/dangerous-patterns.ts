@@ -27,7 +27,7 @@ export const dangerousCommandPatterns: { pattern: RegExp; label: string }[] = [
   { pattern: /^(?:kill|pkill|killall)$/i, label: "kill" },
   { pattern: /^crontab$/i, label: "crontab" },
   { pattern: /^nohup$/i, label: "nohup" },
-  { pattern: /^(?:screen|tmux)$/i, label: "screen/tmux" },
+  { pattern: /^screen$/i, label: "screen" },
   { pattern: /^ssh$/i, label: "ssh" },
   { pattern: /^(?:scp|rsync)$/i, label: "scp/rsync" },
   { pattern: /^(?:curl|wget)$/i, label: "curl/wget (network access)" },

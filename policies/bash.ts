@@ -195,6 +195,6 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
     allowPathsRules,
     includePathsOption: hasBoth,
     includeBroaderOption: !!allowBroaderRules,
-    includeAlwaysOption: uniqueSigs.length > 0 || outsideDirs.length > 0,
+    includeAlwaysOption: (!analysis.hasUnsafePattern) && (uniqueSigs.length > 0 || outsideDirs.length > 0),
   };
 }

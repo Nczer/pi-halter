@@ -100,7 +100,11 @@ function buildBashPrompt(
   }
   if (riskDangerous) {
     body += `\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n`;
-    for (const reason of riskReasons) body += `  \u2022 ${reason}\n`;
+    for (const reason of riskReasons) {
+      const lines = reason.split("\n");
+      body += `  \u2022 ${lines[0]}\n`;
+      for (let i = 1; i < lines.length; i++) body += `    ${lines[i]}\n`;
+    }
   }
   if (segments.length > 1) {
     body += `\nThis chains ${segments.length} commands:\n`;
