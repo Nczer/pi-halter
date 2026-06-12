@@ -279,4 +279,48 @@ describe("isTrustedScriptCommand", () => {
   it("returns false for single-word commands", () => {
     expect(isTrustedScriptCommand("python3", "/tmp")).toBe(false);
   });
+
+  it("detects uv run with trusted script", () => {
+    expect(isTrustedScriptCommand("uv run python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+  });
+
+  it("detects uv run --with deps and trusted script", () => {
+    expect(isTrustedScriptCommand("uv run --with pymupdf python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+  });
+
+  it("detects uv run --with=deps (equals form) and trusted script", () => {
+    expect(isTrustedScriptCommand("uv run --with=pymupdf python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+  });
+
+  it("detects uv run --with-editable and trusted script", () => {
+    expect(isTrustedScriptCommand("uv run --with-editable ./pkg python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+  });
+
+  it("rejects uv run with script outside skills dir", () => {
+    expect(isTrustedScriptCommand("uv run python /tmp/random.py", "/tmp")).toBe(false);
+  });
+
+  it("rejects uv run with non-trusted script even with --with", () => {
+    expect(isTrustedScriptCommand("uv run --with pymupdf python /tmp/random.py", "/tmp")).toBe(false);
+  });
+
+  it("rejects uv run with unknown --with package", () => {
+    expect(isTrustedScriptCommand("uv run --with evil-package python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+  });
+
+  it("rejects uv run with mixed known/unknown --with packages", () => {
+    expect(isTrustedScriptCommand("uv run --with pymupdf,evil-package python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+  });
+
+  it("allows uv run with comma-separated known packages", () => {
+    expect(isTrustedScriptCommand("uv run --with pypdf,reportlab python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+  });
+
+  it("allows uv run with package extras syntax", () => {
+    expect(isTrustedScriptCommand('uv run --with "markitdown[pptx]" python ~/.pi/agent/skills/my-script.py', "/tmp")).toBe(true);
+  });
+
+  it("rejects uv run with unknown package in extras form", () => {
+    expect(isTrustedScriptCommand('uv run --with "evil[payload]" python ~/.pi/agent/skills/my-script.py', "/tmp")).toBe(false);
+  });
 });

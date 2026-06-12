@@ -54,15 +54,17 @@ export async function twoTierAlwaysPrompt(
     let dispatch: Map<number, DispatchFn>;
 
     if (!includeAlwaysOption) {
-      choices = ["Yes", "Permanent always (config)", "No (with reason)", "No"];
+      choices = ["Yes", "Permanent Always (config)", "No (with reason)", "No"];
+    } else if (includeBroaderOption && includePathsOption) {
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, `Always (paths): ${alwaysPathsLabel}`, "Permanent Always (config)", "No (with reason)", "No"]
     } else if (includeBroaderOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, "Permanent always (config)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, "Permanent Always (config)", "No (with reason)", "No"];
     } else if (includePathsOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "Permanent always (config)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "Permanent Always (config)", "No (with reason)", "No"]
     } else if (includeFileOption) {
-      choices = ["Yes", `Always (path): ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "Permanent always (config)", "No (with reason)", "No"];
+      choices = ["Yes", `Always (path): ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "Permanent Always (config)", "No (with reason)", "No"];
     } else {
-      choices = ["Yes", `Always: ${alwaysLabel}`, "Permanent always (config)", "No (with reason)", "No"];
+      choices = ["Yes", `Always: ${alwaysLabel}`, "Permanent Always (config)", "No (with reason)", "No"];
     }
 
     const warningPrefix = over
@@ -107,7 +109,19 @@ export async function twoTierAlwaysPrompt(
     let tier2Config: { title: string; body: string };
     let callback: () => PromptResult;
 
-    if (includeBroaderOption && includeFileOption) {
+    if (includeBroaderOption && includePathsOption) {
+      // Bash with both broader sigs and paths options
+      if (idx === Choice.Always) {
+        tier2Config = tier2Everything;
+        callback = () => { onAlways(); return "always" as PromptResult; };
+      } else if (idx === Choice.AlwaysBroader) {
+        tier2Config = tier2Broader ?? tier2Everything;
+        callback = () => { onAlwaysBroader?.(); return "always" as PromptResult; };
+      } else {
+        tier2Config = tier2Paths ?? tier2Everything;
+        callback = () => { onAlwaysPaths(); return "alwaysPaths" as PromptResult; };
+      }
+    } else if (includeBroaderOption && includeFileOption) {
       // File with both directory and file options
       if (idx === Choice.Always) {
         tier2Config = tier2Everything;

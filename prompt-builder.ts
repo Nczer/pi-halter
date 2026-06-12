@@ -114,7 +114,7 @@ function buildBashPrompt(
     });
   }
   if (hasUnsafePattern) {
-    body += `\n⚠️ Commands matching danger patterns always prompt, even after auto-allowing.`;
+    body += `\n\u26a0\ufe0f Commands matching danger patterns always prompt, even after auto-allowing.`;
   }
   body += "\n";
 
@@ -131,22 +131,22 @@ function buildBashPrompt(
     : needsPathApproval
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow read access for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}`,
+        body: `"Always Yes" will auto-allow read for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}`,
       }
     : {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow each of these command signatures this session:\n\n${uniqueSigs.map(s => `  \u2022 ${s} *`).join("\n")}${dangerWarning}`,
+        body: `"Always Yes" will auto-allow these command signatures this session:\n\n${uniqueSigs.map(s => `  \u2022 ${s} *`).join("\n")}${dangerWarning}`,
       };
 
   // Tier 2 — "always (paths only)" confirmation
   const tier2Paths = hasBoth
     ? {
         title: `Confirm Always (paths only)`,
-        body: `"Always Yes" will auto-allow read access for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}\n\nThe command will still prompt next time.`,
+        body: `"Always Yes" will auto-allow read for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}\n\nThe command will still prompt next time`,
       }
     : undefined;
 
-  const alwaysLabel = uniqueSigs.length > 0
+  const alwaysLabel = (needsCommandApproval && uniqueSigs.length > 0)
     ? uniqueSigs.map(s => s + " *").join(", ")
     : (needsPathApproval ? outsideDirs.map(d => `Read ${d}/*`).join(", ") : "");
   const alwaysBroaderLabel = includeBroaderOption
@@ -176,16 +176,16 @@ function buildFilePrompt(
 ): BuiltPrompt {
   const { action, filePath, resolved, cwd, outsideDir, isWriteOp, deniedRule, warnedRule, symlinkHint } = data;
   const insideCwd = outsideDir === null;
-  const symlinkLine = symlinkHint ? `\n\n🔗 Resolved via symlink: ${symlinkHint}` : "";
-  const warnLine = warnedRule ? `\n\n⚠️ Matches credential pattern "${warnedRule}" — may contain secrets or tokens.` : "";
-  const deniedLine = deniedRule ? `\n\n⚠️ Matches denied rule "${deniedRule}" — typically contains credentials or generated files.` : "";
+  const symlinkLine = symlinkHint ? `\n\n\u{1F517} Resolved via symlink: ${symlinkHint}` : "";
+  const warnLine = warnedRule ? `\n\n\u26a0\ufe0f Matches credential pattern "${warnedRule}" — may contain secrets or tokens.` : "";
+  const deniedLine = deniedRule ? `\n\n\u26a0\ufe0f Matches denied rule "${deniedRule}" — typically contains credentials or generated files.` : "";
 
   if (insideCwd) {
     const scopeNote = isWriteOp
-      ? `"Always Yes" will auto-allow ${action.toLowerCase()} on this file this session (read will still prompt).`
+      ? `"Always Yes" will auto-allow ${action.toLowerCase()} on this file this session (includes read).`
       : `"Always Yes" will auto-allow read on this file this session (write/edit will still prompt).`;
     const dirScope = isWriteOp
-      ? `auto-allow ${action.toLowerCase()} for this directory this session (read will still prompt)`
+      ? `auto-allow ${action.toLowerCase()} for this directory this session (includes read)`
       : `auto-allow read for this directory this session (write/edit will still prompt)`;
     const fileName = resolved.split("/").pop() || resolved;
     const parentDir = path.dirname(resolved);
@@ -211,17 +211,17 @@ function buildFilePrompt(
   }
 
   const scope = isWriteOp
-    ? `auto-allow ${action} for this directory this session`
+    ? `auto-allow ${action.toLowerCase()} for this directory this session`
     : `auto-allow read for this directory this session (write/edit will still prompt)`;
   const tier2Label = isWriteOp ? `${action} ${outsideDir}/*` : `Read ${outsideDir}/*`;
   const fileName = resolved.split("/").pop() || resolved;
   const fileScope = isWriteOp
-    ? `auto-allow ${action.toLowerCase()} on this file this session (read will still prompt)`
+    ? `auto-allow ${action.toLowerCase()} on this file this session (includes read)`
     : `auto-allow read on this file this session (write/edit will still prompt)`;
 
   return {
-    title: `⚠️ ${action} outside cwd`,
-    body: `Path:\n  ${filePath}\n\n⚠️ Outside cwd: ${outsideDir}${warnLine}${deniedLine}${symlinkLine}\n`,
+    title: `\u26a0\ufe0f ${action} outside cwd`,
+    body: `Path:\n  ${filePath}\n\n\u26a0\ufe0f Outside cwd: ${outsideDir}${warnLine}${deniedLine}${symlinkLine}\n`,
     tier2Everything: {
       title: `Confirm Always Allow`,
       body: `"Always Yes" will ${scope}:\n\n  ${outsideDir}/*`,
@@ -256,7 +256,7 @@ function buildMcpPrompt(
   if (argsPreview) {
     body += `\nArguments:\n${argsPreview}`;
   }
-  body += `\n\n⚠️ This MCP tool will be called through an external server.\n`;
+  body += `\n\n\u26a0\ufe0f This MCP tool will be called through an external server.\n`;
 
   return {
     title: `\u26a0\ufe0f MCP`,

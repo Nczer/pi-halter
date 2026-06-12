@@ -41,10 +41,11 @@ export function decideFile(req: FileRequest, store: Store): Decision {
   // Auto-allow checks
   if (isProjectPiPath(req.filePath, req.cwd)) return { kind: "auto-allow" };
   if (req.toolName === "read" && store.hasAllowedReadPath(resolved)) return { kind: "auto-allow" };
+  if (req.toolName === "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" }; // write implies read
   if (req.toolName !== "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" };
 
   const autoAllowedDirs = req.toolName === "read"
-    ? store.listAllowedReadDirs()
+    ? new Set([...store.listAllowedReadDirs(), ...store.listAllowedWriteDirs()]) // write dirs imply read
     : store.listAllowedWriteDirs();
 
   if (!isInsideCwd(resolved, req.cwd) && isInsideAutoAllowedDir(resolved, autoAllowedDirs)) {
@@ -77,16 +78,16 @@ export function decideFile(req: FileRequest, store: Store): Decision {
   };
 
   const allowRules: AllowRules = isInsideCwd(resolved, req.cwd)
-    ? (isWriteOp ? { writePaths: [resolved] } : { readPaths: [resolved] })
-    : (isWriteOp ? { writeDirs: [path.dirname(resolved)] } : { readDirs: [path.dirname(resolved)] });
+    ? (isWriteOp ? { writePaths: [resolved], readPaths: [resolved] } : { readPaths: [resolved] })
+    : (isWriteOp ? { writeDirs: [path.dirname(resolved)], readDirs: [path.dirname(resolved)] } : { readDirs: [path.dirname(resolved)] });
 
   const allowFileRules = isInsideCwd(resolved, req.cwd)
     ? undefined
-    : (isWriteOp ? { writePaths: [resolved] } : { readPaths: [resolved] });
+    : (isWriteOp ? { writePaths: [resolved], readPaths: [resolved] } : { readPaths: [resolved] });
 
   // Directory-level allow for inside-cwd files (broader than file-only)
   const allowBroaderRules = isInsideCwd(resolved, req.cwd)
-    ? (isWriteOp ? { writeDirs: [path.dirname(resolved)] } : { readDirs: [path.dirname(resolved)] })
+    ? (isWriteOp ? { writeDirs: [path.dirname(resolved)], readDirs: [path.dirname(resolved)] } : { readDirs: [path.dirname(resolved)] })
     : undefined;
 
   return { kind: "prompt", promptData, allowRules, allowFileRules, allowBroaderRules, includeBroaderOption: isInsideCwd(resolved, req.cwd) };

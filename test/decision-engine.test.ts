@@ -14,6 +14,7 @@ import os from "node:os";
 import { describe, expect, it } from "vitest";
 import { decide, FileRequest, McpRequest } from "../decision-engine";
 import { createStore } from "../store";
+import { buildPrompt } from "../prompt-builder";
 
 const home = os.homedir();
 const cwd = path.join(home, "Projects");
@@ -363,6 +364,64 @@ describe("Bash: granular allow (subcommand vs broader)", () => {
 			// sed is not a package manager — no broader option
 			expect(d.includeBroaderOption).toBe(false);
 			expect(d.allowBroaderRules).toBeUndefined();
+		}
+	});
+});
+
+describe("Integration: decide → buildPrompt", () => {
+	it("trusted script with outside path: alwaysLabel shows path not command", async () => {
+		const store = createStore();
+		const d = await decide(
+			{ type: "bash", command: `uv run --with pymupdf python ${home}/.pi/agent/skills/pdf/scripts/pdf_extract.py /mnt/data/file.pdf`, cwd },
+			store,
+		);
+		expect(d.kind).toBe("prompt");
+		if (d.kind === "prompt") {
+			expect(d.promptData.needsPathApproval).toBe(true);
+			expect(d.promptData.needsCommandApproval).toBe(false);
+			const prompt = buildPrompt(d);
+			expect(prompt.title).toBe("Path");
+			expect(prompt.alwaysLabel).toContain("Read /mnt/data/*");
+			expect(prompt.alwaysLabel).not.toContain("uv run");
+		}
+	});
+
+	it("trusted script with outside path: tier2 confirms path only", async () => {
+		const store = createStore();
+		const d = await decide(
+			{ type: "bash", command: `uv run --with pymupdf python ${home}/.pi/agent/skills/pdf/scripts/pdf_extract.py /mnt/data/file.pdf`, cwd },
+			store,
+		);
+		if (d.kind === "prompt") {
+			const prompt = buildPrompt(d);
+			expect(prompt.tier2Everything.body).toContain("/mnt/data/*");
+			expect(prompt.tier2Everything.body).not.toContain("uv run");
+			expect(prompt.tier2Paths).toBeUndefined();
+		}
+	});
+
+	it("untrusted command with outside path: alwaysLabel shows command sig", async () => {
+		const store = createStore();
+		const d = await decide(
+			{ type: "bash", command: "npm test /mnt/data/file.txt", cwd },
+			store,
+		);
+		if (d.kind === "prompt") {
+			const prompt = buildPrompt(d);
+			expect(prompt.alwaysLabel).toContain("npm test *");
+		}
+	});
+
+	it("untrusted package in --with: prompts for command approval", async () => {
+		const store = createStore();
+		const d = await decide(
+			{ type: "bash", command: `uv run --with evil-pkg python ${home}/.pi/agent/skills/pdf/scripts/pdf_extract.py /tmp/file.pdf`, cwd },
+			store,
+		);
+		expect(d.kind).toBe("prompt");
+		if (d.kind === "prompt") {
+			// Script is trusted but package is not → command is not simple
+			expect(d.promptData.needsCommandApproval).toBe(true);
 		}
 	});
 });
