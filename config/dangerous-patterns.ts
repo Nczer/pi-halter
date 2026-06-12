@@ -12,7 +12,6 @@
 /** Command-name patterns — tested against the first word only (avoids matching arguments). */
 export const dangerousCommandPatterns: { pattern: RegExp; label: string }[] = [
   { pattern: /^rm$/, label: "rm (any file deletion)" },
-  { pattern: /^sudo$/i, label: "sudo (privilege escalation)" },
   { pattern: /^(?:chmod|chown)$/i, label: "chmod/chown (permission change)" },
   { pattern: /^mkfs/i, label: "mkfs (filesystem creation)" },
   { pattern: /^mount$/i, label: "mount" },

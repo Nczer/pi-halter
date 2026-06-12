@@ -100,9 +100,16 @@ function buildBashPrompt(
   }
   if (riskDangerous) {
     body += `\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n`;
+    const tagWidth = Math.max(...riskReasons.map(r => { const m = r.match(/^\[.+?\]\s*/); return m ? m[0].length : 0; }));
     for (const reason of riskReasons) {
       const lines = reason.split("\n");
-      body += `  \u2022 ${lines[0]}\n`;
+      const m = lines[0].match(/^(\[.+?\]\s*)(.*)/);
+      if (m) {
+        const tag = m[1].padEnd(tagWidth);
+        body += `  \u2022 ${tag} ${m[2]}\n`;
+      } else {
+        body += `  \u2022 ${lines[0]}\n`;
+      }
       for (let i = 1; i < lines.length; i++) body += `    ${lines[i]}\n`;
     }
   }
@@ -121,7 +128,13 @@ function buildBashPrompt(
   // Tier 2 — "always (everything)" confirmation
   let dangerWarning = "";
   if (riskDangerous) {
-    dangerWarning = `\n\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n${riskReasons.map(r => `  \u2022 ${r}`).join("\n")}`;
+    const tw = Math.max(...riskReasons.map(r => { const m = r.match(/^\[.+?\]\s*/); return m ? m[0].length : 0; }));
+    const aligned = riskReasons.map(r => {
+      const m = r.match(/^(\[.+?\]\s*)(.*)/);
+      if (m) return `  \u2022 ${m[1].padEnd(tw)} ${m[2]}`;
+      return `  \u2022 ${r}`;
+    });
+    dangerWarning = `\n\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n${aligned.join("\n")}`;
   }
   const tier2Everything = hasBoth
     ? {

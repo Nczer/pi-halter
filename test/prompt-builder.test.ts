@@ -93,8 +93,8 @@ describe("bash body content", () => {
   });
 
   it("includes danger flags in body", () => {
-    const prompt = buildPrompt(bashDecision({ riskDangerous: true, riskSeverity: "high", riskReasons: ["sudo (elevated privileges)"] }));
-    expect(prompt.body).toContain("sudo (elevated privileges)");
+    const prompt = buildPrompt(bashDecision({ riskDangerous: true, riskSeverity: "high", riskReasons: ["[System] sudo (privilege escalation)"] }));
+    expect(prompt.body).toContain("[System]  sudo (privilege escalation)");
   });
 
   it("includes paths outside cwd in body", () => {

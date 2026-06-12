@@ -21,7 +21,7 @@ describe("analyzeRisk", () => {
     const risk = await analyze("sudo rm -rf /");
     expect(risk.dangerous).toBe(true);
     expect(risk.severity).toBe("high");
-    expect(risk.reasons).toContain("sudo (elevated privileges)");
+    expect(risk.reasons).toContain("[System] sudo (privilege escalation)");
   });
 
   it("detects recursive delete", async () => {

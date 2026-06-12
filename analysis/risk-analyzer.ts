@@ -47,14 +47,14 @@ export async function analyzeWholeCommandRisk(
   // Whole-command operator checks (these operate on the full command string)
   const cmdNoNullRedirect = stripNullRedirects(cmd);
   const hasRealWriteRedirect = /[0-9]*&?>+\s*\S/.test(cmdNoNullRedirect);
-  if (hasRealWriteRedirect && !reasons.includes("shell output redirection (can overwrite files)")) {
-    reasons.push("shell output redirection (can overwrite files)");
+  if (hasRealWriteRedirect && !reasons.some(r => r.includes("shell output redirection"))) {
+    reasons.push("[Risk] shell output redirection (can overwrite files)");
     setSeverity("medium");
   }
 
   // Input redirect
   if (cmd.includes("<") && !reasons.some(r => r.includes("input redirection"))) {
-    reasons.push("shell input redirection");
+    reasons.push("[Risk] shell input redirection");
   }
 
   // Pipe operator — only flag if at least one stage is NOT an allowed command
@@ -65,7 +65,8 @@ export async function analyzeWholeCommandRisk(
       return isAllowedCommand(getFirstWord(stage));
     });
     if (!allStagesSafe) {
-      reasons.push("pipe operator (chained commands)");
+      reasons.push("[Risk] pipe operator (chained commands)");
+      setSeverity("medium");
     }
   }
 
