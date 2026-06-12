@@ -1,7 +1,18 @@
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseCommand, hasSubshell } from "../analysis/bash-parser";
+
+// Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /etc → /private/etc)
+const realPath = (p: string) => {
+	try { return fs.realpathSync(p); } catch {
+		// For non-existent paths, resolve the parent and re-append
+		const dir = path.dirname(p);
+		const base = path.basename(p);
+		try { return path.join(fs.realpathSync(dir), base); } catch { return p; }
+	}
+};
 
 const home = os.homedir();
 const cwd = path.join(home, "Projects");
@@ -74,7 +85,7 @@ describe("parseCommand: segments", () => {
 describe("parseCommand: paths", () => {
 	it("keeps absolute paths", async () => {
 		const r = await parseCommand("cat /etc/hosts", cwd);
-		expect(r.paths).toContain("/etc/hosts");
+		expect(r.paths).toContain(realPath("/etc/hosts"));
 	});
 
 	it("expands tilde", async () => {
@@ -90,12 +101,12 @@ describe("parseCommand: paths", () => {
 
 	it("extracts redirect destination", async () => {
 		const r = await parseCommand("cat file.txt > /tmp/out.txt", cwd);
-		expect(r.paths).toContain("/tmp/out.txt");
+		expect(r.paths).toContain(realPath("/tmp/out.txt"));
 	});
 
 	it("extracts input redirect", async () => {
 		const r = await parseCommand("cat < /tmp/in.txt", cwd);
-		expect(r.paths).toContain("/tmp/in.txt");
+		expect(r.paths).toContain(realPath("/tmp/in.txt"));
 	});
 
 	it("filters /dev/null", async () => {
@@ -105,12 +116,12 @@ describe("parseCommand: paths", () => {
 
 	it("handles single-quoted paths", async () => {
 		const r = await parseCommand("cat '/tmp/file with spaces.txt'", cwd);
-		expect(r.paths).toContain("/tmp/file with spaces.txt");
+		expect(r.paths).toContain(realPath("/tmp/file with spaces.txt"));
 	});
 
 	it("handles double-quoted paths", async () => {
 		const r = await parseCommand('cat "/tmp/file with spaces.txt"', cwd);
-		expect(r.paths).toContain("/tmp/file with spaces.txt");
+		expect(r.paths).toContain(realPath("/tmp/file with spaces.txt"));
 	});
 
 	it("does not extract heredoc body as path", async () => {

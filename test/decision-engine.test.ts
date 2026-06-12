@@ -11,10 +11,20 @@
 
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { decide, FileRequest, McpRequest } from "../decision-engine";
 import { createStore } from "../store";
 import { buildPrompt } from "../prompt-builder";
+
+// Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /var → /private/var)
+const realPath = (p: string) => {
+	try { return fs.realpathSync(p); } catch {
+		const dir = path.dirname(p);
+		const base = path.basename(p);
+		try { return path.join(fs.realpathSync(dir), base); } catch { return p; }
+	}
+};
 
 const home = os.homedir();
 const cwd = path.join(home, "Projects");
@@ -43,7 +53,8 @@ describe("File: Read outside cwd", () => {
 
 	it("auto-allowed after adding dir", async () => {
 		const store = createStore();
-		store.addAllowed({ readDirs: ["/etc"] });
+		// Add the resolved realpath of /etc (macOS: /private/etc)
+		store.addAllowed({ readDirs: [realPath("/etc")] });
 		const req: FileRequest = { type: "file", toolName: "read", filePath: "/etc/hosts", cwd };
 		const d = await decide(req, store);
 		expect(d.kind).toBe("auto-allow");
@@ -71,7 +82,8 @@ describe("File: Write outside cwd", () => {
 		expect(d.kind).toBe("prompt");
 		if (d.kind === "prompt") {
 			expect(d.promptData.isWriteOp).toBe(true);
-			expect(d.promptData.outsideDir).toBe("/var/log");
+			// macOS: /var/log resolves to /private/var/log
+			expect(d.promptData.outsideDir).toBe(realPath("/var/log"));
 		}
 	});
 });
@@ -167,7 +179,8 @@ describe("File: allowRules", () => {
 		if (d.kind === "prompt") {
 			expect(d.allowFileRules).toBeDefined();
 			if (d.allowFileRules) {
-				expect(d.allowFileRules.writePaths?.[0]).toBe("/var/log/out.txt");
+				// macOS: /var/log/out.txt resolves to /private/var/log/out.txt
+				expect(d.allowFileRules.writePaths?.[0]).toBe(realPath("/var/log/out.txt"));
 			}
 		}
 	});
