@@ -9,8 +9,18 @@
 
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { analyzeCommand, type CommandAnalysis } from "../analysis/command-analysis";
+
+// Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /etc → /private/etc)
+const realPath = (p: string) => {
+	try { return fs.realpathSync(p); } catch {
+		const dir = path.dirname(p);
+		const base = path.basename(p);
+		try { return path.join(fs.realpathSync(dir), base); } catch { return p; }
+	}
+};
 
 const home = os.homedir();
 const cwd = path.join(home, "Projects");
@@ -326,7 +336,7 @@ describe("Signature store round-trip: relative paths", () => {
 
 describe("Paths: extraction", () => {
 	it("extracts absolute path", async () => {
-		expect((await analyzeCommand("cat /etc/hosts", cwd)).paths).toContain("/etc/hosts");
+		expect((await analyzeCommand("cat /etc/hosts", cwd)).paths).toContain(realPath("/etc/hosts"));
 	});
 
 	it("resolves tilde path", async () => {
@@ -340,7 +350,7 @@ describe("Paths: extraction", () => {
 	});
 
 	it("extracts redirect path", async () => {
-		expect((await analyzeCommand("echo hello > /tmp/out.txt", cwd)).paths).toContain("/tmp/out.txt");
+		expect((await analyzeCommand("echo hello > /tmp/out.txt", cwd)).paths).toContain(realPath("/tmp/out.txt"));
 	});
 
 	it("filters /dev/null from paths", async () => {

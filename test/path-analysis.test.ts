@@ -40,12 +40,18 @@ describe("resolvePathReal", () => {
 		expect(resolvePathReal("src/index.ts", cwd)).toBe(path.join(cwd, "src/index.ts"));
 	});
 
-	it("resolves absolute path", () => {
-		expect(resolvePathReal("/etc/hosts", cwd)).toBe("/etc/hosts");
+	it("resolves absolute path (follows symlinks)", () => {
+		// macOS: /etc/hosts → /private/etc/hosts, Linux: stays /etc/hosts
+		const expected = require("fs").realpathSync("/etc/hosts");
+		expect(resolvePathReal("/etc/hosts", cwd)).toBe(expected);
 	});
 
 	it("handles non-existent path gracefully", () => {
-		expect(resolvePathReal("/tmp/nonexistent/deep/file.txt", cwd)).toBe("/tmp/nonexistent/deep/file.txt");
+		// macOS: /tmp → /private/tmp, so resolved path reflects the symlink target
+		const tmpReal = require("fs").realpathSync("/tmp", "utf8");
+		expect(resolvePathReal("/tmp/nonexistent/deep/file.txt", cwd)).toBe(
+			path.join(tmpReal, "nonexistent/deep/file.txt")
+		);
 	});
 });
 
