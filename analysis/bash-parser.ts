@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { pathAwareCommands } from "./config";
+import { pathAwareCommands } from "../config";
 import { expandTilde, resolvePathReal } from "./path-analysis";
 
 // ── Lazy tree-sitter parser ────────────────────────────────────────────────

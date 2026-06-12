@@ -1,6 +1,6 @@
 import path from "node:path";
 import os from "node:os";
-import { expandTilde } from "../path-util";
+import { expandTilde } from "../analysis/path-util";
 
 /** Directories whose scripts are auto-trusted (interpreter + script in this dir bypasses dangerous-pattern check). */
 const trustedScriptDirs: string[] = [

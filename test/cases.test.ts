@@ -12,7 +12,7 @@
 import path from "node:path";
 import os from "node:os";
 import { describe, expect, it } from "vitest";
-import { analyzeCommand } from "../command-analysis";
+import { analyzeCommand } from "../analysis/command-analysis";
 import { decide } from "../decision-engine";
 import { createStore } from "../store";
 

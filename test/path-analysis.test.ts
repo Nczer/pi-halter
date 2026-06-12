@@ -11,7 +11,7 @@ import {
 	isProjectPiPath,
 	isPathDenied,
 	isPathWarned,
-} from "../path-analysis";
+} from "../analysis/path-analysis";
 
 const home = os.homedir();
 const tmpdir = os.tmpdir();

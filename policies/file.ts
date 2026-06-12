@@ -9,7 +9,7 @@ import {
   isProjectPiPath,
   isPathDenied,
   isPathWarned,
-} from "../path-analysis";
+} from "../analysis/path-analysis";
 import type { Store, AllowRules, FileRequest, Decision, FilePromptData } from "../decision-engine";
 
 export function decideFile(req: FileRequest, store: Store): Decision {

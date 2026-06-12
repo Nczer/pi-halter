@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { analyzeWholeCommandRisk } from "../risk-analyzer";
-import { analyzeSegment } from "../segment-analysis";
-import { parseCommand } from "../bash-parser";
+import { analyzeWholeCommandRisk } from "../analysis/risk-analyzer";
+import { analyzeSegment } from "../analysis/segment-analysis";
+import { parseCommand } from "../analysis/bash-parser";
 
 async function analyze(cmd: string, cwd = "/home/user/project") {
   const result = await parseCommand(cmd, cwd);

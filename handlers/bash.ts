@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import type { BashRequest } from "../decision-engine";
 import { decide } from "../decision-engine";
@@ -6,11 +6,10 @@ import { showPrompt } from "../prompt-flow";
 import { store } from "../store";
 
 export async function handleBash(
-  event: { input: { command?: string } },
+  event: ToolCallEvent,
   ctx: ExtensionContext,
 ) {
   if (!isToolCallEventType("bash", event)) return;
-
   const cmd = event.input.command;
   if (!cmd || cmd.trim().length === 0) return;
 

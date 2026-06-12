@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { analyzeCommand } from "../command-analysis";
+import { analyzeCommand } from "../analysis/command-analysis";
 import { decide, type Decision } from "../decision-engine";
 import { createStore } from "../store";
 import {
   getTmuxSubcommand,
   extractTmuxSendKeys,
   isTmuxSendKeysSafe,
-} from "../segment-analysis";
+} from "../analysis/segment-analysis";
 import { MIRROR_CASES } from "./shared-cases";
 
 const cwd = "/home/user/project";
