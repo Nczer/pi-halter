@@ -1,11 +1,11 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, PACKAGE_MANAGERS, unconditionallySafeCommands } from "../config";
-import { analyzeCommand } from "../command-analysis";
+import { analyzeCommand } from "../analysis/command-analysis";
 import {
   getOutsideCwdPaths,
-} from "../path-analysis";
-import { getFirstWord } from "../segment-helpers";
+} from "../analysis/path-analysis";
+import { getFirstWord } from "../analysis/segment-helpers";
 import type { Store, AllowRules, BashRequest, Decision, BashPromptData } from "../decision-engine";
 
 // ── Fast pre-check (avoids tree-sitter for trivial commands) ──

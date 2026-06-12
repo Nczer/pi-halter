@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import path from "node:path";
 import fs from "node:fs";
 import type { FileRequest } from "../decision-engine";
@@ -8,25 +8,26 @@ import { store } from "../store";
 import {
   expandTilde,
   resolvePathReal,
-} from "../path-analysis";
+} from "../analysis/path-analysis";
 
 const FILE_TOOLS = ["read", "write", "edit"] as const;
 
 export async function handleFile(
-  event: { toolName: string; input: { path?: string; edits?: Array<{ oldText?: string; newText?: string }> } },
+  event: ToolCallEvent,
   ctx: ExtensionContext,
 ) {
   const toolName = event.toolName as string;
   if (!FILE_TOOLS.includes(toolName as "read" | "write" | "edit")) return;
 
-  const filePath = event.input.path as string | undefined;
+  const input = event.input as { path?: string; edits?: Array<{ oldText: string; newText: string }> };
+  const filePath = input.path;
   if (!filePath) return;
 
   // Pre-validate edit calls — skip permission prompt if the edit would fail anyway
   if (toolName === "edit") {
-    const edits = event.input.edits as Array<{ oldText?: string; newText?: string }> | undefined;
+    const edits = input.edits;
     if (!edits || !Array.isArray(edits) || edits.length === 0) return;
-    if (!edits.every(e => typeof e?.oldText === "string" && typeof e?.newText === "string")) return;
+    if (!edits.every(e => typeof e.oldText === "string" && typeof e.newText === "string")) return;
     try {
       const resolvedPath = resolvePathReal(expandTilde(filePath), ctx.cwd);
       if (!fs.existsSync(resolvedPath)) return;

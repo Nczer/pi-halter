@@ -10,7 +10,7 @@
 import path from "node:path";
 import os from "node:os";
 import { describe, expect, it } from "vitest";
-import { analyzeCommand, type CommandAnalysis } from "../command-analysis";
+import { analyzeCommand, type CommandAnalysis } from "../analysis/command-analysis";
 
 const home = os.homedir();
 const cwd = path.join(home, "Projects");

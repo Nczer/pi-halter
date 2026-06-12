@@ -11,6 +11,7 @@ enum Choice {
   Yes = 0,
   Always = 1,
   AlwaysAlt = 2,   // broader / paths / file (variant by layout)
+  AlwaysBroader = 2, // alias for AlwaysAlt
   Permanent = 3,
   NoWithReason = 4,
   No = 5,

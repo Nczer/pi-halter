@@ -1,10 +1,10 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import type { McpRequest } from "../decision-engine";
 import { decide } from "../decision-engine";
 import { showPrompt } from "../prompt-flow";
 import { store } from "../store";
-import { resolveServerFromToolName, deriveProxyTarget, METADATA_OPS } from "../mcp-resolver";
+import { resolveServerFromToolName, deriveProxyTarget, METADATA_OPS } from "../analysis/mcp-resolver";
 
 // ── MCP formatting helpers (inlined from mcp-format.ts) ────────────────
 
@@ -155,7 +155,7 @@ async function checkMcpPermission(
  * Prompts for tool invocations.
  */
 export async function handleMcp(
-  event: { toolName: string; input: Record<string, unknown> },
+  event: ToolCallEvent,
   ctx: ExtensionContext,
 ) {
   if (!isToolCallEventType("mcp", event)) return;
@@ -195,7 +195,7 @@ export async function handleMcp(
  * Detects direct tools by matching tool name against known MCP server names.
  */
 export async function handleMcpDirectTool(
-  event: { toolName: string; input: Record<string, unknown> },
+  event: ToolCallEvent,
   ctx: ExtensionContext,
 ) {
   const toolName = event.toolName as string;

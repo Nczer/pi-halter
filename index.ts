@@ -32,7 +32,7 @@ export default async function permissionExtension(pi: ExtensionAPI) {
       }
       ctx.ui.notify(
         isDspActive() ? "DSP MODE ON — all permissions bypassed" : "DSP MODE OFF — permissions restored",
-        isDspActive() ? "warning" : "success",
+        isDspActive() ? "warning" : "info",
       );
     },
   });
@@ -52,10 +52,10 @@ export default async function permissionExtension(pi: ExtensionAPI) {
           return ctx.ui.notify("Index must be a number", "error");
         }
         try {
-          await store.removeUserRule(type, index);
-          ctx.ui.notify(`Removed rule ${index} from ${type} rules.`, "success");
+          await store.removeUserRule(type as "bash" | "read" | "write", index);
+          ctx.ui.notify(`Removed rule ${index} from ${type} rules.`, "info");
         } catch (e) {
-          ctx.ui.notify(`Failed to remove rule: ${e.message}`, "error");
+          ctx.ui.notify(`Failed to remove rule: ${e instanceof Error ? e.message : String(e)}`, "error");
         }
         return;
       }

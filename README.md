@@ -49,14 +49,29 @@ index.ts                          Extension entry — event registration, /dsp c
 │   ├── bash.ts                   Bash command interceptor
 │   ├── file.ts                   File operation interceptor (incl. edit pre-validation)
 │   └── mcp.ts                    MCP tool call interceptor (proxy + direct tools)
-├── bash-parser.ts                tree-sitter-bash wrapper — lazy WASM load, AST path extraction
+├── analysis/                     Command analysis and risk assessment
+│   ├── bash-parser.ts            tree-sitter-bash wrapper — lazy WASM load, AST path extraction
+│   ├── segment-analysis.ts       Unified segment analysis — runs evaluators, pipeline checks, derives safety booleans
+│   ├── segment-helpers.ts        Pipeline splitting, null-redirect stripping, command substitution detection
+│   ├── command-analysis.ts       Fat analyzer — async analyzeCommand(cmd, cwd) → CommandAnalysis
+│   ├── path-analysis.ts          Pure path utilities (resolve, deny rules, cwd checks)
+│   ├── path-util.ts              Tilde expansion, path resolution helpers
+│   ├── risk-analyzer.ts          Whole-command risk analysis (merge segment risks + operator checks)
+│   ├── safety-checker.ts         Thin wrappers around segment-analysis for legacy API
+│   ├── mcp-resolver.ts           MCP server:tool resolution and proxy target derivation
+│   └── evaluators/               Per-domain risk evaluators (modular, pluggable)
+│       ├── types.ts              EvaluatorResult + RiskEvaluator interface
+│       ├── shell-evaluator.ts    Subshells, heredocs, redirects, sed/perl, obfuscation, wrappers
+│       ├── system-evaluator.ts   sudo, rm, chmod, chown, mv, cp, kill, shutdown, systemctl, dd
+│       ├── git-evaluator.ts      git dangerous operations (reset --hard, push --force, etc.)
+│       ├── tmux-evaluator.ts     tmux dangerous subcommands (send-keys, run-shell, etc.)
+│       ├── disk-evaluator.ts     Disk/volume management commands (mount, mkfs, fdisk, etc.)
+│       └── tool-evaluator.ts     find/fd/rg exec, kubectl, terraform, aws, gcloud, curl/wget pipe
 ├── decision-engine.ts            Pure policy dispatcher — async decide(request, store) → Decision
 ├── policies/                     Request-specific decision logic
 │   ├── bash.ts                   Bash policy
 │   ├── file.ts                   File policy
 │   └── mcp.ts                    MCP policy
-├── command-analysis.ts           Fat analyzer — async analyzeCommand(cmd, cwd) → CommandAnalysis
-├── path-analysis.ts              Pure path utilities (resolve, deny rules, cwd checks)
 ├── prompt-flow.ts                UI interaction loop — showPrompt(decision, ctx, store)
 ├── prompt-builder.ts             Pure formatter — PromptDecision → BuiltPrompt (title/body)
 ├── prompts.ts                    Two-tier confirmation flow (orchestrates selector)
@@ -79,6 +94,8 @@ index.ts                          Extension entry — event registration, /dsp c
 - **Store** — injected into `decide()` and `showPrompt()`. Runtime singleton
 - **Decision Engine** — async pure function, no UI dependency. All policy logic concentrated here
 - **Bash Parser** — lazy-loaded tree-sitter WASM. Public API: `extractPathsFromBash()`, `hasSubshell()`, `extractSegments()`
+- **Evaluators** — modular risk evaluators in `analysis/evaluators/`. Each implements `RiskEvaluator` interface. Adding new analyzers is a drop-in file, no monolith editing
+- **Segment Analysis** — runs all evaluators, merges results, handles pipeline analysis and obfuscation detection
 - **Prompt Builder** — pure function. All prompt wording lives in one module. Truncates long commands to 20 lines to keep prompts compact
 - **Selector** — only module calling `ctx.ui.custom()`. UI seam for selection prompts and reason editor
 
@@ -99,6 +116,8 @@ All config lives in `config/` as focused modules, re-exported through `config/in
 - **Decision engine** — async, no UI dependency. Inject `Store` for testability
 - **Prompt builder** — pure function. Verify prompt content for each decision type
 - **Command analysis** — async pure function. Verify risk scoring, AST path extraction, obfuscation detection
+- **Segment analysis** — verify evaluator integration, pipeline checks, safety boolean derivation
+- **Evaluators** — each evaluator is independently testable via `RiskEvaluator.evaluate()`
 - **Bash parser** — lazy WASM loading. Verify path extraction across heredocs, comments, quotes, subshells
 - **Path utilities** — pure functions. Verify path resolution, deny rules, cwd checks
 - **MCP handler** — verify server:tool parsing, metadata op auto-allow, server-level session approval

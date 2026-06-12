@@ -2,7 +2,7 @@ import {
   dangerousCommandPatterns,
   dangerousContextPatterns,
   isAllowedCommand,
-} from "./config";
+} from "../config";
 import type { BashSegment } from "./bash-parser";
 import { getFirstWord, splitPipeline, stripNullRedirects } from "./segment-helpers";
 

@@ -1,7 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import { describe, expect, it } from "vitest";
-import { parseCommand, hasSubshell } from "../bash-parser";
+import { parseCommand, hasSubshell } from "../analysis/bash-parser";
 
 const home = os.homedir();
 const cwd = path.join(home, "Projects");

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { isWriteOperation, isTrustedScriptCommand } from "../config";
-import { isSimpleAllowedCommand, isSegmentUnsafe } from "../safety-checker";
-import { parseCommand, type BashSegment } from "../bash-parser";
-import { containsCommandSubstitution } from "../segment-helpers";
+import { isSimpleAllowedCommand, isSegmentUnsafe } from "../analysis/safety-checker";
+import { parseCommand, type BashSegment } from "../analysis/bash-parser";
+import { containsCommandSubstitution } from "../analysis/segment-helpers";
 
 async function makeSeg(cmd: string, cwd = "/home/user/project"): Promise<BashSegment> {
   const result = await parseCommand(cmd, cwd);

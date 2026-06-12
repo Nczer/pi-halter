@@ -8,18 +8,31 @@ import {
   isTrustedScriptCommand,
   wrapperCommands,
   isWriteOperation,
-  SHELL_INTERPRETERS,
-} from "./config";
+} from "../config";
 import type { BashSegment } from "./bash-parser";
 import { isFirstTokenRelativePath } from "./path-analysis";
 import { containsCommandSubstitution, getFirstWord, splitPipeline, stripNullRedirects } from "./segment-helpers";
+import { ShellEvaluator } from "./evaluators/shell-evaluator";
+import { SystemEvaluator } from "./evaluators/system-evaluator";
+import { GitEvaluator } from "./evaluators/git-evaluator";
+import { TmuxEvaluator } from "./evaluators/tmux-evaluator";
+import { DiskEvaluator } from "./evaluators/disk-evaluator";
+import { ToolEvaluator } from "./evaluators/tool-evaluator";
+import type { EvaluatorResult, RiskEvaluator } from "./evaluators/types";
 
 // ── Constants ──
 
 const LOOKUP_COMMANDS = new Set(["which", "type", "command", "hash", "whence"]);
 const ECHO_COMMANDS = new Set(["echo", "printf", "true", "false"]);
 const PROCESS_INSPECTION_COMMANDS = new Set(["pgrep", "pidof"]);
-const SHELL_NAMES = new Set(["sh", "bash", "zsh", "fish"]);
+const EVALUATORS: RiskEvaluator[] = [
+  ShellEvaluator,
+  SystemEvaluator,
+  GitEvaluator,
+  TmuxEvaluator,
+  DiskEvaluator,
+  ToolEvaluator,
+];
 
 // ── Result type ──
 
@@ -60,7 +73,7 @@ function hasWriteRedirect(cmd: string): boolean {
   return false;
 }
 
-function detectObfuscation(cmd: string): { detected: boolean; techniques: string[] } {
+export function detectObfuscation(cmd: string): { detected: boolean; techniques: string[] } {
   const techniques: string[] = [];
   if (/\$\{!/.test(cmd)) techniques.push("variable indirection");
   if (/(?:^|;|\|\||&&)\s*\$[A-Z_][A-Z0-9_]*\s+\w/.test(cmd)) techniques.push("variable holding command");
@@ -82,7 +95,7 @@ function anyArgStartsWith(args: string[], prefix: string): boolean {
 
 // ── Git ──
 
-function isGitDangerous(segment: string): boolean {
+export function isGitDangerous(segment: string): boolean {
   const args = segment.trim().split(/\s+/);
   if (args.length < 2) return false;
   const sub = args[1].toLowerCase();
@@ -102,7 +115,7 @@ function isGitDangerous(segment: string): boolean {
  * Tmux subcommands that are safe (read-only, session management, no code execution).
  * All other subcommands prompt — whitelist approach.
  */
-const TMUX_SAFE_SUBCOMMANDS = new Set([
+export const TMUX_SAFE_SUBCOMMANDS = new Set([
   // Read-only inspection
   "capture-pane", "list-sessions", "list-panes", "list-windows", "list-buffers",
   "has-session", "show-options", "show-messages", "display-message", "display-panes",
@@ -116,7 +129,7 @@ const TMUX_SAFE_SUBCOMMANDS = new Set([
 ]);
 
 /** Human-readable descriptions for known dangerous tmux subcommands. */
-const TMUX_DANGEROUS_DESCRIPTIONS: Record<string, string> = {
+export const TMUX_DANGEROUS_DESCRIPTIONS: Record<string, string> = {
   "send-keys": "arbitrary keystroke injection — executes commands inside tmux pane",
   "run-shell": "executes commands on tmux server",
   "pipe-pane": "pipes pane output to a shell command",
@@ -204,7 +217,6 @@ export function isTmuxSendKeysSafe(keys: string): boolean {
   if (!cmd) return true; // pressing Enter on empty line is safe
 
   // Handle shell-quoted arguments: strip outer quotes from the full key string
-  // e.g., 'tmux send-keys -t bar ls' → tmux send-keys -t bar ls
   const unquoted = cmd.replace(/^("|')(.*\1)$/, "$2").trim();
 
   // Split on whitespace to get the first command
@@ -260,7 +272,20 @@ function isWrapperRunningWrite(segment: string): boolean {
     const arg = args[i];
     if (skipWrapperArg(firstWord, arg)) continue;
     const wrappedCmd = arg.toLowerCase();
+    if (isFirstTokenRelativePath(arg)) return true;
     if (isWriteOperation(wrappedCmd, segment)) return true;
+    break;
+  }
+  return false;
+}
+
+function isWrapperRunningRelativePath(segment: string): boolean {
+  const args = segment.trim().split(/\s+/);
+  const firstWord = args[0].toLowerCase();
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (skipWrapperArg(firstWord, arg)) continue;
+    if (isFirstTokenRelativePath(arg)) return true;
     break;
   }
   return false;
@@ -306,152 +331,71 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   const rest = args.slice(1);
   const ops = seg.ops;
 
-  const reasons: string[] = [];
-  let severity: "high" | "medium" | null = null;
-  const setSeverity = (s: "high" | "medium") => {
-    if (s === "high" || !severity) severity = s;
-  };
+  // Run evaluators
+  const evaluatorResults = EVALUATORS.map(ev => ev.evaluate(seg, cwd));
 
-  // ── Danger flags (accumulated, used for isSimple/isUnsafe derivation) ──
-  let hasDangerFlag = false;
-  let hasDangerInPipeline = false;
+  // Merge evaluator results
+  const aggregatedReasons: string[] = [];
+  let aggregatedSeverity: "high" | "medium" | null = null;
+  let aggregatedHasDanger = false;
+  let allStagesSimple = true;
 
-  // Subshell
-  if (seg.hasSubshell) {
-    hasDangerFlag = true;
-    reasons.push("command substitution (subshell)");
-    setSeverity("high");
-  }
-
-  // Heredoc to interpreter
-  const hasHeredoc = ops.includes("<<") || ops.includes("<<<");
-  const isInterpreterWithHeredoc = hasHeredoc && new RegExp("^(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv|bash|sh|zsh|fish|csh|tcsh|ksh)", "i").test(firstWord);
-  if (isInterpreterWithHeredoc) {
-    hasDangerFlag = true;
-    reasons.push("heredoc to shell interpreter (executable code)");
-    setSeverity("high");
-  }
-
-  // Write redirect
-  const writeRedirect = hasWriteRedirect(segment);
-  if (writeRedirect) {
-    hasDangerFlag = true;
-    reasons.push("shell output redirection (can overwrite files)");
-    setSeverity("medium");
-  }
-
-  // find/fd/rg exec write
-  if (firstWord === "find" && dangerousFindFlags.test(segment)) {
-    hasDangerFlag = true;
-    reasons.push("find with dangerous flags");
-    setSeverity("high");
-  }
-  if (firstWord === "find" && isFindExecWrite(segment)) {
-    hasDangerFlag = true;
-    reasons.push("find -exec with write operation");
-    setSeverity("high");
-  }
-  if (firstWord === "fd" && isFdExecWrite(segment)) {
-    hasDangerFlag = true;
-    reasons.push("fd -x with write operation");
-    setSeverity("high");
-  }
-  if (firstWord === "rg" && isRgPreWrite(segment)) {
-    hasDangerFlag = true;
-    reasons.push("rg --pre with write operation");
-    setSeverity("high");
-  }
-
-  // sed/perl flags
-  if (firstWord === "sed" && dangerousSedFlags.test(segment)) {
-    hasDangerFlag = true;
-    reasons.push("sed -i (in-place file modification)");
-    setSeverity("high");
-  }
-  if (firstWord === "perl" && dangerousPerlFlags.test(segment)) {
-    hasDangerFlag = true;
-    reasons.push("perl -pi/-i (in-place file modification)");
-    setSeverity("high");
-  }
-
-  // Git dangerous
-  if (firstWord === "git" && isGitDangerous(segment)) {
-    hasDangerFlag = true;
-    setSeverity("high");
-  }
-
-  // Tmux dangerous
-  if (firstWord === "tmux" && isTmuxDangerous(segment)) {
-    const tmuxSub = getTmuxSubcommand(segment);
-    // send-keys inherits session auto-allow: safe keys → auto-allow, unsafe keys → prompt
-    if (tmuxSub === "send-keys") {
-      const keys = extractTmuxSendKeys(segment);
-      if (!keys || !isTmuxSendKeysSafe(keys)) {
-        hasDangerFlag = true;
-        setSeverity("high");
-      }
-    } else {
-      hasDangerFlag = true;
-      setSeverity("high");
+  for (const result of evaluatorResults) {
+    if (result.hasDanger) aggregatedHasDanger = true;
+    if (result.severity === "high" || (!aggregatedSeverity && result.severity === "medium")) {
+      aggregatedSeverity = result.severity;
     }
+    for (const reason of result.reasons) {
+      if (!aggregatedReasons.includes(reason)) aggregatedReasons.push(reason);
+    }
+    if (result.isSimple === false) allStagesSimple = false;
   }
 
-  // Wrapper running write
-  if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment)) {
-    hasDangerFlag = true;
-    setSeverity("high");
-  }
-
-  // ── Pipeline analysis (single loop for all checks) ──
+  // Pipeline analysis
   const stages = splitPipeline(segment);
   if (stages.length > 1) {
-    let allStagesSimple = true;
     for (let i = 1; i < stages.length; i++) {
       const stage = stages[i];
       const stageCmd = getFirstWord(stage);
 
-      // Check for relative path in pipeline stage
       if (isFirstTokenRelativePath(stage)) {
         allStagesSimple = false;
         continue;
       }
 
-      // Check if stage is an allowed command
       if (!isAllowedCommand(stageCmd)) {
         allStagesSimple = false;
-        // Pipe to shell
-        if (SHELL_NAMES.has(stageCmd)) {
-          reasons.push("pipe to a shell (possible remote code execution)");
-          setSeverity("high");
+        if (new Set(["sh", "bash", "zsh", "fish"]).has(stageCmd)) {
+          if (!aggregatedReasons.includes("pipe to a shell (possible remote code execution)")) {
+            aggregatedReasons.push("pipe to a shell (possible remote code execution)");
+            aggregatedSeverity = "high";
+          }
         }
-        // Check dangerous command patterns even for non-allowed commands
         if (dangerousCommandPatterns.some(({ pattern }) => pattern.test(stageCmd))) {
-          hasDangerInPipeline = true;
+          aggregatedHasDanger = true;
         }
         if (dangerousContextPatterns.some(({ pattern }) => pattern.test(stage))) {
-          hasDangerInPipeline = true;
+          aggregatedHasDanger = true;
         }
         continue;
       }
 
-      // Check stage-specific danger patterns
       let stageDangerous = false;
-
       if (stageCmd === "find" && (dangerousFindFlags.test(stage) || isFindExecWrite(stage))) stageDangerous = true;
       if (stageCmd === "fd" && isFdExecWrite(stage)) stageDangerous = true;
       if (stageCmd === "rg" && isRgPreWrite(stage)) stageDangerous = true;
       if (stageCmd === "sed" && dangerousSedFlags.test(stage)) {
         stageDangerous = true;
-        if (!reasons.includes("sed -i (in-place file modification)")) {
-          reasons.push("sed -i in pipeline (in-place file modification)");
-          setSeverity("high");
+        if (!aggregatedReasons.includes("sed -i (in-place file modification)")) {
+          aggregatedReasons.push("sed -i in pipeline (in-place file modification)");
+          aggregatedSeverity = "high";
         }
       }
       if (stageCmd === "perl" && dangerousPerlFlags.test(stage)) {
         stageDangerous = true;
-        if (!reasons.includes("perl -pi/-i (in-place file modification)")) {
-          reasons.push("perl -pi/-i in pipeline (in-place file modification)");
-          setSeverity("high");
+        if (!aggregatedReasons.includes("perl -pi/-i (in-place file modification)")) {
+          aggregatedReasons.push("perl -pi/-i in pipeline (in-place file modification)");
+          aggregatedSeverity = "high";
         }
       }
       if (stageCmd === "git" && isGitDangerous(stage)) stageDangerous = true;
@@ -463,179 +407,46 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
 
       if (stageDangerous) {
         allStagesSimple = false;
-        hasDangerInPipeline = true;
+        aggregatedHasDanger = true;
       }
     }
-    if (hasDangerInPipeline) {
-      hasDangerFlag = true;
-    }
-    // Store for isSimple derivation
-    (analyzeSegment as any)._allStagesSimple = allStagesSimple;
-  } else {
-    (analyzeSegment as any)._allStagesSimple = true;
   }
 
-  // ── Per-segment risk (token analysis) ──
-  // sudo
-  if (firstWord === "sudo") {
-    reasons.push("sudo (elevated privileges)");
-    setSeverity("high");
-  }
-
-  // rm/rmdir/unlink
-  if (firstWord === "rm" || firstWord === "rmdir" || firstWord === "unlink") {
-    setSeverity("high");
-    if (rest.some((a) => a.includes("-r") || a.includes("-R"))) reasons.push("recursive delete (-r/-R)");
-    if (rest.some((a) => a.includes("-f"))) reasons.push("forced delete (-f)");
-  }
-
-  // find -delete
-  if (firstWord === "find" && rest.includes("-delete")) {
-    setSeverity("high");
-    reasons.push("find -delete (bulk deletion)");
-  }
-
-  // git operations
-  if (firstWord === "git") {
-    const sub = rest[0];
-    const subArgs = rest.slice(1);
-    reasons.push(sub ? `git ${sub} (git command)` : "git (git command)");
-    if (sub === "rm") {
-      setSeverity("high");
-      reasons.push("git rm (deletes files from working tree and stages deletions)");
-    }
-    if (sub === "clean" && (subArgs.some((a) => a.includes("-f")) || subArgs.includes("-d") || subArgs.includes("-x"))) {
-      setSeverity("high");
-      reasons.push("git clean (can delete untracked files)");
-    }
-    if (sub === "reset" && subArgs.includes("--hard")) {
-      setSeverity("high");
-      reasons.push("git reset --hard (discard changes)");
-    }
-    if ((sub === "checkout" || sub === "restore") && (subArgs.includes(".") || subArgs.includes("--") || subArgs.includes("--source"))) {
-      reasons.push("git checkout/restore (can overwrite working tree)");
-    }
-    if (sub === "push" && (subArgs.includes("--force") || subArgs.includes("--force-with-lease") || subArgs.includes("-f"))) {
-      setSeverity("high");
-      reasons.push("git push --force (rewrite remote history)");
-    }
-    if (sub === "reflog" && subArgs.includes("expire")) {
-      setSeverity("high");
-      reasons.push("git reflog expire (can remove recovery history)");
-    }
-    if (sub === "gc" && subArgs.some((a) => a.startsWith("--prune"))) {
-      setSeverity("high");
-      reasons.push("git gc --prune (can permanently delete objects)");
-    }
-  }
-
-  // tmux operations
-  if (firstWord === "tmux") {
-    const tmuxSub = getTmuxSubcommand(segment);
-    if (tmuxSub && !TMUX_SAFE_SUBCOMMANDS.has(tmuxSub)) {
-      const desc = TMUX_DANGEROUS_DESCRIPTIONS[tmuxSub]
-        || "not in safe allowlist — may execute code or modify sessions";
-      let reason = `tmux ${tmuxSub} (${desc})`;
-      // Extract keys from send-keys for display
-      if (tmuxSub === "send-keys") {
-        const keys = extractTmuxSendKeys(segment);
-        if (keys) reason += `\n  → ${keys}`;
-      }
-      reasons.push(reason);
-    }
-  }
-
-  // truncate
-  if (firstWord === "truncate") {
-    reasons.push("truncate (in-place size change, can erase contents)");
-  }
-
-  // dd of=
-  if (firstWord === "dd" && anyArgStartsWith(rest, "of=")) {
-    setSeverity("high");
-    reasons.push("dd with output file/device (can overwrite data)");
-  }
-
-  // Disk / volume management
-  if (firstWord.startsWith("mkfs")) { setSeverity("high"); reasons.push("mkfs (filesystem formatting)"); }
-  if (firstWord.startsWith("newfs_")) { setSeverity("high"); reasons.push("newfs_* (filesystem formatting)"); }
-  if (firstWord === "wipefs") { setSeverity("high"); reasons.push("wipefs (disk signature wipe)"); }
-  if (firstWord === "diskutil") {
-    setSeverity("high"); reasons.push("diskutil (disk management command)");
-    if (rest.includes("eraseDisk") || rest.includes("eraseVolume")) reasons.push("diskutil erase (destructive disk operation)");
-  }
-  if (firstWord === "hdiutil") { setSeverity("high"); reasons.push("hdiutil (disk image management command)"); }
-  if (firstWord === "gpt") { setSeverity("high"); reasons.push("gpt (partition table manipulation)"); }
-  if (firstWord === "asr") { setSeverity("high"); reasons.push("asr (Apple Software Restore; can overwrite volumes)"); }
-  if (["parted", "fdisk", "gdisk", "sgdisk"].includes(firstWord)) { setSeverity("high"); reasons.push(`${firstWord} (disk/partition management)`); }
-  if (firstWord === "lsblk") { setSeverity("medium"); reasons.push("lsblk (disk listing)"); }
-  if (firstWord === "cryptsetup") { setSeverity("high"); reasons.push("cryptsetup (disk encryption management)"); }
-  if (["pvcreate", "vgcreate", "lvcreate"].includes(firstWord)) { setSeverity("high"); reasons.push(`${firstWord} (LVM volume management)`); }
-  if (firstWord === "zpool") { setSeverity("high"); reasons.push("zpool (ZFS pool management)"); }
-
-  // chmod/chown recursive
-  if (firstWord === "chmod" && (rest.includes("-R") || rest.includes("--recursive"))) reasons.push("chmod -R (recursive permission changes)");
-  if (firstWord === "chown" && (rest.includes("-R") || rest.includes("--recursive"))) reasons.push("chown -R (recursive ownership changes)");
-
-  // mv/cp overwriting
-  if (firstWord === "mv" && (rest.includes("-f") || rest.includes("--force"))) reasons.push("mv --force/-f (can overwrite files)");
-  if (firstWord === "cp" && (rest.includes("-f") || rest.includes("--force"))) reasons.push("cp --force/-f (can overwrite files)");
-
-  // kill/shutdown/systemctl
-  if (["kill", "pkill", "killall"].includes(firstWord)) {
-    reasons.push(`${firstWord} (process termination)`);
-    if (rest.includes("-9")) { setSeverity("high"); reasons.push("SIGKILL (-9)"); }
-  }
-  if (["shutdown", "reboot"].includes(firstWord)) { setSeverity("high"); reasons.push(`${firstWord} (system power operation)`); }
-  if (firstWord === "systemctl" && (rest.includes("stop") || rest.includes("disable"))) reasons.push("systemctl stop/disable (service disruption)");
-
-  // Remote execution via pipe
-  if ((firstWord === "curl" || firstWord === "wget") && ops.includes("|")) {
-    setSeverity("high");
-    reasons.push("curl/wget piped (possible remote code execution)");
-  }
-
-  // Infra deletes
-  if (firstWord === "kubectl" && rest[0] === "delete") { setSeverity("high"); reasons.push("kubectl delete (resource deletion)"); }
-  if (firstWord === "terraform" && rest[0] === "destroy") { setSeverity("high"); reasons.push("terraform destroy (infrastructure teardown)"); }
-  if (firstWord === "aws" && rest[0] === "s3" && rest[1] === "rm" && rest.includes("--recursive")) { setSeverity("high"); reasons.push("aws s3 rm --recursive (bulk deletion)"); }
-  if (firstWord === "gcloud" && rest.includes("delete")) { setSeverity("high"); reasons.push("gcloud delete (resource deletion)"); }
-
-  // ── Obfuscation ──
+  // Obfuscation
   const obfuscation = detectObfuscation(segment);
   const isObfuscated = containsCommandSubstitution(segment) || obfuscation.detected;
   if (obfuscation.techniques.length > 0) {
     for (const tech of obfuscation.techniques) {
-      if (!reasons.includes(tech)) reasons.push(tech);
+      if (!aggregatedReasons.includes(tech)) aggregatedReasons.push(tech);
     }
-    setSeverity("high");
+    aggregatedSeverity = "high";
   }
 
-  // ── Regex-based safety net (dangerous command/context patterns) ──
+  // Regex-based safety net
   const isLookupOrEcho = LOOKUP_COMMANDS.has(firstWord) || ECHO_COMMANDS.has(firstWord) || PROCESS_INSPECTION_COMMANDS.has(firstWord);
   const isTrusted = isTrustedScriptCommand(segment, cwd);
 
   if (!isTrusted && !isLookupOrEcho) {
     for (const { pattern, label } of dangerousCommandPatterns) {
-      if (pattern.test(firstWord) && !reasons.includes(label)) {
-        reasons.push(label);
-        setSeverity("medium");
+      if (pattern.test(firstWord) && !aggregatedReasons.includes(label)) {
+        aggregatedReasons.push(label);
+        if (!aggregatedSeverity) aggregatedSeverity = "medium";
       }
     }
     for (const { pattern, label } of dangerousContextPatterns) {
-      if (pattern.test(segment) && !reasons.includes(label)) {
-        reasons.push(label);
-        setSeverity("medium");
+      if (pattern.test(segment) && !aggregatedReasons.includes(label)) {
+        aggregatedReasons.push(label);
+        if (!aggregatedSeverity) aggregatedSeverity = "medium";
       }
     }
   }
 
-  // ── Derive booleans ──
-  const allStagesSimple = (analyzeSegment as any)._allStagesSimple as boolean;
-  const hasDanger = hasDangerFlag;
+  // Derive booleans
+  const hasDanger = aggregatedHasDanger;
+  const writeRedirect = hasWriteRedirect(segment);
+  const isRedirectOnly = /^[0-9]*&?>+/.test(trimmed);
 
   // isSimple: allowed command, no danger, no relative path, all pipeline stages simple
-  const isRedirectOnly = /^[0-9]*&?>+/.test(trimmed);
   let isSimple: boolean;
   if (isRedirectOnly) {
     isSimple = !writeRedirect;
@@ -660,19 +471,5 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
     ));
   }
 
-  return { isSimple, isUnsafe, hasDanger, risk: { severity, reasons } };
-}
-
-// ── Helpers used by isSimple derivation ──
-
-function isWrapperRunningRelativePath(segment: string): boolean {
-  const args = segment.trim().split(/\s+/);
-  const firstWord = args[0].toLowerCase();
-  for (let i = 1; i < args.length; i++) {
-    const arg = args[i];
-    if (skipWrapperArg(firstWord, arg)) continue;
-    if (isFirstTokenRelativePath(arg)) return true;
-    break;
-  }
-  return false;
+  return { isSimple, isUnsafe, hasDanger, risk: { severity: aggregatedSeverity, reasons: aggregatedReasons } };
 }
