@@ -71,7 +71,7 @@ index.ts                          Extension entry — event registration, /dsp c
     ├── bash-patterns.ts          Allowed commands, path-aware set, dangerous find flags
     ├── path-rules.ts             Allowed read paths, denied path names
     ├── dangerous-patterns.ts     Regex danger patterns (safety net)
-    └── trusted-scripts.ts        Trusted script directories (skills, etc.)
+    └── trusted-scripts.ts        Trusted script directories (skills, etc.) + TRUSTED_PACKAGES for `uv run --with`
 ```
 
 ### Key seams
@@ -92,7 +92,7 @@ All config lives in `config/` as focused modules, re-exported through `config/in
 | `bash-patterns.ts` | Auto-allowed commands, path-aware commands, dangerous find/sed/perl flags |
 | `path-rules.ts` | Always-allowed read/write paths, always-denied path names |
 | `dangerous-patterns.ts` | Regex patterns for risk detection (safety net alongside token analysis) |
-| `trusted-scripts.ts` | Trusted script directories (e.g. skills) — bypasses dangerous-pattern check |
+| `trusted-scripts.ts` | Trusted script directories (e.g. skills), `TRUSTED_PACKAGES` allowlist for `uv run --with` — bypasses dangerous-pattern check |
 
 ## Testing
 
@@ -102,6 +102,14 @@ All config lives in `config/` as focused modules, re-exported through `config/in
 - **Bash parser** — lazy WASM loading. Verify path extraction across heredocs, comments, quotes, subshells
 - **Path utilities** — pure functions. Verify path resolution, deny rules, cwd checks
 - **MCP handler** — verify server:tool parsing, metadata op auto-allow, server-level session approval
+
+## Trusted Packages (`uv run --with`)
+
+`trusted-scripts.ts` maintains a `TRUSTED_PACKAGES` allowlist (line ~11). Commands like `uv run --with <pkg> python script.py` are only auto-trusted if:
+1. The script is in a trusted directory (e.g. `~/.pi/agent/skills/`)
+2. All packages in `--with` are in the `TRUSTED_PACKAGES` set
+
+To add a new package, edit the `TRUSTED_PACKAGES` set in `config/trusted-scripts.ts` (lowercase, no extras — `markitdown[pptx]` is matched against `markitdown`).
 
 ## Dependencies
 
