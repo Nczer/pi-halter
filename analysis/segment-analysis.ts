@@ -332,7 +332,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   const ops = seg.ops;
 
   // Run evaluators
-  const evaluatorResults = EVALUATORS.map(ev => ev.evaluate(seg, cwd));
+  const evaluatorResults = EVALUATORS.map(ev => ({ evaluator: ev.name, result: ev.evaluate(seg, cwd) }));
 
   // Merge evaluator results
   const aggregatedReasons: string[] = [];
@@ -340,13 +340,15 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   let aggregatedHasDanger = false;
   let allStagesSimple = true;
 
-  for (const result of evaluatorResults) {
+  for (const { evaluator, result } of evaluatorResults) {
     if (result.hasDanger) aggregatedHasDanger = true;
     if (result.severity === "high" || (!aggregatedSeverity && result.severity === "medium")) {
       aggregatedSeverity = result.severity;
     }
     for (const reason of result.reasons) {
-      if (!aggregatedReasons.includes(reason)) aggregatedReasons.push(reason);
+      const tag = evaluator.charAt(0).toUpperCase() + evaluator.slice(1);
+      const tagged = `[${tag}] ${reason}`;
+      if (!aggregatedReasons.includes(tagged)) aggregatedReasons.push(tagged);
     }
     if (result.isSimple === false) allStagesSimple = false;
   }
@@ -366,8 +368,9 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       if (!isAllowedCommand(stageCmd)) {
         allStagesSimple = false;
         if (new Set(["sh", "bash", "zsh", "fish"]).has(stageCmd)) {
-          if (!aggregatedReasons.includes("pipe to a shell (possible remote code execution)")) {
-            aggregatedReasons.push("pipe to a shell (possible remote code execution)");
+          const reason = "[Pipeline] pipe to a shell (possible remote code execution)";
+          if (!aggregatedReasons.includes(reason)) {
+            aggregatedReasons.push(reason);
             aggregatedSeverity = "high";
           }
         }
@@ -386,15 +389,17 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       if (stageCmd === "rg" && isRgPreWrite(stage)) stageDangerous = true;
       if (stageCmd === "sed" && dangerousSedFlags.test(stage)) {
         stageDangerous = true;
-        if (!aggregatedReasons.includes("sed -i (in-place file modification)")) {
-          aggregatedReasons.push("sed -i in pipeline (in-place file modification)");
+        const reason = "[Pipeline] sed -i in pipeline (in-place file modification)";
+        if (!aggregatedReasons.includes(reason)) {
+          aggregatedReasons.push(reason);
           aggregatedSeverity = "high";
         }
       }
       if (stageCmd === "perl" && dangerousPerlFlags.test(stage)) {
         stageDangerous = true;
-        if (!aggregatedReasons.includes("perl -pi/-i (in-place file modification)")) {
-          aggregatedReasons.push("perl -pi/-i in pipeline (in-place file modification)");
+        const reason = "[Pipeline] perl -pi/-i in pipeline (in-place file modification)";
+        if (!aggregatedReasons.includes(reason)) {
+          aggregatedReasons.push(reason);
           aggregatedSeverity = "high";
         }
       }
@@ -417,7 +422,8 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   const isObfuscated = containsCommandSubstitution(segment) || obfuscation.detected;
   if (obfuscation.techniques.length > 0) {
     for (const tech of obfuscation.techniques) {
-      if (!aggregatedReasons.includes(tech)) aggregatedReasons.push(tech);
+      const tagged = `[Shell] ${tech}`;
+      if (!aggregatedReasons.includes(tagged)) aggregatedReasons.push(tagged);
     }
     aggregatedSeverity = "high";
   }
@@ -428,14 +434,16 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
 
   if (!isTrusted && !isLookupOrEcho) {
     for (const { pattern, label } of dangerousCommandPatterns) {
-      if (pattern.test(firstWord) && !aggregatedReasons.includes(label)) {
-        aggregatedReasons.push(label);
+      const tagged = `[Pattern] ${label}`;
+      if (pattern.test(firstWord) && !aggregatedReasons.includes(tagged)) {
+        aggregatedReasons.push(tagged);
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
       }
     }
     for (const { pattern, label } of dangerousContextPatterns) {
-      if (pattern.test(segment) && !aggregatedReasons.includes(label)) {
-        aggregatedReasons.push(label);
+      const tagged = `[Pattern] ${label}`;
+      if (pattern.test(segment) && !aggregatedReasons.includes(tagged)) {
+        aggregatedReasons.push(tagged);
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
       }
     }

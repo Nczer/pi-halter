@@ -20,8 +20,9 @@ export const SystemEvaluator: RiskEvaluator = {
 
     // sudo
     if (firstWord === "sudo") {
-      reasons.push("sudo (elevated privileges)");
+      reasons.push("sudo (privilege escalation)");
       setSeverity("high");
+      hasDanger = true;
     }
 
     // rm/rmdir/unlink

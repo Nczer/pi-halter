@@ -60,7 +60,12 @@ export function updateWidget(ctx: ExtensionContext): void {
   const mcpServerItems = [...store.listAllowedMcpServers()];
   const userRules = store.listUserRulesSync();
 
-  const hasSessionRules = bashItems.length > 0 || readPathItems.length > 0 || writePathItems.length > 0 || readDirItems.length > 0 || writeDirItems.length > 0 || mcpServerItems.length > 0;
+  // Merge dirs + paths; since write implies read, R/W paths don't also appear in R
+  const allReadPaths = filterSubPaths([...readDirItems, ...readPathItems]);
+  const allWritePaths = filterSubPaths([...writeDirItems, ...writePathItems]);
+  const readOnlyPaths = allReadPaths.filter(p => !allWritePaths.some(wp => p === wp || p.startsWith(wp + "/")));
+
+  const hasSessionRules = bashItems.length > 0 || readOnlyPaths.length > 0 || allWritePaths.length > 0 || mcpServerItems.length > 0;
   const hasPermRules = userRules.bash.length > 0 || userRules.read.length > 0 || userRules.write.length > 0;
 
   if (!hasSessionRules && !hasPermRules) {
@@ -76,17 +81,11 @@ export function updateWidget(ctx: ExtensionContext): void {
         const grouped = groupCommandVariants(bashItems);
         baseLines.push(theme.fg("muted", "Bash:") + " " + theme.fg("dim", grouped.join(" ")));
       }
-      if (readDirItems.length > 0) {
-        baseLines.push(theme.fg("muted", "Read dirs:") + " " + theme.fg("dim", readDirItems.join(" ")));
+      if (readOnlyPaths.length > 0) {
+        baseLines.push(theme.fg("muted", "R:") + " " + theme.fg("dim", readOnlyPaths.join(" ")));
       }
-      if (writeDirItems.length > 0) {
-        baseLines.push(theme.fg("muted", "Write dirs:") + " " + theme.fg("dim", writeDirItems.join(" ")));
-      }
-      if (readPathItems.length > 0) {
-        baseLines.push(theme.fg("muted", "Read paths:") + " " + theme.fg("dim", readPathItems.join(" ")));
-      }
-      if (writePathItems.length > 0) {
-        baseLines.push(theme.fg("muted", "Write paths:") + " " + theme.fg("dim", writePathItems.join(" ")));
+      if (allWritePaths.length > 0) {
+        baseLines.push(theme.fg("muted", "R/W:") + " " + theme.fg("dim", allWritePaths.join(" ")));
       }
       if (mcpServerItems.length > 0) {
         baseLines.push(theme.fg("muted", "MCP:") + " " + theme.fg("dim", mcpServerItems.map(s => `${s}:*`).join(", ")));
@@ -98,10 +97,10 @@ export function updateWidget(ctx: ExtensionContext): void {
         baseLines.push(theme.fg("muted", "⚙ Bash:") + " " + theme.fg("dim", userRules.bash.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
       }
       if (userRules.read.length > 0) {
-        baseLines.push(theme.fg("muted", "⚙ Read:") + " " + theme.fg("dim", userRules.read.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
+        baseLines.push(theme.fg("muted", "⚙ R:") + " " + theme.fg("dim", userRules.read.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
       }
       if (userRules.write.length > 0) {
-        baseLines.push(theme.fg("muted", "⚙ Write:") + " " + theme.fg("dim", userRules.write.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
+        baseLines.push(theme.fg("muted", "⚙ R/W:") + " " + theme.fg("dim", userRules.write.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
       }
     }
 

@@ -35,9 +35,8 @@ When the user selects "Always", a second prompt requires explicit confirmation b
 | Category | Scope | Granted by |
 |----------|-------|------------|
 | Bash signatures | Command + flags (e.g. `git -am`) | "Always" on bash prompt |
-| Read directories | Any read in that directory | "Always" on file/bash path prompt |
-| Write directories | Any write/edit in that directory | "Always" on file write prompt |
-| File paths | Specific resolved path (read/write split) | "Always" on file-inside-cwd prompt |
+| Paths (R) | Read access to dirs/files | "Always" on read prompt |
+| Paths (R/W) | Read+write access to dirs/files | "Always" on write prompt (implies read) |
 | MCP servers | All tools from a server (e.g. `exa:*`) | "Always" on MCP prompt |
 
 ## Architecture
