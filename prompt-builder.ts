@@ -117,7 +117,19 @@ function buildBashPrompt(
     body += `\nThis chains ${segments.length} commands:\n`;
     segments.forEach((s, i) => {
       const marker = nonAllowedSet.has(i) ? " \u26a0\ufe0f" : "";
-      body += `  ${i + 1}.${marker} ${s}\n`;
+      // Full command is already shown above in Command: — keep chain list compact
+      const lines = s.split("\n");
+      let display: string;
+      if (lines.length > 1) {
+        const first = lines[0].trimEnd();
+        display = lines.length > 5
+          ? `${first} ... (>${lines.length} lines)`
+          : `${first} ... (${lines.length} lines)`;
+      } else {
+        display = s.trimEnd();
+      }
+      const truncated = display.length > 80 ? display.slice(0, 77) + "..." : display;
+      body += `  ${i + 1}.${marker} ${truncated}\n`;
     });
   }
   if (hasUnsafePattern) {

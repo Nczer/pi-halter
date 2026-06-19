@@ -274,7 +274,7 @@ function isWrapperRunningWrite(segment: string): boolean {
     const wrappedCmd = arg.toLowerCase();
     if (isFirstTokenRelativePath(arg)) return true;
     if (isWriteOperation(wrappedCmd, segment)) return true;
-    break;
+    continue;
   }
   return false;
 }

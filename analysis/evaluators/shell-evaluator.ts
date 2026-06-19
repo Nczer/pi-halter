@@ -72,6 +72,7 @@ export const ShellEvaluator: RiskEvaluator = {
     if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment, false)) {
       hasDanger = true;
       setSeverity("high");
+      reasons.push(`${firstWord} wrapper running write operation`);
     }
 
     // Obfuscation
@@ -109,7 +110,7 @@ function isWrapperRunningWrite(segment: string, includeRelativePath = true): boo
     const wrappedCmd = arg.toLowerCase();
     if (includeRelativePath && isFirstTokenRelativePath(arg)) return true;
     if (isWriteOperation(wrappedCmd, segment)) return true;
-    break;
+    continue;
   }
   return false;
 }
