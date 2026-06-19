@@ -5,9 +5,8 @@ import {
   extractTmuxSendKeys,
   isTmuxSendKeysSafe,
   isTmuxDangerous,
-  TMUX_SAFE_SUBCOMMANDS,
   TMUX_DANGEROUS_DESCRIPTIONS,
-} from "../segment-analysis";
+} from "../tmux-helpers";
 
 /**
  * Evaluates tmux commands for dangerous operations.

@@ -6,7 +6,7 @@ import {
   getTmuxSubcommand,
   extractTmuxSendKeys,
   isTmuxSendKeysSafe,
-} from "../analysis/segment-analysis";
+} from "../analysis/tmux-helpers";
 import { MIRROR_CASES } from "./shared-cases";
 
 const cwd = "/home/user/project";
