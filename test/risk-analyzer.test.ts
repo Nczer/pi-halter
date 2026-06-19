@@ -175,4 +175,51 @@ sed -i 's/foo/bar/g' file.txt
 EOF`);
     expect(risk.reasons.some(r => r.includes("sed -i"))).toBe(false);
   });
+
+  // ── Bug fixes: audit findings ──
+
+  it("detects wrapper write when flag arg precedes command (xargs -a file.txt truncate)", async () => {
+    // Bug: `break` in isWrapperRunningWrite exits after first non-write positional arg.
+    // `file.txt` is the arg to `-a`, not the wrapped command. `truncate` should be checked.
+    const risk = await analyze("xargs -a file.txt truncate -s 0 file.txt");
+    expect(risk.dangerous).toBe(true);
+    expect(risk.severity).toBe("high");
+    expect(risk.reasons.some(r => r.includes("wrapper") || r.includes("truncate"))).toBe(true);
+  });
+
+  it("detects force in composite short flag mv -if", async () => {
+    // Bug: rest.includes("-f") misses composite flags like -if
+    const risk = await analyze("mv -if source dest");
+    expect(risk.dangerous).toBe(true);
+    expect(risk.reasons.some(r => r.includes("force") || r.includes("-f"))).toBe(true);
+  });
+
+  it("detects force in composite short flag cp -rpaf", async () => {
+    // Bug: rest.includes("-f") misses composite flags like -rpaf
+    const risk = await analyze("cp -rpaf src dest");
+    expect(risk.dangerous).toBe(true);
+    expect(risk.reasons.some(r => r.includes("force") || r.includes("-f"))).toBe(true);
+  });
+
+  it("does not false-positive recursive delete on rm --reference=", async () => {
+    // Bug: a.includes("-r") matches --reference=template.txt as containing "-r"
+    const risk = await analyze("rm --reference=template.txt file.txt");
+    expect(risk.dangerous).toBe(true); // rm is always dangerous
+    expect(risk.reasons.some(r => r.includes("recursive delete"))).toBe(false);
+  });
+
+  it("does not false-positive recursive delete on rm --no-preserve-root", async () => {
+    // Bug: a.includes("-r") matches --no-preserve-root as containing "-r"
+    const risk = await analyze("rm --no-preserve-root /");
+    expect(risk.dangerous).toBe(true); // rm is always dangerous
+    expect(risk.reasons.some(r => r.includes("recursive delete"))).toBe(false);
+  });
+
+  it("detects aws s3 rm --recursive with interleaved flags", async () => {
+    // Bug: rest[0] === "s3" && rest[1] === "rm" fails when --profile precedes subcommand
+    const risk = await analyze("aws --profile prod s3 rm --recursive s3://bucket/dir");
+    expect(risk.dangerous).toBe(true);
+    expect(risk.severity).toBe("high");
+    expect(risk.reasons.some(r => r.includes("aws") || r.includes("bulk deletion") || r.includes("s3"))).toBe(true);
+  });
 });

@@ -54,7 +54,7 @@ export const ToolEvaluator: RiskEvaluator = {
     // Infra deletes
     if (firstWord === "kubectl" && rest[0] === "delete") { setSeverity("high"); reasons.push("kubectl delete (resource deletion)"); }
     if (firstWord === "terraform" && rest[0] === "destroy") { setSeverity("high"); reasons.push("terraform destroy (infrastructure teardown)"); }
-    if (firstWord === "aws" && rest[0] === "s3" && rest[1] === "rm" && rest.includes("--recursive")) { setSeverity("high"); reasons.push("aws s3 rm --recursive (bulk deletion)"); }
+    if (firstWord === "aws" && awsHasSubcommand(rest, "s3", "rm") && rest.includes("--recursive")) { setSeverity("high"); reasons.push("aws s3 rm --recursive (bulk deletion)"); }
     if (firstWord === "gcloud" && rest.includes("delete")) { setSeverity("high"); reasons.push("gcloud delete (resource deletion)"); }
 
     return { reasons, severity, hasDanger, isSimple: undefined };
@@ -80,4 +80,15 @@ function isRgPreWrite(segment: string): boolean {
   if (!preMatch) return false;
   const cmd = preMatch[1];
   return isWriteOperation(cmd, segment);
+}
+
+/** Check if AWS args contain subcommand chain (e.g. s3 rm), skipping global flags like --profile. */
+function awsHasSubcommand(args: string[], ...subcommands: string[]): boolean {
+  let idx = 0;
+  for (const sub of subcommands) {
+    idx = args.indexOf(sub, idx);
+    if (idx < 0) return false;
+    idx++;
+  }
+  return true;
 }

@@ -201,7 +201,9 @@ const cases: TestCase[] = [
 	{ cmd: "rmdir dir", simple: false, unsafe: true, decision: "prompt", desc: "rmdir" },
 	{ cmd: "unlink file.txt", simple: false, unsafe: true, decision: "prompt", desc: "unlink" },
 	{ cmd: "mv file.txt backup.txt", simple: false, unsafe: true, decision: "prompt", desc: "mv" },
+	{ cmd: "mv -if source dest", simple: false, unsafe: true, decision: "prompt", desc: "mv -if (composite short flag contains -f)" },
 	{ cmd: "cp file.txt backup.txt", simple: false, unsafe: true, decision: "prompt", desc: "cp" },
+	{ cmd: "cp -rpaf src dest", simple: false, unsafe: true, decision: "prompt", desc: "cp -rpaf (composite short flag contains -f)" },
 	{ cmd: "chmod 755 file.txt", simple: false, unsafe: true, decision: "prompt", desc: "chmod" },
 	{ cmd: "chmod -R 777 .", simple: false, unsafe: true, decision: "prompt", desc: "chmod -R" },
 	{ cmd: "chown user:user file.txt", simple: false, unsafe: true, decision: "prompt", desc: "chown" },
@@ -430,6 +432,8 @@ const cases: TestCase[] = [
 	{ cmd: "stdbuf -oL rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "stdbuf -oL rm -rf (wrapper)" },
 	{ cmd: "xargs -0 rm -rf", simple: false, unsafe: true, decision: "prompt", desc: "xargs rm -rf (wrapper)" },
 	{ cmd: "timeout 30 rm -r dir", simple: false, unsafe: true, decision: "prompt", desc: "timeout rm -r (wrapper)" },
+	// Wrapper break bug: first positional arg after flags is an arg to a flag, not the command
+	{ cmd: "xargs -a file.txt truncate -s 0 file.txt", simple: false, unsafe: true, decision: "prompt", desc: "xargs -a file.txt truncate (break bug: file.txt is arg to -a not the cmd)" },
 	// find -exec rm -r
 	{ cmd: "find . -exec rm -rf {} \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec rm -rf" },
 	{ cmd: "find . -exec rm -r {} \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec rm -r" },

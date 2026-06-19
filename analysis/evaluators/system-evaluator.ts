@@ -28,8 +28,8 @@ export const SystemEvaluator: RiskEvaluator = {
     // rm/rmdir/unlink
     if (firstWord === "rm" || firstWord === "rmdir" || firstWord === "unlink") {
       setSeverity("high");
-      if (rest.some((a) => a.includes("-r") || a.includes("-R"))) reasons.push("recursive delete (-r/-R)");
-      if (rest.some((a) => a.includes("-f"))) reasons.push("forced delete (-f)");
+      if (rest.some((a) => hasShortFlag(a, "r") || hasShortFlag(a, "R"))) reasons.push("recursive delete (-r/-R)");
+      if (rest.some((a) => hasShortFlag(a, "f"))) reasons.push("forced delete (-f)");
     }
 
     // chmod/chown
@@ -44,7 +44,7 @@ export const SystemEvaluator: RiskEvaluator = {
 
     // mv/cp
     if (firstWord === "mv" || firstWord === "cp") {
-      if (rest.includes("-f") || rest.includes("--force")) {
+      if (rest.some((a) => hasShortFlag(a, "f")) || rest.includes("--force")) {
         setSeverity("medium");
         reasons.push(`${firstWord} --force/-f (can overwrite files)`);
       } else {
@@ -84,4 +84,11 @@ export const SystemEvaluator: RiskEvaluator = {
 
 function anyArgStartsWith(args: string[], prefix: string): boolean {
   return args.some(a => a.startsWith(prefix));
+}
+
+/** Check if an arg contains a short flag character (exact match or composite like -if). Rejects long flags. */
+function hasShortFlag(arg: string, flagChar: string): boolean {
+  if (arg === "-" + flagChar) return true;
+  if (arg.startsWith("-") && !arg.startsWith("--") && arg.includes(flagChar)) return true;
+  return false;
 }
