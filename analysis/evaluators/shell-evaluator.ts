@@ -3,15 +3,13 @@ import {
   dangerousSedFlags,
   dangerousPerlFlags,
   wrapperCommands,
-  isWriteOperation,
-  isAllowedCommand,
 } from "../../config";
 import {
   containsCommandSubstitution,
-  stripNullRedirects,
   getFirstWord,
+  hasWriteRedirect,
+  isWrapperRunningWrite,
 } from "../segment-helpers";
-import { isFirstTokenRelativePath } from "../path-analysis";
 import { detectObfuscation } from "../segment-analysis";
 
 /**
@@ -88,38 +86,4 @@ export const ShellEvaluator: RiskEvaluator = {
   },
 };
 
-function hasWriteRedirect(cmd: string): boolean {
-  const trimmed = cmd.trim();
-  if (/^[0-9]*&?>+/.test(trimmed)) {
-    if (!stripNullRedirects(trimmed).trim()) return false;
-  }
-  const stripped = stripNullRedirects(cmd);
-  if (/>+\s*\S/.test(stripped)) {
-    const inTest = /\[\s.*\]/.test(stripped) || /test\s/.test(stripped);
-    if (!inTest) return true;
-  }
-  return false;
-}
 
-function isWrapperRunningWrite(segment: string, includeRelativePath = true): boolean {
-  const args = segment.trim().split(/\s+/);
-  const firstWord = args[0].toLowerCase();
-  for (let i = 1; i < args.length; i++) {
-    const arg = args[i];
-    if (skipWrapperArg(firstWord, arg)) continue;
-    const wrappedCmd = arg.toLowerCase();
-    if (includeRelativePath && isFirstTokenRelativePath(arg)) return true;
-    if (isWriteOperation(wrappedCmd, segment)) return true;
-    continue;
-  }
-  return false;
-}
-
-function skipWrapperArg(wrapper: string, arg: string): boolean {
-  if (arg.startsWith("-")) return true;
-  if (wrapper === "env" && /=/.test(arg) && !arg.startsWith("/")) return true;
-  if (wrapper === "timeout" && /^\d+(\.\d+)?(?:[smhd])?$/.test(arg)) return true;
-  if (wrapper === "nice" && /^\d+$/.test(arg)) return true;
-  if (wrapper === "ionice" && /^\d+$/.test(arg)) return true;
-  return false;
-}
