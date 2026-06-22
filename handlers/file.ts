@@ -33,6 +33,7 @@ export async function handleFile(
       if (!fs.existsSync(resolvedPath)) return;
       const content = fs.readFileSync(resolvedPath, "utf-8");
       for (const edit of edits) {
+        if (edit.oldText === edit.newText) return; // Identical content — edit will fail
         const matches: number[] = [];
         let idx = 0;
         while (idx < content.length) {
