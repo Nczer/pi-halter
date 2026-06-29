@@ -149,6 +149,9 @@ export const wrapperCommands = new Set([
 /** Shell interpreters used by find -exec and similar constructs. */
 export const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh"]);
 
+/** Package manager commands that use subcommands (npm install, cargo check, etc.). */
+export const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "npx", "cargo", "pip", "pip3", "uv", "go", "bun"]);
+
 /** Commands that always perform write operations (unconditional — no flag-dependent behavior). */
 const ALWAYS_WRITE = new Set([
   "rm", "rmdir", "unlink", "mv", "cp", "chmod", "chown",

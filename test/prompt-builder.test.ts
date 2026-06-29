@@ -109,19 +109,83 @@ describe("bash body content", () => {
     expect(prompt.body).toContain("more lines");
   });
 
-  it("lists segments with numbered indices", () => {
-    const prompt = buildPrompt(bashDecision({ segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
+  it("shows formatted breakdown with numbered segments for tmux chains", () => {
+    // Breakdown format used when at least one segment is a tmux command
+    const segments = ["mkdir -p /tmp/foo", "tmux -f /dev/null -S $SOCKET new -d -s foo", "sleep 1"];
+    const cmd = segments.join("; ");
+    const prompt = buildPrompt(bashDecision({ command: cmd, segments, nonAllowedSegmentIndices: [1] }));
+    expect(prompt.body).toContain("Segments:");
     expect(prompt.body).toContain("1.");
     expect(prompt.body).toContain("2.");
-    expect(prompt.body).toContain("2 commands");
+    expect(prompt.body).toContain("3.");
   });
 
-  it("marks non-allowed segments with warning emoji", () => {
-    const prompt = buildPrompt(bashDecision({ segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
-    // Segment 2 (index 1) should have ⚠, segment 1 should not
+  it("marks non-allowed segments with warning in formatted tmux output", () => {
+    const segments = ["mkdir -p /tmp/foo", "tmux -f /dev/null -S $SOCKET new -d -s foo", "sleep 1"];
+    const cmd = segments.join("; ");
+    const prompt = buildPrompt(bashDecision({ command: cmd, segments, nonAllowedSegmentIndices: [1] }));
+    const segmentLines = prompt.body.split("\n").filter(l => l.includes("2."));
+    expect(segmentLines.some(l => l.includes("⚠"))).toBe(true);
+  });
+
+  it("shows raw command for non-tmux chains", () => {
+    // Non-tmux chains keep raw command display + chain list
+    const cmd = "ls && rm -rf /";
+    const prompt = buildPrompt(bashDecision({ command: cmd, segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
+    expect(prompt.body).toContain("  ls && rm -rf /");
+    expect(prompt.body).not.toContain("bash (");
+    expect(prompt.body).toContain("This chains 2 commands");
+  });
+
+  it("marks non-allowed segments with warning emoji in chain list", () => {
+    const prompt = buildPrompt(bashDecision({ command: "ls && rm -rf /", segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
     const segmentLines = prompt.body.split("\n").filter(l => l.includes("."));
-    expect(segmentLines[0]).not.toContain("⚠");
-    expect(segmentLines[1]).toContain("⚠");
+    expect(segmentLines.find(l => l.includes("1."))!).not.toContain("⚠");
+    expect(segmentLines.find(l => l.includes("2."))!).toContain("⚠");
+  });
+
+  it("shows formatted breakdown even when tmux command has no boilerplate", () => {
+    // Multi-segment tmux commands always get the structured "bash (N segments)" format
+    const segments = ["tmux list-sessions", "sleep 1"];
+    const cmd = segments.join("; ");
+    const prompt = buildPrompt(bashDecision({ command: cmd, segments, nonAllowedSegmentIndices: [0] }));
+    expect(prompt.body).toContain("Segments:");
+    expect(prompt.body).toContain("bash (2 segments)");
+    // ⚠ marker on segment 1 (index 0)
+    const lines = prompt.body.split("\n");
+    const line1 = lines.find(l => l.includes("1."));
+    expect(line1).toContain("⚠");
+  });
+
+  it("compresses multi-line segments in non-tmux chain list", () => {
+    // Non-tmux chains use plain numbered list with multi-line compression
+    const multiLine = "cat <<'EOF'\nline1\nline2\nline3\nEOF";
+    const prompt = buildPrompt(bashDecision({
+      command: `ls && ${multiLine}`,
+      segments: ["ls", multiLine],
+      nonAllowedSegmentIndices: [1],
+    }));
+    expect(prompt.body).toContain("This chains 2 commands");
+    expect(prompt.body).toContain("(5 lines)"); // heredoc has 5 lines including EOF markers
+    // Chain list segment 2 shows compressed form (raw command above still shows full heredoc)
+    const chainLines = prompt.body.split("\n").filter(l => l.includes("2."));
+    expect(chainLines[0]).toContain("cat <<'EOF'");
+    expect(chainLines[0]).toContain("(5 lines)");
+    expect(chainLines[0]).not.toContain("line2");
+  });
+
+  it("truncates long segment display in chain list", () => {
+    const longSegment = "a".repeat(100);
+    const prompt = buildPrompt(bashDecision({
+      command: `ls && ${longSegment}`,
+      segments: ["ls", longSegment],
+      nonAllowedSegmentIndices: [],
+    }));
+    expect(prompt.body).toContain("This chains 2 commands");
+    // Segment display should be truncated to 80 chars
+    const segLines = prompt.body.split("\n").filter(l => l.includes("2."));
+    expect(segLines[0]).toContain("...");
+    expect(segLines[0].length).toBeLessThanOrEqual(80 + 5); // "  2. " prefix = 5 chars
   });
 
   it("shows hasUnsafePattern warning text", () => {
