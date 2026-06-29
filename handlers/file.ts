@@ -51,7 +51,6 @@ export async function handleFile(
     }
   }
 
-  const resolvedPath = resolvePathReal(expandTilde(filePath), ctx.cwd);
   const request: FileRequest = { type: "file", toolName: toolName as "read" | "write" | "edit", filePath, cwd: ctx.cwd, resolvedPath };
   const decision = await decide(request, store);
 
