@@ -1,5 +1,10 @@
 import { EvaluatorResult, RiskEvaluator } from "./types";
-import { getFirstWord } from "../segment-helpers";
+import {
+  getFirstWord,
+  isFindExecWrite,
+  isFdExecWrite,
+  isRgPreWrite,
+} from "../segment-helpers";
 import {
   dangerousFindFlags,
   isWriteOperation,
@@ -60,27 +65,6 @@ export const ToolEvaluator: RiskEvaluator = {
     return { reasons, severity, hasDanger, isSimple: undefined };
   },
 };
-
-function isFindExecWrite(segment: string): boolean {
-  const execMatch = segment.match(/-(?:exec|execdir)\b\s+(\S+)/);
-  if (!execMatch) return false;
-  const cmd = execMatch[1];
-  return isWriteOperation(cmd, segment);
-}
-
-function isFdExecWrite(segment: string): boolean {
-  const execMatch = segment.match(/-(?:x|X)\b\s+(\S+)/);
-  if (!execMatch) return false;
-  const cmd = execMatch[1];
-  return isWriteOperation(cmd, segment);
-}
-
-function isRgPreWrite(segment: string): boolean {
-  const preMatch = segment.match(/--pre\s+(\S+)/);
-  if (!preMatch) return false;
-  const cmd = preMatch[1];
-  return isWriteOperation(cmd, segment);
-}
 
 /** Check if AWS args contain subcommand chain (e.g. s3 rm), skipping global flags like --profile. */
 function awsHasSubcommand(args: string[], ...subcommands: string[]): boolean {

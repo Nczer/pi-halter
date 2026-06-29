@@ -115,3 +115,30 @@ export function getCommandSignature(segment: string): string {
   const flags = tokens.slice(1).filter(t => t.startsWith("-")).sort();
   return flags.length === 0 ? cmd : `${cmd} ${flags.join(" ")}`;
 }
+
+/**
+ * Check if find/fd/rg execution triggers a write operation.
+ */
+export function isFindExecWrite(segment: string): boolean {
+  const execMatch = segment.match(/-(?:exec|execdir)\b\s+(\S+)/);
+  if (!execMatch) return false;
+  const execCmd = execMatch[1].toLowerCase();
+  const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
+  return isWriteOperation(execCmd, afterExec);
+}
+
+export function isFdExecWrite(segment: string): boolean {
+  const execMatch = segment.match(/-(?:x|X)\b\s+(\S+)/);
+  if (!execMatch) return false;
+  const execCmd = execMatch[1].toLowerCase();
+  const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
+  return isWriteOperation(execCmd, afterExec);
+}
+
+export function isRgPreWrite(segment: string): boolean {
+  const preMatch = segment.match(/--pre(?:=|\s+)(\S+)/);
+  if (!preMatch) return false;
+  const preCmd = preMatch[1].toLowerCase();
+  const afterPre = segment.slice(preMatch.index! + preMatch[0].length);
+  return isWriteOperation(preCmd, afterPre);
+}
