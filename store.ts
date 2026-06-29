@@ -83,6 +83,15 @@ function createSessionState(nowFn = Date.now): SessionState {
   const aborted = new Map<string, number>();
   let pcount = 0;
 
+  const pruneAborted = () => {
+    if (aborted.size > 100) {
+      const cutoff = nowFn() - ABORT_REMEMBER_MS;
+      for (const [k, v] of aborted) {
+        if (v < cutoff) aborted.delete(k);
+      }
+    }
+  };
+
   return {
     hasAllowedBash(s) { return bashSigs.has(s); },
     hasAllowedBashPrefix(s) {
@@ -106,22 +115,11 @@ function createSessionState(nowFn = Date.now): SessionState {
 
     recordAbort(cmd) {
       aborted.set(cmd, nowFn());
-      if (aborted.size > 100) {
-        const cutoff = nowFn() - ABORT_REMEMBER_MS;
-        for (const [k, v] of aborted) {
-          if (v < cutoff) aborted.delete(k);
-        }
-      }
+      pruneAborted();
     },
     getLastAbort(cmd) {
-      const ts = aborted.get(cmd) ?? null;
-      if (aborted.size > 100) {
-        const cutoff = nowFn() - ABORT_REMEMBER_MS;
-        for (const [k, v] of aborted) {
-          if (v < cutoff) aborted.delete(k);
-        }
-      }
-      return ts;
+      pruneAborted();
+      return aborted.get(cmd) ?? null;
     },
 
     listAllowedBash() { return new Set(bashSigs); },

@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   isAllowedCommand,
   dangerousFindFlags,
@@ -8,6 +9,7 @@ import {
   isTrustedScriptCommand,
   wrapperCommands,
   isWriteOperation,
+  SHELL_INTERPRETERS,
 } from "../config";
 import type { BashSegment } from "./bash-parser";
 import { isFirstTokenRelativePath } from "./path-analysis";
@@ -69,17 +71,34 @@ export interface SegmentAnalysis {
   risk: SegmentRisk;
 }
 
+// ── Pre-compiled regexes for obfuscation detection ──
+
+const OBfus_VAR_INDIRECTION_RE = /\$\{!/;
+const OBfus_VAR_HOLDING_CMD_RE = /(?:^|;|\|\||&&)\s*\$[A-Z_][A-Z0-9_]*\s+\w/;
+const OBfus_CHAR_CONCAT_RE1 = /[a-z]"[a-z]/;
+const OBfus_CHAR_CONCAT_RE2 = /[a-z]'[a-z]/;
+const OBfus_BASE64_RE = /base64\s+[-d]/i;
+const OBfus_PRINTF_HEX_RE = /printf\s+.*\\x/i;
+const OBfus_XARGS_RM_RE = /xargs\s.*\brm\b/;
+const OBfus_XARGS_SH_RE = /xargs\s+sh\s+-c\b/;
+const OBfus_XARGS_BASH_RE = /xargs\s+bash\s+-c\b/;
+const OBfus_ALIAS_RE = /\b(alias|declare|typeset)\s+\w+=\s*(rm|sudo|curl|wget|ssh)\b/i;
+const GIT_CLEAN_FLAGS_RE = /-[fdx]/;
+const REDIRECT_ONLY_RE = /^[0-9]*&?>+/;
+const PIPELINE_RELATIVE_RE1 = /^\.\//;
+const PIPELINE_RELATIVE_RE2 = /^\.\.\//;
+
 // ── Pattern checks (shared by danger detection and risk reasons) ──
 
 export function detectObfuscation(cmd: string): { detected: boolean; techniques: string[] } {
   const techniques: string[] = [];
-  if (/\$\{!/.test(cmd)) techniques.push("variable indirection");
-  if (/(?:^|;|\|\||&&)\s*\$[A-Z_][A-Z0-9_]*\s+\w/.test(cmd)) techniques.push("variable holding command");
-  if (/[a-z]"[a-z]/.test(cmd) || /[a-z]'[a-z]/.test(cmd)) techniques.push("character concatenation");
-  if (/base64\s+[-d]/i.test(cmd) || /printf\s+.*\\x/i.test(cmd)) techniques.push("encoding/decoding");
-  if (/xargs\s.*\brm\b/.test(cmd)) techniques.push("indirect command via xargs");
-  if (/xargs\s+sh\s+-c\b/.test(cmd) || /xargs\s+bash\s+-c\b/.test(cmd)) techniques.push("xargs piping to shell interpreter");
-  if (/\b(alias|declare|typeset)\s+\w+=\s*(rm|sudo|curl|wget|ssh)\b/i.test(cmd)) techniques.push("alias/function obfuscation");
+  if (OBfus_VAR_INDIRECTION_RE.test(cmd)) techniques.push("variable indirection");
+  if (OBfus_VAR_HOLDING_CMD_RE.test(cmd)) techniques.push("variable holding command");
+  if (OBfus_CHAR_CONCAT_RE1.test(cmd) || OBfus_CHAR_CONCAT_RE2.test(cmd)) techniques.push("character concatenation");
+  if (OBfus_BASE64_RE.test(cmd) || OBfus_PRINTF_HEX_RE.test(cmd)) techniques.push("encoding/decoding");
+  if (OBfus_XARGS_RM_RE.test(cmd)) techniques.push("indirect command via xargs");
+  if (OBfus_XARGS_SH_RE.test(cmd) || OBfus_XARGS_BASH_RE.test(cmd)) techniques.push("xargs piping to shell interpreter");
+  if (OBfus_ALIAS_RE.test(cmd)) techniques.push("alias/function obfuscation");
   return { detected: techniques.length > 0, techniques };
 }
 
@@ -99,7 +118,7 @@ export function isGitDangerous(segment: string): boolean {
   const sub = args[1].toLowerCase();
   const subArgs = args.slice(2);
   if (sub === "rm") return true;
-  if (sub === "clean" && subArgs.some(a => /-[fdx]/.test(a))) return true;
+  if (sub === "clean" && subArgs.some(a => GIT_CLEAN_FLAGS_RE.test(a))) return true;
   if (sub === "reset" && subArgs.includes("--hard")) return true;
   if (sub === "push" && subArgs.some(a => a === "--force" || a === "--force-with-lease" || a === "-f")) return true;
   if (sub === "reflog" && subArgs.includes("expire")) return true;
@@ -131,12 +150,14 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   const segment = seg.text;
   const trimmed = segment.trim();
   const firstWord = getFirstWord(segment);
-  const args = trimmed.split(/\s+/);
-  const rest = args.slice(1);
   const ops = seg.ops;
 
-  // Run evaluators
-  const evaluatorResults = EVALUATORS.map(ev => ({ evaluator: ev.name, result: ev.evaluate(seg, cwd) }));
+  // Cache expensive checks to avoid duplicates across evaluators and pipeline analysis
+  const cachedObfuscation = detectObfuscation(segment);
+  const cachedGitDangerous = firstWord === "git" ? isGitDangerous(segment) : false;
+
+// Run evaluators with cached results
+  const evaluatorResults = EVALUATORS.map(ev => ({ evaluator: ev.name, result: ev.evaluate(seg, cwd, { firstWord, obfuscation: cachedObfuscation, gitDangerous: cachedGitDangerous }) }));
 
   // Merge evaluator results
   const aggregatedReasons: string[] = [];
@@ -167,16 +188,20 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   if (stages.length > 1) {
     for (let i = 1; i < stages.length; i++) {
       const stage = stages[i];
-      const stageCmd = getFirstWord(stage);
+      // Extract first token once (avoids double split in getFirstWord + isFirstTokenRelativePath)
+      const stageTokens = stage.trim().split(/\s+/);
+      const stageFirst = stageTokens[0];
+      const stageCmd = path.basename(stageFirst.toLowerCase());
+      const isRelativeFirst = PIPELINE_RELATIVE_RE1.test(stageFirst) || PIPELINE_RELATIVE_RE2.test(stageFirst);
 
-      if (isFirstTokenRelativePath(stage)) {
+      if (isRelativeFirst) {
         allStagesSimple = false;
         continue;
       }
 
       if (!isAllowedCommand(stageCmd)) {
         allStagesSimple = false;
-        if (new Set(["sh", "bash", "zsh", "fish"]).has(stageCmd)) {
+        if (SHELL_INTERPRETERS.has(stageCmd)) {
           const reason = "[Pipeline] pipe to a shell (possible remote code execution)";
           if (!aggregatedReasons.includes(reason)) {
             aggregatedReasons.push(reason);
@@ -226,11 +251,10 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
     }
   }
 
-  // Obfuscation
-  const obfuscation = detectObfuscation(segment);
-  const isObfuscated = containsCommandSubstitution(segment) || obfuscation.detected;
-  if (obfuscation.techniques.length > 0) {
-    for (const tech of obfuscation.techniques) {
+  // Obfuscation (use cached result)
+  const isObfuscated = containsCommandSubstitution(segment) || cachedObfuscation.detected;
+  if (cachedObfuscation.techniques.length > 0) {
+    for (const tech of cachedObfuscation.techniques) {
       const tagged = `[Shell] ${tech}`;
       if (!aggregatedReasons.includes(tagged)) aggregatedReasons.push(tagged);
     }
@@ -277,7 +301,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   // Derive booleans
   const hasDanger = aggregatedHasDanger;
   const writeRedirect = hasWriteRedirect(segment);
-  const isRedirectOnly = /^[0-9]*&?>+/.test(trimmed);
+  const isRedirectOnly = REDIRECT_ONLY_RE.test(trimmed);
 
   // isSimple: allowed command, no danger, no relative path, all pipeline stages simple
   let isSimple: boolean;

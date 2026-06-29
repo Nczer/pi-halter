@@ -14,6 +14,10 @@ const TRUSTED_PACKAGES = new Set([
   "openpyxl", "pandas", "pillow", "pymupdf", "pypdf", "reportlab",
 ]);
 
+/** Pre-compiled regexes for interpreter detection and file extension check. */
+const INTERPRETER_RE = /^(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv)/i;
+const FILE_EXT_RE = /\.\w{2,4}$/;
+
 /**
  * Extract package name from a --with value, stripping extras like [pptx].
  * "markitdown[pptx]" → "markitdown"
@@ -30,10 +34,7 @@ function arePackagesTrusted(value: string): boolean {
 
 /** Check if a resolved absolute path is inside any trusted script directory. */
 export function isTrustedScriptPath(resolvedPath: string): boolean {
-  return trustedScriptDirs.some(dir => {
-    const rel = path.relative(dir, resolvedPath);
-    return rel !== "" && !rel.startsWith("..");
-  });
+  return trustedScriptDirs.some(dir => resolvedPath.startsWith(dir + "/"));
 }
 
 /**
@@ -45,7 +46,7 @@ export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
   if (tokens.length < 2) return false;
 
   const cmd = tokens[0].toLowerCase();
-  if (!/^(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv)/i.test(cmd)) return false;
+  if (!INTERPRETER_RE.test(cmd)) return false;
 
   // Determine start index for script file search
   let startIdx = 1;
@@ -84,7 +85,7 @@ export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
   for (let i = startIdx; i < tokens.length; i++) {
     const token = tokens[i];
     if (token.startsWith("-")) continue; // skip flags like -c, -m, -u, etc.
-    if (/\.\w{2,4}$/.test(token)) {
+    if (FILE_EXT_RE.test(token)) {
       const resolved = path.resolve(cwd, expandTilde(token));
 
       // Trusted static directory only

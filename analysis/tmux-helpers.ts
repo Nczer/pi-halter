@@ -103,6 +103,12 @@ export function extractTmuxSendKeys(segment: string): string | null {
   return keys.length > 0 ? keys.join(" ") : null;
 }
 
+// ── Pre-compiled regexes for send-keys safety ──
+
+const SEND_KEYS_ENTER_RE1 = /\s+Enter$/;
+const SEND_KEYS_ENTER_RE2 = /^Enter$/;
+const SEND_KEYS_QUOTE_RE = /^("|')(.*\1)$/;
+
 // ── Tmux send-keys safety ──
 
 /**
@@ -111,11 +117,11 @@ export function extractTmuxSendKeys(segment: string): string | null {
  */
 export function isTmuxSendKeysSafe(keys: string): boolean {
   // Strip trailing "Enter" since it's just a keystroke, not part of the command
-  const cmd = keys.replace(/\s+Enter$/, "").replace(/^Enter$/, "").trim();
+  const cmd = keys.replace(SEND_KEYS_ENTER_RE1, "").replace(SEND_KEYS_ENTER_RE2, "").trim();
   if (!cmd) return true; // pressing Enter on empty line is safe
 
   // Handle shell-quoted arguments: strip outer quotes from the full key string
-  const unquoted = cmd.replace(/^("|')(.*\1)$/, "$2").trim();
+  const unquoted = cmd.replace(SEND_KEYS_QUOTE_RE, "$2").trim();
 
   // Split on whitespace to get the first command
   const firstToken = unquoted.split(/\s+/)[0];

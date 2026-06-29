@@ -4,7 +4,7 @@ import {
   getOutsideCwdPaths,
   resolvePathsToDirs,
 } from "../analysis/path-analysis";
-import { getFirstWord } from "../analysis/segment-helpers";
+import { getFirstWord, STARTS_WITH_REDIRECT_RE } from "../analysis/segment-helpers";
 import type { Store, AllowRules, BashRequest, Decision, BashPromptData } from "../decision-engine";
 
 // ── Fast pre-check (avoids tree-sitter for trivial commands) ──
@@ -91,21 +91,26 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
     return { kind: "auto-allow" };
   }
 
+  // Pre-compute per-segment properties (reused multiple times)
+  const segIsSafeSubcommand = analysis.segments.map(seg => isSafeSubcommand(seg));
+
   // Auto-allow if all segments are safe subcommands (npm test, tsc, etc.)
-  if (analysis.segments.every(seg => isSafeSubcommand(seg)) && !analysis.hasUnsafePattern && outsidePaths.length === 0) {
+  if (segIsSafeSubcommand.every(Boolean) && !analysis.hasUnsafePattern && outsidePaths.length === 0) {
     return { kind: "auto-allow" };
   }
 
   // Auto-allow if all signatures are either previously approved or in the static allowlist
   const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
+  // Pre-compute first words for all signatures
+  const sigFirstWords = analysis.signatures.map(getFirstWord);
   const isSigApproved = (sig: string, segIdx: number) => {
     if (store.hasAllowedBash(sig)) return true;
     if (store.hasAllowedBashPrefix(sig)) return true;
     // User rule: getUserRuleAction handles trailing wildcard stripping
     if (store.getUserRuleAction("bash", sig) === "allow") return true;
     if (relPathIdxSet.has(segIdx)) return false;
-    if (isSafeSubcommand(analysis.segments[segIdx])) return true;
-    return isAllowedCommand(getFirstWord(sig));
+    if (segIsSafeSubcommand[segIdx]) return true;
+    return isAllowedCommand(sigFirstWords[segIdx]);
   };
 
   // User rules approved every segment — explicit user intent, bypass safety heuristics
@@ -124,14 +129,14 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   const needsCommandApproval = !analysis.allSimple;
   const needsPathApproval = outsidePaths.length > 0;
 
-  const isRedirectOnly = (text: string) => /^[0-9]*&?>+/.test(text.trim());
+  const isRedirectOnly = (text: string) => STARTS_WITH_REDIRECT_RE.test(text.trim());
   const nonAllowlistedSegmentIndices = analysis.signatures
     .map((sig, i) =>
       isRedirectOnly(analysis.segments[i])
         ? -1
-        : isSafeSubcommand(analysis.segments[i])
+        : segIsSafeSubcommand[i]
         ? -1
-        : isAllowedCommand(getFirstWord(sig)) ? -1 : i,
+        : isAllowedCommand(sigFirstWords[i]) ? -1 : i,
     )
     .filter(i => i >= 0);
   const nonAllowlistedSigs = nonAllowlistedSegmentIndices.map(i => analysis.signatures[i]);
@@ -144,10 +149,7 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   }
   if (needsCommandApproval && nonAllowlistedSigs.length > 0) {
     allowRules.bashSigs = nonAllowlistedSigs;
-    const pmSigs = nonAllowlistedSigs.filter(sig => {
-      const cmd = getFirstWord(sig);
-      return PACKAGE_MANAGERS.has(cmd);
-    });
+    const pmSigs = nonAllowlistedSegmentIndices.filter(i => PACKAGE_MANAGERS.has(sigFirstWords[i])).map(i => analysis.signatures[i]);
     const broaderSigs = pmSigs.length > 0
       ? [...new Set(pmSigs.map(getFirstWord))]
       : [];

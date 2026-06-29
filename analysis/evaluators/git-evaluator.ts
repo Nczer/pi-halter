@@ -1,15 +1,14 @@
-import { EvaluatorResult, RiskEvaluator } from "./types";
+import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
-import { isGitDangerous } from "../segment-analysis";
 
 /**
  * Evaluates git commands for dangerous operations.
  */
 export const GitEvaluator: RiskEvaluator = {
   name: "git",
-  evaluate(seg, cwd): EvaluatorResult {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
-    const firstWord = getFirstWord(segment);
+    const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const args = segment.trim().split(/\s+/);
     const rest = args.slice(1);
     const sub = rest[0];
@@ -25,7 +24,8 @@ export const GitEvaluator: RiskEvaluator = {
 
     reasons.push(sub ? `git ${sub} (git command)` : "git (git command)");
 
-    if (isGitDangerous(segment)) {
+    // Use cached result
+    if (cache?.gitDangerous) {
       hasDanger = true;
       setSeverity("high");
     }

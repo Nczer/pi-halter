@@ -10,19 +10,49 @@ export { splitOnPipe as splitPipeline };
 
 const CMD_SUBST_MARKER = "__CMD_SUBST__";
 
+// ── Pre-compiled regexes for hot paths ──
+
+/** Detect command substitution in quoted strings. */
+const CMD_SUBST_IN_QUOTE_RE = /\$\s*\(/;
+const BACKTICK_RE = /`/;
+/** Write redirect patterns. */
+export const STARTS_WITH_REDIRECT_RE = /^[0-9]*&?>+/;
+const WRITE_REDIRECT_RE = />+\s*\S/;
+const IN_TEST_RE = /\[\s.*\]/;
+const TEST_CMD_RE = /test\s/;
+/** Null redirect stripping. */
+const NULL_REDIRECT_RE1 = /[0-9]*&?>+\s*(?:\/dev\/(?:null|stderr))\b/g;
+const NULL_REDIRECT_RE2 = /[0-9]*>&[0-9]+/g;
+/** Signature extraction. */
+const SIG_REDIRECT_RE = /&?[0-9]*>>?\s*\S+/g;
+const SIG_INPUT_RE = /<\s*\S+/g;
+/** Wrapper arg skip. */
+const WRAPPER_ENV_ASSIGN_RE = /=/;
+const WRAPPER_TIMEOUT_RE = /^\d+(\.\d+)?(?:[smhd])?$/;
+const WRAPPER_NICE_RE = /^\d+$/;
+/** Find/fd/rg exec detection. */
+const FIND_EXEC_RE = /-(?:exec|execdir)\b\s+(\S+)/;
+const FD_EXEC_RE = /-(?:x|X)\b\s+(\S+)/;
+const RG_PRE_RE = /--pre(?:=|\s+)(\S+)/;
+/** stripQuotedStrings. */
+const QUOTE_DOUBLE_RE = /"(?:[^"\\\\]|\\\\.)*"/g;
+const QUOTE_SINGLE_RE = /'[^']*'/g;
+const QUOTE_DOLLAR_RE = /\$'[^']*'/g;
+const QUOTE_COMMENT_RE = /\s*#.*$/gm;
+
 /** Check if a string contains command substitution markers from stripQuotedStrings. */
 export function containsCommandSubstitution(s: string): boolean {
   return s.includes(CMD_SUBST_MARKER);
 }
 
 function stripQuotedStrings(cmd: string): string {
-  let s = cmd.replace(/"(?:[^"\\]|\\.)*"/g, (match) => {
-    if (/\$\s*\(/.test(match) || /`/.test(match)) return CMD_SUBST_MARKER;
+  let s = cmd.replace(QUOTE_DOUBLE_RE, (match) => {
+    if (CMD_SUBST_IN_QUOTE_RE.test(match) || BACKTICK_RE.test(match)) return CMD_SUBST_MARKER;
     return "__STR__";
   });
-  s = s.replace(/'[^']*'/g, "__STR__");
-  s = s.replace(/\$'[^']*'/g, "__STR__");
-  s = s.replace(/\s*#.*$/gm, "");
+  s = s.replace(QUOTE_SINGLE_RE, "__STR__");
+  s = s.replace(QUOTE_DOLLAR_RE, "__STR__");
+  s = s.replace(QUOTE_COMMENT_RE, "");
   return s;
 }
 
@@ -34,27 +64,22 @@ export function getFirstWord(segment: string): string {
 /** Strip /dev/null, /dev/stderr redirects and fd-to-fd redirects from a command string. */
 export function stripNullRedirects(cmd: string): string {
   return cmd
-    .replace(/[0-9]*&?>+\s*(?:\/dev\/(?:null|stderr))\b/g, "")
-    .replace(/[0-9]*>&[0-9]+/g, "");
+    .replace(NULL_REDIRECT_RE1, "")
+    .replace(NULL_REDIRECT_RE2, "");
 }
 
-/**
- * Extract a command signature, stripping redirects and quotes.
- * For pipelines, uses the first command's signature.
- * For package managers, includes the subcommand for granular allow control.
- */
 /**
  * Check if a command string contains a write redirect (> or >> to a file).
  * Ignores /dev/null, /dev/stderr, fd-to-fd redirects, and test/[ conditionals.
  */
 export function hasWriteRedirect(cmd: string): boolean {
   const trimmed = cmd.trim();
-  if (/^[0-9]*&?>+/.test(trimmed)) {
+  if (STARTS_WITH_REDIRECT_RE.test(trimmed)) {
     if (!stripNullRedirects(trimmed).trim()) return false;
   }
   const stripped = stripNullRedirects(cmd);
-  if (/>+\s*\S/.test(stripped)) {
-    const inTest = /\[\s.*\]/.test(stripped) || /test\s/.test(stripped);
+  if (WRITE_REDIRECT_RE.test(stripped)) {
+    const inTest = IN_TEST_RE.test(stripped) || TEST_CMD_RE.test(stripped);
     if (!inTest) return true;
   }
   return false;
@@ -65,10 +90,10 @@ export function hasWriteRedirect(cmd: string): boolean {
  */
 export function skipWrapperArg(wrapper: string, arg: string): boolean {
   if (arg.startsWith("-")) return true;
-  if (wrapper === "env" && /=/.test(arg) && !arg.startsWith("/")) return true;
-  if (wrapper === "timeout" && /^\d+(\.\d+)?(?:[smhd])?$/.test(arg)) return true;
-  if (wrapper === "nice" && /^\d+$/.test(arg)) return true;
-  if (wrapper === "ionice" && /^\d+$/.test(arg)) return true;
+  if (wrapper === "env" && WRAPPER_ENV_ASSIGN_RE.test(arg) && !arg.startsWith("/")) return true;
+  if (wrapper === "timeout" && WRAPPER_TIMEOUT_RE.test(arg)) return true;
+  if (wrapper === "nice" && WRAPPER_NICE_RE.test(arg)) return true;
+  if (wrapper === "ionice" && WRAPPER_NICE_RE.test(arg)) return true;
   return false;
 }
 
@@ -90,11 +115,16 @@ export function isWrapperRunningWrite(segment: string, includeRelativePath = tru
   return false;
 }
 
+/**
+ * Extract a command signature, stripping redirects and quotes.
+ * For pipelines, uses the first command's signature.
+ * For package managers, includes the subcommand for granular allow control.
+ */
 export function getCommandSignature(segment: string): string {
   const firstCmd = splitOnPipe(segment)[0] ?? segment;
   const cleaned = firstCmd
-    .replace(/&?[0-9]*>>?\s*\S+/g, "")
-    .replace(/<\s*\S+/g, "")
+    .replace(SIG_REDIRECT_RE, "")
+    .replace(SIG_INPUT_RE, "")
     .trim();
   const tokens = stripQuotedStrings(cleaned).split(/\s+/);
   const cmd = tokens[0].toLowerCase();
@@ -120,7 +150,7 @@ export function getCommandSignature(segment: string): string {
  * Check if find/fd/rg execution triggers a write operation.
  */
 export function isFindExecWrite(segment: string): boolean {
-  const execMatch = segment.match(/-(?:exec|execdir)\b\s+(\S+)/);
+  const execMatch = segment.match(FIND_EXEC_RE);
   if (!execMatch) return false;
   const execCmd = execMatch[1].toLowerCase();
   const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
@@ -128,7 +158,7 @@ export function isFindExecWrite(segment: string): boolean {
 }
 
 export function isFdExecWrite(segment: string): boolean {
-  const execMatch = segment.match(/-(?:x|X)\b\s+(\S+)/);
+  const execMatch = segment.match(FD_EXEC_RE);
   if (!execMatch) return false;
   const execCmd = execMatch[1].toLowerCase();
   const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
@@ -136,7 +166,7 @@ export function isFdExecWrite(segment: string): boolean {
 }
 
 export function isRgPreWrite(segment: string): boolean {
-  const preMatch = segment.match(/--pre(?:=|\s+)(\S+)/);
+  const preMatch = segment.match(RG_PRE_RE);
   if (!preMatch) return false;
   const preCmd = preMatch[1].toLowerCase();
   const afterPre = segment.slice(preMatch.index! + preMatch[0].length);

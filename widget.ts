@@ -6,13 +6,14 @@ import { store } from "./store";
 
 /** Remove paths that are sub-paths of another entry in the same list. */
 export function filterSubPaths(paths: string[]): string[] {
-  const sorted = [...paths].sort((a, b) => a.length - b.length);
+  const sorted = [...paths].sort();
   const result: string[] = [];
   for (const p of sorted) {
-    const isSubPath = result.some(parent => p.startsWith(parent.endsWith('/') ? parent : parent + '/'));
-    if (!isSubPath) {
-      result.push(p);
+    let isSub = false;
+    for (const parent of result) {
+      if (p === parent || p.startsWith(parent + "/")) { isSub = true; break; }
     }
+    if (!isSub) result.push(p);
   }
   return result;
 }

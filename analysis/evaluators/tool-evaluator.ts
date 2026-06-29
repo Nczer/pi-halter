@@ -1,4 +1,4 @@
-import { EvaluatorResult, RiskEvaluator } from "./types";
+import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
 import {
   getFirstWord,
   isFindExecWrite,
@@ -15,9 +15,9 @@ import {
  */
 export const ToolEvaluator: RiskEvaluator = {
   name: "tool",
-  evaluate(seg, cwd): EvaluatorResult {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
-    const firstWord = getFirstWord(segment);
+    const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const args = segment.trim().split(/\s+/);
     const rest = args.slice(1);
     const reasons: string[] = [];

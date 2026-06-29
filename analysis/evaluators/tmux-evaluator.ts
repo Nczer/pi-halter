@@ -1,10 +1,10 @@
-import { EvaluatorResult, RiskEvaluator } from "./types";
+import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
 import {
   getTmuxSubcommand,
   extractTmuxSendKeys,
   isTmuxSendKeysSafe,
-  isTmuxDangerous,
+  TMUX_SAFE_SUBCOMMANDS,
   TMUX_DANGEROUS_DESCRIPTIONS,
 } from "../tmux-helpers";
 
@@ -13,9 +13,9 @@ import {
  */
 export const TmuxEvaluator: RiskEvaluator = {
   name: "tmux",
-  evaluate(seg, cwd): EvaluatorResult {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
-    const firstWord = getFirstWord(segment);
+    const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const reasons: string[] = [];
     let severity: "high" | "medium" | null = null;
     let hasDanger = false;
@@ -26,7 +26,8 @@ export const TmuxEvaluator: RiskEvaluator = {
     if (firstWord !== "tmux") return { reasons, severity, hasDanger, isSimple: undefined };
 
     const tmuxSub = getTmuxSubcommand(segment);
-    if (isTmuxDangerous(segment)) {
+    const isDangerous = !tmuxSub || !TMUX_SAFE_SUBCOMMANDS.has(tmuxSub);
+    if (isDangerous) {
       // send-keys inherits session auto-allow: safe keys → auto-allow, unsafe keys → prompt
       if (tmuxSub === "send-keys") {
         const keys = extractTmuxSendKeys(segment);
