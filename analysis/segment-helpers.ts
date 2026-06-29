@@ -27,9 +27,64 @@ export function getFirstWord(segment: string): string {
   return path.basename(word);
 }
 
-/** Split a segment into pipeline parts (on |). */
-export function splitPipeline(segment: string): string[] {
-  return segment.split("|").map(s => s.trim()).filter(Boolean);
+/**
+ * Split a command on pipe operator | (not ||).
+ * Respects single and double quotes.
+ */
+export function splitPipeline(cmd: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let i = 0;
+
+  while (i < cmd.length) {
+    const ch = cmd[i];
+    const next = i + 1 < cmd.length ? cmd[i + 1] : null;
+
+    if (inSingleQuote) {
+      current += ch;
+      if (ch === "'") inSingleQuote = false;
+      i++;
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      current += ch;
+      if (ch === '"' && (i === 0 || cmd[i - 1] !== "\\")) inDoubleQuote = false;
+      i++;
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingleQuote = true;
+      current += ch;
+      i++;
+      continue;
+    }
+
+    if (ch === '"') {
+      inDoubleQuote = true;
+      current += ch;
+      i++;
+      continue;
+    }
+
+    // Pipe operator (not ||)
+    if (ch === "|" && next !== "|") {
+      parts.push(current.trim());
+      current = "";
+      i++;
+      continue;
+    }
+
+    current += ch;
+    i++;
+  }
+
+  const last = current.trim();
+  if (last) parts.push(last);
+  return parts;
 }
 
 /** Strip /dev/null, /dev/stderr redirects and fd-to-fd redirects from a command string. */
@@ -92,7 +147,7 @@ export function isWrapperRunningWrite(segment: string, includeRelativePath = tru
 }
 
 export function getCommandSignature(segment: string): string {
-  const firstCmd = segment.split("|")[0].trim();
+  const firstCmd = splitPipeline(segment)[0] ?? segment;
   const cleaned = firstCmd
     .replace(/&?[0-9]*>>?\s*\S+/g, "")
     .replace(/<\s*\S+/g, "")
