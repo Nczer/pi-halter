@@ -255,15 +255,18 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
     aggregatedSeverity = "high";
   }
 
-  // Regex-based safety net
+  // Regex-based safety net — single pass, results reused for isUnsafe
   const isLookupOrEcho = LOOKUP_COMMANDS.has(firstWord) || ECHO_COMMANDS.has(firstWord) || PROCESS_INSPECTION_COMMANDS.has(firstWord);
   const isTrusted = isTrustedScriptCommand(segment, cwd);
 
+  let matchedDangerousCommand = false;
+  let matchedDangerousContext = false;
   if (!isTrusted && !isLookupOrEcho) {
     for (const { pattern, label } of dangerousCommandPatterns) {
       const tagged = `[Pattern] ${label}`;
       if (pattern.test(firstWord) && !aggregatedReasons.includes(tagged)) {
         aggregatedReasons.push(tagged);
+        matchedDangerousCommand = true;
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
       }
     }
@@ -271,6 +274,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       const tagged = `[Pattern] ${label}`;
       if (pattern.test(segment) && !aggregatedReasons.includes(tagged)) {
         aggregatedReasons.push(tagged);
+        matchedDangerousContext = true;
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
       }
     }
@@ -300,10 +304,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   if (isRedirectOnly && !writeRedirect) {
     isUnsafe = false;
   } else {
-    isUnsafe = hasDanger || isObfuscated || (!isTrusted && !isLookupOrEcho && (
-      dangerousCommandPatterns.some(({ pattern }) => pattern.test(firstWord))
-      || dangerousContextPatterns.some(({ pattern }) => pattern.test(segment))
-    ));
+    isUnsafe = hasDanger || isObfuscated || matchedDangerousCommand || matchedDangerousContext;
   }
 
   return { isSimple, isUnsafe, hasDanger, risk: { severity: aggregatedSeverity, reasons: aggregatedReasons } };
