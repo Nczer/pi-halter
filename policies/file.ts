@@ -44,24 +44,32 @@ export function decideFile(req: FileRequest, store: Store): Decision {
   if (req.toolName === "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" }; // write implies read
   if (req.toolName !== "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" };
 
-  const autoAllowedDirs = req.toolName === "read"
-    ? new Set([...store.listAllowedReadDirs(), ...store.listAllowedWriteDirs()]) // write dirs imply read
-    : store.listAllowedWriteDirs();
-
-  if (!isInsideCwd(resolved, req.cwd) && isInsideAutoAllowedDir(resolved, autoAllowedDirs)) {
-    return { kind: "auto-allow" };
+  // Session auto-allowed dirs (write dirs imply read)
+  // Cache to avoid redundant Set copies from listAllowed*()
+  const allowedReadDirs = store.listAllowedReadDirs();
+  const allowedWriteDirs = store.listAllowedWriteDirs();
+  if (req.toolName === "read") {
+    if (isInsideAutoAllowedDir(resolved, allowedReadDirs)) return { kind: "auto-allow" };
+    if (isInsideAutoAllowedDir(resolved, allowedWriteDirs)) return { kind: "auto-allow" };
+  } else {
+    if (isInsideAutoAllowedDir(resolved, allowedWriteDirs)) return { kind: "auto-allow" };
   }
+
+  // Static config paths
   if (req.toolName === "read" && isAllowedReadPath(resolved)) return { kind: "auto-allow" };
   if (req.toolName !== "read" && isAllowedWritePath(resolved)) return { kind: "auto-allow" };
-  if (req.toolName === "read" && isInsideCwd(resolved, req.cwd) && !warnResult.warned) return { kind: "auto-allow" };
+
+  // Inside cwd (read only, unless warned)
+  const insideCwd = isInsideCwd(resolved, req.cwd);
+  if (req.toolName === "read" && insideCwd && !warnResult.warned) return { kind: "auto-allow" };
   const action = req.toolName.charAt(0).toUpperCase() + req.toolName.slice(1);
   const isWriteOp = req.toolName !== "read";
 
-  // Detect symlink: compare parent of original path vs parent of resolved path
+  // Pre-compute values reused multiple times
+  const resolvedDir = path.dirname(resolved);
   const originalParent = path.dirname(expandTilde(req.filePath));
-  const resolvedParent = path.dirname(resolved);
-  const symlinkHint = originalParent !== resolvedParent
-    ? `${originalParent} → ${resolvedParent}`
+  const symlinkHint = originalParent !== resolvedDir
+    ? `${originalParent} → ${resolvedDir}`
     : null;
 
   const promptData: FilePromptData = {
@@ -70,25 +78,25 @@ export function decideFile(req: FileRequest, store: Store): Decision {
     filePath: req.filePath,
     resolved,
     cwd: req.cwd,
-    outsideDir: isInsideCwd(resolved, req.cwd) ? null : path.dirname(resolved),
+    outsideDir: insideCwd ? null : resolvedDir,
     isWriteOp,
     deniedRule: deniedResult.matchedRule,
     warnedRule: warnResult.matchedRule,
     symlinkHint,
   };
 
-  const allowRules: AllowRules = isInsideCwd(resolved, req.cwd)
+  const allowRules: AllowRules = insideCwd
     ? (isWriteOp ? { writePaths: [resolved], readPaths: [resolved] } : { readPaths: [resolved] })
-    : (isWriteOp ? { writeDirs: [path.dirname(resolved)], readDirs: [path.dirname(resolved)] } : { readDirs: [path.dirname(resolved)] });
+    : (isWriteOp ? { writeDirs: [resolvedDir], readDirs: [resolvedDir] } : { readDirs: [resolvedDir] });
 
-  const allowFileRules = isInsideCwd(resolved, req.cwd)
+  const allowFileRules = insideCwd
     ? undefined
     : (isWriteOp ? { writePaths: [resolved], readPaths: [resolved] } : { readPaths: [resolved] });
 
   // Directory-level allow for inside-cwd files (broader than file-only)
-  const allowBroaderRules = isInsideCwd(resolved, req.cwd)
-    ? (isWriteOp ? { writeDirs: [path.dirname(resolved)], readDirs: [path.dirname(resolved)] } : { readDirs: [path.dirname(resolved)] })
+  const allowBroaderRules = insideCwd
+    ? (isWriteOp ? { writeDirs: [resolvedDir], readDirs: [resolvedDir] } : { readDirs: [resolvedDir] })
     : undefined;
 
-  return { kind: "prompt", promptData, allowRules, allowFileRules, allowBroaderRules, includeBroaderOption: isInsideCwd(resolved, req.cwd) };
+  return { kind: "prompt", promptData, allowRules, allowFileRules, allowBroaderRules, includeBroaderOption: insideCwd };
 }

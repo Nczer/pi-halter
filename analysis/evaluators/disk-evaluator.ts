@@ -1,4 +1,4 @@
-import { EvaluatorResult, RiskEvaluator } from "./types";
+import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
 
 /**
@@ -6,9 +6,9 @@ import { getFirstWord } from "../segment-helpers";
  */
 export const DiskEvaluator: RiskEvaluator = {
   name: "disk",
-  evaluate(seg, cwd): EvaluatorResult {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
-    const firstWord = getFirstWord(segment);
+    const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const args = segment.trim().split(/\s+/);
     const rest = args.slice(1);
     const reasons: string[] = [];

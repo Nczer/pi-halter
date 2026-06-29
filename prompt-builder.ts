@@ -76,10 +76,15 @@ function buildBashPrompt(
           needsCommandApproval, needsPathApproval, nonAllowedSegmentIndices } = data;
   const nonAllowedSet = new Set(nonAllowedSegmentIndices);
 
-  // Pre-compute tag width for risk reason alignment (reused in body and tier2)
-  const tagWidth = riskDangerous
-    ? Math.max(...riskReasons.map(r => { const m = r.match(/^\[.+?\]\s*/); return m ? m[0].length : 0; }))
-    : 0;
+  // Pre-compute aligned risk reasons (reused in body and tier2)
+  const alignedReasons = riskDangerous
+    ? riskReasons.map(r => {
+        const m = r.match(/^(\[.+?\]\s*)(.*)/);
+        const tagLen = m ? m[1].length : 0;
+        return { tagLen, tag: m ? m[1] : "", rest: m ? m[2] : r };
+      })
+    : [];
+  const tagWidth = alignedReasons.length ? Math.max(...alignedReasons.map(r => r.tagLen)) : 0;
 
   const hasBoth = needsCommandApproval && needsPathApproval;
   const uniqueSigs = [...new Set(signatures)];
@@ -103,23 +108,18 @@ function buildBashPrompt(
   }
   if (riskDangerous) {
     body += `\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n`;
-    for (const reason of riskReasons) {
-      const lines = reason.split("\n");
-      const m = lines[0].match(/^(\[.+?\]\s*)(.*)/);
-      if (m) {
-        const tag = m[1].padEnd(tagWidth);
-        body += `  \u2022 ${tag} ${m[2]}\n`;
-      } else {
-        body += `  \u2022 ${lines[0]}\n`;
-      }
-      for (let i = 1; i < lines.length; i++) body += `    ${lines[i]}\n`;
+    for (let i = 0; i < alignedReasons.length; i++) {
+      const { tag, rest } = alignedReasons[i];
+      const lines = riskReasons[i].split("\n");
+      body += `  \u2022 ${tag.padEnd(tagWidth)} ${rest}\n`;
+      for (let j = 1; j < lines.length; j++) body += `    ${lines[j]}\n`;
     }
   }
 
   // Segment breakdown: formatted for tmux chains, plain list for others
   if (segments.length > 1) {
     // Guard: skip expensive format pass when no segment is a tmux command
-    const hasTmuxSegment = segments.some(s => isTmuxCommand(s.trim()));
+    const hasTmuxSegment = segments.some(isTmuxCommand);
     if (hasTmuxSegment) {
       const formattedCommand = formatBashCommand(command, nonAllowedSet, segments);
       body += `\nSegments:\n${formattedCommand}\n`;
@@ -141,11 +141,7 @@ function buildBashPrompt(
   // Tier 2 — "always (everything)" confirmation
   let dangerWarning = "";
   if (riskDangerous) {
-    const aligned = riskReasons.map(r => {
-      const m = r.match(/^(\[.+?\]\s*)(.*)/);
-      if (m) return `  \u2022 ${m[1].padEnd(tagWidth)} ${m[2]}`;
-      return `  \u2022 ${r}`;
-    });
+    const aligned = alignedReasons.map(({ tag, rest }) => `  \u2022 ${tag.padEnd(tagWidth)} ${rest}`);
     dangerWarning = `\n\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n${aligned.join("\n")}`;
   }
   const tier2Everything = hasBoth

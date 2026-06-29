@@ -39,6 +39,8 @@ function getParser(): Promise<TSParser> {
 
 /** Node types whose subtrees are not command arguments. */
 const SKIP_TYPES = new Set(["heredoc_body", "heredoc_end", "comment"]);
+/** Node types that represent a shell word (for command name/argument detection). */
+const WORD_TYPES = new Set(["word", "concatenation", "string", "raw_string"]);
 
 /** Resolve the shell value of an argument node (quote removal, concatenation). */
 function resolveNodeText(node: TSNode): string {
@@ -51,24 +53,17 @@ function resolveNodeText(node: TSNode): string {
         ? t.slice(1, -1)
         : t;
     }
-    case "string": {
-      let result = "";
-      for (let i = 0; i < node.childCount; i++) {
-        const child = node.child(i);
-        if (!child || child.type === '"') continue;
-        result += resolveNodeText(child);
-      }
-      return result;
-    }
     case "string_content":
     case "simple_expansion":
     case "expansion":
       return node.text;
+    case "string":
     case "concatenation": {
       let result = "";
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i);
         if (!child) continue;
+        if (node.type === "string" && child.type === '"') continue;
         result += resolveNodeText(child);
       }
       return result;
@@ -95,23 +90,12 @@ function extractCommandArgs(node: TSNode): string[] {
     if (child.type === "variable_assignment") continue;
 
     // First word-like child is the command name if no explicit command_name node
-    if (
-      !seenName &&
-      (child.type === "word" ||
-        child.type === "concatenation" ||
-        child.type === "string" ||
-        child.type === "raw_string")
-    ) {
+    if (!seenName && WORD_TYPES.has(child.type)) {
       seenName = true;
       continue;
     }
 
-    if (
-      child.type === "word" ||
-      child.type === "concatenation" ||
-      child.type === "string" ||
-      child.type === "raw_string"
-    ) {
+    if (WORD_TYPES.has(child.type)) {
       args.push(resolveNodeText(child));
       continue;
     }
@@ -133,12 +117,7 @@ function extractRedirectPaths(node: TSNode): string[] {
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
-    if (
-      child.type === "word" ||
-      child.type === "concatenation" ||
-      child.type === "string" ||
-      child.type === "raw_string"
-    ) {
+    if (WORD_TYPES.has(child.type)) {
       paths.push(resolveNodeText(child));
     }
   }
@@ -171,6 +150,7 @@ const SAFE_SYSTEM_PATHS = new Set([
 ]);
 
 const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
+const BARE_SLASH_RE = /^\/+$/;
 
 /** Check if a token looks like a filesystem path worth resolving. */
 function isPathCandidate(token: string): boolean {
@@ -187,7 +167,7 @@ function isPathCandidate(token: string): boolean {
   if (token.startsWith("@") && !token.startsWith("@/")) return false;
 
   // Bare slashes (// JS comments, lone /)
-  if (/^\/+$/.test(token)) return false;
+  if (BARE_SLASH_RE.test(token)) return false;
 
   // Must look like a path
   return (
@@ -215,12 +195,7 @@ function getCommandName(node: TSNode): string | null {
       return null;
     }
     // First word-like child is the command name
-    if (
-      child.type === "word" ||
-      child.type === "concatenation" ||
-      child.type === "string" ||
-      child.type === "raw_string"
-    ) {
+    if (WORD_TYPES.has(child.type)) {
       return resolveNodeText(child).toLowerCase();
     }
   }

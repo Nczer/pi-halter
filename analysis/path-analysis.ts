@@ -8,13 +8,18 @@ export { expandTilde }; // Re-export for existing importers
 
 // ── Relative path detection ──
 
+/** Pre-compiled regex for relative path detection (./foo, ../foo). */
+const RELATIVE_PATH_RE = /^\.\/|^\.\.\//;
+/** Pre-compiled regex for .env.* pattern detection. */
+const ENV_FILE_RE = /^\.env\.[^/]*$/;
+
 /**
  * Check if the first token is a relative path (./foo, ../foo).
  * Absolute paths (/bin/cat, /usr/bin/find) are allowed through.
  */
 export function isFirstTokenRelativePath(segment: string): boolean {
   const token = segment.trim().split(/\s+/)[0];
-  return /^\.\/|^\.\./.test(token);
+  return RELATIVE_PATH_RE.test(token);
 }
 
 /**
@@ -24,7 +29,7 @@ export function isFirstTokenRelativePath(segment: string): boolean {
 export function hasRelativePath(segment: string): boolean {
   const tokens = segment.trim().split(/\s+/);
   for (const token of tokens) {
-    if (/^\.\/|^\.\./.test(token)) return true;
+    if (RELATIVE_PATH_RE.test(token)) return true;
   }
   return false;
 }
@@ -58,11 +63,10 @@ export function resolvePathReal(inputPath: string, cwd: string): string {
 
 // ── Path containment checks ──
 
-/** Check if child is inside (or equal to) parent, using path.relative for correctness. */
+/** Check if child is inside (or equal to) parent. Uses prefix check for O(1) performance. */
 function isChildOf(child: string, parent: string): boolean {
   if (child === parent) return true;
-  const rel = path.relative(parent, child);
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  return child.startsWith(parent + "/");
 }
 
 export function isInsideCwd(resolved: string, cwd: string): boolean {
@@ -70,7 +74,11 @@ export function isInsideCwd(resolved: string, cwd: string): boolean {
 }
 
 export function isInsideAutoAllowedDir(resolved: string, dirs: Set<string>): boolean {
-  return dirs.has(resolved) || [...dirs].some(d => isChildOf(resolved, d));
+  if (dirs.has(resolved)) return true;
+  for (const d of dirs) {
+    if (isChildOf(resolved, d)) return true;
+  }
+  return false;
 }
 
 export function isAllowedReadPath(resolved: string): boolean {
@@ -109,11 +117,9 @@ export function isProjectPiPath(filePath: string, cwd: string): boolean {
 
 export function isPathDenied(filePath: string, cwd: string): { denied: boolean; matchedRule: string | null } {
   const resolved = resolvePathReal(expandTilde(filePath), cwd);
-  const basename = path.basename(filePath);
-  const resolvedBasename = path.basename(resolved);
-  const basenamesToCheck = new Set([basename, resolvedBasename]);
+  const names = [path.basename(filePath), path.basename(resolved)];
 
-  for (const nameToCheck of basenamesToCheck) {
+  for (const nameToCheck of names) {
     for (const denied of deniedPaths) {
       if (nameToCheck === denied) return { denied: true, matchedRule: denied };
       if (resolved.includes(`/${denied}/`) || resolved.endsWith(`/${denied}`)) {
@@ -126,11 +132,9 @@ export function isPathDenied(filePath: string, cwd: string): { denied: boolean; 
 
 export function isPathWarned(filePath: string, cwd: string): { warned: boolean; matchedRule: string | null } {
   const resolved = resolvePathReal(expandTilde(filePath), cwd);
-  const basename = path.basename(filePath);
-  const resolvedBasename = path.basename(resolved);
-  const basenamesToCheck = new Set([basename, resolvedBasename]);
+  const names = [path.basename(filePath), path.basename(resolved)];
 
-  for (const nameToCheck of basenamesToCheck) {
+  for (const nameToCheck of names) {
     for (const warn of warnPaths) {
       if (nameToCheck === warn) return { warned: true, matchedRule: warn };
       if (resolved.includes(`/${warn}/`) || resolved.endsWith(`/${warn}`)) {
@@ -138,7 +142,7 @@ export function isPathWarned(filePath: string, cwd: string): { warned: boolean; 
       }
     }
     // .env.* pattern (e.g. .env.production, .env.development)
-    if (/^\.env\.[^/]*$/.test(nameToCheck)) {
+    if (ENV_FILE_RE.test(nameToCheck)) {
       return { warned: true, matchedRule: ".env.*" };
     }
   }

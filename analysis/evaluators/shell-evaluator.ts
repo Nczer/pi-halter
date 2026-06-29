@@ -1,4 +1,4 @@
-import { EvaluatorResult, RiskEvaluator } from "./types";
+import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
 import {
   dangerousSedFlags,
   dangerousPerlFlags,
@@ -10,7 +10,9 @@ import {
   hasWriteRedirect,
   isWrapperRunningWrite,
 } from "../segment-helpers";
-import { detectObfuscation } from "../segment-analysis";
+
+/** Pre-compiled regex for heredoc-to-interpreter detection. */
+const HEREDOC_INTERPRETER_RE = /^(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv|bash|sh|zsh|fish|csh|tcsh|ksh)$/i;
 
 /**
  * Evaluates shell constructs: subshells, heredocs, redirects, sed/perl, obfuscation, wrappers.
@@ -18,9 +20,9 @@ import { detectObfuscation } from "../segment-analysis";
  */
 export const ShellEvaluator: RiskEvaluator = {
   name: "shell",
-  evaluate(seg, cwd): EvaluatorResult {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
-    const firstWord = getFirstWord(segment);
+    const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const reasons: string[] = [];
     let severity: "high" | "medium" | null = null;
     let hasDanger = false;
@@ -37,9 +39,7 @@ export const ShellEvaluator: RiskEvaluator = {
 
     // Heredoc to interpreter
     const hasHeredoc = seg.ops.includes("<<") || seg.ops.includes("<<<");
-    const isInterpreterWithHeredoc = hasHeredoc && new RegExp(
-      "^(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv|bash|sh|zsh|fish|csh|tcsh|ksh)", "i"
-    ).test(firstWord);
+    const isInterpreterWithHeredoc = hasHeredoc && HEREDOC_INTERPRETER_RE.test(firstWord);
     if (isInterpreterWithHeredoc) {
       hasDanger = true;
       reasons.push("heredoc to shell interpreter (executable code)");
@@ -73,8 +73,8 @@ export const ShellEvaluator: RiskEvaluator = {
       reasons.push(`${firstWord} wrapper running write operation`);
     }
 
-    // Obfuscation
-    const obfuscation = detectObfuscation(segment);
+    // Obfuscation (use cached result)
+    const obfuscation = cache?.obfuscation ?? { detected: false, techniques: [] };
     if (obfuscation.detected) {
       for (const tech of obfuscation.techniques) {
         if (!reasons.includes(tech)) reasons.push(tech);

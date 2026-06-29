@@ -152,6 +152,9 @@ export const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "fish", "dash", 
 /** Package manager commands that use subcommands (npm install, cargo check, etc.). */
 export const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "npx", "cargo", "pip", "pip3", "uv", "go", "bun"]);
 
+/** Pre-compiled regex for tee write check. */
+const TEE_WRITE_RE = /\btee\b.*\S/;
+
 /** Commands that always perform write operations (unconditional — no flag-dependent behavior). */
 const ALWAYS_WRITE = new Set([
   "rm", "rmdir", "unlink", "mv", "cp", "chmod", "chown",
@@ -177,7 +180,7 @@ export function isWriteOperation(command: string, context: string): boolean {
 
   if (command === "sed") return dangerousSedFlags.test(context);
   if (command === "perl") return dangerousPerlFlags.test(context);
-  if (command === "tee") return /\btee\b.*\S/.test(context);
+  if (command === "tee") return TEE_WRITE_RE.test(context);
 
   // Shell interpreters running via exec are inherently write-capable
   if (SHELL_INTERPRETERS.has(command)) return true;

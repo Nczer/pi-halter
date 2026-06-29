@@ -19,6 +19,9 @@ interface SegmentRisk {
   reasons: string[];
 }
 
+/** Pre-compiled regex for whole-command write redirect check. */
+const WHOLE_CMD_WRITE_REDIRECT_RE = /[0-9]*&?>+\s*\S/;
+
 // ── Whole-command risk analysis ──
 
 /**
@@ -46,7 +49,7 @@ export async function analyzeWholeCommandRisk(
 
   // Whole-command operator checks (these operate on the full command string)
   const cmdNoNullRedirect = stripNullRedirects(cmd);
-  const hasRealWriteRedirect = /[0-9]*&?>+\s*\S/.test(cmdNoNullRedirect);
+  const hasRealWriteRedirect = WHOLE_CMD_WRITE_REDIRECT_RE.test(cmdNoNullRedirect);
   if (hasRealWriteRedirect && !reasons.some(r => r.includes("shell output redirection"))) {
     reasons.push("[Risk] shell output redirection (can overwrite files)");
     setSeverity("medium");

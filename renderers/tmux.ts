@@ -313,7 +313,7 @@ export function formatBashCommand(command: string, nonAllowedIndices: Set<number
   // Only use breakdown format if at least one segment is a tmux command
   // (otherwise return raw command unchanged for non-tmux)
   // Skip the check when caller provided segments — they already verified.
-  const hasTmux = segments ? true : segmentList.some(s => isTmuxCommand(s.trim()));
+  const hasTmux = segments ? true : segmentList.some(isTmuxCommand);
   if (!hasTmux) {
     return trimmed;
   }
