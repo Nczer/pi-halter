@@ -6,6 +6,11 @@
  *   → tmux send-keys  target=foo → ls Enter
  */
 
+import { splitOnPipe, splitIntoSegments, tokenize } from "../analysis/tokenizer";
+
+// Re-export tokenizer utilities for backwards compatibility
+export { splitOnPipe, splitIntoSegments };
+
 // ── Flag definitions ──
 
 /** Tmux boilerplate flags to strip (agent infrastructure, not semantic). */
@@ -196,72 +201,6 @@ export function parseTmuxFlags(cmd: string): ParsedTmuxFlags {
   return { subcommand, flags, keys };
 }
 
-/**
- * Simple tokenizer that respects quotes.
- * Preserves quote characters in tokens.
- */
-function tokenize(cmd: string): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let inSingleQuote = false;
-  let inDoubleQuote = false;
-  let i = 0;
-
-  while (i < cmd.length) {
-    const ch = cmd[i];
-
-    if (inSingleQuote) {
-      current += ch;
-      if (ch === "'") {
-        inSingleQuote = false;
-      }
-      i++;
-      continue;
-    }
-
-    if (inDoubleQuote) {
-      current += ch;
-      if (ch === '"' && (i === 0 || cmd[i - 1] !== "\\")) {
-        inDoubleQuote = false;
-      }
-      i++;
-      continue;
-    }
-
-    if (ch === "'") {
-      inSingleQuote = true;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    if (ch === '"') {
-      inDoubleQuote = true;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    if (/\s/.test(ch)) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-      i++;
-      continue;
-    }
-
-    current += ch;
-    i++;
-  }
-
-  if (current) {
-    tokens.push(current);
-  }
-
-  return tokens;
-}
-
 // ── Formatting ──
 
 /**
@@ -355,71 +294,6 @@ export function formatSegment(segment: string): string {
   return trimmed;
 }
 
-/**
- * Split a command on pipe operator | (not ||).
- */
-export function splitOnPipe(cmd: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let inSingleQuote = false;
-  let inDoubleQuote = false;
-  let i = 0;
-
-  while (i < cmd.length) {
-    const ch = cmd[i];
-    const next = i + 1 < cmd.length ? cmd[i + 1] : null;
-
-    if (inSingleQuote) {
-      current += ch;
-      if (ch === "'") inSingleQuote = false;
-      i++;
-      continue;
-    }
-
-    if (inDoubleQuote) {
-      current += ch;
-      if (ch === '"' && (i === 0 || cmd[i - 1] !== "\\")) inDoubleQuote = false;
-      i++;
-      continue;
-    }
-
-    if (ch === "'") {
-      inSingleQuote = true;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    if (ch === '"') {
-      inDoubleQuote = true;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    // Skip double pipe (||) — not a pipe operator
-    if (ch === "|" && next === "|") {
-      current += "||";
-      i += 2;
-      continue;
-    }
-
-    // Single pipe
-    if (ch === "|") {
-      parts.push(current.trim());
-      current = "";
-      i++;
-      continue;
-    }
-
-    current += ch;
-    i++;
-  }
-
-  if (current.trim()) parts.push(current.trim());
-  return parts;
-}
-
 // ── Full bash command formatting ──
 
 /**
@@ -459,75 +333,4 @@ export function formatBashCommand(command: string, nonAllowedIndices: Set<number
   return result;
 }
 
-/**
- * Split a command into segments on &&, ||, ; operators (respecting quotes).
- * Pipes (|) are kept within a segment.
- */
-export function splitIntoSegments(cmd: string): string[] {
-  const segments: string[] = [];
-  let current = "";
-  let inSingleQuote = false;
-  let inDoubleQuote = false;
-  let i = 0;
 
-  while (i < cmd.length) {
-    const ch = cmd[i];
-    const next = i + 1 < cmd.length ? cmd[i + 1] : null;
-
-    if (inSingleQuote) {
-      current += ch;
-      if (ch === "'") inSingleQuote = false;
-      i++;
-      continue;
-    }
-
-    if (inDoubleQuote) {
-      current += ch;
-      if (ch === '"' && (i === 0 || cmd[i - 1] !== "\\")) inDoubleQuote = false;
-      i++;
-      continue;
-    }
-
-    if (ch === "'") {
-      inSingleQuote = true;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    if (ch === '"') {
-      inDoubleQuote = true;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    // Check for 2-char chain operators (&&, ||)
-    if ((ch === "&" && next === "&") ||
-        (ch === "|" && next === "|")) {
-      const trimmed = current.trim();
-      if (trimmed) segments.push(trimmed);
-      current = "";
-      i += 2; // skip operator
-      continue;
-    }
-
-    // Semicolon separator (skip `;=` which is part of e.g. `VAR;=x` — unlikely but safe)
-    if (ch === ";" && next !== "=") {
-      const trimmed = current.trim();
-      if (trimmed) segments.push(trimmed);
-      current = "";
-      i++; // skip only the semicolon
-      continue;
-    }
-
-    current += ch;
-    i++;
-  }
-
-  // Don't forget the last segment
-  const last = current.trim();
-  if (last) segments.push(last);
-
-  return segments;
-}
