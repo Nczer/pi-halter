@@ -1,6 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import { allowedReadPaths, allowedWritePaths, deniedPaths, warnPaths, isTrustedScriptPath } from "../config";
 import { expandTilde } from "./path-util";
 export { expandTilde }; // Re-export for existing importers
@@ -142,4 +143,24 @@ export function isPathWarned(filePath: string, cwd: string): { warned: boolean; 
     }
   }
   return { warned: false, matchedRule: null };
+}
+
+// ── Path-to-directory resolution ──
+
+/**
+ * Resolve a list of paths to their containing directories.
+ * For directories, returns the path as-is. For files (or non-existent paths),
+ * returns the parent directory.
+ */
+export async function resolvePathsToDirs(paths: string[]): Promise<string[]> {
+  if (!paths.length) return [];
+  const results = await Promise.all(paths.map(async p => {
+    try {
+      const stat = await fsPromises.stat(p);
+      return stat.isDirectory() ? p : path.dirname(p);
+    } catch {
+      return path.dirname(p);
+    }
+  }));
+  return [...new Set(results)].sort();
 }
