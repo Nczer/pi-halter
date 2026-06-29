@@ -23,13 +23,15 @@ export async function handleFile(
   const filePath = input.path;
   if (!filePath) return;
 
+  // Resolve once — reused by pre-validation and decision engine
+  const resolvedPath = resolvePathReal(expandTilde(filePath), ctx.cwd);
+
   // Pre-validate edit calls — skip permission prompt if the edit would fail anyway
   if (toolName === "edit") {
     const edits = input.edits;
     if (!edits || !Array.isArray(edits) || edits.length === 0) return;
     if (!edits.every(e => typeof e.oldText === "string" && typeof e.newText === "string")) return;
     try {
-      const resolvedPath = resolvePathReal(expandTilde(filePath), ctx.cwd);
       if (!fs.existsSync(resolvedPath)) return;
       const content = fs.readFileSync(resolvedPath, "utf-8");
       for (const edit of edits) {
@@ -49,7 +51,8 @@ export async function handleFile(
     }
   }
 
-  const request: FileRequest = { type: "file", toolName: toolName as "read" | "write" | "edit", filePath, cwd: ctx.cwd };
+  const resolvedPath = resolvePathReal(expandTilde(filePath), ctx.cwd);
+  const request: FileRequest = { type: "file", toolName: toolName as "read" | "write" | "edit", filePath, cwd: ctx.cwd, resolvedPath };
   const decision = await decide(request, store);
 
   // Auto-allow: proceed without prompting
