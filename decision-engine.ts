@@ -17,6 +17,8 @@ export interface FileRequest {
   toolName: "read" | "write" | "edit";
   filePath: string;
   cwd: string;
+  /** Pre-resolved path to avoid redundant fs.realpathSync calls. */
+  resolvedPath?: string;
 }
 
 export interface McpRequest {

@@ -13,7 +13,7 @@ import {
 import type { Store, AllowRules, FileRequest, Decision, FilePromptData } from "../decision-engine";
 
 export function decideFile(req: FileRequest, store: Store): Decision {
-  const resolved = resolvePathReal(expandTilde(req.filePath), req.cwd);
+  const resolved = req.resolvedPath ?? resolvePathReal(expandTilde(req.filePath), req.cwd);
 
   // 1. User Rule Check (Priority 1)
   const type = req.toolName === "read" ? "read" : "write";
