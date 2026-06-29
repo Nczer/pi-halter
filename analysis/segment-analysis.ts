@@ -18,6 +18,9 @@ import {
   hasWriteRedirect,
   isWrapperRunningWrite,
   skipWrapperArg,
+  isFindExecWrite,
+  isFdExecWrite,
+  isRgPreWrite,
 } from "./segment-helpers";
 import { isTmuxDangerous } from "./tmux-helpers";
 import { ShellEvaluator } from "./evaluators/shell-evaluator";
@@ -116,32 +119,6 @@ function isWrapperRunningRelativePath(segment: string): boolean {
     break;
   }
   return false;
-}
-
-// ── find/fd/rg exec ──
-
-function isFindExecWrite(segment: string): boolean {
-  const execMatch = segment.match(/-(?:exec|execdir)\b\s+(\S+)/);
-  if (!execMatch) return false;
-  const execCmd = execMatch[1].toLowerCase();
-  const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
-  return isWriteOperation(execCmd, afterExec);
-}
-
-function isFdExecWrite(segment: string): boolean {
-  const execMatch = segment.match(/-(?:x|X)\b\s+(\S+)/);
-  if (!execMatch) return false;
-  const execCmd = execMatch[1].toLowerCase();
-  const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
-  return isWriteOperation(execCmd, afterExec);
-}
-
-function isRgPreWrite(segment: string): boolean {
-  const preMatch = segment.match(/--pre(?:=|\s+)(\S+)/);
-  if (!preMatch) return false;
-  const preCmd = preMatch[1].toLowerCase();
-  const afterPre = segment.slice(preMatch.index! + preMatch[0].length);
-  return isWriteOperation(preCmd, afterPre);
 }
 
 // ── Unified segment analysis ──
@@ -264,18 +241,28 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   if (!isTrusted && !isLookupOrEcho) {
     for (const { pattern, label } of dangerousCommandPatterns) {
       const tagged = `[Pattern] ${label}`;
-      if (pattern.test(firstWord) && !aggregatedReasons.includes(tagged)) {
-        aggregatedReasons.push(tagged);
+      if (pattern.test(firstWord)) {
         matchedDangerousCommand = true;
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
+        // Only add reason if not already covered by an evaluator
+        if (!aggregatedReasons.some(r => r.includes(label.split(" (")[0]))) {
+          if (!aggregatedReasons.includes(tagged)) {
+            aggregatedReasons.push(tagged);
+          }
+        }
       }
     }
     for (const { pattern, label } of dangerousContextPatterns) {
       const tagged = `[Pattern] ${label}`;
-      if (pattern.test(segment) && !aggregatedReasons.includes(tagged)) {
-        aggregatedReasons.push(tagged);
+      if (pattern.test(segment)) {
         matchedDangerousContext = true;
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
+        // Only add reason if not already covered by an evaluator
+        if (!aggregatedReasons.some(r => r.includes(label.split(" (")[0]))) {
+          if (!aggregatedReasons.includes(tagged)) {
+            aggregatedReasons.push(tagged);
+          }
+        }
       }
     }
   }
