@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { PromptDecision, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
+import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./renderers/tmux";
 
 // ── Output types (match twoTierAlwaysPrompt's expected inputs) ──
 
@@ -75,7 +76,11 @@ function buildBashPrompt(
           needsCommandApproval, needsPathApproval, nonAllowedSegmentIndices } = data;
   const nonAllowedSet = new Set(nonAllowedSegmentIndices);
 
-  const cmdDisplay = command.length > 60 ? command.slice(0, 57) + "..." : command;
+  // Pre-compute tag width for risk reason alignment (reused in body and tier2)
+  const tagWidth = riskDangerous
+    ? Math.max(...riskReasons.map(r => { const m = r.match(/^\[.+?\]\s*/); return m ? m[0].length : 0; }))
+    : 0;
+
   const hasBoth = needsCommandApproval && needsPathApproval;
   const uniqueSigs = [...new Set(signatures)];
 
@@ -89,18 +94,15 @@ function buildBashPrompt(
     ? `\u26a0\ufe0f ${titlePrefix}`
     : titlePrefix;
 
-  // Truncate long commands to keep prompt compact (user can scroll above for full command)
-  const commandDisplay = truncateLongCommand(command);
-
-  // Body
-  let body = `Command:\n  ${commandDisplay}\n`;
+  // Always show raw command first (truncated if long)
+  const rawDisplay = truncateLongCommand(command);
+  let body = `Command:\n  ${rawDisplay}\n`;
 
   if (needsPathApproval) {
     body += `\n\u26a0\ufe0f Paths outside cwd:\n${outsideDirs.map(d => `  \u2022 ${d}`).join("\n")}`;
   }
   if (riskDangerous) {
     body += `\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n`;
-    const tagWidth = Math.max(...riskReasons.map(r => { const m = r.match(/^\[.+?\]\s*/); return m ? m[0].length : 0; }));
     for (const reason of riskReasons) {
       const lines = reason.split("\n");
       const m = lines[0].match(/^(\[.+?\]\s*)(.*)/);
@@ -113,24 +115,23 @@ function buildBashPrompt(
       for (let i = 1; i < lines.length; i++) body += `    ${lines[i]}\n`;
     }
   }
+
+  // Segment breakdown: formatted for tmux chains, plain list for others
   if (segments.length > 1) {
-    body += `\nThis chains ${segments.length} commands:\n`;
-    segments.forEach((s, i) => {
-      const marker = nonAllowedSet.has(i) ? " \u26a0\ufe0f" : "";
-      // Full command is already shown above in Command: — keep chain list compact
-      const lines = s.split("\n");
-      let display: string;
-      if (lines.length > 1) {
-        const first = lines[0].trimEnd();
-        display = lines.length > 5
-          ? `${first} ... (>${lines.length} lines)`
-          : `${first} ... (${lines.length} lines)`;
-      } else {
-        display = s.trimEnd();
-      }
-      const truncated = display.length > 80 ? display.slice(0, 77) + "..." : display;
-      body += `  ${i + 1}.${marker} ${truncated}\n`;
-    });
+    // Guard: skip expensive format pass when no segment is a tmux command
+    const hasTmuxSegment = segments.some(s => isTmuxCommand(s.trim()));
+    if (hasTmuxSegment) {
+      const formattedCommand = formatBashCommand(command, nonAllowedSet, segments);
+      body += `\nSegments:\n${formattedCommand}\n`;
+    } else {
+      // Non-tmux chain — plain numbered list
+      body += `\nThis chains ${segments.length} commands:\n`;
+      segments.forEach((s, i) => {
+        const marker = nonAllowedSet.has(i) ? " \u26a0\ufe0f" : "";
+        const display = truncateSegmentDisplay(s.trimEnd());
+        body += `  ${i + 1}.${marker} ${display}\n`;
+      });
+    }
   }
   if (hasUnsafePattern) {
     body += `\n\u26a0\ufe0f Commands matching danger patterns always prompt, even after auto-allowing.`;
@@ -140,10 +141,9 @@ function buildBashPrompt(
   // Tier 2 — "always (everything)" confirmation
   let dangerWarning = "";
   if (riskDangerous) {
-    const tw = Math.max(...riskReasons.map(r => { const m = r.match(/^\[.+?\]\s*/); return m ? m[0].length : 0; }));
     const aligned = riskReasons.map(r => {
       const m = r.match(/^(\[.+?\]\s*)(.*)/);
-      if (m) return `  \u2022 ${m[1].padEnd(tw)} ${m[2]}`;
+      if (m) return `  \u2022 ${m[1].padEnd(tagWidth)} ${m[2]}`;
       return `  \u2022 ${r}`;
     });
     dangerWarning = `\n\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n${aligned.join("\n")}`;

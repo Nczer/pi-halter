@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
-import { isWriteOperation } from "../config";
+import { isWriteOperation, PACKAGE_MANAGERS } from "../config";
 
 // ── Segment helpers (pure string utilities) ──
 
@@ -38,9 +38,6 @@ export function stripNullRedirects(cmd: string): string {
     .replace(/[0-9]*&?>+\s*(?:\/dev\/(?:null|stderr))\b/g, "")
     .replace(/[0-9]*>&[0-9]+/g, "");
 }
-
-/** Package manager commands that use subcommands (npm install, cargo check, etc.). */
-export const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "npx", "cargo", "pip", "pip3", "uv", "go", "bun"]);
 
 /**
  * Extract a command signature, stripping redirects and quotes.
