@@ -1,9 +1,8 @@
-import path from "node:path";
-import { promises as fs } from "node:fs";
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, PACKAGE_MANAGERS, unconditionallySafeCommands } from "../config";
 import { analyzeCommand } from "../analysis/command-analysis";
 import {
   getOutsideCwdPaths,
+  resolvePathsToDirs,
 } from "../analysis/path-analysis";
 import { getFirstWord } from "../analysis/segment-helpers";
 import type { Store, AllowRules, BashRequest, Decision, BashPromptData } from "../decision-engine";
@@ -121,15 +120,7 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
     }
   }
 
-  const outsideDirResults = await Promise.all(outsidePaths.map(async p => {
-    try {
-      const stat = await fs.stat(p);
-      return stat.isDirectory() ? p : path.dirname(p);
-    } catch {
-      return path.dirname(p);
-    }
-  }));
-  const outsideDirs = [...new Set(outsideDirResults)].sort();
+  const outsideDirs = await resolvePathsToDirs(outsidePaths);
   const needsCommandApproval = !analysis.allSimple;
   const needsPathApproval = outsidePaths.length > 0;
 
