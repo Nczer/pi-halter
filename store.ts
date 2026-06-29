@@ -3,15 +3,15 @@ import path from "node:path";
 import os from "node:os";
 import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "./config";
 
-// ── Wildcard matching (inlined from wildcard.ts) ──
+// ── Wildcard matching ──
 
 /** Compile a wildcard pattern into a RegExp (call once, reuse). */
 function compilePattern(pattern: string): RegExp {
   return new RegExp(
     "^" + pattern
-      .replace(/[.+^${}()|[\]\\]/g, "\\$&") // Escape regex special chars except * and ?
-      .replace(/\*/g, ".*")                // * -> match any characters
-      .replace(/\?/g, ".")                 // ? -> match one character
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".")
     + "$",
     "i",
   );
@@ -23,7 +23,7 @@ function stripTrailingWildcard(pattern: string): string | null {
   return m ? m[1] : null;
 }
 
-// ── Persistence (inlined from persistence.ts) ──
+// ── Persistence types ──
 
 export interface UserRule {
   pattern: string;
@@ -34,6 +34,142 @@ export interface UserPermissions {
   bash: UserRule[];
   read: UserRule[];
   write: UserRule[];
+}
+
+// ── Allow rules ──
+
+/** Structured rules for what to auto-allow on "always" confirmation. */
+export interface AllowRules {
+  bashSigs?: string[];
+  readDirs?: string[];
+  writeDirs?: string[];
+  readPaths?: string[];
+  writePaths?: string[];
+  mcpServers?: string[];
+}
+
+// ── SessionState (volatile, in-memory) ──
+
+/**
+ * Volatile session state: auto-allow sets, abort history, prompt counter.
+ * Resets on session restart. No disk I/O.
+ */
+export interface SessionState {
+  hasAllowedBash(signature: string): boolean;
+  hasAllowedBashPrefix(signature: string): boolean;
+  hasAllowedReadPath(path: string): boolean;
+  hasAllowedWritePath(path: string): boolean;
+  hasAllowedMcpServer(server: string): boolean;
+  addAllowed(rules: AllowRules): void;
+  recordAbort(command: string): void;
+  getLastAbort(command: string): number | null;
+  incrementPromptCount(): { over: boolean; count: number };
+  listAllowedBash(): Set<string>;
+  listAllowedReadDirs(): Set<string>;
+  listAllowedWriteDirs(): Set<string>;
+  listAllowedReadPaths(): Set<string>;
+  listAllowedWritePaths(): Set<string>;
+  listAllowedMcpServers(): Set<string>;
+  clear(): void;
+}
+
+function createSessionState(nowFn = Date.now): SessionState {
+  const bashSigs = new Set<string>();
+  const readDirs = new Set<string>();
+  const writeDirs = new Set<string>();
+  const readPaths = new Set<string>();
+  const writePaths = new Set<string>();
+  const mcpServers = new Set<string>();
+  const aborted = new Map<string, number>();
+  let pcount = 0;
+
+  return {
+    hasAllowedBash(s) { return bashSigs.has(s); },
+    hasAllowedBashPrefix(s) {
+      for (const allowed of bashSigs) {
+        if (s.startsWith(allowed + " ")) return true;
+      }
+      return false;
+    },
+    hasAllowedReadPath(p) { return readPaths.has(p); },
+    hasAllowedWritePath(p) { return writePaths.has(p); },
+    hasAllowedMcpServer(s) { return mcpServers.has(s); },
+
+    addAllowed(rules) {
+      rules.bashSigs?.forEach(s => bashSigs.add(s));
+      rules.readDirs?.forEach(d => readDirs.add(d));
+      rules.writeDirs?.forEach(d => writeDirs.add(d));
+      rules.readPaths?.forEach(p => readPaths.add(p));
+      rules.writePaths?.forEach(p => writePaths.add(p));
+      rules.mcpServers?.forEach(s => mcpServers.add(s));
+    },
+
+    recordAbort(cmd) {
+      aborted.set(cmd, nowFn());
+      if (aborted.size > 100) {
+        const cutoff = nowFn() - ABORT_REMEMBER_MS;
+        for (const [k, v] of aborted) {
+          if (v < cutoff) aborted.delete(k);
+        }
+      }
+    },
+    getLastAbort(cmd) {
+      const ts = aborted.get(cmd) ?? null;
+      if (aborted.size > 100) {
+        const cutoff = nowFn() - ABORT_REMEMBER_MS;
+        for (const [k, v] of aborted) {
+          if (v < cutoff) aborted.delete(k);
+        }
+      }
+      return ts;
+    },
+
+    listAllowedBash() { return new Set(bashSigs); },
+    listAllowedReadDirs() { return new Set(readDirs); },
+    listAllowedWriteDirs() { return new Set(writeDirs); },
+    listAllowedReadPaths() { return new Set(readPaths); },
+    listAllowedWritePaths() { return new Set(writePaths); },
+    listAllowedMcpServers() { return new Set(mcpServers); },
+
+    incrementPromptCount() {
+      pcount++;
+      return { over: pcount > PROMPT_WARNING_THRESHOLD, count: pcount };
+    },
+
+    clear() {
+      bashSigs.clear();
+      readDirs.clear();
+      writeDirs.clear();
+      readPaths.clear();
+      writePaths.clear();
+      mcpServers.clear();
+      aborted.clear();
+      pcount = 0;
+    },
+  };
+}
+
+// ── RuleStore (persistent, disk-backed) ──
+
+/** Cached compiled pattern for a user rule. */
+interface CompiledRule {
+  regex: RegExp;
+  strippedRegex: RegExp | null;
+  action: "allow" | "deny";
+}
+
+/**
+ * Persistent user rules: disk-backed allow/deny patterns.
+ * Survives session restarts. Owns compiled pattern cache.
+ */
+export interface RuleStore {
+  init(): Promise<void>;
+  addUserRule(type: "bash" | "read" | "write", rule: UserRule): Promise<void>;
+  getUserRuleAction(type: "bash" | "read" | "write", pattern: string): "allow" | "deny" | null;
+  listUserRules(): Promise<UserPermissions>;
+  listUserRulesSync(): UserPermissions;
+  removeUserRule(type: "bash" | "read" | "write", index: number): Promise<void>;
+  reset(): void;
 }
 
 let CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "permissions.json");
@@ -61,95 +197,9 @@ async function saveUserPermissions(permissions: UserPermissions): Promise<void> 
   }
 }
 
-/** Cached compiled pattern for a user rule. */
-interface CompiledRule {
-  regex: RegExp;
-  strippedRegex: RegExp | null;
-  action: "allow" | "deny";
-}
-
-// ── Interface ──
-
-/** Mutates auto-allow state and tracks abort history. The seam between policy and persistence. */
-export interface Store {
-  /** Check if a bash command signature is auto-allowed. */
-  hasAllowedBash(signature: string): boolean;
-  /** Check if a signature starts with an allowed prefix (e.g. "npm test --coverage" matches "npm test "). */
-  hasAllowedBashPrefix(signature: string): boolean;
-  /** Check if a file path is auto-allowed for read. */
-  hasAllowedReadPath(path: string): boolean;
-  /** Check if a file path is auto-allowed for write. */
-  hasAllowedWritePath(path: string): boolean;
-  /** Check if an MCP server is auto-allowed. */
-  hasAllowedMcpServer(server: string): boolean;
-  /** Add auto-allow rules in bulk. */
-  addAllowed(rules: AllowRules): void;
-  /** Initialize store from disk. */
-  init(): Promise<void>;
-  /** Add a user-defined rule for persistent allow/deny. */
-  addUserRule(type: "bash" | "read" | "write", rule: UserRule): Promise<void>;
-  /** Check if a pattern matches a user-defined rule. Returns "allow", "deny", or null. */
-  getUserRuleAction(type: "bash" | "read" | "write", pattern: string): "allow" | "deny" | null;
-  /** List all permanent user rules. */
-  listUserRules(): Promise<UserPermissions>;
-  /** Sync snapshot of user rules for UI rendering (may be stale if not loaded). */
-  listUserRulesSync(): UserPermissions;
-  /** Remove a permanent user rule by type and index. */
-  removeUserRule(type: "bash" | "read" | "write", index: number): Promise<void>;
-  /** Record that a command was just aborted (for retry-loop prevention). */
-  recordAbort(command: string): void;
-  /** Get the timestamp of the last abort for a command, or null. */
-  getLastAbort(command: string): number | null;
-  /** Increment prompt counter. Returns whether threshold is exceeded. */
-  incrementPromptCount(): { over: boolean; count: number };
-  /** Get a copy of all auto-allowed bash signatures. */
-  listAllowedBash(): Set<string>;
-  /** Get a copy of all auto-allowed read directories. */
-  listAllowedReadDirs(): Set<string>;
-  /** Get a copy of all auto-allowed write directories. */
-  listAllowedWriteDirs(): Set<string>;
-  /** Get a copy of all auto-allowed read paths. */
-  listAllowedReadPaths(): Set<string>;
-  /** Get a copy of all auto-allowed write paths. */
-  listAllowedWritePaths(): Set<string>;
-  /** Get a copy of all auto-allowed MCP servers. */
-  listAllowedMcpServers(): Set<string>;
-  /** Reset volatile session state (auto-allow, abort history, prompt counter). Preserves user rules. */
-  resetSessionState(): void;
-  /** Reset all state including user rules (session shutdown only). */
-  reset(): void;
-}
-
-/** Structured rules for what to auto-allow on "always" confirmation. */
-export interface AllowRules {
-  bashSigs?: string[];
-  readDirs?: string[];
-  writeDirs?: string[];
-  readPaths?: string[];
-  writePaths?: string[];
-  mcpServers?: string[];
-}
-
-// ── Factory ──
-
-/**
- * Create a Store backed by fresh collections.
- * Used for both the runtime singleton and test fakes — one implementation, zero duplication.
- */
-export function createStore(nowFn = Date.now): Store {
-  const bashSigs = new Set<string>();
-  const readDirs = new Set<string>();
-  const writeDirs = new Set<string>();
-  const readPaths = new Set<string>();
-  const writePaths = new Set<string>();
-  const mcpServers = new Set<string>();
-  const aborted = new Map<string, number>();
-  let pcount = 0;
-
-  // User rules cache
+function createRuleStore(): RuleStore {
   let userPerms: UserPermissions = { bash: [], read: [], write: [] };
   let isLoaded = false;
-  // Compiled rules cache — keyed by type, invalidated on rule change
   const compiledCache = new Map<"bash" | "read" | "write", CompiledRule[]>();
 
   const compileRules = (type: "bash" | "read" | "write") => {
@@ -165,7 +215,7 @@ export function createStore(nowFn = Date.now): Store {
       } catch (e) {
         console.error(`[permissions] Invalid pattern '${rule.pattern}': ${(e as Error).message}`);
         return {
-          regex: new RegExp("^$"), // never matches — skip silently
+          regex: new RegExp("^$"),
           strippedRegex: null,
           action: rule.action,
         };
@@ -181,32 +231,11 @@ export function createStore(nowFn = Date.now): Store {
   };
 
   return {
-    hasAllowedBash(s) { return bashSigs.has(s); },
-    hasAllowedBashPrefix(s) {
-      for (const allowed of bashSigs) {
-        if (s.startsWith(allowed + " ")) return true;
-      }
-      return false;
-    },
-    hasAllowedReadPath(p) { return readPaths.has(p); },
-    hasAllowedWritePath(p) { return writePaths.has(p); },
-    hasAllowedMcpServer(s) { return mcpServers.has(s); },
-
-    addAllowed(rules) {
-      rules.bashSigs?.forEach(s => bashSigs.add(s));
-      rules.readDirs?.forEach(d => readDirs.add(d));
-      rules.writeDirs?.forEach(d => writeDirs.add(d));
-      rules.readPaths?.forEach(p => readPaths.add(p));
-      rules.writePaths?.forEach(p => writePaths.add(p));
-      rules.mcpServers?.forEach(s => mcpServers.add(s));
-    },
-
     async init() {
       await ensureLoaded();
     },
 
     async addUserRule(type, rule) {
-      // Validate pattern before saving — fail fast on malformed regex
       try {
         compilePattern(rule.pattern);
       } catch (e) {
@@ -216,6 +245,16 @@ export function createStore(nowFn = Date.now): Store {
       userPerms[type].push(rule);
       compileRules(type);
       await saveUserPermissions(userPerms);
+    },
+
+    getUserRuleAction(type, target) {
+      const compiled = compiledCache.get(type);
+      if (!compiled) return null;
+      for (const rule of compiled) {
+        if (rule.regex.test(target)) return rule.action;
+        if (rule.strippedRegex?.test(target)) return rule.action;
+      }
+      return null;
     },
 
     async listUserRules() {
@@ -236,69 +275,93 @@ export function createStore(nowFn = Date.now): Store {
       }
     },
 
-    getUserRuleAction(type, target) {
-      // Note: This is sync. If not loaded yet, it returns null.
-      // In practice, we will trigger ensureLoaded() at agent startup.
-      const compiled = compiledCache.get(type);
-      if (!compiled) return null;
-      for (const rule of compiled) {
-        if (rule.regex.test(target)) return rule.action;
-        if (rule.strippedRegex?.test(target)) return rule.action;
-      }
-      return null;
-    },
-
-    recordAbort(cmd) {
-      aborted.set(cmd, nowFn());
-      // Bounded cleanup on write to prevent unbounded growth
-      if (aborted.size > 100) {
-        const cutoff = nowFn() - ABORT_REMEMBER_MS;
-        for (const [k, v] of aborted) {
-          if (v < cutoff) aborted.delete(k);
-        }
-      }
-    },
-    getLastAbort(cmd) {
-      const ts = aborted.get(cmd) ?? null;
-      // Lazy cleanup: prune entries older than ABORT_REMEMBER_MS
-      if (aborted.size > 100) {
-        const cutoff = nowFn() - ABORT_REMEMBER_MS;
-        for (const [k, v] of aborted) {
-          if (v < cutoff) aborted.delete(k);
-        }
-      }
-      return ts;
-    },
-
-    listAllowedBash() { return new Set(bashSigs); },
-    listAllowedReadDirs() { return new Set(readDirs); },
-    listAllowedWriteDirs() { return new Set(writeDirs); },
-    listAllowedReadPaths() { return new Set(readPaths); },
-    listAllowedWritePaths() { return new Set(writePaths); },
-    listAllowedMcpServers() { return new Set(mcpServers); },
-
-    incrementPromptCount() {
-      pcount++;
-      return { over: pcount > PROMPT_WARNING_THRESHOLD, count: pcount };
-    },
-
-    resetSessionState() {
-      bashSigs.clear();
-      readDirs.clear();
-      writeDirs.clear();
-      readPaths.clear();
-      writePaths.clear();
-      mcpServers.clear();
-      aborted.clear();
-      pcount = 0;
-      // Preserve userPerms and compiledCache — they are persistent, not session-scoped
-    },
-
     reset() {
-      this.resetSessionState();
       compiledCache.clear();
       isLoaded = false;
       userPerms = { bash: [], read: [], write: [] };
+    },
+  };
+}
+
+// ── Store (composite facade) ──
+
+/**
+ * Composite store combining volatile session state and persistent user rules.
+ * Delegates to SessionState for auto-allow/abort tracking and to RuleStore
+ * for persistent allow/deny patterns.
+ */
+export interface Store {
+  // Session state
+  hasAllowedBash(signature: string): boolean;
+  hasAllowedBashPrefix(signature: string): boolean;
+  hasAllowedReadPath(path: string): boolean;
+  hasAllowedWritePath(path: string): boolean;
+  hasAllowedMcpServer(server: string): boolean;
+  addAllowed(rules: AllowRules): void;
+  recordAbort(command: string): void;
+  getLastAbort(command: string): number | null;
+  incrementPromptCount(): { over: boolean; count: number };
+  listAllowedBash(): Set<string>;
+  listAllowedReadDirs(): Set<string>;
+  listAllowedWriteDirs(): Set<string>;
+  listAllowedReadPaths(): Set<string>;
+  listAllowedWritePaths(): Set<string>;
+  listAllowedMcpServers(): Set<string>;
+
+  // Rule store
+  init(): Promise<void>;
+  addUserRule(type: "bash" | "read" | "write", rule: UserRule): Promise<void>;
+  getUserRuleAction(type: "bash" | "read" | "write", pattern: string): "allow" | "deny" | null;
+  listUserRules(): Promise<UserPermissions>;
+  listUserRulesSync(): UserPermissions;
+  removeUserRule(type: "bash" | "read" | "write", index: number): Promise<void>;
+
+  // Lifecycle
+  resetSessionState(): void;
+  reset(): void;
+}
+
+/**
+ * Create a Store backed by fresh collections.
+ * Used for both the runtime singleton and test fakes — one implementation, zero duplication.
+ */
+export function createStore(nowFn = Date.now): Store {
+  const session = createSessionState(nowFn);
+  const rules = createRuleStore();
+
+  return {
+    // Session state delegation
+    hasAllowedBash: s => session.hasAllowedBash(s),
+    hasAllowedBashPrefix: s => session.hasAllowedBashPrefix(s),
+    hasAllowedReadPath: p => session.hasAllowedReadPath(p),
+    hasAllowedWritePath: p => session.hasAllowedWritePath(p),
+    hasAllowedMcpServer: s => session.hasAllowedMcpServer(s),
+    addAllowed: r => session.addAllowed(r),
+    recordAbort: c => session.recordAbort(c),
+    getLastAbort: c => session.getLastAbort(c),
+    incrementPromptCount: () => session.incrementPromptCount(),
+    listAllowedBash: () => session.listAllowedBash(),
+    listAllowedReadDirs: () => session.listAllowedReadDirs(),
+    listAllowedWriteDirs: () => session.listAllowedWriteDirs(),
+    listAllowedReadPaths: () => session.listAllowedReadPaths(),
+    listAllowedWritePaths: () => session.listAllowedWritePaths(),
+    listAllowedMcpServers: () => session.listAllowedMcpServers(),
+
+    // Rule store delegation
+    init: () => rules.init(),
+    addUserRule: (t, r) => rules.addUserRule(t, r),
+    getUserRuleAction: (t, p) => rules.getUserRuleAction(t, p),
+    listUserRules: () => rules.listUserRules(),
+    listUserRulesSync: () => rules.listUserRulesSync(),
+    removeUserRule: (t, i) => rules.removeUserRule(t, i),
+
+    // Lifecycle
+    resetSessionState() {
+      session.clear();
+    },
+    reset() {
+      session.clear();
+      rules.reset();
     },
   };
 }
@@ -307,5 +370,3 @@ export function createStore(nowFn = Date.now): Store {
 
 /** The default store instance, used by handlers at runtime. */
 export const store: Store = createStore();
-
-
