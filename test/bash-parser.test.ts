@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseCommand, hasSubshell } from "../analysis/bash-parser";
+import { parseCommand } from "../analysis/bash-parser";
 
 // Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /etc → /private/etc)
 const realPath = (p: string) => {
@@ -157,40 +157,48 @@ describe("parseCommand: hasSubshell", () => {
 	});
 });
 
-describe("hasSubshell: command substitution", () => {
+describe("parseCommand: command substitution", () => {
 	it("detects $()", async () => {
-		expect(await hasSubshell("$(cat /etc/passwd)")).toBe(true);
+		const r = await parseCommand("$(cat /etc/passwd)", cwd);
+		expect(r.hasSubshell).toBe(true);
 	});
 
 	it("detects backticks", async () => {
-		expect(await hasSubshell("`whoami`")).toBe(true);
+		const r = await parseCommand("`whoami`", cwd);
+		expect(r.hasSubshell).toBe(true);
 	});
 
 	it("detects process substitution", async () => {
-		expect(await hasSubshell("cat <(ls)")).toBe(true);
+		const r = await parseCommand("cat <(ls)", cwd);
+		expect(r.hasSubshell).toBe(true);
 	});
 });
 
-describe("hasSubshell: no subshell", () => {
+describe("parseCommand: no subshell", () => {
 	it("simple command has no subshell", async () => {
-		expect(await hasSubshell("ls -la")).toBe(false);
+		const r = await parseCommand("ls -la", cwd);
+		expect(r.hasSubshell).toBe(false);
 	});
 
 	it("pipeline has no subshell", async () => {
-		expect(await hasSubshell("cat file.txt | grep pattern")).toBe(false);
+		const r = await parseCommand("cat file.txt | grep pattern", cwd);
+		expect(r.hasSubshell).toBe(false);
 	});
 
 	it("single-quoted $() not flagged (literal string)", async () => {
-		expect(await hasSubshell("echo 'hello $(world)'")).toBe(false);
+		const r = await parseCommand("echo 'hello $(world)'", cwd);
+		expect(r.hasSubshell).toBe(false);
 	});
 });
 
-describe("hasSubshell: edge cases", () => {
+describe("parseCommand: edge cases", () => {
 	it("empty string has no subshell", async () => {
-		expect(await hasSubshell("")).toBe(false);
+		const r = await parseCommand("", cwd);
+		expect(r.hasSubshell).toBe(false);
 	});
 
 	it("echo has no subshell", async () => {
-		expect(await hasSubshell("echo hello")).toBe(false);
+		const r = await parseCommand("echo hello", cwd);
+		expect(r.hasSubshell).toBe(false);
 	});
 });

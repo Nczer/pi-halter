@@ -143,6 +143,8 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   let aggregatedSeverity: "high" | "medium" | null = null;
   let aggregatedHasDanger = false;
   let allStagesSimple = true;
+  // Track command keys already covered by evaluators to avoid duplicate pattern reasons
+  const coveredKeys = new Set<string>();
 
   for (const { evaluator, result } of evaluatorResults) {
     if (result.hasDanger) aggregatedHasDanger = true;
@@ -153,6 +155,9 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       const tag = evaluator.charAt(0).toUpperCase() + evaluator.slice(1);
       const tagged = `[${tag}] ${reason}`;
       if (!aggregatedReasons.includes(tagged)) aggregatedReasons.push(tagged);
+      // Extract first word of reason as coverage key (e.g. "rm" from "rm -rf (recursive deletion)")
+      const key = reason.split(/\s/)[0].toLowerCase();
+      coveredKeys.add(key);
     }
     if (result.isSimple === false) allStagesSimple = false;
   }
@@ -245,7 +250,8 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
         matchedDangerousCommand = true;
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
         // Only add reason if not already covered by an evaluator
-        if (!aggregatedReasons.some(r => r.includes(label.split(" (")[0]))) {
+        const key = label.split(/\s|[\/]/)[0].toLowerCase();
+        if (!coveredKeys.has(key)) {
           if (!aggregatedReasons.includes(tagged)) {
             aggregatedReasons.push(tagged);
           }
@@ -258,7 +264,8 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
         matchedDangerousContext = true;
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
         // Only add reason if not already covered by an evaluator
-        if (!aggregatedReasons.some(r => r.includes(label.split(" (")[0]))) {
+        const key = label.split(/\s/)[0].toLowerCase();
+        if (!coveredKeys.has(key)) {
           if (!aggregatedReasons.includes(tagged)) {
             aggregatedReasons.push(tagged);
           }

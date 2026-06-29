@@ -534,34 +534,4 @@ export async function parseCommand(command: string, cwd: string): Promise<ParseR
   }
 }
 
-/**
- * Check if a command contains subshells or complex constructs.
- * Uses AST for accurate detection.
- */
-export async function hasSubshell(command: string): Promise<boolean> {
-  const parser = await getParser();
-  const tree = parser.parse(command);
-  if (!tree) return false;
 
-  try {
-    let found = false;
-    const check = (node: TSNode): void => {
-      if (found) return;
-      if (
-        node.type === "command_substitution" ||
-        node.type === "process_substitution"
-      ) {
-        found = true;
-        return;
-      }
-      for (let i = 0; i < node.childCount; i++) {
-        const child = node.child(i);
-        if (child) check(child);
-      }
-    };
-    check(tree.rootNode);
-    return found;
-  } finally {
-    tree.delete();
-  }
-}
