@@ -1,4 +1,5 @@
-import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
+import { EvaluationBuilder } from "./builder";
+import { EvalCache, RiskEvaluator } from "./types";
 import {
   getFirstWord,
   isFindExecWrite,
@@ -7,7 +8,6 @@ import {
 } from "../segment-helpers";
 import {
   dangerousFindFlags,
-  isWriteOperation,
 } from "../../config";
 
 /**
@@ -15,54 +15,40 @@ import {
  */
 export const ToolEvaluator: RiskEvaluator = {
   name: "tool",
-  evaluate(seg, cwd, cache): EvaluatorResult {
+  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const args = segment.trim().split(/\s+/);
     const rest = args.slice(1);
-    const reasons: string[] = [];
-    let severity: "high" | "medium" | null = null;
-    let hasDanger = false;
-    const setSeverity = (s: "high" | "medium") => {
-      if (s === "high" || !severity) severity = s;
-    };
+    const b = new EvaluationBuilder();
 
     // find/fd/rg exec write
     if (firstWord === "find" && dangerousFindFlags.test(segment)) {
-      hasDanger = true;
-      reasons.push("find with dangerous flags");
-      setSeverity("high");
+      b.addHigh("find with dangerous flags");
     }
     if (firstWord === "find" && isFindExecWrite(segment)) {
-      hasDanger = true;
-      reasons.push("find -exec with write operation");
-      setSeverity("high");
+      b.addHigh("find -exec with write operation");
     }
     if (firstWord === "fd" && isFdExecWrite(segment)) {
-      hasDanger = true;
-      reasons.push("fd -x with write operation");
-      setSeverity("high");
+      b.addHigh("fd -x with write operation");
     }
     if (firstWord === "rg" && isRgPreWrite(segment)) {
-      hasDanger = true;
-      reasons.push("rg --pre with write operation");
-      setSeverity("high");
+      b.addHigh("rg --pre with write operation");
     }
 
     // Remote execution via pipe
     if ((firstWord === "curl" || firstWord === "wget") && seg.ops.includes("|")) {
-      setSeverity("high");
-      hasDanger = true;
-      reasons.push("curl/wget piped (possible remote code execution)");
+      b.addHigh("curl/wget piped (possible remote code execution)");
     }
 
     // Infra deletes
-    if (firstWord === "kubectl" && rest[0] === "delete") { setSeverity("high"); reasons.push("kubectl delete (resource deletion)"); }
-    if (firstWord === "terraform" && rest[0] === "destroy") { setSeverity("high"); reasons.push("terraform destroy (infrastructure teardown)"); }
-    if (firstWord === "aws" && awsHasSubcommand(rest, "s3", "rm") && rest.includes("--recursive")) { setSeverity("high"); reasons.push("aws s3 rm --recursive (bulk deletion)"); }
-    if (firstWord === "gcloud" && rest.includes("delete")) { setSeverity("high"); reasons.push("gcloud delete (resource deletion)"); }
+    if (firstWord === "kubectl" && rest[0] === "delete") b.addHigh("kubectl delete (resource deletion)");
+    if (firstWord === "terraform" && rest[0] === "destroy") b.addHigh("terraform destroy (infrastructure teardown)");
+    if (firstWord === "aws" && awsHasSubcommand(rest, "s3", "rm") && rest.includes("--recursive"))
+      b.addHigh("aws s3 rm --recursive (bulk deletion)");
+    if (firstWord === "gcloud" && rest.includes("delete")) b.addHigh("gcloud delete (resource deletion)");
 
-    return { reasons, severity, hasDanger, isSimple: undefined };
+    return b.build();
   },
 };
 

@@ -1,4 +1,5 @@
-import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
+import { EvaluationBuilder } from "./builder";
+import { EvalCache, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
 import {
   getTmuxSubcommand,
@@ -13,17 +14,12 @@ import {
  */
 export const TmuxEvaluator: RiskEvaluator = {
   name: "tmux",
-  evaluate(seg, cwd, cache): EvaluatorResult {
+  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
-    const reasons: string[] = [];
-    let severity: "high" | "medium" | null = null;
-    let hasDanger = false;
-    const setSeverity = (s: "high" | "medium") => {
-      if (s === "high" || !severity) severity = s;
-    };
+    const b = new EvaluationBuilder();
 
-    if (firstWord !== "tmux") return { reasons, severity, hasDanger, isSimple: undefined };
+    if (firstWord !== "tmux") return b.build();
 
     const tmuxSub = getTmuxSubcommand(segment);
     const isDangerous = !tmuxSub || !TMUX_SAFE_SUBCOMMANDS.has(tmuxSub);
@@ -32,12 +28,12 @@ export const TmuxEvaluator: RiskEvaluator = {
       if (tmuxSub === "send-keys") {
         const keys = extractTmuxSendKeys(segment);
         if (!keys || !isTmuxSendKeysSafe(keys)) {
-          hasDanger = true;
-          setSeverity("high");
+          b.setHigh();
+          b.markDanger();
         }
       } else {
-        hasDanger = true;
-        setSeverity("high");
+        b.setHigh();
+        b.markDanger();
       }
       if (tmuxSub) {
         const desc = TMUX_DANGEROUS_DESCRIPTIONS[tmuxSub]
@@ -47,10 +43,10 @@ export const TmuxEvaluator: RiskEvaluator = {
           const keys = extractTmuxSendKeys(segment);
           if (keys) reason += `\n  → ${keys}`;
         }
-        reasons.push(reason);
+        b.addReason(reason);
       }
     }
 
-    return { reasons, severity, hasDanger, isSimple: undefined };
+    return b.build();
   },
 };

@@ -1,90 +1,6 @@
-import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
+import { EvaluationBuilder } from "./builder";
+import { EvalCache, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
-
-/**
- * Evaluates system commands: sudo, rm, chmod, chown, mv, cp, kill, shutdown, systemctl, truncate, dd.
- */
-export const SystemEvaluator: RiskEvaluator = {
-  name: "system",
-  evaluate(seg, cwd, cache): EvaluatorResult {
-    const segment = seg.text;
-    const firstWord = cache?.firstWord ?? getFirstWord(segment);
-    const args = segment.trim().split(/\s+/);
-    const rest = args.slice(1);
-    const reasons: string[] = [];
-    let severity: "high" | "medium" | null = null;
-    let hasDanger = false;
-    const setSeverity = (s: "high" | "medium") => {
-      if (s === "high" || !severity) severity = s;
-    };
-
-    // sudo
-    if (firstWord === "sudo") {
-      reasons.push("sudo (privilege escalation)");
-      setSeverity("high");
-      hasDanger = true;
-    }
-
-    // rm/rmdir/unlink
-    if (firstWord === "rm" || firstWord === "rmdir" || firstWord === "unlink") {
-      setSeverity("high");
-      if (rest.some((a) => hasShortFlag(a, "r") || hasShortFlag(a, "R"))) reasons.push("recursive delete (-r/-R)");
-      if (rest.some((a) => hasShortFlag(a, "f"))) reasons.push("forced delete (-f)");
-    }
-
-    // chmod/chown
-    if (firstWord === "chmod" || firstWord === "chown") {
-      if (rest.includes("-R") || rest.includes("--recursive")) {
-        setSeverity("high");
-        reasons.push(`${firstWord} -R (recursive ${firstWord === "chmod" ? "permission" : "ownership"} changes)`);
-      } else {
-        setSeverity("medium");
-      }
-    }
-
-    // mv/cp
-    if (firstWord === "mv" || firstWord === "cp") {
-      if (rest.some((a) => hasShortFlag(a, "f")) || rest.includes("--force")) {
-        setSeverity("medium");
-        reasons.push(`${firstWord} --force/-f (can overwrite files)`);
-      } else {
-        setSeverity("medium");
-      }
-    }
-
-    // truncate
-    if (firstWord === "truncate") {
-      reasons.push("truncate (in-place size change, can erase contents)");
-      setSeverity("high");
-    }
-
-    // dd of=
-    if (firstWord === "dd" && anyArgStartsWith(rest, "of=")) {
-      setSeverity("high");
-      reasons.push("dd with output file/device (can overwrite data)");
-    }
-
-    // kill/shutdown/systemctl
-    if (["kill", "pkill", "killall"].includes(firstWord)) {
-      reasons.push(`${firstWord} (process termination)`);
-      if (rest.includes("-9")) { setSeverity("high"); reasons.push("SIGKILL (-9)"); }
-    }
-    if (["shutdown", "reboot"].includes(firstWord)) {
-      setSeverity("high");
-      reasons.push(`${firstWord} (system power operation)`);
-    }
-    if (firstWord === "systemctl" && (rest.includes("stop") || rest.includes("disable"))) {
-      reasons.push("systemctl stop/disable (service disruption)");
-      setSeverity("medium");
-    }
-
-    return { reasons, severity, hasDanger, isSimple: undefined };
-  },
-};
-
-function anyArgStartsWith(args: string[], prefix: string): boolean {
-  return args.some(a => a.startsWith(prefix));
-}
 
 /** Check if an arg contains a short flag character (exact match or composite like -if). Rejects long flags. */
 function hasShortFlag(arg: string, flagChar: string): boolean {
@@ -92,3 +8,93 @@ function hasShortFlag(arg: string, flagChar: string): boolean {
   if (arg.startsWith("-") && !arg.startsWith("--") && arg.includes(flagChar)) return true;
   return false;
 }
+
+// ── System command handlers ──
+
+/** System command → handler (match, evaluate). */
+const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: string, rest: string[], b: EvaluationBuilder) => void }> = [
+  // sudo
+  { match: (c) => c === "sudo",
+    evaluate: (_cmd, _rest, b) => { b.addHigh("sudo (privilege escalation)"); } },
+  // rm/rmdir/unlink
+  { match: (c) => ["rm", "rmdir", "unlink"].includes(c),
+    evaluate: (cmd, rest, b) => {
+      b.setHigh();
+      if (rest.some((a) => hasShortFlag(a, "r") || hasShortFlag(a, "R")))
+        b.addReason("recursive delete (-r/-R)");
+      if (rest.some((a) => hasShortFlag(a, "f")))
+        b.addReason("forced delete (-f)");
+    } },
+  // chmod/chown
+  { match: (c) => c === "chmod" || c === "chown",
+    evaluate: (cmd, rest, b) => {
+      if (rest.includes("-R") || rest.includes("--recursive")) {
+        b.addReason(`${cmd} -R (recursive ${cmd === "chmod" ? "permission" : "ownership"} changes)`);
+        b.setHigh();
+      } else {
+        b.setMedium();
+      }
+    } },
+  // mv/cp
+  { match: (c) => c === "mv" || c === "cp",
+    evaluate: (cmd, rest, b) => {
+      if (rest.some((a) => hasShortFlag(a, "f")) || rest.includes("--force")) {
+        b.addMedium(`${cmd} --force/-f (can overwrite files)`);
+      } else {
+        b.setMedium();
+      }
+    } },
+  // truncate
+  { match: (c) => c === "truncate",
+    evaluate: (_cmd, _rest, b) => { b.addReason("truncate (in-place size change, can erase contents)"); b.setHigh(); } },
+  // dd of=
+  { match: (c) => c === "dd",
+    evaluate: (_cmd, rest, b) => {
+      if (rest.some(a => a.startsWith("of="))) {
+        b.addReason("dd with output file/device (can overwrite data)");
+        b.setHigh();
+      }
+    } },
+  // kill/pkill/killall
+  { match: (c) => ["kill", "pkill", "killall"].includes(c),
+    evaluate: (cmd, rest, b) => {
+      b.addReason(`${cmd} (process termination)`);
+      if (rest.includes("-9")) {
+        b.setHigh();
+        b.addReason("SIGKILL (-9)");
+      }
+    } },
+  // shutdown/reboot
+  { match: (c) => ["shutdown", "reboot"].includes(c),
+    evaluate: (cmd, _rest, b) => { b.addReason(`${cmd} (system power operation)`); b.setHigh(); } },
+  // systemctl
+  { match: (c) => c === "systemctl",
+    evaluate: (_cmd, rest, b) => {
+      if (rest.includes("stop") || rest.includes("disable")) {
+        b.addReason("systemctl stop/disable (service disruption)");
+        b.setMedium();
+      }
+    } },
+];
+
+/**
+ * Evaluates system commands: sudo, rm, chmod, chown, mv, cp, kill, shutdown, systemctl, truncate, dd.
+ */
+export const SystemEvaluator: RiskEvaluator = {
+  name: "system",
+  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
+    const segment = seg.text;
+    const firstWord = cache?.firstWord ?? getFirstWord(segment);
+    const rest = segment.trim().split(/\s+/).slice(1);
+    const b = new EvaluationBuilder();
+
+    for (const handler of SYSTEM_HANDLERS) {
+      if (handler.match(firstWord)) {
+        handler.evaluate(firstWord, rest, b);
+        return b.build();
+      }
+    }
+
+    return b.build();
+  },
+};

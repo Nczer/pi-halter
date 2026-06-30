@@ -4,6 +4,7 @@ import type { Store } from "./store";
 import { buildPrompt } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
 import { updateWidget } from "./widget";
+import { RuleGenerator } from "./rule-generator";
 
 /** Result of showing a permission prompt to the user. */
 interface PromptFlowResult {
@@ -34,21 +35,24 @@ export async function showPrompt(
   const type = decision.promptData.type === "bash" ? "bash" : (decision.promptData.type === "file" ? (decision.promptData.isWriteOp ? "write" : "read") : "bash");
 
   const result = await twoTierAlwaysPrompt(prompt, ctx, () => {
-    store.addAllowed(decision.allowRules);
+    store.addAllowed(RuleGenerator.generatePrimaryRules(decision.promptData));
     updateWidget(ctx);
   }, () => {
-    if (decision.allowPathsRules) {
-      store.addAllowed(decision.allowPathsRules);
+    const rules = RuleGenerator.generatePathsOnlyRules(decision.promptData);
+    if (rules) {
+      store.addAllowed(rules);
       updateWidget(ctx);
     }
   }, () => {
-    if (decision.allowFileRules) {
-      store.addAllowed(decision.allowFileRules);
+    const rules = RuleGenerator.generateFileOnlyRules(decision.promptData);
+    if (rules) {
+      store.addAllowed(rules);
       updateWidget(ctx);
     }
   }, () => {
-    if (decision.allowBroaderRules) {
-      store.addAllowed(decision.allowBroaderRules);
+    const rules = RuleGenerator.generateBroaderRules(decision.promptData);
+    if (rules) {
+      store.addAllowed(rules);
       updateWidget(ctx);
     }
   }, async (pattern) => {

@@ -1,7 +1,7 @@
 import { isAllowedCommand, dangerousCommandPatterns, dangerousContextPatterns } from "../config";
 import { containsCommandSubstitution, hasWriteRedirect } from "./segment-helpers";
-import { detectObfuscation } from "./segment-analysis";
-import { isGitDangerous } from "./segment-analysis";
+import { detectObfuscation } from "./obfuscation";
+import { isGitDangerous } from "./segment-helpers";
 
 // ── Tmux safe subcommands ──
 

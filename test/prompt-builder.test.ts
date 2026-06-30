@@ -4,7 +4,7 @@ import type { PromptDecision } from "../decision-engine";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function bashDecision(overrides: Partial<PromptDecision["promptData"]> & { includePathsOption?: boolean; includeBroaderOption?: boolean } = {}): PromptDecision {
+function bashDecision(overrides: Partial<PromptDecision["promptData"]> = {}): PromptDecision {
   return {
     kind: "prompt",
     promptData: {
@@ -23,9 +23,6 @@ function bashDecision(overrides: Partial<PromptDecision["promptData"]> & { inclu
       needsPathApproval: false,
       ...overrides,
     },
-    allowRules: {},
-    includePathsOption: overrides.includePathsOption ?? false,
-    includeBroaderOption: overrides.includeBroaderOption ?? false,
   };
 }
 
@@ -45,7 +42,6 @@ function fileDecision(overrides: Partial<PromptDecision["promptData"]> = {}): Pr
       symlinkHint: null,
       ...overrides,
     },
-    allowRules: {},
   };
 }
 
@@ -60,7 +56,6 @@ function mcpDecision(overrides: Partial<PromptDecision["promptData"]> = {}): Pro
       argsPreview: undefined,
       ...overrides,
     },
-    allowRules: { mcpServers: ["exa"] },
   };
 }
 
@@ -390,11 +385,10 @@ describe("mcp", () => {
 // ── Edge cases ─────────────────────────────────────────────────────────────
 
 describe("edge cases", () => {
-  it("handles empty allowRules gracefully", () => {
+  it("handles minimal prompt data gracefully", () => {
     const decision: PromptDecision = {
       kind: "prompt",
       promptData: { type: "bash", command: "ls", cwd: "/tmp", outsideDirs: [], segments: ["ls"], signatures: ["ls"], nonAllowedSegmentIndices: [], riskDangerous: false, riskSeverity: null, riskReasons: [], hasUnsafePattern: false, needsCommandApproval: false, needsPathApproval: false },
-      allowRules: {},
     };
     expect(() => buildPrompt(decision)).not.toThrow();
   });

@@ -155,11 +155,6 @@ export async function twoTierAlwaysPrompt(
     const tier2Idx = await showSelectIndex(ctx, entry.config.title + "\n---\n" + entry.config.body, ["Always Yes", "Back"]);
     if (tier2Idx === Tier2.Confirm) return entry.fn();
     // tier2Idx === Back || null → loop
-
-    // Show tier-2 confirmation
-    const tier2Idx = await showSelectIndex(ctx, tier2Config.title + "\n---\n" + tier2Config.body, ["Always Yes", "Back"]);
-    if (tier2Idx === Tier2.Confirm) return callback();
-    // tier2Idx === Back || null → loop
   }
 }
 

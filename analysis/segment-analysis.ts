@@ -42,6 +42,27 @@ const EVALUATORS: RiskEvaluator[] = [
   ToolEvaluator,
 ];
 
+// ── Pipeline stage danger check ──
+
+/** Check if a pipeline stage (after first) is dangerous. Combines shared + pipeline-specific checks. */
+function checkPipelineStageDanger(stage: string, stageCmd: string): StageDanger {
+  // Start with shared danger checks (sed/perl, find/fd/rg, wrapper, write redirect)
+  const shared = checkStageDanger(stage);
+  if (shared.dangerous) {
+    // Git/tmux/pattern checks only set boolean, no extra reasons beyond shared
+    return { ...shared, dangerous: true };
+  }
+
+  // Pipeline-specific checks (git, tmux, dangerous patterns)
+  let dangerous = false;
+  if (stageCmd === "git" && isGitDangerous(stage)) dangerous = true;
+  if (stageCmd === "tmux" && isTmuxDangerous(stage)) dangerous = true;
+  if (dangerousCommandPatterns.some(({ pattern }) => pattern.test(stageCmd))) dangerous = true;
+  if (dangerousContextPatterns.some(({ pattern }) => pattern.test(stage))) dangerous = true;
+
+  return { ...shared, dangerous };
+}
+
 // ── Result type ──
 
 /** Risk assessment for a single segment. */
@@ -146,12 +167,9 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
         continue;
       }
 
-      let stageDangerous = false;
-
-      // Shared danger checks (sed/perl, find/fd/rg, wrapper, write redirect)
-      const stageDanger = checkStageDanger(stage);
+      // Combined danger checks (shared + pipeline-specific)
+      const stageDanger = checkPipelineStageDanger(stage, stageCmd);
       if (stageDanger.dangerous) {
-        stageDangerous = true;
         for (const reason of stageDanger.reasons) {
           const tagged = `[Pipeline] ${reason}`;
           if (!aggregatedReasons.includes(tagged)) {
@@ -161,15 +179,6 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
         if (stageDanger.severity === "high" || (!aggregatedSeverity && stageDanger.severity === "medium")) {
           aggregatedSeverity = stageDanger.severity;
         }
-      }
-
-      // Pipeline-specific checks (git, tmux, dangerous patterns)
-      if (stageCmd === "git" && isGitDangerous(stage)) stageDangerous = true;
-      if (stageCmd === "tmux" && isTmuxDangerous(stage)) stageDangerous = true;
-      if (dangerousCommandPatterns.some(({ pattern }) => pattern.test(stageCmd))) stageDangerous = true;
-      if (dangerousContextPatterns.some(({ pattern }) => pattern.test(stage))) stageDangerous = true;
-
-      if (stageDangerous) {
         allStagesSimple = false;
         aggregatedHasDanger = true;
       }

@@ -1,11 +1,11 @@
-import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
+import { EvaluationBuilder } from "./builder";
+import { EvalCache, RiskEvaluator } from "./types";
 import {
   dangerousSedFlags,
   dangerousPerlFlags,
   wrapperCommands,
 } from "../../config";
 import {
-  containsCommandSubstitution,
   getFirstWord,
   hasWriteRedirect,
   isWrapperRunningWrite,
@@ -20,69 +20,52 @@ const HEREDOC_INTERPRETER_RE = /^(python|node|ruby|php|lua|perl|deno|bun|jruby|p
  */
 export const ShellEvaluator: RiskEvaluator = {
   name: "shell",
-  evaluate(seg, cwd, cache): EvaluatorResult {
+  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
-    const reasons: string[] = [];
-    let severity: "high" | "medium" | null = null;
-    let hasDanger = false;
-    const setSeverity = (s: "high" | "medium") => {
-      if (s === "high" || !severity) severity = s;
-    };
+    const b = new EvaluationBuilder();
 
     // Subshell
     if (seg.hasSubshell) {
-      hasDanger = true;
-      reasons.push("command substitution (subshell)");
-      setSeverity("high");
+      b.addHigh("command substitution (subshell)");
     }
 
     // Heredoc to interpreter
     const hasHeredoc = seg.ops.includes("<<") || seg.ops.includes("<<<");
     const isInterpreterWithHeredoc = hasHeredoc && HEREDOC_INTERPRETER_RE.test(firstWord);
     if (isInterpreterWithHeredoc) {
-      hasDanger = true;
-      reasons.push("heredoc to shell interpreter (executable code)");
-      setSeverity("high");
+      b.addHigh("heredoc to shell interpreter (executable code)");
     }
 
     // Write redirect
-    const writeRedirect = hasWriteRedirect(segment);
-    if (writeRedirect) {
-      hasDanger = true;
-      reasons.push("shell output redirection (can overwrite files)");
-      setSeverity("medium");
+    if (hasWriteRedirect(segment)) {
+      b.addMedium("shell output redirection (can overwrite files)");
+      b.markDanger();
     }
 
     // sed/perl flags
     if (firstWord === "sed" && dangerousSedFlags.test(segment)) {
-      hasDanger = true;
-      reasons.push("sed -i (in-place file modification)");
-      setSeverity("high");
+      b.addHigh("sed -i (in-place file modification)");
     }
     if (firstWord === "perl" && dangerousPerlFlags.test(segment)) {
-      hasDanger = true;
-      reasons.push("perl -pi/-i (in-place file modification)");
-      setSeverity("high");
+      b.addHigh("perl -pi/-i (in-place file modification)");
     }
 
     // Wrapper running write (not relative path - that only affects isSimple)
     if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment, false)) {
-      hasDanger = true;
-      setSeverity("high");
-      reasons.push(`${firstWord} wrapper running write operation`);
+      b.addHigh(`${firstWord} wrapper running write operation`);
     }
 
     // Obfuscation (use cached result)
     const obfuscation = cache?.obfuscation ?? { detected: false, techniques: [] };
     if (obfuscation.detected) {
       for (const tech of obfuscation.techniques) {
-        if (!reasons.includes(tech)) reasons.push(tech);
+        b.addReason(tech);
       }
-      setSeverity("high");
+      b.setHigh();
     }
 
-    return { reasons, severity, hasDanger, isSimple: undefined };
+    return b.build();
   },
 };
 

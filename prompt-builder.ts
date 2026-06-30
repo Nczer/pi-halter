@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { PromptDecision, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
+import { PACKAGE_MANAGERS } from "./config";
 import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./renderers/tmux";
 
 // ── Output types (match twoTierAlwaysPrompt's expected inputs) ──
@@ -29,15 +30,15 @@ export interface BuiltPrompt {
  * for the two-tier prompt flow. All prompt wording lives here.
  */
 export function buildPrompt(decision: PromptDecision): BuiltPrompt {
-  const { promptData, allowRules, allowPathsRules, includePathsOption = false, includeBroaderOption = false, includeAlwaysOption = true } = decision;
+  const { promptData } = decision;
 
   switch (promptData.type) {
     case "bash":
-      return buildBashPrompt(promptData, allowRules, includePathsOption, includeBroaderOption ?? false, includeAlwaysOption);
+      return buildBashPrompt(promptData);
     case "file":
-      return buildFilePrompt(promptData, allowRules);
+      return buildFilePrompt(promptData);
     case "mcp":
-      return buildMcpPrompt(promptData, allowRules);
+      return buildMcpPrompt(promptData);
   }
 }
 
@@ -66,10 +67,6 @@ function truncateLongCommand(command: string): string {
 
 function buildBashPrompt(
   data: BashPromptData,
-  _allowRules: { bashSigs?: string[]; readDirs?: string[] },
-  includePathsOption: boolean,
-  includeBroaderOption: boolean,
-  includeAlwaysOption: boolean,
 ): BuiltPrompt {
   const { command, cwd, outsideDirs, segments, signatures,
           riskDangerous, riskSeverity, riskReasons, hasUnsafePattern,
@@ -88,6 +85,14 @@ function buildBashPrompt(
 
   const hasBoth = needsCommandApproval && needsPathApproval;
   const uniqueSigs = [...new Set(signatures)];
+
+  // Compute prompt options from data (previously on PromptDecision)
+  const includePathsOption = hasBoth;
+  // PACKAGE_MANAGERS imported from config
+  const pmSigs = uniqueSigs.filter(sig => PACKAGE_MANAGERS.has(sig.split(/\s+/)[0]));
+  const broaderSigs = [...new Set(pmSigs.map(sig => sig.split(/\s+/)[0]))];
+  const includeBroaderOption = broaderSigs.some(s => !uniqueSigs.includes(s));
+  const includeAlwaysOption = !hasUnsafePattern && (uniqueSigs.length > 0 || outsideDirs.length > 0);
 
   // Title — reflect what triggered the prompt
   const titlePrefix = needsCommandApproval && needsPathApproval
@@ -193,7 +198,6 @@ function buildBashPrompt(
 
 function buildFilePrompt(
   data: FilePromptData,
-  _allowRules: { readPaths?: string[]; writePaths?: string[]; readDirs?: string[]; writeDirs?: string[] },
 ): BuiltPrompt {
   const { action, filePath, resolved, cwd, outsideDir, isWriteOp, deniedRule, warnedRule, symlinkHint } = data;
   const insideCwd = outsideDir === null;
@@ -265,7 +269,6 @@ function buildFilePrompt(
 
 function buildMcpPrompt(
   data: McpPromptData,
-  _allowRules: { mcpServers?: string[] },
 ): BuiltPrompt {
   const { server, tool, op, argsPreview } = data;
 

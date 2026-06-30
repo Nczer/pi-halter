@@ -1,40 +1,50 @@
-import { EvaluatorResult, EvalCache, RiskEvaluator } from "./types";
+import { EvaluationBuilder } from "./builder";
+import { EvalCache, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
+
+// ── Disk command handlers ──
+
+/** Disk command → handler (reason, severity, extra checks). */
+const DISK_HANDLERS: Array<{ match: (cmd: string) => boolean; reason: (cmd: string) => string; severity: "high" | "medium"; extra?: (cmd: string, rest: string[]) => string[] }> = [
+  { match: (c) => c.startsWith("mkfs"), reason: () => "mkfs (filesystem formatting)", severity: "high" },
+  { match: (c) => c.startsWith("newfs_"), reason: () => "newfs_* (filesystem formatting)", severity: "high" },
+  { match: (c) => c === "wipefs", reason: () => "wipefs (disk signature wipe)", severity: "high" },
+  { match: (c) => c === "diskutil", reason: () => "diskutil (disk management command)", severity: "high",
+    extra: (c, rest) => (rest.includes("eraseDisk") || rest.includes("eraseVolume")) ? ["diskutil erase (destructive disk operation)"] : [] },
+  { match: (c) => c === "hdiutil", reason: () => "hdiutil (disk image management command)", severity: "high" },
+  { match: (c) => c === "gpt", reason: () => "gpt (partition table manipulation)", severity: "high" },
+  { match: (c) => c === "asr", reason: () => "asr (Apple Software Restore; can overwrite volumes)", severity: "high" },
+  { match: (c) => ["parted", "fdisk", "gdisk", "sgdisk"].includes(c), reason: (c) => `${c} (disk/partition management)`, severity: "high" },
+  { match: (c) => c === "lsblk", reason: () => "lsblk (disk listing)", severity: "medium" },
+  { match: (c) => c === "cryptsetup", reason: () => "cryptsetup (disk encryption management)", severity: "high" },
+  { match: (c) => ["pvcreate", "vgcreate", "lvcreate"].includes(c), reason: (c) => `${c} (LVM volume management)`, severity: "high" },
+  { match: (c) => c === "zpool", reason: () => "zpool (ZFS pool management)", severity: "high" },
+];
 
 /**
  * Evaluates disk/volume management commands.
  */
 export const DiskEvaluator: RiskEvaluator = {
   name: "disk",
-  evaluate(seg, cwd, cache): EvaluatorResult {
+  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
-    const args = segment.trim().split(/\s+/);
-    const rest = args.slice(1);
-    const reasons: string[] = [];
-    let severity: "high" | "medium" | null = null;
-    let hasDanger = false;
-    const setSeverity = (s: "high" | "medium") => {
-      if (s === "high" || !severity) severity = s;
-    };
+    const rest = segment.trim().split(/\s+/).slice(1);
+    const b = new EvaluationBuilder();
 
-    // Disk / volume management
-    if (firstWord.startsWith("mkfs")) { setSeverity("high"); reasons.push("mkfs (filesystem formatting)"); }
-    if (firstWord.startsWith("newfs_")) { setSeverity("high"); reasons.push("newfs_* (filesystem formatting)"); }
-    if (firstWord === "wipefs") { setSeverity("high"); reasons.push("wipefs (disk signature wipe)"); }
-    if (firstWord === "diskutil") {
-      setSeverity("high"); reasons.push("diskutil (disk management command)");
-      if (rest.includes("eraseDisk") || rest.includes("eraseVolume")) reasons.push("diskutil erase (destructive disk operation)");
+    for (const handler of DISK_HANDLERS) {
+      if (handler.match(firstWord)) {
+        b.addReason(handler.reason(firstWord));
+        if (handler.extra) {
+          for (const extra of handler.extra(firstWord, rest)) {
+            b.addReason(extra);
+          }
+        }
+        b.setSeverity(handler.severity);
+        return b.build();
+      }
     }
-    if (firstWord === "hdiutil") { setSeverity("high"); reasons.push("hdiutil (disk image management command)"); }
-    if (firstWord === "gpt") { setSeverity("high"); reasons.push("gpt (partition table manipulation)"); }
-    if (firstWord === "asr") { setSeverity("high"); reasons.push("asr (Apple Software Restore; can overwrite volumes)"); }
-    if (["parted", "fdisk", "gdisk", "sgdisk"].includes(firstWord)) { setSeverity("high"); reasons.push(`${firstWord} (disk/partition management)`); }
-    if (firstWord === "lsblk") { setSeverity("medium"); reasons.push("lsblk (disk listing)"); }
-    if (firstWord === "cryptsetup") { setSeverity("high"); reasons.push("cryptsetup (disk encryption management)"); }
-    if (["pvcreate", "vgcreate", "lvcreate"].includes(firstWord)) { setSeverity("high"); reasons.push(`${firstWord} (LVM volume management)`); }
-    if (firstWord === "zpool") { setSeverity("high"); reasons.push("zpool (ZFS pool management)"); }
 
-    return { reasons, severity, hasDanger, isSimple: undefined };
+    return b.build();
   },
 };

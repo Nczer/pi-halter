@@ -1,9 +1,7 @@
 import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
-import path from "node:path";
 import fs from "node:fs";
 import type { FileRequest } from "../decision-engine";
-import { decide } from "../decision-engine";
-import { showPrompt } from "../prompt-flow";
+import { gate, rejectFile } from "../gate";
 import { store } from "../store";
 import {
   expandTilde,
@@ -51,46 +49,15 @@ export async function handleFile(
     }
   }
 
-  const request: FileRequest = { type: "file", toolName: toolName as "read" | "write" | "edit", filePath, cwd: ctx.cwd, resolvedPath };
-  const decision = await decide(request, store);
+  const request: FileRequest = {
+    type: "file",
+    toolName: toolName as "read" | "write" | "edit",
+    filePath,
+    cwd: ctx.cwd,
+    resolvedPath,
+  };
 
-  // Auto-allow: proceed without prompting
-  if (decision.kind === "auto-allow") return;
-
-  // Block: no prompt shown
-  if (decision.kind === "block") {
-    return { block: true, reason: decision.reason };
-  }
-
-  // No UI available — block
-  if (!ctx.hasUI) {
-    const pd = decision.promptData;
-    const reasons: string[] = [];
-    if (pd.type === "file" && pd.deniedRule) reasons.push(`matches denied rule "${pd.deniedRule}"`);
-    if (pd.type === "file" && pd.outsideDir) reasons.push("outside cwd");
-    const action = pd.type === "file" ? pd.action : "Access";
-    return { block: true, reason: reasons.length > 0
-      ? `[Permission Policy] Auto-blocked (no UI): ${action} ${filePath} — ${reasons.join(", ")}`
-      : `[Permission Policy] Auto-blocked (no UI): ${action} ${filePath} requires confirmation` };
-  }
-
-  const wasExpanded = ctx.ui.getToolsExpanded();
-  if (!wasExpanded) ctx.ui.setToolsExpanded(true);
-
-  try {
-    const result = await showPrompt(decision, ctx, store);
-    if (!result.allowed) {
-      // Note: unlike bash, we don't call store.recordAbort() here.
-      // File accesses are deterministic (same path → same result) and the
-      // agent's rejection reason is sufficient to prevent retry loops.
-      const pd = decision.promptData;
-      const action = (pd.type === "file" ? pd.action : "Access").toLowerCase();
-      const resolved = pd.type === "file" ? pd.resolved : filePath;
-      const reasonDetail = result.reason ? ` Reason: ${result.reason}.` : "";
-      ctx.ui.notify(`Permission denied: ${action} ${path.basename(filePath)}`, "error");
-      return { block: true, reason: `[USER REJECTED] You denied ${action} access to ${path.basename(filePath)} (${resolved}).${reasonDetail}` };
-    }
-  } finally {
-    ctx.ui.setToolsExpanded(wasExpanded);
-  }
+  return await gate(request, ctx, store, (decision, result) =>
+    rejectFile(decision, result, ctx),
+  );
 }

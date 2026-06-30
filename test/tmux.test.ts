@@ -68,8 +68,8 @@ describe("tmux: safe subcommands (auto-allow)", () => {
 
   it.each(safe)("%s", async (cmd) => {
     const { analysis, decision: dec } = await decision(cmd);
-    expect(analysis.allSimple, `${cmd}: allSimple`).toBe(true);
-    expect(analysis.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(false);
+    expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(true);
+    expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(false);
     expect(isAutoAllow(dec), `${cmd}: auto-allow`).toBe(true);
   });
 });
@@ -84,8 +84,8 @@ describe("tmux: safe subcommands with socket/alias flags (auto-allow)", () => {
 
   it.each(withSocket)("%s", async (cmd) => {
     const { analysis, decision: dec } = await decision(cmd);
-    expect(analysis.allSimple, `${cmd}: allSimple`).toBe(true);
-    expect(analysis.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(false);
+    expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(true);
+    expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(false);
     expect(isAutoAllow(dec), `${cmd}: auto-allow`).toBe(true);
   });
 });
@@ -110,8 +110,8 @@ describe("tmux: dangerous subcommands (prompt)", () => {
 
   it.each(dangerous)("%s", async ({ cmd }) => {
     const { analysis, decision: dec } = await decision(cmd);
-    expect(analysis.allSimple, `${cmd}: allSimple`).toBe(false);
-    expect(analysis.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
+    expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(false);
+    expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
     expect(isPrompt(dec), `${cmd}: prompt`).toBe(true);
     // Check severity
     const bashData = dec.kind === "prompt" ? dec.promptData : null;
@@ -151,8 +151,8 @@ describe("tmux: send-keys inherits auto-allow for safe keys", () => {
 
   it.each(safeKeys)("%s", async (cmd) => {
     const { analysis, decision: dec } = await decision(cmd);
-    expect(analysis.allSimple, `${cmd}: allSimple`).toBe(true);
-    expect(analysis.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(false);
+    expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(true);
+    expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(false);
     expect(isAutoAllow(dec), `${cmd}: auto-allow`).toBe(true);
   });
 });
@@ -191,8 +191,8 @@ describe("tmux: send-keys prompts for dangerous keys", () => {
 
   it.each(dangerousKeys)("%s", async (cmd) => {
     const { analysis, decision: dec } = await decision(cmd);
-    expect(analysis.allSimple, `${cmd}: allSimple`).toBe(false);
-    expect(analysis.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
+    expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(false);
+    expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
     expect(isPrompt(dec), `${cmd}: prompt`).toBe(true);
   });
 });
@@ -205,8 +205,8 @@ describe("tmux: send-keys with write redirect in keys (prompt)", () => {
 
   it.each(redirectKeys)("%s", async (cmd) => {
     const { analysis, decision: dec } = await decision(cmd);
-    expect(analysis.allSimple, `${cmd}: allSimple`).toBe(false);
-    expect(analysis.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
+    expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(false);
+    expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
     expect(isPrompt(dec), `${cmd}: prompt`).toBe(true);
   });
 });
@@ -219,8 +219,8 @@ describe("tmux: send-keys with subshell in keys (prompt)", () => {
 
   it.each(subshellKeys)("%s", async (cmd) => {
     const { analysis, decision: dec } = await decision(cmd);
-    expect(analysis.allSimple, `${cmd}: allSimple`).toBe(false);
-    expect(analysis.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
+    expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(false);
+    expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
     expect(isPrompt(dec), `${cmd}: prompt`).toBe(true);
   });
 });
@@ -235,10 +235,10 @@ describe("tmux: send-keys with no Enter (partial input)", () => {
   it.each(noEnter)("%s", async ({ cmd, safe }) => {
     const { analysis, decision: dec } = await decision(cmd);
     if (safe) {
-      expect(analysis.allSimple, `${cmd}: allSimple`).toBe(true);
+      expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(true);
       expect(isAutoAllow(dec), `${cmd}: auto-allow`).toBe(true);
     } else {
-      expect(analysis.allSimple, `${cmd}: allSimple`).toBe(false);
+      expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(false);
       expect(isPrompt(dec), `${cmd}: prompt`).toBe(true);
     }
   });
@@ -249,12 +249,12 @@ describe("tmux: 1:1 mirror of cases.test.ts bash commands via send-keys", () => 
   it.each(MIRROR_CASES)("%s (safe=%s)", async ({ cmd, safe }) => {
     const { analysis, decision: dec } = await decision(cmd);
     if (safe) {
-      expect(analysis.allSimple, `${cmd}: allSimple`).toBe(true);
-      expect(analysis.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(false);
+      expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(true);
+      expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(false);
       expect(isAutoAllow(dec), `${cmd}: auto-allow`).toBe(true);
     } else {
-      expect(analysis.allSimple, `${cmd}: allSimple`).toBe(false);
-      expect(analysis.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
+      expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(false);
+      expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
       expect(isPrompt(dec), `${cmd}: prompt`).toBe(true);
     }
   });
@@ -263,13 +263,13 @@ describe("tmux: 1:1 mirror of cases.test.ts bash commands via send-keys", () => 
 describe("tmux: edge cases", () => {
   it("no subcommand prompts", async () => {
     const { analysis, decision: dec } = await decision("tmux");
-    expect(analysis.allSimple).toBe(false);
+    expect(analysis.safety.isSimple).toBe(false);
     expect(isPrompt(dec)).toBe(true);
   });
 
   it("send-keys with no keys prompts", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo");
-    expect(analysis.allSimple).toBe(false);
+    expect(analysis.safety.isSimple).toBe(false);
     expect(isPrompt(dec)).toBe(true);
   });
 
@@ -277,7 +277,7 @@ describe("tmux: edge cases", () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo Enter");
     // Enter alone → empty command after stripping → treated as safe
     // (just pressing Enter in a terminal is harmless)
-    expect(analysis.allSimple).toBe(true);
+    expect(analysis.safety.isSimple).toBe(true);
     expect(isAutoAllow(dec)).toBe(true);
   });
 
@@ -285,31 +285,31 @@ describe("tmux: edge cases", () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo ls && echo done Enter");
     // The keys contain && which is a shell operator; the first command is 'ls'
     // isTmuxSendKeysSafe checks the first token only
-    expect(analysis.allSimple).toBe(true);
+    expect(analysis.safety.isSimple).toBe(true);
     expect(isAutoAllow(dec)).toBe(true);
   });
 
   it("pipeline with safe tmux command", async () => {
     const { analysis, decision: dec } = await decision("tmux list-sessions | grep foo");
-    expect(analysis.allSimple).toBe(true);
+    expect(analysis.safety.isSimple).toBe(true);
     expect(isAutoAllow(dec)).toBe(true);
   });
 
   it("pipeline with dangerous tmux command", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo rm -rf / Enter | cat");
-    expect(analysis.allSimple).toBe(false);
+    expect(analysis.safety.isSimple).toBe(false);
     expect(isPrompt(dec)).toBe(true);
   });
 
   it("&& chain with safe send-keys", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo ls Enter && tmux send-keys -t bar pwd Enter");
-    expect(analysis.allSimple).toBe(true);
+    expect(analysis.safety.isSimple).toBe(true);
     expect(isAutoAllow(dec)).toBe(true);
   });
 
   it("&& chain with dangerous send-keys", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo ls Enter && tmux send-keys -t bar rm -rf / Enter");
-    expect(analysis.allSimple).toBe(false);
+    expect(analysis.safety.isSimple).toBe(false);
     expect(isPrompt(dec)).toBe(true);
   });
 
@@ -320,7 +320,7 @@ describe("tmux: edge cases", () => {
     // Then checks isTmuxDangerous on the inner command
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo 'tmux send-keys -t bar ls' Enter");
     // Inner: tmux send-keys with safe keys (ls) → safe
-    expect(analysis.allSimple).toBe(true);
+    expect(analysis.safety.isSimple).toBe(true);
     expect(isAutoAllow(dec)).toBe(true);
   });
 });
@@ -366,9 +366,11 @@ describe("tmux: risk reason content", () => {
 
 describe("tmux: no 'always' option for dangerous commands", () => {
   it("dangerous subcommand blocks always option", async () => {
-    const { decision: dec } = await decision("tmux send-keys -t foo rm -rf / Enter");
+    const { analysis, decision: dec } = await decision("tmux send-keys -t foo rm -rf / Enter");
     expect(dec.kind).toBe("prompt");
-    expect(dec.includeAlwaysOption).toBe(false);
+    // hasUnsafePattern means canBeAutoAllowed is false, so no "always" option
+    expect(analysis.safety.hasUnsafePattern).toBe(true);
+    expect(analysis.safety.canBeAutoAllowed).toBe(false);
   });
 
   it("safe subcommand auto-allows (no prompt)", async () => {
@@ -382,25 +384,25 @@ describe("tmux: no 'always' option for dangerous commands", () => {
 describe("tmux: control characters in send-keys", () => {
   it("C-c prompts (SIGINT injection)", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo C-c");
-    expect(analysis.allSimple).toBe(false);
+    expect(analysis.safety.isSimple).toBe(false);
     expect(isPrompt(dec)).toBe(true);
   });
 
   it("C-d prompts (EOF injection)", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo C-d");
-    expect(analysis.allSimple).toBe(false);
+    expect(analysis.safety.isSimple).toBe(false);
     expect(isPrompt(dec)).toBe(true);
   });
 
   it("C-\\ prompts (SIGQUIT injection)", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo C-\\");
-    expect(analysis.allSimple).toBe(false);
+    expect(analysis.safety.isSimple).toBe(false);
     expect(isPrompt(dec)).toBe(true);
   });
 
   it("M-x prompts (Meta key, not an allowed command)", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo M-x");
-    expect(analysis.allSimple).toBe(false);
+    expect(analysis.safety.isSimple).toBe(false);
     expect(isPrompt(dec)).toBe(true);
   });
 
@@ -408,7 +410,7 @@ describe("tmux: control characters in send-keys", () => {
     // Current implementation checks first token only. ls is allowed → auto-allow.
     // If multi-key safety becomes a requirement, this test documents the current behavior.
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo ls C-c Enter");
-    expect(analysis.allSimple).toBe(true);
+    expect(analysis.safety.isSimple).toBe(true);
     expect(isAutoAllow(dec)).toBe(true);
   });
 });

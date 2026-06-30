@@ -85,18 +85,5 @@ export function decideFile(req: FileRequest, store: Store): Decision {
     symlinkHint,
   };
 
-  const allowRules: AllowRules = insideCwd
-    ? (isWriteOp ? { writePaths: [resolved], readPaths: [resolved] } : { readPaths: [resolved] })
-    : (isWriteOp ? { writeDirs: [resolvedDir], readDirs: [resolvedDir] } : { readDirs: [resolvedDir] });
-
-  const allowFileRules = insideCwd
-    ? undefined
-    : (isWriteOp ? { writePaths: [resolved], readPaths: [resolved] } : { readPaths: [resolved] });
-
-  // Directory-level allow for inside-cwd files (broader than file-only)
-  const allowBroaderRules = insideCwd
-    ? (isWriteOp ? { writeDirs: [resolvedDir], readDirs: [resolvedDir] } : { readDirs: [resolvedDir] })
-    : undefined;
-
-  return { kind: "prompt", promptData, allowRules, allowFileRules, allowBroaderRules, includeBroaderOption: insideCwd };
+  return { kind: "prompt", promptData };
 }
