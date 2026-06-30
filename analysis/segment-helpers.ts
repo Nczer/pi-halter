@@ -223,6 +223,31 @@ export interface StageDanger {
   severity: "high" | "medium" | null;
 }
 
+// ── Pipeline stage danger handlers ──
+
+/** Stage danger check: match + evaluate → { dangerous, reason?, severity? } */
+const STAGE_DANGER_HANDLERS: Array<{
+  match: (cmd: string, stage: string) => boolean;
+  evaluate: (cmd: string, stage: string) => { dangerous: boolean; reason?: string; severity?: "high" | "medium" }
+}> = [
+  { match: (c, s) => c === "find" && dangerousFindFlags.test(s),
+    evaluate: () => ({ dangerous: true, reason: "find with dangerous flags" }) },
+  { match: (c, s) => c === "find" && isFindExecWrite(s),
+    evaluate: () => ({ dangerous: true, reason: "find -exec with write operation" }) },
+  { match: (c, s) => c === "fd" && isFdExecWrite(s),
+    evaluate: () => ({ dangerous: true, reason: "fd -x with write operation" }) },
+  { match: (c, s) => c === "rg" && isRgPreWrite(s),
+    evaluate: () => ({ dangerous: true, reason: "rg --pre with write operation" }) },
+  { match: (c, s) => c === "sed" && isWriteOperation(c, s),
+    evaluate: () => ({ dangerous: true, reason: "sed -i in pipeline (in-place file modification)", severity: "high" }) },
+  { match: (c, s) => c === "perl" && isWriteOperation(c, s),
+    evaluate: () => ({ dangerous: true, reason: "perl -pi/-i in pipeline (in-place file modification)", severity: "high" }) },
+  { match: (c) => wrapperCommands.has(c),
+    evaluate: (_, s) => ({ dangerous: isWrapperRunningWrite(s) }) },
+  { match: () => true,
+    evaluate: (_, s) => ({ dangerous: hasWriteRedirect(s) }) },
+];
+
 export function checkStageDanger(stage: string): StageDanger {
   const reasons: string[] = [];
   let severity: "high" | "medium" | null = null;
@@ -230,32 +255,15 @@ export function checkStageDanger(stage: string): StageDanger {
 
   const stageCmd = getFirstWord(stage);
 
-  // find/fd/rg exec write
-  if (stageCmd === "find" && dangerousFindFlags.test(stage)) { dangerous = true; reasons.push("find with dangerous flags"); }
-  if (stageCmd === "find" && isFindExecWrite(stage)) { dangerous = true; reasons.push("find -exec with write operation"); }
-  if (stageCmd === "fd" && isFdExecWrite(stage)) { dangerous = true; reasons.push("fd -x with write operation"); }
-  if (stageCmd === "rg" && isRgPreWrite(stage)) { dangerous = true; reasons.push("rg --pre with write operation"); }
-
-  // sed/perl flags
-  if (stageCmd === "sed" && isWriteOperation(stageCmd, stage)) {
-    dangerous = true;
-    reasons.push("sed -i in pipeline (in-place file modification)");
-    severity = "high";
-  }
-  if (stageCmd === "perl" && isWriteOperation(stageCmd, stage)) {
-    dangerous = true;
-    reasons.push("perl -pi/-i in pipeline (in-place file modification)");
-    severity = "high";
-  }
-
-  // Wrapper running write
-  if (wrapperCommands.has(stageCmd) && isWrapperRunningWrite(stage)) {
-    dangerous = true;
-  }
-
-  // Write redirect
-  if (hasWriteRedirect(stage)) {
-    dangerous = true;
+  for (const handler of STAGE_DANGER_HANDLERS) {
+    if (handler.match(stageCmd, stage)) {
+      const result = handler.evaluate(stageCmd, stage);
+      if (result.dangerous) {
+        dangerous = true;
+        if (result.reason) reasons.push(result.reason);
+        if (result.severity && (!severity || result.severity === "high")) severity = result.severity;
+      }
+    }
   }
 
   return { dangerous, reasons, severity };
