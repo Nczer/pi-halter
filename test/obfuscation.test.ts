@@ -13,7 +13,7 @@ describe("detectObfuscation", () => {
 
   describe("variable indirection", () => {
     it("detects ${! prefix", () => {
-      expect(detectObfuscation("${!cmd}").techniques).toContain("variable indirection");
+      expect(detectObfuscation("${!cmd}").techniques).toContain("variable indirection (obfuscation)");
     });
 
     it("ignores normal variable usage", () => {
@@ -25,19 +25,19 @@ describe("detectObfuscation", () => {
     it("detects $VAR followed by word after semicolon", () => {
       // Regex: (?:^|;|\|\||&&)\s*\$[A-Z_][A-Z0-9_]*\s+\w
       // Requires uppercase var name + whitespace + word char (not a flag like -)
-      expect(detectObfuscation("; $CMD file").techniques).toContain("variable holding command");
+      expect(detectObfuscation("; $CMD file").techniques).toContain("variable holding command (obfuscation)");
     });
 
     it("detects after &&", () => {
-      expect(detectObfuscation("&& $X file").techniques).toContain("variable holding command");
+      expect(detectObfuscation("&& $X file").techniques).toContain("variable holding command (obfuscation)");
     });
 
     it("detects after ||", () => {
-      expect(detectObfuscation("|| $FOO bar").techniques).toContain("variable holding command");
+      expect(detectObfuscation("|| $FOO bar").techniques).toContain("variable holding command (obfuscation)");
     });
 
     it("detects at start of string", () => {
-      expect(detectObfuscation("$MYCMD arg").techniques).toContain("variable holding command");
+      expect(detectObfuscation("$MYCMD arg").techniques).toContain("variable holding command (obfuscation)");
     });
 
     it("ignores lowercase variable names", () => {
@@ -51,29 +51,61 @@ describe("detectObfuscation", () => {
 
   describe("character concatenation", () => {
     it("detects double-quote concatenation", () => {
-      expect(detectObfuscation("a\"b").techniques).toContain("character concatenation");
+      expect(detectObfuscation("a\"b").techniques).toContain("character concatenation (obfuscation)");
     });
 
     it("detects single-quote concatenation", () => {
-      expect(detectObfuscation("a'b").techniques).toContain("character concatenation");
+      expect(detectObfuscation("a'b").techniques).toContain("character concatenation (obfuscation)");
+    });
+
+    it("detects obfuscated command names", () => {
+      expect(detectObfuscation("ec\"ho file").techniques).toContain("character concatenation (obfuscation)");
     });
 
     it("ignores normal quoted strings", () => {
       expect(detectObfuscation('echo "hello world"').detected).toBe(false);
     });
+
+    it("ignores normal single-quoted arguments", () => {
+      expect(detectObfuscation("echo 'hello world'").detected).toBe(false);
+    });
+
+    it("ignores English contractions (possessive)", () => {
+      expect(detectObfuscation("beginner's guide").detected).toBe(false);
+    });
+
+    it("ignores English contractions (don't)", () => {
+      expect(detectObfuscation("don't do that").detected).toBe(false);
+    });
+
+    it("ignores English contractions (it's)", () => {
+      expect(detectObfuscation("it's fine").detected).toBe(false);
+    });
+
+    it("ignores English contractions (it'd)", () => {
+      expect(detectObfuscation("it'd be nice").detected).toBe(false);
+    });
+
+    it("ignores git commit messages with contractions", () => {
+      expect(detectObfuscation("git commit -m \"fix: beginner's guide\"").detected).toBe(false);
+    });
+
+    it("ignores chained commands with quoted args", () => {
+      expect(detectObfuscation('cd /path && git add file && git commit -m "fix: update docs"').detected).toBe(false);
+    });
   });
 
   describe("encoding/decoding", () => {
     it("detects base64 -d", () => {
-      expect(detectObfuscation("echo foo | base64 -d").techniques).toContain("encoding/decoding");
+      expect(detectObfuscation("echo foo | base64 -d").techniques).toContain("encoding/decoding (obfuscation)");
     });
 
     it("detects base64 -D (case insensitive)", () => {
-      expect(detectObfuscation("base64 -D").techniques).toContain("encoding/decoding");
+      expect(detectObfuscation("base64 -D").techniques).toContain("encoding/decoding (obfuscation)");
     });
 
     it("detects printf with \\x hex escape", () => {
-      expect(detectObfuscation("printf '\\x61\\x62'").techniques).toContain("encoding/decoding");
+      expect(detectObfuscation("printf '\\x61\\x62'").techniques).toContain("encoding/decoding (obfuscation)");
     });
 
     it("ignores base64 encode (no -d)", () => {
@@ -83,7 +115,7 @@ describe("detectObfuscation", () => {
 
   describe("indirect command via xargs", () => {
     it("detects xargs rm", () => {
-      expect(detectObfuscation("find . -name '*.tmp' | xargs rm").techniques).toContain("indirect command via xargs");
+      expect(detectObfuscation("find . -name '*.tmp' | xargs rm").techniques).toContain("indirect command via xargs (obfuscation)");
     });
 
     it("ignores xargs with safe commands", () => {
@@ -93,11 +125,11 @@ describe("detectObfuscation", () => {
 
   describe("xargs piping to shell interpreter", () => {
     it("detects xargs sh -c", () => {
-      expect(detectObfuscation("echo rm | xargs sh -c").techniques).toContain("xargs piping to shell interpreter");
+      expect(detectObfuscation("echo rm | xargs sh -c").techniques).toContain("xargs piping to shell interpreter (obfuscation)");
     });
 
     it("detects xargs bash -c", () => {
-      expect(detectObfuscation("echo rm | xargs bash -c").techniques).toContain("xargs piping to shell interpreter");
+      expect(detectObfuscation("echo rm | xargs bash -c").techniques).toContain("xargs piping to shell interpreter (obfuscation)");
     });
 
     it("ignores xargs without shell interpreter", () => {
