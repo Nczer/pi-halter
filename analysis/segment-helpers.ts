@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
-import { isWriteOperation, PACKAGE_MANAGERS } from "../config";
+import { isWriteOperation, PACKAGE_MANAGERS, dangerousFindFlags, wrapperCommands } from "../config";
 import { splitOnPipe } from "./tokenizer";
 
 // splitPipeline is splitOnPipe — same semantics (split on | not ||)
@@ -98,21 +98,37 @@ export function skipWrapperArg(wrapper: string, arg: string): boolean {
 }
 
 /**
- * Check if a wrapper command (xargs, timeout, nice, etc.) is running a write operation.
- * @param includeRelativePath - If true, also returns true for relative path targets (./foo).
+ * Iterate wrapper command args (skipping flags/options) and apply a predicate.
+ * @param firstOnly - If true, check only the first non-flag arg. If false, check all.
  */
-export function isWrapperRunningWrite(segment: string, includeRelativePath = true): boolean {
+function checkWrapperArg(segment: string, predicate: (arg: string) => boolean, firstOnly = false): boolean {
   const args = segment.trim().split(/\s+/);
   const firstWord = args[0].toLowerCase();
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
     if (skipWrapperArg(firstWord, arg)) continue;
-    const wrappedCmd = arg.toLowerCase();
-    if (includeRelativePath && isFirstTokenRelativePath(arg)) return true;
-    if (isWriteOperation(wrappedCmd, segment)) return true;
-    continue;
+    if (predicate(arg)) return true;
+    if (firstOnly) break;
   }
   return false;
+}
+
+/**
+ * Check if a wrapper command (xargs, timeout, nice, etc.) is running a write operation.
+ * @param includeRelativePath - If true, also returns true for relative path targets (./foo).
+ */
+export function isWrapperRunningWrite(segment: string, includeRelativePath = true): boolean {
+  return checkWrapperArg(segment, (arg) => {
+    if (includeRelativePath && isFirstTokenRelativePath(arg)) return true;
+    return isWriteOperation(arg.toLowerCase(), segment);
+  });
+}
+
+/**
+ * Check if a wrapper command is targeting a relative path (./foo, ../foo).
+ */
+export function isWrapperRunningRelativePath(segment: string): boolean {
+  return checkWrapperArg(segment, (arg) => isFirstTokenRelativePath(arg), true);
 }
 
 /**
@@ -147,28 +163,95 @@ export function getCommandSignature(segment: string): string {
 }
 
 /**
- * Check if find/fd/rg execution triggers a write operation.
+ * Check if a tool's exec/pre flag triggers a write operation.
+ * Generic helper for find -exec, fd -x, rg --pre, etc.
  */
+function checkExecWrite(segment: string, regex: RegExp): boolean {
+  const match = segment.match(regex);
+  if (!match) return false;
+  const cmd = match[1].toLowerCase();
+  const after = segment.slice(match.index! + match[0].length);
+  return isWriteOperation(cmd, after);
+}
+
 export function isFindExecWrite(segment: string): boolean {
-  const execMatch = segment.match(FIND_EXEC_RE);
-  if (!execMatch) return false;
-  const execCmd = execMatch[1].toLowerCase();
-  const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
-  return isWriteOperation(execCmd, afterExec);
+  return checkExecWrite(segment, FIND_EXEC_RE);
 }
 
 export function isFdExecWrite(segment: string): boolean {
-  const execMatch = segment.match(FD_EXEC_RE);
-  if (!execMatch) return false;
-  const execCmd = execMatch[1].toLowerCase();
-  const afterExec = segment.slice(execMatch.index! + execMatch[0].length);
-  return isWriteOperation(execCmd, afterExec);
+  return checkExecWrite(segment, FD_EXEC_RE);
 }
 
 export function isRgPreWrite(segment: string): boolean {
-  const preMatch = segment.match(RG_PRE_RE);
-  if (!preMatch) return false;
-  const preCmd = preMatch[1].toLowerCase();
-  const afterPre = segment.slice(preMatch.index! + preMatch[0].length);
-  return isWriteOperation(preCmd, afterPre);
+  return checkExecWrite(segment, RG_PRE_RE);
+}
+
+/** Pre-compiled regex for git clean flags. */
+const GIT_CLEAN_FLAGS_RE = /-[fdx]/;
+
+/**
+ * Check if a git command is dangerous.
+ * Used by segment-analysis.ts (pipeline loop) and GitEvaluator.
+ */
+export function isGitDangerous(segment: string): boolean {
+  const args = segment.trim().split(/\s+/);
+  if (args.length < 2) return false;
+  const sub = args[1].toLowerCase();
+  const subArgs = args.slice(2);
+  if (sub === "rm") return true;
+  if (sub === "clean" && subArgs.some(a => GIT_CLEAN_FLAGS_RE.test(a))) return true;
+  if (sub === "reset" && subArgs.includes("--hard")) return true;
+  if (sub === "push" && subArgs.some(a => a === "--force" || a === "--force-with-lease" || a === "-f")) return true;
+  if (sub === "reflog" && subArgs.includes("expire")) return true;
+  if (sub === "gc" && subArgs.some(a => a.startsWith("--prune"))) return true;
+  return false;
+}
+
+/**
+ * Check if a pipeline stage is dangerous.
+ * Used by both segment-analysis.ts (pipeline loop) and evaluators.
+ * Returns { dangerous, reasons, severity } for the stage.
+ */
+export interface StageDanger {
+  dangerous: boolean;
+  reasons: string[];
+  severity: "high" | "medium" | null;
+}
+
+export function checkStageDanger(stage: string): StageDanger {
+  const reasons: string[] = [];
+  let severity: "high" | "medium" | null = null;
+  let dangerous = false;
+
+  const stageCmd = getFirstWord(stage);
+
+  // find/fd/rg exec write
+  if (stageCmd === "find" && dangerousFindFlags.test(stage)) { dangerous = true; reasons.push("find with dangerous flags"); }
+  if (stageCmd === "find" && isFindExecWrite(stage)) { dangerous = true; reasons.push("find -exec with write operation"); }
+  if (stageCmd === "fd" && isFdExecWrite(stage)) { dangerous = true; reasons.push("fd -x with write operation"); }
+  if (stageCmd === "rg" && isRgPreWrite(stage)) { dangerous = true; reasons.push("rg --pre with write operation"); }
+
+  // sed/perl flags
+  if (stageCmd === "sed" && isWriteOperation(stageCmd, stage)) {
+    dangerous = true;
+    reasons.push("sed -i in pipeline (in-place file modification)");
+    severity = "high";
+  }
+  if (stageCmd === "perl" && isWriteOperation(stageCmd, stage)) {
+    dangerous = true;
+    reasons.push("perl -pi/-i in pipeline (in-place file modification)");
+    severity = "high";
+  }
+
+  // Wrapper running write
+  if (wrapperCommands.has(stageCmd) && isWrapperRunningWrite(stage)) {
+    dangerous = true;
+  }
+
+  // Write redirect
+  if (hasWriteRedirect(stage)) {
+    dangerous = true;
+  }
+
+  return { dangerous, reasons, severity };
 }

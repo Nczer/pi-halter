@@ -106,69 +106,55 @@ export async function twoTierAlwaysPrompt(
     }
 
     // ── Tier-2 confirmation for "Always" choices ──
-    // Resolve which callback and tier-2 config to use based on layout + index
-    let tier2Config: { title: string; body: string };
-    let callback: () => PromptResult;
+    // Build dispatch table: choice index → (tier2Config, callback)
+    interface Tier2Entry { config: { title: string; body: string }; fn: () => PromptResult; }
+    const entries: Tier2Entry[] = [];
 
-    if (includeBroaderOption && includePathsOption) {
-      // Bash with both broader sigs and paths options
-      if (idx === Choice.Always) {
-        tier2Config = tier2Everything;
-        callback = () => { onAlways(); return "always" as PromptResult; };
-      } else if (idx === Choice.AlwaysBroader) {
-        tier2Config = tier2Broader ?? tier2Everything;
-        callback = () => { onAlwaysBroader?.(); return "always" as PromptResult; };
-      } else {
-        tier2Config = tier2Paths ?? tier2Everything;
-        callback = () => { onAlwaysPaths(); return "alwaysPaths" as PromptResult; };
-      }
-    } else if (includeBroaderOption && includeFileOption) {
-      // File with both directory and file options
-      if (idx === Choice.Always) {
-        tier2Config = tier2Everything;
-        callback = () => { onAlways(); return "always" as PromptResult; };
-      } else {
-        tier2Config = tier2Broader ?? tier2Everything;
-        callback = () => { onAlwaysBroader?.(); return "always" as PromptResult; };
-      }
-    } else if (includeBroaderOption) {
-      if (idx === Choice.Always) {
-        // Always: specific sigs
-        tier2Config = tier2Everything;
-        callback = () => { onAlways(); return "always" as PromptResult; };
-      } else {
-        // Always: broader sigs
-        tier2Config = tier2Broader ?? tier2Everything;
-        callback = () => { onAlwaysBroader?.(); return "always" as PromptResult; };
-      }
-    } else if (includeFileOption) {
-      if (idx === Choice.Always) {
-        // Always (path)
-        tier2Config = tier2Everything;
-        callback = () => { onAlways(); return "always" as PromptResult; };
-      } else {
-        // Always (file)
-        tier2Config = tier2File!;
-        callback = () => { onAlwaysFile(); return "alwaysFile" as PromptResult; };
-      }
-    } else if (includePathsOption) {
-      if (idx === Choice.Always) {
-        // Always: sigs + paths
-        tier2Config = tier2Everything;
-        callback = () => { onAlways(); return "always" as PromptResult; };
-      } else {
-        // Always (paths)
-        tier2Config = tier2Paths ?? tier2Everything;
-        callback = () => { onAlwaysPaths(); return "alwaysPaths" as PromptResult; };
-      }
-    } else {
-      // Default: single Always option
-      const tier2Body = tier2Everything.body
-        ? tier2Everything.body + "\n\n\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts."
-        : "\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
-      tier2Config = { title: tier2Everything.title, body: tier2Body };
-      callback = () => { onAlways(); return "always" as PromptResult; };
+    // Primary "Always" (always at Choice.Always = index 1)
+    {
+      const primaryConfig = includeBroaderOption || includePathsOption || includeFileOption
+        ? tier2Everything
+        : {
+            title: tier2Everything.title,
+            body: tier2Everything.body
+              ? tier2Everything.body + "\n\n\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts."
+              : "\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.",
+          };
+      entries.push({ config: primaryConfig, fn: () => { onAlways(); return "always" as PromptResult; } });
     }
+
+    // Broader option (e.g. "npm *" instead of "npm test *")
+    if (includeBroaderOption) {
+      entries.push({ config: tier2Broader ?? tier2Everything, fn: () => { onAlwaysBroader?.(); return "always" as PromptResult; } });
+    }
+
+    // Paths-only option (bash with outside dirs)
+    if (includePathsOption) {
+      entries.push({ config: tier2Paths ?? tier2Everything, fn: () => { onAlwaysPaths(); return "alwaysPaths" as PromptResult; } });
+    }
+
+    // File-only option (file outside cwd)
+    if (includeFileOption) {
+      entries.push({ config: tier2File!, fn: () => { onAlwaysFile(); return "alwaysFile" as PromptResult; } });
+    }
+
+    // Resolve: idx maps to entry index (Choice.Always=1 → entries[0], Choice.AlwaysAlt=2 → entries[1], etc.)
+    const entryIdx = idx - Choice.Always;
+    const entry = entries[entryIdx];
+    if (!entry) {
+      // Fallback: should not happen given the choices array is built consistently
+      const tier2Body = "\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
+      const tier2Config = { title: tier2Everything.title, body: tier2Body };
+      const callback = () => { onAlways(); return "always" as PromptResult; };
+      const tier2Idx = await showSelectIndex(ctx, tier2Config.title + "\n---\n" + tier2Config.body, ["Always Yes", "Back"]);
+      if (tier2Idx === Tier2.Confirm) return callback();
+      continue;
+    }
+
+    // Show tier-2 confirmation
+    const tier2Idx = await showSelectIndex(ctx, entry.config.title + "\n---\n" + entry.config.body, ["Always Yes", "Back"]);
+    if (tier2Idx === Tier2.Confirm) return entry.fn();
+    // tier2Idx === Back || null → loop
 
     // Show tier-2 confirmation
     const tier2Idx = await showSelectIndex(ctx, tier2Config.title + "\n---\n" + tier2Config.body, ["Always Yes", "Back"]);

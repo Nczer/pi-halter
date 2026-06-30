@@ -1,14 +1,10 @@
 import path from "node:path";
 import {
   isAllowedCommand,
-  dangerousFindFlags,
-  dangerousPerlFlags,
-  dangerousSedFlags,
   dangerousCommandPatterns,
   dangerousContextPatterns,
   isTrustedScriptCommand,
   wrapperCommands,
-  isWriteOperation,
   SHELL_INTERPRETERS,
 } from "../config";
 import type { BashSegment } from "./bash-parser";
@@ -18,13 +14,12 @@ import {
   getFirstWord,
   splitPipeline,
   hasWriteRedirect,
-  isWrapperRunningWrite,
-  skipWrapperArg,
-  isFindExecWrite,
-  isFdExecWrite,
-  isRgPreWrite,
+  checkStageDanger,
+  isGitDangerous,
+  isWrapperRunningRelativePath,
 } from "./segment-helpers";
 import { isTmuxDangerous } from "./tmux-helpers";
+import { detectObfuscation } from "./obfuscation";
 import { ShellEvaluator } from "./evaluators/shell-evaluator";
 import { SystemEvaluator } from "./evaluators/system-evaluator";
 import { GitEvaluator } from "./evaluators/git-evaluator";
@@ -71,74 +66,9 @@ export interface SegmentAnalysis {
   risk: SegmentRisk;
 }
 
-// ── Pre-compiled regexes for obfuscation detection ──
-
-const OBfus_VAR_INDIRECTION_RE = /\$\{!/;
-const OBfus_VAR_HOLDING_CMD_RE = /(?:^|;|\|\||&&)\s*\$[A-Z_][A-Z0-9_]*\s+\w/;
-const OBfus_CHAR_CONCAT_RE1 = /[a-z]"[a-z]/;
-const OBfus_CHAR_CONCAT_RE2 = /[a-z]'[a-z]/;
-const OBfus_BASE64_RE = /base64\s+[-d]/i;
-const OBfus_PRINTF_HEX_RE = /printf\s+.*\\x/i;
-const OBfus_XARGS_RM_RE = /xargs\s.*\brm\b/;
-const OBfus_XARGS_SH_RE = /xargs\s+sh\s+-c\b/;
-const OBfus_XARGS_BASH_RE = /xargs\s+bash\s+-c\b/;
-const OBfus_ALIAS_RE = /\b(alias|declare|typeset)\s+\w+=\s*(rm|sudo|curl|wget|ssh)\b/i;
-const GIT_CLEAN_FLAGS_RE = /-[fdx]/;
 const REDIRECT_ONLY_RE = /^[0-9]*&?>+/;
 const PIPELINE_RELATIVE_RE1 = /^\.\//;
 const PIPELINE_RELATIVE_RE2 = /^\.\.\//;
-
-// ── Pattern checks (shared by danger detection and risk reasons) ──
-
-export function detectObfuscation(cmd: string): { detected: boolean; techniques: string[] } {
-  const techniques: string[] = [];
-  if (OBfus_VAR_INDIRECTION_RE.test(cmd)) techniques.push("variable indirection");
-  if (OBfus_VAR_HOLDING_CMD_RE.test(cmd)) techniques.push("variable holding command");
-  if (OBfus_CHAR_CONCAT_RE1.test(cmd) || OBfus_CHAR_CONCAT_RE2.test(cmd)) techniques.push("character concatenation");
-  if (OBfus_BASE64_RE.test(cmd) || OBfus_PRINTF_HEX_RE.test(cmd)) techniques.push("encoding/decoding");
-  if (OBfus_XARGS_RM_RE.test(cmd)) techniques.push("indirect command via xargs");
-  if (OBfus_XARGS_SH_RE.test(cmd) || OBfus_XARGS_BASH_RE.test(cmd)) techniques.push("xargs piping to shell interpreter");
-  if (OBfus_ALIAS_RE.test(cmd)) techniques.push("alias/function obfuscation");
-  return { detected: techniques.length > 0, techniques };
-}
-
-function hasFlag(args: string[], flag: string): boolean {
-  return args.includes(flag) || args.some((a) => a.startsWith(flag + "=") || a.startsWith(flag + "."));
-}
-
-function anyArgStartsWith(args: string[], prefix: string): boolean {
-  return args.some((a) => a.startsWith(prefix));
-}
-
-// ── Git ──
-
-export function isGitDangerous(segment: string): boolean {
-  const args = segment.trim().split(/\s+/);
-  if (args.length < 2) return false;
-  const sub = args[1].toLowerCase();
-  const subArgs = args.slice(2);
-  if (sub === "rm") return true;
-  if (sub === "clean" && subArgs.some(a => GIT_CLEAN_FLAGS_RE.test(a))) return true;
-  if (sub === "reset" && subArgs.includes("--hard")) return true;
-  if (sub === "push" && subArgs.some(a => a === "--force" || a === "--force-with-lease" || a === "-f")) return true;
-  if (sub === "reflog" && subArgs.includes("expire")) return true;
-  if (sub === "gc" && subArgs.some(a => a.startsWith("--prune"))) return true;
-  return false;
-}
-
-// ── Wrapper commands ──
-
-function isWrapperRunningRelativePath(segment: string): boolean {
-  const args = segment.trim().split(/\s+/);
-  const firstWord = args[0].toLowerCase();
-  for (let i = 1; i < args.length; i++) {
-    const arg = args[i];
-    if (skipWrapperArg(firstWord, arg)) continue;
-    if (isFirstTokenRelativePath(arg)) return true;
-    break;
-  }
-  return false;
-}
 
 // ── Unified segment analysis ──
 
@@ -150,7 +80,6 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   const segment = seg.text;
   const trimmed = segment.trim();
   const firstWord = getFirstWord(segment);
-  const ops = seg.ops;
 
   // Cache expensive checks to avoid duplicates across evaluators and pipeline analysis
   const cachedObfuscation = detectObfuscation(segment);
@@ -218,29 +147,25 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       }
 
       let stageDangerous = false;
-      if (stageCmd === "find" && (dangerousFindFlags.test(stage) || isFindExecWrite(stage))) stageDangerous = true;
-      if (stageCmd === "fd" && isFdExecWrite(stage)) stageDangerous = true;
-      if (stageCmd === "rg" && isRgPreWrite(stage)) stageDangerous = true;
-      if (stageCmd === "sed" && dangerousSedFlags.test(stage)) {
+
+      // Shared danger checks (sed/perl, find/fd/rg, wrapper, write redirect)
+      const stageDanger = checkStageDanger(stage);
+      if (stageDanger.dangerous) {
         stageDangerous = true;
-        const reason = "[Pipeline] sed -i in pipeline (in-place file modification)";
-        if (!aggregatedReasons.includes(reason)) {
-          aggregatedReasons.push(reason);
-          aggregatedSeverity = "high";
+        for (const reason of stageDanger.reasons) {
+          const tagged = `[Pipeline] ${reason}`;
+          if (!aggregatedReasons.includes(tagged)) {
+            aggregatedReasons.push(tagged);
+          }
+        }
+        if (stageDanger.severity === "high" || (!aggregatedSeverity && stageDanger.severity === "medium")) {
+          aggregatedSeverity = stageDanger.severity;
         }
       }
-      if (stageCmd === "perl" && dangerousPerlFlags.test(stage)) {
-        stageDangerous = true;
-        const reason = "[Pipeline] perl -pi/-i in pipeline (in-place file modification)";
-        if (!aggregatedReasons.includes(reason)) {
-          aggregatedReasons.push(reason);
-          aggregatedSeverity = "high";
-        }
-      }
+
+      // Pipeline-specific checks (git, tmux, dangerous patterns)
       if (stageCmd === "git" && isGitDangerous(stage)) stageDangerous = true;
       if (stageCmd === "tmux" && isTmuxDangerous(stage)) stageDangerous = true;
-      if (wrapperCommands.has(stageCmd) && isWrapperRunningWrite(stage)) stageDangerous = true;
-      if (hasWriteRedirect(stage)) stageDangerous = true;
       if (dangerousCommandPatterns.some(({ pattern }) => pattern.test(stageCmd))) stageDangerous = true;
       if (dangerousContextPatterns.some(({ pattern }) => pattern.test(stage))) stageDangerous = true;
 
