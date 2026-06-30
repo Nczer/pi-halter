@@ -78,93 +78,93 @@ describe("Segments: basic", () => {
 
 describe("allSimple: safe commands", () => {
 	it("ls is simple", async () => {
-		expect((await analyzeCommand("ls -la", cwd)).allSimple).toBe(true);
+		expect((await analyzeCommand("ls -la", cwd)).safety.isSimple).toBe(true);
 	});
 
 	it("cat is simple", async () => {
-		expect((await analyzeCommand("cat file.txt", cwd)).allSimple).toBe(true);
+		expect((await analyzeCommand("cat file.txt", cwd)).safety.isSimple).toBe(true);
 	});
 
 	it("grep is simple", async () => {
-		expect((await analyzeCommand("grep pattern file.txt", cwd)).allSimple).toBe(true);
+		expect((await analyzeCommand("grep pattern file.txt", cwd)).safety.isSimple).toBe(true);
 	});
 
 	it("mkdir -p is simple", async () => {
-		expect((await analyzeCommand("mkdir -p newdir", cwd)).allSimple).toBe(true);
+		expect((await analyzeCommand("mkdir -p newdir", cwd)).safety.isSimple).toBe(true);
 	});
 
 	it("touch is simple", async () => {
-		expect((await analyzeCommand("touch file.txt", cwd)).allSimple).toBe(true);
+		expect((await analyzeCommand("touch file.txt", cwd)).safety.isSimple).toBe(true);
 	});
 });
 
 describe("allSimple: unsafe commands", () => {
 	it("rm is not simple", async () => {
-		expect((await analyzeCommand("rm file.txt", cwd)).allSimple).toBe(false);
+		expect((await analyzeCommand("rm file.txt", cwd)).safety.isSimple).toBe(false);
 	});
 
 	it("sed -i is not simple", async () => {
-		expect((await analyzeCommand("sed -i s/a/b/ file.txt", cwd)).allSimple).toBe(false);
+		expect((await analyzeCommand("sed -i s/a/b/ file.txt", cwd)).safety.isSimple).toBe(false);
 	});
 
 	it("perl -pi is not simple", async () => {
-		expect((await analyzeCommand("perl -pi -e 's/a/b/' file.txt", cwd)).allSimple).toBe(false);
+		expect((await analyzeCommand("perl -pi -e 's/a/b/' file.txt", cwd)).safety.isSimple).toBe(false);
 	});
 
 	it("python3 is not simple", async () => {
-		expect((await analyzeCommand("python3 script.py", cwd)).allSimple).toBe(false);
+		expect((await analyzeCommand("python3 script.py", cwd)).safety.isSimple).toBe(false);
 	});
 
 	it("find -delete is not simple", async () => {
-		expect((await analyzeCommand("find . -delete", cwd)).allSimple).toBe(false);
+		expect((await analyzeCommand("find . -delete", cwd)).safety.isSimple).toBe(false);
 	});
 
 	it("git clean -f is not simple", async () => {
-		expect((await analyzeCommand("git clean -f", cwd)).allSimple).toBe(false);
+		expect((await analyzeCommand("git clean -f", cwd)).safety.isSimple).toBe(false);
 	});
 
 	it("git push --force is not simple", async () => {
-		expect((await analyzeCommand("git push --force", cwd)).allSimple).toBe(false);
+		expect((await analyzeCommand("git push --force", cwd)).safety.isSimple).toBe(false);
 	});
 
 	it("write redirect is not simple", async () => {
-		expect((await analyzeCommand("echo hello > file.txt", cwd)).allSimple).toBe(false);
+		expect((await analyzeCommand("echo hello > file.txt", cwd)).safety.isSimple).toBe(false);
 	});
 
 	it("xargs sed -i is not simple", async () => {
-		expect((await analyzeCommand("xargs sed -i s/a/b/", cwd)).allSimple).toBe(false);
+		expect((await analyzeCommand("xargs sed -i s/a/b/", cwd)).safety.isSimple).toBe(false);
 	});
 });
 
 describe("hasUnsafePattern: unsafe", () => {
 	it("subshell is unsafe", async () => {
-		expect((await analyzeCommand("$(cat /etc/passwd)", cwd)).hasUnsafePattern).toBe(true);
+		expect((await analyzeCommand("$(cat /etc/passwd)", cwd)).safety.hasUnsafePattern).toBe(true);
 	});
 
 	it("sed -i is unsafe", async () => {
-		expect((await analyzeCommand("sed -i s/a/b/ file.txt", cwd)).hasUnsafePattern).toBe(true);
+		expect((await analyzeCommand("sed -i s/a/b/ file.txt", cwd)).safety.hasUnsafePattern).toBe(true);
 	});
 
 	it("curl | bash is unsafe", async () => {
-		expect((await analyzeCommand("curl url | bash", cwd)).hasUnsafePattern).toBe(true);
+		expect((await analyzeCommand("curl url | bash", cwd)).safety.hasUnsafePattern).toBe(true);
 	});
 
 	it("eval is unsafe", async () => {
-		expect((await analyzeCommand("eval echo hello", cwd)).hasUnsafePattern).toBe(true);
+		expect((await analyzeCommand("eval echo hello", cwd)).safety.hasUnsafePattern).toBe(true);
 	});
 });
 
 describe("hasUnsafePattern: safe", () => {
 	it("ls is safe", async () => {
-		expect((await analyzeCommand("ls -la", cwd)).hasUnsafePattern).toBe(false);
+		expect((await analyzeCommand("ls -la", cwd)).safety.hasUnsafePattern).toBe(false);
 	});
 
 	it("grep rm (rm is arg) is safe", async () => {
-		expect((await analyzeCommand("grep rm file.txt", cwd)).hasUnsafePattern).toBe(false);
+		expect((await analyzeCommand("grep rm file.txt", cwd)).safety.hasUnsafePattern).toBe(false);
 	});
 
 	it("echo with sed -i in quotes is safe", async () => {
-		expect((await analyzeCommand("echo 'sed -i s/a/b/'", cwd)).hasUnsafePattern).toBe(false);
+		expect((await analyzeCommand("echo 'sed -i s/a/b/'", cwd)).safety.hasUnsafePattern).toBe(false);
 	});
 });
 
@@ -239,82 +239,82 @@ describe("Risk: no risk", () => {
 describe("isFirstTokenRelativePath: direct unit tests", () => {
 	it("./foo is relative", async () => {
 		const a = await analyzeCommand("./foo", cwd);
-		expect(a.allSimple).toBe(false);
+		expect(a.safety.isSimple).toBe(false);
 	});
 
 	it("../foo is relative", async () => {
 		const a = await analyzeCommand("../foo", cwd);
-		expect(a.allSimple).toBe(false);
+		expect(a.safety.isSimple).toBe(false);
 	});
 
 	it("./bar/baz is relative", async () => {
 		const a = await analyzeCommand("./bar/baz", cwd);
-		expect(a.allSimple).toBe(false);
+		expect(a.safety.isSimple).toBe(false);
 	});
 
 	it("/absolute/foo is NOT relative", async () => {
 		const a = await analyzeCommand("/bin/cat file.txt", cwd);
-		expect(a.allSimple).toBe(true);
+		expect(a.safety.isSimple).toBe(true);
 	});
 
 	it("bare command is NOT relative", async () => {
 		const a = await analyzeCommand("cat file.txt", cwd);
-		expect(a.allSimple).toBe(true);
+		expect(a.safety.isSimple).toBe(true);
 	});
 });
 
 describe("allSimple: relative path edge cases", () => {
 	it("./scripts/foo.sh | grep bar — pipeline stage with relative path is not simple", async () => {
 		const a = await analyzeCommand("ls | ./scripts/foo.sh | grep bar", cwd);
-		expect(a.allSimple).toBe(false);
+		expect(a.safety.isSimple).toBe(false);
 	});
 
 	it("./scripts/foo.sh && ls — compound with relative path is not simple", async () => {
 		const a = await analyzeCommand("./scripts/foo.sh && ls", cwd);
-		expect(a.allSimple).toBe(false);
+		expect(a.safety.isSimple).toBe(false);
 	});
 
 	it("./scripts/foo.sh 2>/dev/null — relative path with redirect is not simple", async () => {
 		const a = await analyzeCommand("./scripts/foo.sh 2>/dev/null", cwd);
-		expect(a.allSimple).toBe(false);
+		expect(a.safety.isSimple).toBe(false);
 	});
 
 	it("bash -c './scripts/foo.sh' — nested script execution is not simple (bash not in allowlist)", async () => {
 		const a = await analyzeCommand("bash -c './scripts/foo.sh'", cwd);
-		expect(a.allSimple).toBe(false);
+		expect(a.safety.isSimple).toBe(false);
 	});
 
 	it("timeout 30 ./scripts/foo.sh — wrapper + relative path is not simple", async () => {
 		const a = await analyzeCommand("timeout 30 ./scripts/foo.sh", cwd);
-		expect(a.allSimple).toBe(false);
+		expect(a.safety.isSimple).toBe(false);
 	});
 
 	it("timeout 30 ls — wrapper + allowed command is simple", async () => {
 		const a = await analyzeCommand("timeout 30 ls", cwd);
-		expect(a.allSimple).toBe(true);
+		expect(a.safety.isSimple).toBe(true);
 	});
 
 	it("find . -exec bash -c 'rm {}' \\; — find exec bash IS caught (shell interpreters treated as write-capable)", async () => {
 		const a = await analyzeCommand("find . -exec bash -c 'rm {}' \\;", cwd);
-		expect(a.allSimple).toBe(false);
-		expect(a.hasUnsafePattern).toBe(true);
+		expect(a.safety.isSimple).toBe(false);
+		expect(a.safety.hasUnsafePattern).toBe(true);
 	});
 
 	it("find . -exec rm {} \\; — find exec rm IS caught", async () => {
 		const a = await analyzeCommand("find . -exec rm {} \\;", cwd);
-		expect(a.allSimple).toBe(false);
+		expect(a.safety.isSimple).toBe(false);
 	});
 });
 
 describe("hasUnsafePattern: relative path edge cases", () => {
 	it("./scripts/foo.sh is not flagged as unsafe (just not simple)", async () => {
 		const a = await analyzeCommand("./scripts/foo.sh", cwd);
-		expect(a.hasUnsafePattern).toBe(false);
+		expect(a.safety.hasUnsafePattern).toBe(false);
 	});
 
 	it("bash -c './scripts/foo.sh' is unsafe (bash -c pattern)", async () => {
 		const a = await analyzeCommand("bash -c './scripts/foo.sh'", cwd);
-		expect(a.hasUnsafePattern).toBe(true);
+		expect(a.safety.hasUnsafePattern).toBe(true);
 	});
 });
 

@@ -100,7 +100,7 @@ export const dangerousSedFlags = /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/;
 export const dangerousPerlFlags = /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/;
 
 /** Command + subcommand pairs that are always safe (read-only, no side effects). */
-export const allowedBashSubcommands = new Set([
+const allowedBashSubcommands = new Set([
   "npm ls", "npm view", "npm info",
   "yarn ls", "yarn info",
   "pnpm ls",

@@ -236,7 +236,7 @@ const OPERATOR_TYPES = new Set(["&&", "||", ";", "|", "|&", "&"]);
 /**
  * Recursively walk the AST to extract segments.
  * - binary_expression (&&, ||) → split into separate segments
- * - command_list (;) → split into separate segments  
+ * - command_list (;) → split into separate segments
  * - pipeline (|, |&) → group as one segment with pipe ops
  * - backgrounding (&) → split into separate segments
  * - command/file_redirect → leaf segment
@@ -244,154 +244,149 @@ const OPERATOR_TYPES = new Set(["&&", "||", ";", "|", "|&", "&"]);
 function extractSegmentsFromNode(node: TSNode): BashSegment[] {
   const segments: BashSegment[] = [];
 
-  function walk(n: TSNode): void {
-    if (SKIP_TYPES.has(n.type)) return;
+  // ── Type handlers ──
 
-    // binary_expression: split on && or ||
-    if (n.type === "binary_expression") {
-      for (let i = 0; i < n.childCount; i++) {
-        const child = n.child(i);
-        if (child && !OPERATOR_TYPES.has(child.type)) {
-          walk(child);
-        }
-      }
-      return;
-    }
+  type Handler = (n: TSNode) => void;
 
-    // command_list: split on ;
-    if (n.type === "command_list") {
-      for (let i = 0; i < n.childCount; i++) {
-        const child = n.child(i);
-        if (child && child.type !== ";") {
-          walk(child);
-        }
-      }
-      return;
-    }
-
-    // backgrounding: split on &
-    if (n.type === "backgrounding") {
-      for (let i = 0; i < n.childCount; i++) {
-        const child = n.child(i);
-        if (child && child.type !== "&") {
-          walk(child);
-        }
-      }
-      return;
-    }
-
-    // pipeline: group as one segment, collect pipe ops
-    if (n.type === "pipeline") {
-      const cmdTexts: string[] = [];
-      const ops = new Set<string>();
-      let segHasSubshell = false;
-      for (let i = 0; i < n.childCount; i++) {
-        const child = n.child(i);
-        if (!child) continue;
-        if (child.type === "|" || child.type === "|&") {
-          ops.add(child.type);
-        } else if (child.type === "command") {
-          cmdTexts.push(child.text.trim());
-          if (nodeHasSubshell(child)) segHasSubshell = true;
-        } else {
-          // redirected_statement, subshell, etc. — recurse to extract commands
-          walk(child);
-          // Merge any newly added segments back into this pipeline segment
-          if (segments.length > 0) {
-            const last = segments.pop()!;
-            cmdTexts.push(last.text);
-            segHasSubshell = segHasSubshell || last.hasSubshell;
-            for (const op of last.ops) ops.add(op);
-          }
-        }
-      }
-      if (cmdTexts.length > 0) {
-        segments.push({ text: cmdTexts.join(" | "), ops: [...ops], hasSubshell: segHasSubshell });
-      }
-      return;
-    }
-
-    // for/if/while etc.: recurse into body
-    if (n.type.startsWith("for_") || n.type.startsWith("if_") || n.type.startsWith("while_") || n.type.startsWith("case_")) {
-      for (let i = 0; i < n.childCount; i++) {
-        const child = n.child(i);
-        if (child) walk(child);
-      }
-      return;
-    }
-
-    // redirected_statement: group command + its redirects as one segment
-    // (e.g. "tr 'a-z' 'A-Z' < file.txt" should be one segment, not two)
-    // Can also wrap list, pipeline, or loop constructs:
-    //   "rm a && ls b 2>/dev/null" → list + redirect
-    //   "cat a | grep b 2>/dev/null" → pipeline + redirect
-    //   "for f in a; do rm $f; done 2>/dev/null" → for_statement + redirect
-    if (n.type === "redirected_statement") {
-      let hasCompoundChild = false;
-      const cmdTexts: string[] = [];
-      const redirectTexts: string[] = [];
-      const ops = new Set<string>();
-      let segHasSubshell = false;
-      for (let i = 0; i < n.childCount; i++) {
-        const child = n.child(i);
-        if (!child) continue;
-        if (child.type === "command") {
-          cmdTexts.push(child.text.trim());
-          if (nodeHasSubshell(child)) segHasSubshell = true;
-        } else if (child.type === "file_redirect") {
-          const redirText = child.text.trim();
-          cmdTexts.push(redirText);
-          redirectTexts.push(redirText);
-          const redirectOps = detectOpsInNode(child);
-          for (const op of redirectOps) ops.add(op);
-        } else if (child.type === "heredoc_redirect") {
-          // For heredoc, only include the operator + delimiter (e.g. "<< 'PYEOF'"), not the body.
-          // The body is opaque data/code that the parser skips — including it would cause
-          // dangerousContextPatterns to match content that isn't actually shell commands.
-          const heredocParts: string[] = [];
-          for (let j = 0; j < child.childCount; j++) {
-            const gc = child.child(j);
-            if (!gc) continue;
-            if (gc.type === "<<" || gc.type === "<<<" || gc.type === "heredoc_start") {
-              heredocParts.push(gc.text);
-            }
-            // Skip heredoc_body and heredoc_end — they are opaque to shell analysis
-          }
-          const heredocShort = heredocParts.join(" ").trim();
-          if (heredocShort) {
-            cmdTexts.push(heredocShort);
-            redirectTexts.push(heredocShort);
-          }
-          const redirectOps = detectOpsInNode(child);
-          for (const op of redirectOps) ops.add(op);
-        } else {
-          // list, binary_expression, pipeline, for_statement, while_statement, if_statement, etc.
-          hasCompoundChild = true;
-          walk(child);
-        }
-      }
-      if (!hasCompoundChild && cmdTexts.length > 0) {
-        segments.push({ text: cmdTexts.join(" "), ops: [...ops], hasSubshell: segHasSubshell });
-      } else if (hasCompoundChild && redirectTexts.length > 0 && segments.length > 0) {
-        // Propagate redirects to the last segment so hasWriteRedirect can detect them
-        segments[segments.length - 1].text += " " + redirectTexts.join(" ");
-        for (const op of ops) segments[segments.length - 1].ops.push(op);
-      }
-      return;
-    }
-
-    // leaf: single command or redirect (standalone, not part of simple_command)
-    if (n.type === "command" || n.type === "file_redirect") {
-      const ops = detectOpsInNode(n);
-      segments.push({ text: n.text.trim(), ops, hasSubshell: nodeHasSubshell(n) });
-      return;
-    }
-
-    // default: recurse
+  /** Recurse into all children (default handler). */
+  const recurseAll: Handler = (n) => {
     for (let i = 0; i < n.childCount; i++) {
       const child = n.child(i);
       if (child) walk(child);
     }
+  };
+
+  /** Split on operator nodes (binary_expression, command_list, backgrounding). */
+  const splitOnOp: Handler = (n) => {
+    for (let i = 0; i < n.childCount; i++) {
+      const child = n.child(i);
+      if (child && !OPERATOR_TYPES.has(child.type)) {
+        walk(child);
+      }
+    }
+  };
+
+  /** Group pipeline commands into one segment with pipe ops. */
+  const handlePipeline: Handler = (n) => {
+    const cmdTexts: string[] = [];
+    const ops = new Set<string>();
+    let segHasSubshell = false;
+    for (let i = 0; i < n.childCount; i++) {
+      const child = n.child(i);
+      if (!child) continue;
+      if (child.type === "|" || child.type === "|&") {
+        ops.add(child.type);
+      } else if (child.type === "command") {
+        cmdTexts.push(child.text.trim());
+        if (nodeHasSubshell(child)) segHasSubshell = true;
+      } else {
+        // redirected_statement, subshell, etc. — recurse to extract commands
+        walk(child);
+        // Merge any newly added segments back into this pipeline segment
+        if (segments.length > 0) {
+          const last = segments.pop()!;
+          cmdTexts.push(last.text);
+          segHasSubshell = segHasSubshell || last.hasSubshell;
+          for (const op of last.ops) ops.add(op);
+        }
+      }
+    }
+    if (cmdTexts.length > 0) {
+      segments.push({ text: cmdTexts.join(" | "), ops: [...ops], hasSubshell: segHasSubshell });
+    }
+  };
+
+  /** Group command + its redirects as one segment. */
+  const handleRedirectedStatement: Handler = (n) => {
+    let hasCompoundChild = false;
+    const cmdTexts: string[] = [];
+    const redirectTexts: string[] = [];
+    const ops = new Set<string>();
+    let segHasSubshell = false;
+    for (let i = 0; i < n.childCount; i++) {
+      const child = n.child(i);
+      if (!child) continue;
+      if (child.type === "command") {
+        cmdTexts.push(child.text.trim());
+        if (nodeHasSubshell(child)) segHasSubshell = true;
+      } else if (child.type === "file_redirect") {
+        const redirText = child.text.trim();
+        cmdTexts.push(redirText);
+        redirectTexts.push(redirText);
+        const redirectOps = detectOpsInNode(child);
+        for (const op of redirectOps) ops.add(op);
+      } else if (child.type === "heredoc_redirect") {
+        // For heredoc, only include the operator + delimiter (e.g. "<< 'PYEOF'"), not the body.
+        // The body is opaque data/code that the parser skips — including it would cause
+        // dangerousContextPatterns to match content that isn't actually shell commands.
+        const heredocParts: string[] = [];
+        for (let j = 0; j < child.childCount; j++) {
+          const gc = child.child(j);
+          if (!gc) continue;
+          if (gc.type === "<<" || gc.type === "<<<" || gc.type === "heredoc_start") {
+            heredocParts.push(gc.text);
+          }
+          // Skip heredoc_body and heredoc_end — they are opaque to shell analysis
+        }
+        const heredocShort = heredocParts.join(" ").trim();
+        if (heredocShort) {
+          cmdTexts.push(heredocShort);
+          redirectTexts.push(heredocShort);
+        }
+        const redirectOps = detectOpsInNode(child);
+        for (const op of redirectOps) ops.add(op);
+      } else {
+        // list, binary_expression, pipeline, for_statement, while_statement, if_statement, etc.
+        hasCompoundChild = true;
+        walk(child);
+      }
+    }
+    if (!hasCompoundChild && cmdTexts.length > 0) {
+      segments.push({ text: cmdTexts.join(" "), ops: [...ops], hasSubshell: segHasSubshell });
+    } else if (hasCompoundChild && redirectTexts.length > 0 && segments.length > 0) {
+      // Propagate redirects to the last segment so hasWriteRedirect can detect them
+      segments[segments.length - 1].text += " " + redirectTexts.join(" ");
+      for (const op of ops) segments[segments.length - 1].ops.push(op);
+    }
+  };
+
+  /** Leaf: single command or redirect. */
+  const handleLeaf: Handler = (n) => {
+    const ops = detectOpsInNode(n);
+    segments.push({ text: n.text.trim(), ops, hasSubshell: nodeHasSubshell(n) });
+  };
+
+  // ── Handler map ──
+
+  const handlers: Map<string, Handler> = new Map([
+    ["binary_expression", splitOnOp],
+    ["command_list", splitOnOp],
+    ["backgrounding", splitOnOp],
+    ["pipeline", handlePipeline],
+    ["redirected_statement", handleRedirectedStatement],
+    ["command", handleLeaf],
+    ["file_redirect", handleLeaf],
+  ]);
+
+  // ── Walk ──
+
+  function walk(n: TSNode): void {
+    if (SKIP_TYPES.has(n.type)) return;
+
+    const handler = handlers.get(n.type);
+    if (handler) {
+      handler(n);
+      return;
+    }
+
+    // for/if/while/case: recurse into body
+    if (n.type.startsWith("for_") || n.type.startsWith("if_") || n.type.startsWith("while_") || n.type.startsWith("case_")) {
+      recurseAll(n);
+      return;
+    }
+
+    // default: recurse
+    recurseAll(n);
   }
 
   walk(node);

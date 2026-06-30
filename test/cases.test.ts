@@ -634,8 +634,8 @@ describe.each(cases)("$desc", ({ cmd, simple: expSimple, unsafe: expUnsafe, deci
 		const analysis = await analyzeCommand(cmd, cwd);
 		const decision = await decide({ type: "bash", command: cmd, cwd }, store);
 
-		expect(analysis.allSimple).toBe(expSimple);
-		expect(analysis.hasUnsafePattern).toBe(expUnsafe);
+		expect(analysis.safety.isSimple).toBe(expSimple);
+		expect(analysis.safety.hasUnsafePattern).toBe(expUnsafe);
 		if (expDecision) {
 			expect(decision.kind).toBe(expDecision);
 		}

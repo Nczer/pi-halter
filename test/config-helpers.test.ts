@@ -121,7 +121,7 @@ describe("isTrustedScriptCommand", () => {
 
 async function isUnsafe(cmd: string): Promise<boolean> {
   const result = await analyzeCommand(cmd, "/home/user/project");
-  return result.hasUnsafePattern;
+  return result.safety.hasUnsafePattern;
 }
 
 describe("detectObfuscation: false positive defenses", () => {
