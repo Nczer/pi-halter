@@ -189,6 +189,17 @@ export function isRgPreWrite(segment: string): boolean {
 /** Pre-compiled regex for git clean flags. */
 const GIT_CLEAN_FLAGS_RE = /-[fdx]/;
 
+// ── Git subcommand danger handlers ──
+
+const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => boolean }> = [
+  { match: (sub) => sub === "rm" },
+  { match: (sub, a) => sub === "clean" && a.some(x => GIT_CLEAN_FLAGS_RE.test(x)) },
+  { match: (sub, a) => sub === "reset" && a.includes("--hard") },
+  { match: (sub, a) => sub === "push" && a.some(x => x === "--force" || x === "--force-with-lease" || x === "-f") },
+  { match: (sub, a) => sub === "reflog" && a.includes("expire") },
+  { match: (sub, a) => sub === "gc" && a.some(x => x.startsWith("--prune")) },
+];
+
 /**
  * Check if a git command is dangerous.
  * Used by segment-analysis.ts (pipeline loop) and GitEvaluator.
@@ -198,13 +209,7 @@ export function isGitDangerous(segment: string): boolean {
   if (args.length < 2) return false;
   const sub = args[1].toLowerCase();
   const subArgs = args.slice(2);
-  if (sub === "rm") return true;
-  if (sub === "clean" && subArgs.some(a => GIT_CLEAN_FLAGS_RE.test(a))) return true;
-  if (sub === "reset" && subArgs.includes("--hard")) return true;
-  if (sub === "push" && subArgs.some(a => a === "--force" || a === "--force-with-lease" || a === "-f")) return true;
-  if (sub === "reflog" && subArgs.includes("expire")) return true;
-  if (sub === "gc" && subArgs.some(a => a.startsWith("--prune"))) return true;
-  return false;
+  return GIT_DANGER_HANDLERS.some(h => h.match(sub, subArgs));
 }
 
 /**
