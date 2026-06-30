@@ -9,9 +9,12 @@ export function filterSubPaths(paths: string[]): string[] {
   const sorted = [...paths].sort();
   const result: string[] = [];
   for (const p of sorted) {
+    // Normalize: strip trailing slash for comparison
+    const pNorm = p.endsWith("/") ? p.slice(0, -1) : p;
     let isSub = false;
     for (const parent of result) {
-      if (p === parent || p.startsWith(parent + "/")) { isSub = true; break; }
+      const parentNorm = parent.endsWith("/") ? parent.slice(0, -1) : parent;
+      if (pNorm === parentNorm || pNorm.startsWith(parentNorm + "/")) { isSub = true; break; }
     }
     if (!isSub) result.push(p);
   }
