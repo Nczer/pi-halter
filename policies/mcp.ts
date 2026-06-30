@@ -38,6 +38,5 @@ export function decideMcp(req: McpRequest, store: Store): Decision {
       op: "call",
       argsPreview: req.argsPreview,
     },
-    allowRules: { mcpServers: [effectiveServer] },
   };
 }

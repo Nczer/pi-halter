@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { decide, FileRequest, McpRequest } from "../decision-engine";
 import { createStore } from "../store";
 import { buildPrompt } from "../prompt-builder";
+import { RuleGenerator } from "../rule-generator";
 
 // Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /var → /private/var)
 const realPath = (p: string) => {
@@ -161,26 +162,28 @@ describe("File: Write allowed after adding path", () => {
 	});
 });
 
-describe("File: allowRules", () => {
+describe("File: rules", () => {
 	it("inside cwd uses writePaths not writeDirs", async () => {
 		const store = createStore();
 		const req: FileRequest = { type: "file", toolName: "write", filePath: "src/out.txt", cwd };
 		const d = await decide(req, store);
 		if (d.kind === "prompt") {
-			expect(d.allowRules.writeDirs).toBeUndefined();
-			expect(Array.isArray(d.allowRules.writePaths)).toBe(true);
+			const rules = RuleGenerator.generatePrimaryRules(d.promptData);
+			expect(rules.writeDirs).toBeUndefined();
+			expect(Array.isArray(rules.writePaths)).toBe(true);
 		}
 	});
 
-	it("outside cwd has allowFileRules targeting specific file", async () => {
+	it("outside cwd has file-only rules targeting specific file", async () => {
 		const store = createStore();
 		const req: FileRequest = { type: "file", toolName: "write", filePath: "/var/log/out.txt", cwd };
 		const d = await decide(req, store);
 		if (d.kind === "prompt") {
-			expect(d.allowFileRules).toBeDefined();
-			if (d.allowFileRules) {
+			const fileOnlyRules = RuleGenerator.generateFileOnlyRules(d.promptData);
+			expect(fileOnlyRules).toBeDefined();
+			if (fileOnlyRules) {
 				// macOS: /var/log/out.txt resolves to /private/var/log/out.txt
-				expect(d.allowFileRules.writePaths?.[0]).toBe(realPath("/var/log/out.txt"));
+				expect(fileOnlyRules.writePaths?.[0]).toBe(realPath("/var/log/out.txt"));
 			}
 		}
 	});
@@ -237,13 +240,14 @@ describe("MCP: Server extraction from tool name", () => {
 	});
 });
 
-describe("MCP: allowRules", () => {
-	it("includes server in allowRules", async () => {
+describe("MCP: rules", () => {
+	it("includes server in rules", async () => {
 		const store = createStore();
 		const req: McpRequest = { type: "mcp", server: "blender", tool: "render" };
 		const d = await decide(req, store);
 		if (d.kind === "prompt") {
-			expect(d.allowRules.mcpServers?.[0]).toBe("blender");
+			const rules = RuleGenerator.generatePrimaryRules(d.promptData);
+			expect(rules.mcpServers?.[0]).toBe("blender");
 		}
 	});
 });
@@ -342,14 +346,15 @@ describe("Bash: granular allow (subcommand vs broader)", () => {
 		}
 	});
 
-	it("allowRules has specific sigs, allowBroaderRules has parent command", async () => {
+	it("rules have specific sigs, broader rules have parent command", async () => {
 		const store = createStore();
 		const d = await decide({ type: "bash", command: "npm test", cwd }, store);
 		if (d.kind === "prompt") {
-			expect(d.allowRules.bashSigs).toContain("npm test");
-			expect(d.allowBroaderRules).toBeDefined();
-			expect(d.allowBroaderRules!.bashSigs).toContain("npm");
-			expect(d.includeBroaderOption).toBe(true);
+			const rules = RuleGenerator.generatePrimaryRules(d.promptData);
+			expect(rules.bashSigs).toContain("npm test");
+			const broaderRules = RuleGenerator.generateBroaderRules(d.promptData);
+			expect(broaderRules).toBeDefined();
+			expect(broaderRules!.bashSigs).toContain("npm");
 		}
 	});
 
@@ -375,8 +380,8 @@ describe("Bash: granular allow (subcommand vs broader)", () => {
 		const d = await decide({ type: "bash", command: "sed -i 's/foo/bar/' file.txt", cwd }, store);
 		if (d.kind === "prompt") {
 			// sed is not a package manager — no broader option
-			expect(d.includeBroaderOption).toBe(false);
-			expect(d.allowBroaderRules).toBeUndefined();
+			const broaderRules = RuleGenerator.generateBroaderRules(d.promptData);
+			expect(broaderRules).toBeUndefined();
 		}
 	});
 });

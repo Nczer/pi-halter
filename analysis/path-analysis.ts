@@ -115,33 +115,35 @@ export function isProjectPiPath(filePath: string, cwd: string): boolean {
   return isChildOf(resolved, piDir) && !isChildOf(resolved, homePiDir);
 }
 
-export function isPathDenied(filePath: string, cwd: string): { denied: boolean; matchedRule: string | null } {
+/** Check a path against a list of denied/warned patterns. Returns matched pattern or null. */
+function checkPathAgainstPatterns(filePath: string, cwd: string, patterns: string[]): string | null {
   const resolved = resolvePathReal(expandTilde(filePath), cwd);
   const names = [path.basename(filePath), path.basename(resolved)];
 
   for (const nameToCheck of names) {
-    for (const denied of deniedPaths) {
-      if (nameToCheck === denied) return { denied: true, matchedRule: denied };
-      if (resolved.includes(`/${denied}/`) || resolved.endsWith(`/${denied}`)) {
-        return { denied: true, matchedRule: denied };
+    for (const pattern of patterns) {
+      if (nameToCheck === pattern) return pattern;
+      if (resolved.includes(`/${pattern}/`) || resolved.endsWith(`/${pattern}`)) {
+        return pattern;
       }
     }
   }
-  return { denied: false, matchedRule: null };
+  return null;
+}
+
+export function isPathDenied(filePath: string, cwd: string): { denied: boolean; matchedRule: string | null } {
+  const matched = checkPathAgainstPatterns(filePath, cwd, deniedPaths);
+  return { denied: matched !== null, matchedRule: matched };
 }
 
 export function isPathWarned(filePath: string, cwd: string): { warned: boolean; matchedRule: string | null } {
+  const matched = checkPathAgainstPatterns(filePath, cwd, warnPaths);
+  if (matched) return { warned: true, matchedRule: matched };
+
+  // .env.* pattern (e.g. .env.production, .env.development)
   const resolved = resolvePathReal(expandTilde(filePath), cwd);
   const names = [path.basename(filePath), path.basename(resolved)];
-
   for (const nameToCheck of names) {
-    for (const warn of warnPaths) {
-      if (nameToCheck === warn) return { warned: true, matchedRule: warn };
-      if (resolved.includes(`/${warn}/`) || resolved.endsWith(`/${warn}`)) {
-        return { warned: true, matchedRule: warn };
-      }
-    }
-    // .env.* pattern (e.g. .env.production, .env.development)
     if (ENV_FILE_RE.test(nameToCheck)) {
       return { warned: true, matchedRule: ".env.*" };
     }

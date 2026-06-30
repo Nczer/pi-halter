@@ -1,22 +1,14 @@
-import {
-  dangerousCommandPatterns,
-  dangerousContextPatterns,
-  isAllowedCommand,
-} from "../config";
-import type { BashSegment } from "./bash-parser";
+import { isAllowedCommand } from "../config";
 import { getFirstWord, splitPipeline, stripNullRedirects } from "./segment-helpers";
+import type { SegmentRisk } from "./segment-analysis";
 
 // ── Types ──
 
+/** Full command risk assessment (dangerous + reasons + severity). */
 export interface CommandRisk {
   dangerous: boolean;
   reasons: string[];
   severity: "high" | "medium" | null;
-}
-
-interface SegmentRisk {
-  severity: "high" | "medium" | null;
-  reasons: string[];
 }
 
 /** Pre-compiled regex for whole-command write redirect check. */

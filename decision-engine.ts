@@ -29,7 +29,7 @@ export interface McpRequest {
   argsPreview?: string;
 }
 
-type PermissionRequest = BashRequest | FileRequest | McpRequest;
+export type PermissionRequest = BashRequest | FileRequest | McpRequest;
 
 // ── Decision types (discriminated union) ──
 
@@ -49,20 +49,6 @@ export interface PromptDecision {
   kind: "prompt";
   /** Structured data for the PromptBuilder to format into title/body. */
   promptData: PromptData;
-  /** Rules to apply if user selects "Always (subcommand)" (specific sigs). */
-  allowRules: AllowRules;
-  /** Rules to apply if user selects "Always (everything)" (broader sigs). */
-  allowBroaderRules?: AllowRules;
-  /** Rules to apply if user selects "Always (paths only)" (bash only). */
-  allowPathsRules?: AllowRules;
-  /** Rules to apply if user selects "This file only" (file only). */
-  allowFileRules?: AllowRules;
-  /** Whether to include the "Always (paths only)" option. */
-  includePathsOption?: boolean;
-  /** Whether to show broader allow option (npm test vs npm *). */
-  includeBroaderOption?: boolean;
-  /** Whether to show any "Always" option (false when nothing can be auto-allowed). */
-  includeAlwaysOption?: boolean;
 }
 
 export type Decision = AutoAllowDecision | BlockDecision | PromptDecision;
