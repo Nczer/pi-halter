@@ -167,6 +167,18 @@ const ALWAYS_WRITE_ARCHIVE_PKG = new Set([
   "pip", "npm", "yarn", "cargo", "go", "uv",
 ]);
 
+// ── Write operation handlers ──
+
+/** Command → write check (match, evaluate). */
+const WRITE_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: string, context: string) => boolean }> = [
+  { match: (c) => ALWAYS_WRITE.has(c), evaluate: () => true },
+  { match: (c) => ALWAYS_WRITE_ARCHIVE_PKG.has(c), evaluate: () => true },
+  { match: (c) => c === "sed", evaluate: (_, ctx) => dangerousSedFlags.test(ctx) },
+  { match: (c) => c === "perl", evaluate: (_, ctx) => dangerousPerlFlags.test(ctx) },
+  { match: (c) => c === "tee", evaluate: (_, ctx) => TEE_WRITE_RE.test(ctx) },
+  { match: (c) => SHELL_INTERPRETERS.has(c), evaluate: () => true },
+];
+
 /**
  * Check whether a given command + surrounding context is a write operation.
  * Consolidates the duplicated logic from isWrapperRunningWrite and isFindExecWrite.
@@ -175,15 +187,8 @@ const ALWAYS_WRITE_ARCHIVE_PKG = new Set([
  * @param context  The full segment text after the command (for flag-dependent checks like sed -i).
  */
 export function isWriteOperation(command: string, context: string): boolean {
-  if (ALWAYS_WRITE.has(command)) return true;
-  if (ALWAYS_WRITE_ARCHIVE_PKG.has(command)) return true;
-
-  if (command === "sed") return dangerousSedFlags.test(context);
-  if (command === "perl") return dangerousPerlFlags.test(context);
-  if (command === "tee") return TEE_WRITE_RE.test(context);
-
-  // Shell interpreters running via exec are inherently write-capable
-  if (SHELL_INTERPRETERS.has(command)) return true;
-
+  for (const handler of WRITE_HANDLERS) {
+    if (handler.match(command)) return handler.evaluate(command, context);
+  }
   return false;
 }

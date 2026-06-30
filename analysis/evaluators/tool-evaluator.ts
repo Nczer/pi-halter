@@ -10,50 +10,8 @@ import {
   dangerousFindFlags,
 } from "../../config";
 
-/**
- * Evaluates tool commands: find/fd/rg exec, kubectl, terraform, aws, gcloud, curl/wget pipe.
- */
-export const ToolEvaluator: RiskEvaluator = {
-  name: "tool",
-  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
-    const segment = seg.text;
-    const firstWord = cache?.firstWord ?? getFirstWord(segment);
-    const args = segment.trim().split(/\s+/);
-    const rest = args.slice(1);
-    const b = new EvaluationBuilder();
-
-    // find/fd/rg exec write
-    if (firstWord === "find" && dangerousFindFlags.test(segment)) {
-      b.addHigh("find with dangerous flags");
-    }
-    if (firstWord === "find" && isFindExecWrite(segment)) {
-      b.addHigh("find -exec with write operation");
-    }
-    if (firstWord === "fd" && isFdExecWrite(segment)) {
-      b.addHigh("fd -x with write operation");
-    }
-    if (firstWord === "rg" && isRgPreWrite(segment)) {
-      b.addHigh("rg --pre with write operation");
-    }
-
-    // Remote execution via pipe
-    if ((firstWord === "curl" || firstWord === "wget") && seg.ops.includes("|")) {
-      b.addHigh("curl/wget piped (possible remote code execution)");
-    }
-
-    // Infra deletes
-    if (firstWord === "kubectl" && rest[0] === "delete") b.addHigh("kubectl delete (resource deletion)");
-    if (firstWord === "terraform" && rest[0] === "destroy") b.addHigh("terraform destroy (infrastructure teardown)");
-    if (firstWord === "aws" && awsHasSubcommand(rest, "s3", "rm") && rest.includes("--recursive"))
-      b.addHigh("aws s3 rm --recursive (bulk deletion)");
-    if (firstWord === "gcloud" && rest.includes("delete")) b.addHigh("gcloud delete (resource deletion)");
-
-    return b.build();
-  },
-};
-
-/** Check if AWS args contain subcommand chain (e.g. s3 rm), skipping global flags like --profile. */
-function awsHasSubcommand(args: string[], ...subcommands: string[]): boolean {
+/** Check if args contain subcommand chain (e.g. s3 rm), skipping global flags like --profile. */
+function hasSubcommand(args: string[], ...subcommands: string[]): boolean {
   let idx = 0;
   for (const sub of subcommands) {
     idx = args.indexOf(sub, idx);
@@ -62,3 +20,42 @@ function awsHasSubcommand(args: string[], ...subcommands: string[]): boolean {
   }
   return true;
 }
+
+// ── Tool command handlers ──
+
+interface ToolSegment { text: string; firstWord: string; rest: string[]; ops: string[] }
+
+/** Tool command → handler (match, evaluate). */
+const TOOL_HANDLERS: Array<{ match: (seg: ToolSegment) => boolean; reason: string }> = [
+  { match: (s) => s.firstWord === "find" && dangerousFindFlags.test(s.text), reason: "find with dangerous flags" },
+  { match: (s) => s.firstWord === "find" && isFindExecWrite(s.text), reason: "find -exec with write operation" },
+  { match: (s) => s.firstWord === "fd" && isFdExecWrite(s.text), reason: "fd -x with write operation" },
+  { match: (s) => s.firstWord === "rg" && isRgPreWrite(s.text), reason: "rg --pre with write operation" },
+  { match: (s) => ["curl", "wget"].includes(s.firstWord) && s.ops.includes("|"), reason: "curl/wget piped (possible remote code execution)" },
+  { match: (s) => s.firstWord === "kubectl" && s.rest[0] === "delete", reason: "kubectl delete (resource deletion)" },
+  { match: (s) => s.firstWord === "terraform" && s.rest[0] === "destroy", reason: "terraform destroy (infrastructure teardown)" },
+  { match: (s) => s.firstWord === "aws" && hasSubcommand(s.rest, "s3", "rm") && s.rest.includes("--recursive"), reason: "aws s3 rm --recursive (bulk deletion)" },
+  { match: (s) => s.firstWord === "gcloud" && s.rest.includes("delete"), reason: "gcloud delete (resource deletion)" },
+];
+
+/**
+ * Evaluates tool commands: find/fd/rg exec, kubectl, terraform, aws, gcloud, curl/wget pipe.
+ */
+export const ToolEvaluator: RiskEvaluator = {
+  name: "tool",
+  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
+    const segment = seg.text;
+    const firstWord = cache?.firstWord ?? getFirstWord(segment);
+    const rest = segment.trim().split(/\s+/).slice(1);
+    const b = new EvaluationBuilder();
+
+    const toolSeg: ToolSegment = { text: segment, firstWord, rest, ops: seg.ops };
+    for (const handler of TOOL_HANDLERS) {
+      if (handler.match(toolSeg)) {
+        b.addHigh(handler.reason);
+      }
+    }
+
+    return b.build();
+  },
+};
