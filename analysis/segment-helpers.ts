@@ -35,7 +35,7 @@ const FIND_EXEC_RE = /-(?:exec|execdir)\b\s+(\S+)/;
 const FD_EXEC_RE = /-(?:x|X)\b\s+(\S+)/;
 const RG_PRE_RE = /--pre(?:=|\s+)(\S+)/;
 /** stripQuotedStrings. */
-const QUOTE_DOUBLE_RE = /"(?:[^"\\\\]|\\\\.)*"/g;
+const QUOTE_DOUBLE_RE = /"(?:[^"\\]|\\.)*"/g;
 const QUOTE_SINGLE_RE = /'[^']*'/g;
 const QUOTE_DOLLAR_RE = /\$'[^']*'/g;
 const QUOTE_COMMENT_RE = /\s*#.*$/gm;

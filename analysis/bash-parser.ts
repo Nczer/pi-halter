@@ -31,7 +31,10 @@ async function initParser(): Promise<TSParser> {
 }
 
 function getParser(): Promise<TSParser> {
-  if (!parserPromise) parserPromise = initParser();
+  if (!parserPromise) parserPromise = initParser().catch((e) => {
+    parserPromise = null; // Reset so next call retries instead of caching the failure
+    throw e;
+  });
   return parserPromise;
 }
 
@@ -172,6 +175,7 @@ function isPathCandidate(token: string): boolean {
   // Must look like a path
   return (
     token.startsWith("/") ||
+    token.startsWith("./") ||
     token.startsWith("~/") ||
     token.includes("..")
   );
@@ -281,13 +285,15 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
         if (nodeHasSubshell(child)) segHasSubshell = true;
       } else {
         // redirected_statement, subshell, etc. — recurse to extract commands
+        const prevCount = segments.length;
         walk(child);
-        // Merge any newly added segments back into this pipeline segment
-        if (segments.length > 0) {
-          const last = segments.pop()!;
-          cmdTexts.push(last.text);
-          segHasSubshell = segHasSubshell || last.hasSubshell;
-          for (const op of last.ops) ops.add(op);
+        // Merge ALL newly added segments back into this pipeline segment
+        // (not just the last one — compound children like subshells with && can produce multiple)
+        while (segments.length > prevCount) {
+          const merged = segments.shift()!;
+          cmdTexts.push(merged.text);
+          segHasSubshell = segHasSubshell || merged.hasSubshell;
+          for (const op of merged.ops) ops.add(op);
         }
       }
     }

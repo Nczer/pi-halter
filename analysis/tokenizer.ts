@@ -165,6 +165,8 @@ export function splitOnPipe(cmd: string): string[] {
   return tokenizeWithSplit(cmd, (ch, rest) => {
     // Skip double pipe (||) — not a pipe operator, preserve in output
     if (ch === "|" && rest.startsWith("|")) return { push: false, skip: 2, append: "||" };
+    // |& (tee pipe) — consume both chars as single operator
+    if (ch === "|" && rest.startsWith("&")) return { push: true, skip: 2 };
     if (ch === "|") return { push: true, skip: 1 };
     return null;
   }, false, false, false, true);

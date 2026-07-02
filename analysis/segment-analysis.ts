@@ -8,6 +8,7 @@ import {
   SHELL_INTERPRETERS,
 } from "../config";
 import type { BashSegment } from "./bash-parser";
+import type { StageDanger } from "./segment-helpers";
 import { isFirstTokenRelativePath } from "./path-analysis";
 import {
   containsCommandSubstitution,
@@ -18,6 +19,7 @@ import {
   isGitDangerous,
   isWrapperRunningRelativePath,
 } from "./segment-helpers";
+// StageDanger imported as type above
 import { isTmuxDangerous } from "./tmux-helpers";
 import { detectObfuscation } from "./obfuscation";
 import { ShellEvaluator } from "./evaluators/shell-evaluator";

@@ -8,5 +8,6 @@
     "noEmit": true,
     "esModuleInterop": true
   },
-  "include": ["*.ts", "handlers/*.ts", "config/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["test/**", "node_modules"]
 }
