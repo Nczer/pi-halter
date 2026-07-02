@@ -41,6 +41,19 @@ describe("Signatures: basic", () => {
 		const a = await analyzeCommand("git -R add .", cwd);
 		expect(a.signatures[0]).toBe("git -R");
 	});
+
+	it("P0 fix: QUOTE_DOUBLE_RE — escaped backslash in double quotes stripped correctly", async () => {
+		// The regex fix: \\\\. → \\. (match single-backslash escapes, not double-backslash)
+		// String with escaped backslash should be stripped as one quoted unit
+		const a = await analyzeCommand('grep "test\\nfoo" file.txt', cwd);
+		expect(a.signatures[0]).toBe("grep");
+	});
+
+	it("P0 fix: QUOTE_DOUBLE_RE — escaped quote inside double quotes stripped correctly", async () => {
+		// String with escaped quote should be stripped as one quoted unit
+		const a = await analyzeCommand('echo "hello \\"world\\"" ', cwd);
+		expect(a.signatures[0]).toBe("echo");
+	});
 });
 
 describe("Signatures: compound", () => {
