@@ -31,7 +31,7 @@ export const GitEvaluator: RiskEvaluator = {
     if (sub === "rm") {
       b.addReason("git rm (deletes files from working tree and stages deletions)");
     }
-    if (sub === "clean" && (subArgs.some((a) => a.includes("-f")) || subArgs.includes("-d") || subArgs.includes("-x"))) {
+    if (sub === "clean" && subArgs.some(a => a.includes("-f") || a === "-d" || a === "-x")) {
       b.addReason("git clean (can delete untracked files)");
     }
     if (sub === "reset" && subArgs.includes("--hard")) {
@@ -40,7 +40,7 @@ export const GitEvaluator: RiskEvaluator = {
     if ((sub === "checkout" || sub === "restore") && (subArgs.includes(".") || subArgs.includes("--") || subArgs.includes("--source"))) {
       b.addReason("git checkout/restore (can overwrite working tree)");
     }
-    if (sub === "push" && (subArgs.includes("--force") || subArgs.includes("--force-with-lease") || subArgs.includes("-f"))) {
+    if (sub === "push" && subArgs.some(a => a === "--force" || a === "--force-with-lease" || a === "-f")) {
       b.addReason("git push --force (rewrite remote history)");
     }
     if (sub === "reflog" && subArgs.includes("expire")) {
