@@ -399,17 +399,23 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
   return segments;
 }
 
-/** Check if an AST node subtree contains subshell constructs. */
+/** Per-parse-session cache for nodeHasSubshell to avoid redundant subtree walks. */
+let subshellCache: WeakMap<TSNode, boolean> | null = null;
+
+/** Check if an AST node subtree contains subshell constructs (cached per parse session). */
 function nodeHasSubshell(node: TSNode): boolean {
-  if (
+  if (subshellCache?.has(node)) return subshellCache.get(node)!;
+
+  const result =
     node.type === "command_substitution" ||
-    node.type === "process_substitution"
-  ) return true;
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i);
-    if (child && nodeHasSubshell(child)) return true;
-  }
-  return false;
+    node.type === "process_substitution" ||
+    [...Array(node.childCount)].some((_, i) => {
+      const child = node.child(i);
+      return child && nodeHasSubshell(child);
+    });
+
+  subshellCache?.set(node, result);
+  return result;
 }
 
 /** Detect operators within a command/redirect node. */
@@ -454,6 +460,9 @@ export async function parseCommand(command: string, cwd: string): Promise<ParseR
   if (!tree) return { segments: [], paths: [], hasSubshell: false };
 
   try {
+    // Cache subshell checks per parse session to avoid redundant subtree walks
+    subshellCache = new WeakMap();
+
     // Extract segments (includes per-segment hasSubshell)
     const segments = extractSegmentsFromNode(tree.rootNode);
 
@@ -506,6 +515,7 @@ export async function parseCommand(command: string, cwd: string): Promise<ParseR
 
     return { segments, paths, hasSubshell };
   } finally {
+    subshellCache = null;
     tree.delete();
   }
 }
