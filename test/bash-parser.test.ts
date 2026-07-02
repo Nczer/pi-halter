@@ -202,3 +202,43 @@ describe("parseCommand: edge cases", () => {
 		expect(r.hasSubshell).toBe(false);
 	});
 });
+
+describe("parseCommand: pipeline with compound children (P0 fix: merge all segments)", () => {
+	it("subshell with && chain inside pipeline → all commands merged into one segment", async () => {
+		const r = await parseCommand("(rm a && ls b) | cat", cwd);
+		// The fix: handlePipeline merges ALL segments from compound children, not just the last
+		// Before fix: only "ls b" was captured, "rm a" was dropped
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+		const pipelineSeg = r.segments[0];
+		expect(pipelineSeg.text).toContain("rm a");
+		expect(pipelineSeg.text).toContain("ls b");
+		expect(pipelineSeg.ops).toContain("|");
+	});
+
+	it("subshell with triple && chain inside pipeline → all three commands present", async () => {
+		const r = await parseCommand("(echo a && echo b && echo c) | grep x", cwd);
+		const pipelineSeg = r.segments[0];
+		expect(pipelineSeg.text).toContain("echo a");
+		expect(pipelineSeg.text).toContain("echo b");
+		expect(pipelineSeg.text).toContain("echo c");
+	});
+});
+
+describe("parseCommand: ./ relative paths (P1 fix: isPathCandidate)", () => {
+	it("extracts ./ relative path from path-aware command", async () => {
+		const r = await parseCommand("cat ./src/index.ts", cwd);
+		expect(r.paths.length).toBeGreaterThan(0);
+		expect(r.paths[0]).toContain("src/index.ts");
+	});
+
+	it("extracts ./ relative path from redirect", async () => {
+		const r = await parseCommand("echo hello > ./output.txt", cwd);
+		expect(r.paths.length).toBeGreaterThan(0);
+		expect(r.paths[0]).toContain("output.txt");
+	});
+
+	it("does not extract bare relative paths (no ./ prefix)", async () => {
+		const r = await parseCommand("cat src/index.ts", cwd);
+		expect(r.paths).toHaveLength(0);
+	});
+});

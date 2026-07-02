@@ -456,6 +456,15 @@ describe("splitOnPipe", () => {
   it("trims whitespace from pipe parts", () => {
     expect(splitOnPipe("a  |  b")).toEqual(["a", "b"]);
   });
+
+  it("splits on |& (tee pipe) without leaving & contamination", () => {
+    // P1 fix: |& was splitting on | then leaving & as part of next segment
+    expect(splitOnPipe("echo hello |& grep pattern")).toEqual(["echo hello", "grep pattern"]);
+  });
+
+  it("handles mixed | and |& in same command", () => {
+    expect(splitOnPipe("a | b |& c")).toEqual(["a", "b", "c"]);
+  });
 });
 
 describe("formatBashCommand: pre-parsed segments", () => {
