@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import { allowedReadPaths, allowedWritePaths, deniedPaths, warnPaths, isTrustedScriptPath } from "../config";
 import { expandTilde } from "./path-util";
+import { tokenizeSegment } from "./tokenizer";
 export { expandTilde }; // Re-export for existing importers
 
 // ── Relative path detection ──
@@ -92,13 +93,11 @@ export function isAllowedWritePath(resolved: string): boolean {
 export function getOutsideCwdPaths(
   paths: string[],
   cwd: string,
-  autoAllowedReadDirs: Set<string>,
-  autoAllowedWriteDirs: Set<string>,
+  isInsideAllowedDir?: (p: string) => boolean,
 ): string[] {
   return paths.filter(p => {
     if (isInsideCwd(p, cwd)) return false;
-    if (isInsideAutoAllowedDir(p, autoAllowedReadDirs)) return false;
-    if (isInsideAutoAllowedDir(p, autoAllowedWriteDirs)) return false;
+    if (isInsideAllowedDir?.(p)) return false;
     if (isAllowedReadPath(p)) return false;
     if (isAllowedWritePath(p)) return false;
     if (isTrustedScriptPath(p)) return false;
@@ -118,12 +117,19 @@ function getHomePiDir(): string {
   return cachedHomePiDir;
 }
 
+/** Per-cwd cache for resolvePathReal(".pi", cwd) — avoids 2-3 realpathSync per file decision. */
+const projectPiDirCache = new Map<string, string>();
+
 /**
  * Check if a pre-resolved path is inside the project's `.pi` dir (but not `~/.pi`).
  * Accepts the already-resolved real path to avoid redundant `realpathSync` calls on the hot path.
  */
 export function isProjectPiPathResolved(resolved: string, cwd: string): boolean {
-  const piDir = resolvePathReal(".pi", cwd);
+  let piDir = projectPiDirCache.get(cwd);
+  if (piDir === undefined) {
+    piDir = resolvePathReal(".pi", cwd);
+    projectPiDirCache.set(cwd, piDir);
+  }
   return isChildOf(resolved, piDir) && !isChildOf(resolved, getHomePiDir());
 }
 
@@ -174,6 +180,58 @@ export function isPathWarnedResolved(filePath: string, resolved: string): { warn
 export function isPathWarned(filePath: string, cwd: string): { warned: boolean; matchedRule: string | null } {
   const resolved = resolvePathReal(expandTilde(filePath), cwd);
   return isPathWarnedResolved(filePath, resolved);
+}
+
+// ── Credential path detection for bash commands ──
+
+/**
+ * Pre-compiled regex for fast credential pattern detection in bash commands.
+ * Loose match — false positives just trigger the more expensive resolve+check.
+ * Matches credential file/dir name roots: .ssh, .env, .aws, .docker/config.json, etc.
+ */
+export const CREDENTIAL_SCAN_RE = /\.(?:ssh|gnupg|gpg|vault|secret|secrets|env|aws|gcloud|azure|git-credentials|hg|netrc|npmrc|pypirc|docker)\b/;
+
+/**
+ * Check a bash command string for credential path references.
+ * Returns the first denied and/or warned pattern found.
+ * Uses a fast regex pre-scan to skip the common case (no credential patterns).
+ */
+export function checkCommandForCredentialPaths(
+  command: string,
+  cwd: string,
+): { denied: string | null; warned: string | null } {
+  // Fast pre-scan: if no credential pattern appears in the command, skip entirely
+  if (!CREDENTIAL_SCAN_RE.test(command)) {
+    return { denied: null, warned: null };
+  }
+
+  // Quote-aware tokenization (strips quotes so '.env' is detected as .env)
+  const tokens = tokenizeSegment(command);
+  let denied: string | null = null;
+  let warned: string | null = null;
+
+  for (const token of tokens) {
+    if (!token || token.startsWith("-")) continue;
+    // Skip env assignments (FOO=bar) — = comes before any /
+    const eqIdx = token.indexOf("=");
+    if (eqIdx !== -1) {
+      const slashIdx = token.indexOf("/");
+      if (slashIdx === -1 || eqIdx < slashIdx) continue;
+    }
+
+    const resolved = resolvePathReal(expandTilde(token), cwd);
+    const d = isPathDeniedResolved(token, resolved);
+    if (d.denied) {
+      denied = d.matchedRule;
+      return { denied, warned }; // Denied is highest priority — return immediately
+    }
+    const w = isPathWarnedResolved(token, resolved);
+    if (w.warned && !warned) {
+      warned = w.matchedRule;
+    }
+  }
+
+  return { denied, warned };
 }
 
 // ── Path-to-directory resolution ──

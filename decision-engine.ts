@@ -69,6 +69,8 @@ export interface BashPromptData {
   riskReasons: string[];
   /** Patterns that block auto-allow (subshells, write redirects, obfuscation) — excludes display-only risks like pipes. */
   hasUnsafePattern: boolean;
+  /** Matched credential pattern, if any (e.g. ".env", ".aws"). Prevents auto-allow. */
+  credentialRule: string | null;
   needsCommandApproval: boolean;
   needsPathApproval: boolean;
 }

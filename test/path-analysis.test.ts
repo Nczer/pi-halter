@@ -14,6 +14,7 @@ import {
 	isPathDeniedResolved,
 	isPathWarned,
 	isPathWarnedResolved,
+	checkCommandForCredentialPaths,
 } from "../analysis/path-analysis";
 
 const home = os.homedir();
@@ -132,22 +133,23 @@ describe("isAllowedReadPath", () => {
 
 describe("getOutsideCwdPaths", () => {
 	it("returns empty when all paths inside cwd", () => {
-		expect(getOutsideCwdPaths([`${cwd}/a`, `${cwd}/b`], cwd, new Set(), new Set())).toHaveLength(0);
+		expect(getOutsideCwdPaths([`${cwd}/a`, `${cwd}/b`], cwd)).toHaveLength(0);
 	});
 
 	it("filters to outside paths only", () => {
-		const outside = getOutsideCwdPaths([`${cwd}/a`, "/etc/hosts"], cwd, new Set(), new Set());
+		const outside = getOutsideCwdPaths([`${cwd}/a`, "/etc/hosts"], cwd);
 		expect(outside).toEqual(["/etc/hosts"]);
 	});
 
 	it("excludes auto-allowed dirs", () => {
 		const autoRead = new Set(["/opt"]);
-		const outside = getOutsideCwdPaths([`${cwd}/a`, "/opt/pi", "/etc/hosts"], cwd, autoRead, new Set());
+		const isInside = (p: string) => isInsideAutoAllowedDir(p, autoRead);
+		const outside = getOutsideCwdPaths([`${cwd}/a`, "/opt/pi", "/etc/hosts"], cwd, isInside);
 		expect(outside).toEqual(["/etc/hosts"]);
 	});
 
 	it("excludes allowed read paths", () => {
-		const outside = getOutsideCwdPaths([`${cwd}/a`, path.join(tmpdir, "foo"), "/etc/hosts"], cwd, new Set(), new Set());
+		const outside = getOutsideCwdPaths([`${cwd}/a`, path.join(tmpdir, "foo"), "/etc/hosts"], cwd);
 		expect(outside).toEqual(["/etc/hosts"]);
 	});
 });
@@ -253,6 +255,64 @@ describe("resolved-path variants (hot-path optimization)", () => {
 		it(`isProjectPiPathResolved matches isProjectPiPath for ${filePath}`, () => {
 			const resolved = resolvePathReal(expandTilde(filePath), cwd);
 			expect(isProjectPiPathResolved(resolved, cwd)).toBe(isProjectPiPath(filePath, cwd));
+		});
+	}
+});
+
+describe("checkCommandForCredentialPaths", () => {
+	const deniedCases: [string, string][] = [
+		["cat .ssh/id_rsa", ".ssh"],
+		["cat .gnupg/private.key", ".gnupg"],
+		["cat .gpg/key", ".gpg"],
+		["cat .vault/token", ".vault"],
+		["cat .secret", ".secret"],
+		["cat .secrets/db", ".secrets"],
+		["ls .ssh", ".ssh"],
+		["cat '.ssh/id_rsa'", ".ssh"],
+		['cat ".ssh/id_rsa"', ".ssh"],
+	];
+	for (const [cmd, rule] of deniedCases) {
+		it(`denies: ${cmd}`, () => {
+			const result = checkCommandForCredentialPaths(cmd, cwd);
+			expect(result.denied).toBe(rule);
+		});
+	}
+
+	const warnedCases: [string, string][] = [
+		["cat .env", ".env"],
+		["cat .aws/credentials", ".aws"],
+		["cat .env.production", ".env.*"],
+		["cat .npmrc", ".npmrc"],
+		["cat .netrc", ".netrc"],
+		["cat .pypirc", ".pypirc"],
+		["cat .docker/config.json", ".docker/config.json"],
+		["grep PASS .env", ".env"],
+		["cat '.env'", ".env"],
+		['cat ".env"', ".env"],
+	];
+	for (const [cmd, rule] of warnedCases) {
+		it(`warns: ${cmd}`, () => {
+			const result = checkCommandForCredentialPaths(cmd, cwd);
+			expect(result.warned).toBe(rule);
+			expect(result.denied).toBeNull();
+		});
+	}
+
+	const safeCases = [
+		"cat regular.txt",
+		"ls -la",
+		"grep -r pattern .",
+		"echo hello",
+		"cat src/index.ts",
+		"git status",
+		"cat .gitignore",
+		"cat .git/HEAD",
+	];
+	for (const cmd of safeCases) {
+		it(`safe: ${cmd}`, () => {
+			const result = checkCommandForCredentialPaths(cmd, cwd);
+			expect(result.denied).toBeNull();
+			expect(result.warned).toBeNull();
 		});
 	}
 });

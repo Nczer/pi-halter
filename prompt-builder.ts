@@ -68,7 +68,8 @@ function buildBashPrompt(
 ): BuiltPrompt {
   const { command, cwd, outsideDirs, segments, signatures,
           riskDangerous, riskSeverity, riskReasons, hasUnsafePattern,
-          needsCommandApproval, needsPathApproval, nonAllowedSegmentIndices } = data;
+          needsCommandApproval, needsPathApproval, nonAllowedSegmentIndices,
+          credentialRule } = data;
   const nonAllowedSet = new Set(nonAllowedSegmentIndices);
 
   // Pre-compute aligned risk reasons (reused in body and tier2)
@@ -90,14 +91,18 @@ function buildBashPrompt(
   const pmSigs = uniqueSigs.filter(sig => PACKAGE_MANAGERS.has(sig.split(/\s+/)[0]));
   const broaderSigs = [...new Set(pmSigs.map(sig => sig.split(/\s+/)[0]))];
   const includeBroaderOption = broaderSigs.some(s => !uniqueSigs.includes(s));
-  const includeAlwaysOption = !hasUnsafePattern && (uniqueSigs.length > 0 || outsideDirs.length > 0);
+  const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (uniqueSigs.length > 0 || outsideDirs.length > 0);
 
   // Title — reflect what triggered the prompt
   const titlePrefix = needsCommandApproval && needsPathApproval
     ? "Bash + Path"
     : needsCommandApproval
     ? "Bash"
-    : "Path";
+    : needsPathApproval
+    ? "Path"
+    : credentialRule
+    ? "Credential"
+    : "Bash";
   const title = riskSeverity === "high"
     ? `\u26a0\ufe0f ${titlePrefix}`
     : titlePrefix;
@@ -138,6 +143,9 @@ function buildBashPrompt(
   }
   if (hasUnsafePattern) {
     body += `\n\u26a0\ufe0f Commands matching danger patterns always prompt, even after auto-allowing.`;
+  }
+  if (credentialRule) {
+    body += `\n\u26a0\ufe0f Matches credential pattern "${credentialRule}" \u2014 may contain secrets or tokens.`;
   }
   body += "\n";
 

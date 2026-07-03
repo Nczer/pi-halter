@@ -192,9 +192,10 @@ function getCommandName(node: TSNode): string | null {
     if (!child) continue;
     if (child.type === "command_name") {
       // command_name may contain multiple children (e.g., "npm" "run")
-      // For our purposes, get the first word
+      // For our purposes, get the first word. Lowercase to match pathAwareCommands.
       if (child.childCount > 0) {
-        return child.child(0)?.text ?? null;
+        const text = child.child(0)?.text;
+        return text ? text.toLowerCase() : null;
       }
       return null;
     }

@@ -3,7 +3,6 @@ import {
   resolvePathReal,
   expandTilde,
   isInsideCwd,
-  isInsideAutoAllowedDir,
   isAllowedReadPath,
   isAllowedWritePath,
   isProjectPiPathResolved,
@@ -30,15 +29,11 @@ export function decideFile(req: FileRequest, store: Store): Decision {
   if (req.toolName === "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" }; // write implies read
   if (req.toolName !== "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" };
 
-  // Session auto-allowed dirs (write dirs imply read)
-  // Cache to avoid redundant Set copies from listAllowed*()
-  const allowedReadDirs = store.listAllowedReadDirs();
-  const allowedWriteDirs = store.listAllowedWriteDirs();
+  // Session auto-allowed dirs (write dirs imply read) — checks membership directly, no Set copy
   if (req.toolName === "read") {
-    if (isInsideAutoAllowedDir(resolved, allowedReadDirs)) return { kind: "auto-allow" };
-    if (isInsideAutoAllowedDir(resolved, allowedWriteDirs)) return { kind: "auto-allow" };
+    if (store.isInsideAllowedDir(resolved, "read")) return { kind: "auto-allow" };
   } else {
-    if (isInsideAutoAllowedDir(resolved, allowedWriteDirs)) return { kind: "auto-allow" };
+    if (store.isInsideAllowedDir(resolved, "write")) return { kind: "auto-allow" };
   }
 
   // Static config paths

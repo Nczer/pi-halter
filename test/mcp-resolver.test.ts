@@ -172,6 +172,7 @@ describe("FileCache mtime invalidation", () => {
 		fs.utimesSync(cachePath, t, t);
 
 		const mod = await loadResolver(tmpBase);
+		mod._setFileCacheTtl(0); // disable TTL for mtime-based invalidation test
 		expect(mod.resolveServerFromToolName("web_search", null)).toBe("exa");
 
 		// Overwrite with different server, bump mtime by 10s
@@ -188,6 +189,7 @@ describe("FileCache mtime invalidation", () => {
 		fs.utimesSync(cachePath, t, t);
 
 		const mod = await loadResolver(tmpBase);
+		mod._setFileCacheTtl(0); // disable TTL so mtime is the only invalidation factor
 		expect(mod.resolveServerFromToolName("web_search", null)).toBe("exa");
 
 		// Same mtime → cache hit even though file content changed on disk.

@@ -42,9 +42,11 @@ export async function twoTierAlwaysPrompt(
 ): Promise<PromptResult> {
   const { title, body, tier2Everything, tier2Paths, tier2File, tier2Broader, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel } = prompt;
 
-  while (true) {
-    const { over, count } = store.incrementPromptCount();
+  // Count this prompt once — not once per loop iteration (Back from tier-2
+  // shouldn't inflate the frequency warning).
+  const { over, count } = store.incrementPromptCount();
 
+  while (true) {
     // Build the "Always" option labels (middle of the list), then append the tail
     // (No-with-reason + No).
     const alwaysOptions: string[] = [];

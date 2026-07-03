@@ -155,3 +155,51 @@ describe("Store: Reset", () => {
 		expect(store.incrementPromptCount().count).toBe(1);
 	});
 });
+
+describe("Store: isInsideAllowedDir", () => {
+	it("returns false for empty store", () => {
+		const store = createStore();
+		expect(store.isInsideAllowedDir("/opt/foo", "read")).toBe(false);
+		expect(store.isInsideAllowedDir("/opt/foo", "write")).toBe(false);
+	});
+
+	it("checks read dirs for read kind", () => {
+		const store = createStore();
+		store.addAllowed({ readDirs: ["/opt"] });
+		expect(store.isInsideAllowedDir("/opt", "read")).toBe(true);
+		expect(store.isInsideAllowedDir("/opt/foo", "read")).toBe(true);
+		expect(store.isInsideAllowedDir("/opt/foo/bar", "read")).toBe(true);
+		expect(store.isInsideAllowedDir("/other", "read")).toBe(false);
+		// read dirs don't grant write
+		expect(store.isInsideAllowedDir("/opt", "write")).toBe(false);
+	});
+
+	it("checks write dirs for write kind", () => {
+		const store = createStore();
+		store.addAllowed({ writeDirs: ["/tmp/work"] });
+		expect(store.isInsideAllowedDir("/tmp/work", "write")).toBe(true);
+		expect(store.isInsideAllowedDir("/tmp/work/file.txt", "write")).toBe(true);
+		expect(store.isInsideAllowedDir("/tmp/other", "write")).toBe(false);
+	});
+
+	it("write dirs imply read", () => {
+		const store = createStore();
+		store.addAllowed({ writeDirs: ["/tmp/work"] });
+		expect(store.isInsideAllowedDir("/tmp/work", "read")).toBe(true);
+		expect(store.isInsideAllowedDir("/tmp/work/file.txt", "read")).toBe(true);
+	});
+
+	it("read dirs do not imply write", () => {
+		const store = createStore();
+		store.addAllowed({ readDirs: ["/tmp/work"] });
+		expect(store.isInsideAllowedDir("/tmp/work", "write")).toBe(false);
+	});
+
+	it("does not match partial path prefixes", () => {
+		const store = createStore();
+		store.addAllowed({ readDirs: ["/opt"] });
+		// /optfoo should NOT match /opt
+		expect(store.isInsideAllowedDir("/optfoo", "read")).toBe(false);
+		expect(store.isInsideAllowedDir("/opt-foo", "read")).toBe(false);
+	});
+});

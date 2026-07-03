@@ -1,7 +1,7 @@
 import { parseCommand } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
-import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs } from "./path-analysis";
+import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs, checkCommandForCredentialPaths } from "./path-analysis";
 import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
 
@@ -43,6 +43,10 @@ export interface CommandAnalysis {
   risk: CommandRisk;
   /** Indices of segments that contain relative path tokens (./foo, ../foo). */
   relativePathSegmentIndices: number[];
+  /** Credential path detected in the command (denied paths are blocked earlier; this is for warned paths). */
+  hasCredentialPath: boolean;
+  /** Matched credential pattern name, if any (e.g. ".env", ".aws"). */
+  credentialRule: string | null;
   /** Prompt-specific derived data. */
   prompt: PromptHints;
 
@@ -57,10 +61,8 @@ export interface CommandAnalysis {
  * and redirects correctly).
  */
 export interface AnalyzeCommandOptions {
-  /** Allowed read directories (from store). When provided, outsidePaths/outsideDirs are computed. */
-  allowedReadDirs?: Set<string>;
-  /** Allowed write directories (from store). When provided, outsidePaths/outsideDirs are computed. */
-  allowedWriteDirs?: Set<string>;
+  /** Predicate: is this resolved path inside a session-auto-allowed dir (read or write)? */
+  isInsideAllowedDir?: (path: string) => boolean;
 }
 
 export async function analyzeCommand(
@@ -106,16 +108,19 @@ export async function analyzeCommand(
   let outsidePaths: string[] | undefined;
   let outsideDirs: string[] | undefined;
   let needsPathApproval: boolean | undefined;
-  if (options?.allowedReadDirs && options?.allowedWriteDirs) {
+  if (options?.isInsideAllowedDir) {
     outsidePaths = getOutsideCwdPaths(
       paths,
       cwd,
-      options.allowedReadDirs,
-      options.allowedWriteDirs,
+      options.isInsideAllowedDir,
     );
     outsideDirs = await resolvePathsToDirs(outsidePaths);
     needsPathApproval = outsidePaths.length > 0;
   }
+
+  // Credential path check — denies are blocked earlier by CredentialDenyRule,
+  // but we check both here for defense-in-depth (prevents auto-allow if a rule is bypassed)
+  const credentialCheck = checkCommandForCredentialPaths(cmd, cwd);
 
   const analysis = {
     segments: segmentTexts,
@@ -128,6 +133,8 @@ export async function analyzeCommand(
     },
     risk: wholeRisk,
     relativePathSegmentIndices,
+    hasCredentialPath: credentialCheck.denied !== null || credentialCheck.warned !== null,
+    credentialRule: credentialCheck.denied ?? credentialCheck.warned,
     prompt: {
       nonAllowlistedSegmentIndices,
       promptSignatures,

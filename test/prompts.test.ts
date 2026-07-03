@@ -104,6 +104,16 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 		expect(cb.onAlways).not.toHaveBeenCalled();
 	});
 
+	it("increments prompt count once even when looping back from tier-2", async () => {
+		const cb = makeCallbacks();
+		// tier-1: Always (1), tier-2: Back (1), tier-1: Yes (0)
+		await twoTierAlwaysPrompt(
+			makePrompt(), makeCtx([1, 1, 0]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+		);
+		// Should be 1 prompt, not 2 (Back shouldn't inflate the count)
+		expect(store.incrementPromptCount().count).toBe(2); // 1 from twoTierAlwaysPrompt + 1 from this check
+	});
+
 	it("returns {kind:'no', reason} when No-with-reason is selected", async () => {
 		const cb = makeCallbacks();
 		// tier-1: No with reason (2), editor: "because unsafe"
