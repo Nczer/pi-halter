@@ -12,7 +12,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { decide, FileRequest, McpRequest } from "../decision-engine";
 import { createStore } from "../store";
 import { buildPrompt } from "../prompt-builder";
@@ -441,5 +441,82 @@ describe("Integration: decide → buildPrompt", () => {
 			// Script is trusted but package is not → command is not simple
 			expect(d.promptData.needsCommandApproval).toBe(true);
 		}
+	});
+});
+
+// ── Retry-loop prevention (RetryLoopRule through decide pipeline) ───────
+
+describe("Bash: retry-loop prevention", () => {
+	let clock: number;
+	let dateNowSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		clock = 1_000_000; // non-zero so getLastAbort returns a truthy timestamp
+		dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+	});
+
+	afterEach(() => {
+		dateNowSpy.mockRestore();
+	});
+
+	it("blocks a command aborted within ABORT_REMEMBER_MS", async () => {
+		const store = createStore(() => clock);
+		store.recordAbort("rm -rf /tmp");
+		clock = 1_000_000 + 30_000; // 30s later, within 60s threshold
+		const d = await decide({ type: "bash", command: "rm -rf /tmp", cwd }, store);
+		expect(d.kind).toBe("block");
+		if (d.kind === "block") {
+			expect(d.reason).toContain("aborted");
+		}
+	});
+
+	it("does not block after ABORT_REMEMBER_MS threshold", async () => {
+		const store = createStore(() => clock);
+		store.recordAbort("rm -rf /tmp");
+		clock = 1_000_000 + 61_000; // 61s later, past 60s threshold
+		const d = await decide({ type: "bash", command: "rm -rf /tmp", cwd }, store);
+		expect(d.kind).not.toBe("block");
+		// rm is unsafe + /tmp is outside cwd → should prompt
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("only blocks the exact aborted command, not others", async () => {
+		const store = createStore(() => clock);
+		store.recordAbort("rm -rf /tmp");
+		clock = 1_000_000 + 10_000;
+		const d = await decide({ type: "bash", command: "ls", cwd }, store);
+		expect(d.kind).toBe("auto-allow");
+	});
+});
+
+// ── FastAllow path-token guard ─────────────────────────────────────────
+
+describe("Bash: FastAllow path-token guard", () => {
+	// FastAllowRule auto-allows trivial commands (cat, ls, ...) UNLESS a token
+	// starts with /, ~/, ./, or ../ — those must go through analysis for path checks.
+
+	it("auto-allows 'cat x' (plain, no path token)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "cat x", cwd }, store);
+		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("prompts for 'cat ~/x' (~/ skips FastAllow, analysis catches outside cwd)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "cat ~/x", cwd }, store);
+		// Without the guard, cat ~/x would fast-allow and skip the outside-path check.
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("prompts for 'cat /etc/passwd' (/ skips FastAllow, analysis catches outside cwd)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "cat /etc/passwd", cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("prompts for 'ls /var/log' (/ skips FastAllow, outside cwd)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "ls /var/log", cwd }, store);
+		expect(d.kind).toBe("prompt");
 	});
 });
