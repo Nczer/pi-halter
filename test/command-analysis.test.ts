@@ -249,6 +249,45 @@ describe("Risk: no risk", () => {
 	});
 });
 
+describe("Quote-aware redirect detection (no false positives from quoted content)", () => {
+	it("grep pattern with arrow function => is not a write redirect", async () => {
+		const a = await analyzeCommand('grep -n "setTimeout(() => {" index.ts', cwd);
+		expect(a.safety.isSimple).toBe(true);
+		expect(a.safety.canBeAutoAllowed).toBe(true);
+		expect(a.risk.dangerous).toBe(false);
+		expect(a.risk.reasons.some(r => r.includes("redirection"))).toBe(false);
+	});
+
+	it("grep alternation pattern with => across newline is not a write redirect", async () => {
+		const a = await analyzeCommand('grep -n "setTimeout(() =>\n{" index.ts', cwd);
+		expect(a.safety.canBeAutoAllowed).toBe(true);
+		expect(a.risk.reasons.some(r => r.includes("redirection"))).toBe(false);
+	});
+
+	it("quoted string containing > is not a write redirect (echo)", async () => {
+		const a = await analyzeCommand('echo "foo > bar"', cwd);
+		expect(a.safety.canBeAutoAllowed).toBe(true);
+		expect(a.risk.reasons.some(r => r.includes("redirection"))).toBe(false);
+	});
+
+	it("quoted grep pattern containing < is not an input redirect", async () => {
+		const a = await analyzeCommand('grep "a < b" file.txt', cwd);
+		expect(a.risk.reasons.some(r => r.includes("input redirection"))).toBe(false);
+	});
+
+	it("real redirect to quoted filename IS detected", async () => {
+		const a = await analyzeCommand('echo hello > "out file.txt"', cwd);
+		expect(a.safety.isSimple).toBe(false);
+		expect(a.risk.reasons.some(r => r.includes("redirection"))).toBe(true);
+	});
+
+	it("real unquoted write redirect still flagged", async () => {
+		const a = await analyzeCommand('echo hello > file.txt', cwd);
+		expect(a.safety.isSimple).toBe(false);
+		expect(a.risk.dangerous).toBe(true);
+	});
+});
+
 describe("isFirstTokenRelativePath: direct unit tests", () => {
 	it("./foo is relative", async () => {
 		const a = await analyzeCommand("./foo", cwd);

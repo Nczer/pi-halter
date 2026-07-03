@@ -45,7 +45,7 @@ export function containsCommandSubstitution(s: string): boolean {
   return s.includes(CMD_SUBST_MARKER);
 }
 
-function stripQuotedStrings(cmd: string): string {
+export function stripQuotedStrings(cmd: string): string {
   let s = cmd.replace(QUOTE_DOUBLE_RE, (match) => {
     if (CMD_SUBST_IN_QUOTE_RE.test(match) || BACKTICK_RE.test(match)) return CMD_SUBST_MARKER;
     return "__STR__";
@@ -71,13 +71,17 @@ export function stripNullRedirects(cmd: string): string {
 /**
  * Check if a command string contains a write redirect (> or >> to a file).
  * Ignores /dev/null, /dev/stderr, fd-to-fd redirects, and test/[ conditionals.
+ * Quote-aware: operators inside quoted strings (e.g. a grep pattern containing
+ * "=>" or ">") are not treated as redirects. Unquoted command substitution
+ * $(...) is preserved, so real redirects inside subshells are still detected.
  */
 export function hasWriteRedirect(cmd: string): boolean {
-  const trimmed = cmd.trim();
+  const noQuotes = stripQuotedStrings(cmd);
+  const trimmed = noQuotes.trim();
   if (STARTS_WITH_REDIRECT_RE.test(trimmed)) {
     if (!stripNullRedirects(trimmed).trim()) return false;
   }
-  const stripped = stripNullRedirects(cmd);
+  const stripped = stripNullRedirects(noQuotes);
   if (WRITE_REDIRECT_RE.test(stripped)) {
     const inTest = IN_TEST_RE.test(stripped) || TEST_CMD_RE.test(stripped);
     if (!inTest) return true;

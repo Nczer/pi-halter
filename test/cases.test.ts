@@ -64,6 +64,8 @@ const cases: TestCase[] = [
 	{ cmd: "grep -l pattern *.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "grep -l (file names)" },
 	{ cmd: "grep -c pattern file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "grep -c (count)" },
 	{ cmd: "grep -rn --include='*.ts' pattern .", simple: true, unsafe: false, decision: "auto-allow", desc: "grep -rn --include" },
+	{ cmd: 'grep -n "setTimeout(() => {" index.ts', simple: true, unsafe: false, decision: "auto-allow", desc: "grep pattern with arrow => is not a write redirect (quote-aware)" },
+	{ cmd: 'cd /tmp && grep -n "setTimeout(() =>" index.ts', simple: true, unsafe: false, decision: "auto-allow", desc: "cd && grep with => in quoted pattern (no false redirect)" },
 
 	// ═══════════════════════════════════════════════════════════
 	// rg (ripgrep)
