@@ -153,7 +153,7 @@ const SAFE_SYSTEM_PATHS = new Set([
 ]);
 
 const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
-const BARE_SLASH_RE = /^\/+$/;
+const BARE_SLASH_RE = /^\/\/+$/;
 
 /** Check if a token looks like a filesystem path worth resolving. */
 function isPathCandidate(token: string): boolean {
@@ -285,16 +285,23 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
         cmdTexts.push(child.text.trim());
         if (nodeHasSubshell(child)) segHasSubshell = true;
       } else {
-        // redirected_statement, subshell, etc. — recurse to extract commands
+        // redirected_statement, subshell, etc. — recurse to extract commands.
+        // A compound child can produce multiple segments split on && / ; / & (e.g. a
+        // redirected_statement wrapping "A && B", or a subshell). Only the LAST
+        // newly-added segment is the pipeline stage feeding the next `|`; earlier
+        // segments are separate commands (control operators) and must remain
+        // top-level segments. Folding them in would hide them behind the last
+        // stage's signature — e.g. "cd … && npx vitest 2>&1 | grep" collapsing to
+        // a single "cd"-signed segment and auto-allowing the hidden npx.
+        // (prevCount guard avoids stealing pre-existing segments — the bug that
+        // the prior "merge all" loop was band-aiding.)
         const prevCount = segments.length;
         walk(child);
-        // Merge ALL newly added segments back into this pipeline segment
-        // (not just the last one — compound children like subshells with && can produce multiple)
-        while (segments.length > prevCount) {
-          const merged = segments.shift()!;
-          cmdTexts.push(merged.text);
-          segHasSubshell = segHasSubshell || merged.hasSubshell;
-          for (const op of merged.ops) ops.add(op);
+        if (segments.length > prevCount) {
+          const last = segments.pop()!;
+          cmdTexts.push(last.text);
+          segHasSubshell = segHasSubshell || last.hasSubshell;
+          for (const op of last.ops) ops.add(op);
         }
       }
     }
@@ -447,6 +454,8 @@ export interface ParseResult {
   paths: string[];
   /** Whether any segment contains subshell constructs. */
   hasSubshell: boolean;
+  /** Whether tree-sitter produced ERROR nodes (malformed bash). */
+  hasParseError: boolean;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -458,9 +467,19 @@ export interface ParseResult {
 export async function parseCommand(command: string, cwd: string): Promise<ParseResult> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], paths: [], hasSubshell: false };
+  if (!tree) return { segments: [], paths: [], hasSubshell: false, hasParseError: false };
 
   try {
+    // Check for ERROR nodes in the AST (malformed bash)
+    let hasParseError = false;
+    const checkError = (node: TSNode): void => {
+      if (node.type === "ERROR") { hasParseError = true; return; }
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (child) checkError(child);
+      }
+    };
+    checkError(tree.rootNode);
     // Cache subshell checks per parse session to avoid redundant subtree walks
     subshellCache = new WeakMap();
 
@@ -514,7 +533,7 @@ export async function parseCommand(command: string, cwd: string): Promise<ParseR
 
     const hasSubshell = segments.some(s => s.hasSubshell);
 
-    return { segments, paths, hasSubshell };
+    return { segments, paths, hasSubshell, hasParseError };
   } finally {
     subshellCache = null;
     tree.delete();

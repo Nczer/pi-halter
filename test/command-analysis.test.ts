@@ -408,4 +408,41 @@ describe("Paths: extraction", () => {
 	it("filters /dev/null from paths", async () => {
 		expect((await analyzeCommand("echo hello 2>/dev/null", cwd)).paths).toHaveLength(0);
 	});
+
+	it("extracts / root path from find /", async () => {
+		const a = await analyzeCommand("find / -iname '*.txt'", cwd);
+		expect(a.paths).toContain("/");
+	});
+
+	it("extracts / root path from find / | grep pipeline", async () => {
+		const a = await analyzeCommand("find / -iname '*gallop*' 2>/dev/null | grep -v proc | head -50", cwd);
+		expect(a.paths).toContain("/");
+	});
+});
+
+describe("Paths: outside cwd detection for root filesystem", () => {
+	it("find / has outsidePaths (root is outside cwd)", async () => {
+		const a = await analyzeCommand("find / -iname '*.txt'", cwd, {
+			isInsideAllowedDir: () => false,
+		});
+		expect(a.prompt.outsidePaths).toContain("/");
+		expect(a.prompt.needsPathApproval).toBe(true);
+	});
+
+	it("find / | grep pipeline has outsidePaths", async () => {
+		const a = await analyzeCommand("find / -iname '*gallop*' 2>/dev/null | grep -v proc | head -50", cwd, {
+			isInsideAllowedDir: () => false,
+		});
+		expect(a.prompt.outsidePaths).toContain("/");
+		expect(a.prompt.needsPathApproval).toBe(true);
+	});
+
+	it("needsPathApproval is true when / is outside cwd", async () => {
+		const a = await analyzeCommand("find / -iname '*.txt'", cwd, {
+			isInsideAllowedDir: () => false,
+		});
+		// canBeAutoAllowed is about unsafe patterns only. Outside path gating
+		// happens in SafetyRule via needsPathApproval.
+		expect(a.prompt.needsPathApproval).toBe(true);
+	});
 });

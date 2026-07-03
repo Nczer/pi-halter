@@ -47,6 +47,8 @@ export interface CommandAnalysis {
   hasCredentialPath: boolean;
   /** Matched credential pattern name, if any (e.g. ".env", ".aws"). */
   credentialRule: string | null;
+  /** Whether tree-sitter produced ERROR nodes (malformed bash). */
+  hasParseError: boolean;
   /** Prompt-specific derived data. */
   prompt: PromptHints;
 
@@ -72,7 +74,7 @@ export async function analyzeCommand(
 ): Promise<CommandAnalysis> {
   // Single AST parse: segments, paths, and subshell flags in one pass
   const parseResult = await parseCommand(cmd, cwd);
-  const { segments, paths } = parseResult;
+  const { segments, paths, hasParseError } = parseResult;
   const segmentTexts = segments.map(s => s.text);
   const signatures = segmentTexts.map(getCommandSignature);
 
@@ -126,6 +128,7 @@ export async function analyzeCommand(
     segments: segmentTexts,
     signatures,
     paths,
+    hasParseError,
     safety: {
       canBeAutoAllowed: !hasUnsafe,
       isSimple: allSimple,

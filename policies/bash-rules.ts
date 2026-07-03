@@ -67,10 +67,15 @@ export const FastAllowRule: BashRule = (req) => {
 export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) => {
   if (!analysis) return null;
 
+  // Zero segments + parse error means tree-sitter couldn't parse the command.
+  // Never auto-allow — prompt so the user can inspect.
+  // (Zero segments without parse error is valid: shell builtins like export/unset.)
+  if (analysis.segments.length === 0 && analysis.hasParseError) return null;
+
   const outsidePaths = analysis.prompt.outsidePaths ?? [];
   const canAutoAllow = analysis.safety.canBeAutoAllowed && outsidePaths.length === 0 && !analysis.hasCredentialPath;
 
-  if (analysis.segments.length > 0 && analysis.safety.isSimple && canAutoAllow) {
+  if (analysis.safety.isSimple && canAutoAllow) {
     return { kind: "auto-allow" };
   }
 

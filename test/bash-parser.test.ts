@@ -203,24 +203,148 @@ describe("parseCommand: edge cases", () => {
 	});
 });
 
-describe("parseCommand: pipeline with compound children (P0 fix: merge all segments)", () => {
-	it("subshell with && chain inside pipeline → all commands merged into one segment", async () => {
+describe("parseCommand: pipeline with compound children (split on &&, no commands dropped)", () => {
+	it("subshell with && chain inside pipeline → && splits into separate segments, none dropped", async () => {
 		const r = await parseCommand("(rm a && ls b) | cat", cwd);
-		// The fix: handlePipeline merges ALL segments from compound children, not just the last
-		// Before fix: only "ls b" was captured, "rm a" was dropped
-		expect(r.segments.length).toBeGreaterThanOrEqual(1);
-		const pipelineSeg = r.segments[0];
-		expect(pipelineSeg.text).toContain("rm a");
-		expect(pipelineSeg.text).toContain("ls b");
-		expect(pipelineSeg.ops).toContain("|");
+		// handlePipeline keeps control-operator splits as top-level segments — only the
+		// last newly-added segment joins the pipeline. History: an early version dropped
+		// "rm a" entirely; the "merge all" band-aid fixed the drop but folded both commands
+		// into one blob led by the first command's signature, hiding the second command
+		// from the approval gate (e.g. "(ls && npx evil) | cat" auto-allowed via "ls").
+		expect(r.segments.length).toBe(2);
+		expect(r.segments[0].text).toBe("rm a");
+		expect(r.segments[1].text).toBe("ls b | cat");
+		expect(r.segments[1].ops).toContain("|");
 	});
 
-	it("subshell with triple && chain inside pipeline → all three commands present", async () => {
+	it("subshell with triple && chain inside pipeline → all three commands present across segments", async () => {
 		const r = await parseCommand("(echo a && echo b && echo c) | grep x", cwd);
-		const pipelineSeg = r.segments[0];
-		expect(pipelineSeg.text).toContain("echo a");
-		expect(pipelineSeg.text).toContain("echo b");
-		expect(pipelineSeg.text).toContain("echo c");
+		expect(r.segments.length).toBe(3);
+		expect(r.segments[0].text).toBe("echo a");
+		expect(r.segments[1].text).toBe("echo b");
+		expect(r.segments[2].text).toBe("echo c | grep x");
+	});
+
+	// — bypass fix: && / ; / || chains feeding a pipe —
+	it("cd && npx 2>&1 | grep → cd splits off, npx joins pipe", async () => {
+		const r = await parseCommand("cd /tmp && npx vitest 2>&1 | grep FAIL", cwd);
+		expect(r.segments.length).toBe(2);
+		expect(r.segments[0].text).toBe("cd /tmp");
+		expect(r.segments[1].text).toContain("npx vitest");
+		expect(r.segments[1].text).toContain("| grep FAIL");
+		expect(r.segments[1].ops).toContain("|");
+	});
+
+	it("cd ; npx 2>&1 | cat → ; chain, npx joins pipe", async () => {
+		const r = await parseCommand("cd /tmp ; npx somepkg 2>&1 | cat", cwd);
+		expect(r.segments.length).toBe(2);
+		expect(r.segments[0].text).toBe("cd /tmp");
+		expect(r.segments[1].text).toContain("npx somepkg");
+		expect(r.segments[1].ops).toContain("|");
+	});
+
+	it("cd || npx 2>&1 | cat → || chain, npx joins pipe", async () => {
+		const r = await parseCommand("cd /tmp || npx somepkg 2>&1 | cat", cwd);
+		expect(r.segments.length).toBe(2);
+		expect(r.segments[0].text).toBe("cd /tmp");
+		expect(r.segments[1].text).toContain("npx somepkg");
+		expect(r.segments[1].ops).toContain("|");
+	});
+
+	it("{ ls && npx } | cat → brace group, npx joins pipe", async () => {
+		const r = await parseCommand("{ ls && npx somepkg } | cat", cwd);
+		expect(r.segments.length).toBe(2);
+		expect(r.segments[0].text).toBe("ls");
+		expect(r.segments[1].text).toContain("npx somepkg");
+		expect(r.segments[1].ops).toContain("|");
+	});
+
+	it("cd && ls && npx 2>&1 | cat → triple &&, npx joins pipe", async () => {
+		const r = await parseCommand("cd /tmp && ls && npx somepkg 2>&1 | cat", cwd);
+		expect(r.segments.length).toBe(3);
+		expect(r.segments[0].text).toBe("cd /tmp");
+		expect(r.segments[1].text).toBe("ls");
+		expect(r.segments[2].text).toContain("npx somepkg");
+		expect(r.segments[2].ops).toContain("|");
+	});
+
+	it("ls | grep && npx → pipe then &&, npx separate", async () => {
+		const r = await parseCommand("ls | grep foo && npx somepkg", cwd);
+		expect(r.segments.length).toBe(2);
+		expect(r.segments[0].text).toContain("ls");
+		expect(r.segments[0].text).toContain("| grep foo");
+		expect(r.segments[0].ops).toContain("|");
+		expect(r.segments[1].text).toBe("npx somepkg");
+	});
+
+	it("(cd ; npx) | cat → subshell with ;, npx joins pipe", async () => {
+		const r = await parseCommand("(cd /tmp ; npx somepkg) | cat", cwd);
+		expect(r.segments.length).toBe(2);
+		expect(r.segments[0].text).toBe("cd /tmp");
+		expect(r.segments[1].text).toContain("npx somepkg");
+		expect(r.segments[1].ops).toContain("|");
+	});
+
+	it("(cd || npx) | cat → subshell with ||, npx joins pipe", async () => {
+		const r = await parseCommand("(cd /tmp || npx somepkg) | cat", cwd);
+		expect(r.segments.length).toBe(2);
+		expect(r.segments[0].text).toBe("cd /tmp");
+		expect(r.segments[1].text).toContain("npx somepkg");
+		expect(r.segments[1].ops).toContain("|");
+	});
+
+	it("(ls && echo && npx) | cat → subshell triple &&, npx joins pipe", async () => {
+		const r = await parseCommand("(ls && echo ok && npx somepkg) | cat", cwd);
+		expect(r.segments.length).toBe(3);
+		expect(r.segments[0].text).toBe("ls");
+		expect(r.segments[1].text).toBe("echo ok");
+		expect(r.segments[2].text).toContain("npx somepkg");
+		expect(r.segments[2].ops).toContain("|");
+	});
+
+	// — safe chains should still split correctly (auto-allow path) —
+	it("cd && ls 2>&1 | grep → safe chain, 2 segments", async () => {
+		const r = await parseCommand("cd /tmp && ls 2>&1 | grep foo", cwd);
+		expect(r.segments.length).toBe(2);
+		expect(r.segments[0].text).toBe("cd /tmp");
+		expect(r.segments[1].text).toContain("ls");
+		expect(r.segments[1].ops).toContain("|");
+	});
+
+	it("cd && ls && cat 2>&1 | grep → triple safe chain, 3 segments", async () => {
+		const r = await parseCommand("cd /tmp && ls && cat file 2>&1 | grep foo", cwd);
+		expect(r.segments.length).toBe(3);
+		expect(r.segments[0].text).toBe("cd /tmp");
+		expect(r.segments[1].text).toBe("ls");
+		expect(r.segments[2].text).toContain("cat file");
+		expect(r.segments[2].ops).toContain("|");
+	});
+});
+
+describe("parseCommand: bare / root path", () => {
+	it("extracts / as a path from find /", async () => {
+		const r = await parseCommand("find / -iname '*.txt'", cwd);
+		expect(r.paths).toContain("/");
+	});
+
+	it("extracts / as a path from find / -iname with pipe", async () => {
+		const r = await parseCommand("find / -iname '*gallop*' 2>/dev/null | grep -v proc | head -50", cwd);
+		expect(r.paths).toContain("/");
+	});
+
+	it("extracts / as a path from grep -r /", async () => {
+		const r = await parseCommand("grep -r pattern /", cwd);
+		expect(r.paths).toContain("/");
+	});
+
+	it("extracts / as a path from ls /", async () => {
+		const r = await parseCommand("ls /", cwd);
+		expect(r.paths).toContain("/");
+	});
+
+	it("still filters // (double slash noise)", async () => {
+		const r = await parseCommand("echo //", cwd);
+		expect(r.paths).toHaveLength(0);
 	});
 });
 
