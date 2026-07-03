@@ -6,12 +6,12 @@ import { store } from "./store";
 
 // ── Main extension ──
 
-export default async function permissionExtension(pi: ExtensionAPI) {
+export default async function halterExtension(pi: ExtensionAPI) {
   // ── Session shutdown ──
   pi.on("session_shutdown", async (_event, ctx) => {
     store.reset();
     setDspActive(false);
-    ctx.ui.setWidget("permissions", undefined);
+    ctx.ui.setWidget("halter", undefined);
     ctx.ui.setWidget("dsp-warning", undefined);
   });
 
@@ -21,9 +21,9 @@ export default async function permissionExtension(pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       setDspActive(!isDspActive());
       updateDspWidget(ctx);
-      // Hide the normal permissions widget when DSP is active; restore it when DSP is off
+      // Hide the normal halter widget when DSP is active; restore it when DSP is off
       if (isDspActive()) {
-        ctx.ui.setWidget("permissions", undefined);
+        ctx.ui.setWidget("halter", undefined);
       } else {
         updateWidget(ctx);
       }

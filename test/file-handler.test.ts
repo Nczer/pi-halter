@@ -19,7 +19,7 @@ function makeCtx() {
 /**
  * Regression: edit pre-validation must NOT read file content for credential paths
  * (denied/warned) before the permission gate decides. Reading secrets before the
- * gate is an ordering bug in a permission extension.
+ * gate is an ordering bug in a halter extension.
  */
 describe("handleFile edit pre-validation security", () => {
   let readSpy: ReturnType<typeof vi.spyOn>;
