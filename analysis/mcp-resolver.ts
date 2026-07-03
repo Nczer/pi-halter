@@ -43,11 +43,28 @@ export function deriveProxyTarget(params: Record<string, unknown>): { server: st
 
 // ── Cache helpers ──────────────────────────────────────────────────────
 
-/** Simple mtime-based cache for lazily-loaded data derived from config files. */
+/**
+ * mtime-based cache for lazily-loaded data derived from config files.
+ * Re-stats files at most once per TTL window to avoid synchronous statSync
+ * on every tool call (MCP config changes rarely).
+ */
+let fileCacheTtlMs = 3000;
+
+/** @internal Set TTL for testing (0 = always re-stat). */
+export function _setFileCacheTtl(ms: number): void {
+  fileCacheTtlMs = ms;
+}
+
 class FileCache<T> {
-  private cached: { mtime: number; value: T } | null = null;
+  private cached: { mtime: number; value: T; ts: number } | null = null;
 
   get(files: string[], build: () => T): T {
+    const now = Date.now();
+    // Within TTL window — skip stat checks entirely
+    if (this.cached && now - this.cached.ts < fileCacheTtlMs) {
+      return this.cached.value;
+    }
+
     let latestMtime = 0;
     for (const f of files) {
       try {
@@ -58,10 +75,11 @@ class FileCache<T> {
       }
     }
     if (this.cached && latestMtime <= this.cached.mtime) {
+      this.cached.ts = now; // Refresh timestamp — value still current
       return this.cached.value;
     }
     const value = build();
-    this.cached = { mtime: latestMtime || Date.now(), value };
+    this.cached = { mtime: latestMtime || now, value, ts: now };
     return value;
   }
 }

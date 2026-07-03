@@ -279,10 +279,10 @@ describe("Round-trip: MCP server approval", () => {
 		expect(d2.kind).toBe("auto-allow");
 	});
 
-	it("server extraction from tool name → rules → auto-allow", async () => {
+	it("server approval → rules → auto-allow", async () => {
 		const store = createStore();
 
-		const req: McpRequest = { type: "mcp", server: "", tool: "joplin:get_notes" };
+		const req: McpRequest = { type: "mcp", server: "joplin", tool: "joplin:get_notes" };
 		const d1 = await decide(req, store);
 		expect(d1.kind).toBe("prompt");
 		if (d1.kind !== "prompt") throw new Error("expected prompt");

@@ -1,5 +1,6 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
 import { getFirstWord } from "../analysis/segment-helpers";
+import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE } from "../analysis/path-analysis";
 import type { Store, BashRequest, Decision } from "../decision-engine";
 import type { CommandAnalysis } from "../analysis/command-analysis";
 
@@ -20,11 +21,29 @@ export const RetryLoopRule: BashRule = (req, store) => {
 };
 
 /**
+ * Blocks commands that reference denied credential paths (.ssh, .gnupg, etc.).
+ * Runs before FastAllowRule so even `cat .ssh/id_rsa` is blocked.
+ */
+export const CredentialDenyRule: BashRule = (req) => {
+  const credCheck = checkCommandForCredentialPaths(req.command, req.cwd);
+  if (credCheck.denied) {
+    return {
+      kind: "block",
+      reason: `Blocked: '${credCheck.denied}' is a denied path (credentials/secrets)`,
+    };
+  }
+  return null;
+};
+
+/**
  * Auto-allows trivial commands without needing full tree-sitter analysis.
  */
 export const FastAllowRule: BashRule = (req) => {
   const COMPOUND_RE = /\$\(|`|&&|\|\||[|;&<>]/;
   if (COMPOUND_RE.test(req.command)) return null;
+
+  // Credential check — don't auto-allow if the command references credential paths
+  if (CREDENTIAL_SCAN_RE.test(req.command)) return null;
 
   const tokens = req.command.trim().split(/\s+/);
   if (tokens.length < 1) return null;
@@ -49,7 +68,7 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   if (!analysis) return null;
 
   const outsidePaths = analysis.prompt.outsidePaths ?? [];
-  const canAutoAllow = analysis.safety.canBeAutoAllowed && outsidePaths.length === 0;
+  const canAutoAllow = analysis.safety.canBeAutoAllowed && outsidePaths.length === 0 && !analysis.hasCredentialPath;
 
   if (analysis.segments.length > 0 && analysis.safety.isSimple && canAutoAllow) {
     return { kind: "auto-allow" };
@@ -100,6 +119,7 @@ export const PromptFallbackRule: BashRule = (req, _store, analysis?: CommandAnal
       riskSeverity: analysis.risk.severity,
       riskReasons: analysis.risk.reasons,
       hasUnsafePattern: analysis.safety.hasUnsafePattern,
+      credentialRule: analysis.credentialRule,
       needsCommandApproval: !analysis.safety.isSimple,
       needsPathApproval: prompt.needsPathApproval ?? false,
     },

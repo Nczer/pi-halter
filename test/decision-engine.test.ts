@@ -229,10 +229,10 @@ describe("MCP: With argsPreview", () => {
 	});
 });
 
-describe("MCP: Server extraction from tool name", () => {
-	it("extracts server from tool name", async () => {
+describe("MCP: Server in prompt data", () => {
+	it("uses provided server in prompt data", async () => {
 		const store = createStore();
-		const req: McpRequest = { type: "mcp", server: "", tool: "joplin:get_notes" };
+		const req: McpRequest = { type: "mcp", server: "joplin", tool: "joplin:get_notes" };
 		const d = await decide(req, store);
 		if (d.kind === "prompt") {
 			expect(d.promptData.server).toBe("joplin");
@@ -518,5 +518,77 @@ describe("Bash: FastAllow path-token guard", () => {
 		const store = createStore();
 		const d = await decide({ type: "bash", command: "ls /var/log", cwd }, store);
 		expect(d.kind).toBe("prompt");
+	});
+});
+
+// ── Credential path guard ──────────────────────────────────────────────
+
+describe("Bash: credential path guard", () => {
+	// Bash commands referencing credential files must not be auto-allowed.
+	// Denied paths (.ssh, .gnupg, ...) are blocked; warned paths (.env, .aws, ...) prompt.
+
+	const deniedCases = [
+		"cat .ssh/id_rsa",
+		"cat .gnupg/private.key",
+		"ls .ssh",
+		"cat .vault/token",
+		"cat .secrets/db",
+	];
+	for (const cmd of deniedCases) {
+		it(`blocks: ${cmd}`, async () => {
+			const store = createStore();
+			const d = await decide({ type: "bash", command: cmd, cwd }, store);
+			expect(d.kind).toBe("block");
+			expect(d.kind === "block" && d.reason).toContain("denied path");
+		});
+	}
+
+	const warnedCases = [
+		"cat .env",
+		"cat .aws/credentials",
+		"cat .env.production",
+		"cat .npmrc",
+		"grep PASS .env",
+		"cat .docker/config.json",
+	];
+	for (const cmd of warnedCases) {
+		it(`prompts: ${cmd}`, async () => {
+			const store = createStore();
+			const d = await decide({ type: "bash", command: cmd, cwd }, store);
+			expect(d.kind).toBe("prompt");
+		});
+	}
+
+	it("includes credentialRule in prompt data", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "cat .env", cwd }, store);
+		expect(d.kind).toBe("prompt");
+		if (d.kind === "prompt") {
+			expect(d.promptData.type).toBe("bash");
+			if (d.promptData.type === "bash") {
+				expect(d.promptData.credentialRule).toBe(".env");
+			}
+		}
+	});
+
+	it("does not auto-allow credential path even with prior 'Always' for the command", async () => {
+		const store = createStore();
+		store.addAllowed({ bashSigs: ["cat"] });
+		const d = await decide({ type: "bash", command: "cat .env", cwd }, store);
+		expect(d.kind).toBe("prompt"); // credential path overrides signature approval
+	});
+
+	it("auto-allows safe commands that don't reference credentials", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "cat regular.txt", cwd }, store);
+		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("handles quoted credential paths", async () => {
+		const store = createStore();
+		const d1 = await decide({ type: "bash", command: "cat '.env'", cwd }, store);
+		expect(d1.kind).toBe("prompt");
+		const d2 = await decide({ type: "bash", command: 'cat ".ssh/id_rsa"', cwd }, store);
+		expect(d2.kind).toBe("block");
 	});
 });

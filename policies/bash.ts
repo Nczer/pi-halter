@@ -1,10 +1,11 @@
 import { analyzeCommand } from "../analysis/command-analysis";
 import type { Store, BashRequest, Decision } from "../decision-engine";
-import { RetryLoopRule, FastAllowRule, SafetyRule, PromptFallbackRule } from "./bash-rules";
+import { RetryLoopRule, FastAllowRule, SafetyRule, PromptFallbackRule, CredentialDenyRule } from "./bash-rules";
 
 export async function decideBash(req: BashRequest, store: Store): Promise<Decision> {
   const rules = [
     RetryLoopRule,
+    CredentialDenyRule,
     FastAllowRule,
   ];
 
@@ -14,8 +15,7 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   }
 
   const analysis = await analyzeCommand(req.command, req.cwd, {
-    allowedReadDirs: store.listAllowedReadDirs(),
-    allowedWriteDirs: store.listAllowedWriteDirs(),
+    isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read") || store.isInsideAllowedDir(p, "write"),
   });
 
   const analysisRules = [

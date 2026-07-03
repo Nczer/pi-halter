@@ -24,6 +24,7 @@ export interface SessionState {
   hasAllowedReadPath(path: string): boolean;
   hasAllowedWritePath(path: string): boolean;
   hasAllowedMcpServer(server: string): boolean;
+  isInsideAllowedDir(resolved: string, kind: "read" | "write"): boolean;
   addAllowed(rules: AllowRules): void;
   recordAbort(command: string): void;
   getLastAbort(command: string): number | null;
@@ -67,6 +68,17 @@ function createSessionState(nowFn = Date.now): SessionState {
     hasAllowedReadPath(p) { return readPaths.has(p); },
     hasAllowedWritePath(p) { return writePaths.has(p); },
     hasAllowedMcpServer(s) { return mcpServers.has(s); },
+    isInsideAllowedDir(resolved, kind) {
+      // Write dirs imply read, so "read" checks both sets.
+      const sets = kind === "read" ? [readDirs, writeDirs] : [writeDirs];
+      for (const set of sets) {
+        if (set.has(resolved)) return true;
+        for (const d of set) {
+          if (resolved === d || resolved.startsWith(d + "/")) return true;
+        }
+      }
+      return false;
+    },
 
     addAllowed(rules) {
       rules.bashSigs?.forEach(s => bashSigs.add(s));
@@ -123,6 +135,8 @@ export interface Store {
   hasAllowedReadPath(path: string): boolean;
   hasAllowedWritePath(path: string): boolean;
   hasAllowedMcpServer(server: string): boolean;
+  /** Check if a resolved path is inside a session-auto-allowed dir (no Set copy). */
+  isInsideAllowedDir(resolved: string, kind: "read" | "write"): boolean;
   addAllowed(rules: AllowRules): void;
   recordAbort(command: string): void;
   getLastAbort(command: string): number | null;
@@ -151,6 +165,7 @@ export function createStore(nowFn = Date.now): Store {
     hasAllowedReadPath: p => session.hasAllowedReadPath(p),
     hasAllowedWritePath: p => session.hasAllowedWritePath(p),
     hasAllowedMcpServer: s => session.hasAllowedMcpServer(s),
+    isInsideAllowedDir: (p, k) => session.isInsideAllowedDir(p, k),
     addAllowed: r => session.addAllowed(r),
     recordAbort: c => session.recordAbort(c),
     getLastAbort: c => session.getLastAbort(c),

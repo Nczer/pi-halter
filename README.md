@@ -4,7 +4,7 @@ A halter for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, and `mcp` 
 
 ## Features
 
-- **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.)
+- **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.); blocks denied credential paths (`.ssh`, `.gnupg`, etc.) and prompts for warned paths (`.env`, `.aws`, etc.) even via `cat`/`grep`
 - **File access** — auto-allows reads inside cwd and trusted paths; prompts for paths outside cwd, denied names (`.env`, `.ssh`, etc.)
 - **MCP tool calls** — intercepts both proxy tool calls (`mcp({tool: "..."})`) and direct tools (e.g., `exa_web_search_exa`); auto-allows metadata operations; prompts for tool invocations showing server, tool, and argument preview; server-level "Always" approval (e.g., `exa:*`)
 - **Auto-allow** — "Always" option grants session-scoped permission; status widget shows active allowances
@@ -120,8 +120,9 @@ Follow a bash command (`ls -la`) through the system:
 4. **`policies/bash.ts`** — runs the rule pipeline from `bash-rules.ts`:
    - `UserDenyRule` — is it explicitly denied? → block
    - `RetryLoopRule` — was it recently aborted? → block
-   - `FastAllowRule` — is it trivially safe? → auto-allow
-   - `SafetyRule` — full analysis via `analysis/command-analysis.ts` → auto-allow or null
+   - `CredentialDenyRule` — does it reference a denied credential path (`.ssh`, `.gnupg`)? → block
+   - `FastAllowRule` — is it trivially safe? → auto-allow (skipped if credential pattern detected)
+   - `SafetyRule` — full analysis via `analysis/command-analysis.ts` → auto-allow or null (also blocks auto-allow for warned credential paths like `.env`)
    - `PromptFallbackRule` — everything else → prompt
 5. **`gate.ts`** — on prompt, calls `showPrompt()`
 6. **`prompt-flow.ts`** → **`prompt-builder.ts`** → **`prompts.ts`** — displays the prompt
