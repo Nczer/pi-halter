@@ -210,25 +210,49 @@ export function checkCommandForCredentialPaths(
   let denied: string | null = null;
   let warned: string | null = null;
 
+  // Valid env-var name pattern: starts with letter/underscore, only alphanumeric/underscore.
+  // Flags like `--output=path` have a leading dash, so they won't match.
+  // Valid env-var name pattern: starts with letter/underscore, only alphanumeric/underscore.
+  const ENV_VAR_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+  /** Check a path string against denied/warned patterns, returning the matched rule. */
+  const checkPath = (pathStr: string): { denied: string | null; warned: string | null } => {
+    const resolved = resolvePathReal(expandTilde(pathStr), cwd);
+    const deniedResult = isPathDeniedResolved(pathStr, resolved);
+    if (deniedResult.denied) return { denied: deniedResult.matchedRule, warned: null };
+    const warnedResult = isPathWarnedResolved(pathStr, resolved);
+    return { denied: null, warned: warnedResult.matchedRule };
+  };
+
   for (const token of tokens) {
-    if (!token || token.startsWith("-")) continue;
-    // Skip env assignments (FOO=bar) — = comes before any /
-    const eqIdx = token.indexOf("=");
-    if (eqIdx !== -1) {
-      const slashIdx = token.indexOf("/");
-      if (slashIdx === -1 || eqIdx < slashIdx) continue;
+    if (!token) continue;
+
+    // Handle --flag=value syntax: extract value after = and check it as a path.
+    // Handles cases like docker --env-file=.env, cat --config=~/.aws/config, etc.
+    if (token.startsWith("-") || token.startsWith("--")) {
+      const eqIdx = token.indexOf("=");
+      if (eqIdx > 0 && eqIdx < token.length - 1) {
+        const value = token.slice(eqIdx + 1);
+        if (value) {
+          const result = checkPath(value);
+          if (result.denied) return { denied: result.denied, warned };
+          if (result.warned && !warned) warned = result.warned;
+        }
+      }
+      continue;
     }
 
-    const resolved = resolvePathReal(expandTilde(token), cwd);
-    const d = isPathDeniedResolved(token, resolved);
-    if (d.denied) {
-      denied = d.matchedRule;
-      return { denied, warned }; // Denied is highest priority — return immediately
+    // Skip actual env assignments (FOO=bar, FOO=/path) — the part before = is a
+    // valid environment variable name (no leading dash).
+    const eqIdx = token.indexOf("=");
+    if (eqIdx !== -1) {
+      const beforeEquals = token.slice(0, eqIdx);
+      if (ENV_VAR_NAME_RE.test(beforeEquals)) continue;
     }
-    const w = isPathWarnedResolved(token, resolved);
-    if (w.warned && !warned) {
-      warned = w.matchedRule;
-    }
+
+    const result = checkPath(token);
+    if (result.denied) return { denied: result.denied, warned };
+    if (result.warned && !warned) warned = result.warned;
   }
 
   return { denied, warned };

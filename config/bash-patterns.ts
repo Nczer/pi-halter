@@ -62,7 +62,9 @@ export const unconditionallySafeCommands = new Set([
   // Disk / process inspection (read-only)
   "df", "du", "free", "ps", "pgrep", "pidof",
   // Command lookup
-  "which", "command", "type", "hash", "whence",
+  // NOTE: `command` is excluded — `command -p rm` executes rm (not a pure lookup).
+  // It stays in `allowedBashCommands` for the isSimple check; SafetyRule handles it.
+  "which", "type", "hash", "whence",
   // Calculator
   "bc", "expr", "factor", "yes",
 ]);

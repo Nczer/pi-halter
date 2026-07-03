@@ -675,6 +675,58 @@ const cases: TestCase[] = [
 	{ cmd: "bash -c './scripts/foo.sh'", simple: false, unsafe: true, decision: "prompt", desc: "bash -c with relative path (bash -c pattern triggers unsafe)" },
 	{ cmd: "find . -exec bash -c 'rm {}' \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec bash -c (caught: shell interpreters treated as write-capable)" },
 	{ cmd: "find . -exec rm {} \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec rm (caught by isFindExecWrite)" },
+	// ═══════════════════════════════════════════════════════════
+	// FastAllowRule: quoted operators must not force tree-sitter parse
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: 'echo "a|b"', simple: true, unsafe: false, decision: "auto-allow", desc: "echo with quoted pipe (not a real operator, FastAllowRule should handle)" },
+	{ cmd: 'echo "x > y"', simple: true, unsafe: false, decision: "auto-allow", desc: "echo with quoted gt (not a real redirect)" },
+	{ cmd: 'echo "a&b"', simple: true, unsafe: false, decision: "auto-allow", desc: "echo with quoted amp (not a real backgrounding)" },
+	{ cmd: 'echo "hello; world"', simple: true, unsafe: false, decision: "auto-allow", desc: "echo with quoted semicolon (not a real separator)" },
+	{ cmd: 'grep "setTimeout(() =>" index.ts', simple: true, unsafe: false, decision: "auto-allow", desc: "grep with quoted parens/bracket (already tested above, but explicit fast-path case)" },
+	{ cmd: 'printf "<%s>" hello', simple: true, unsafe: false, decision: "auto-allow", desc: "printf with quoted lt/gt (not real redirects)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// process substitution <() — detected as subshell → not simple
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "cat <(ls)", simple: false, unsafe: true, decision: "prompt", desc: "process substitution (subshell = unsafe pattern)" },
+	{ cmd: "cat <(rm file)", simple: false, unsafe: true, decision: "prompt", desc: "process substitution with rm (subshell + dangerous)" },
+	{ cmd: "grep foo <(find . -delete)", simple: false, unsafe: true, decision: "prompt", desc: "process substitution with find -delete" },
+	{ cmd: "diff <(sort a) <(sort b)", simple: false, unsafe: true, decision: "prompt", desc: "dual process substitution (subshell = unsafe)" },
+	{ cmd: "diff <(sort a) <(rm b)", simple: false, unsafe: true, decision: "prompt", desc: "dual process substitution, one unsafe" },
+
+	// ═══════════════════════════════════════════════════════════
+	// deeply nested compound structures
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "(ls && cat) | grep && echo done", simple: true, unsafe: false, decision: "auto-allow", desc: "(safe&&safe) | safe && safe — all safe" },
+	{ cmd: "(ls && rm a) | grep && echo done", simple: false, unsafe: true, decision: "prompt", desc: "(safe&&unsafe) | safe && safe — rm in subshell" },
+	{ cmd: "{ ls; cat } && grep foo", simple: true, unsafe: false, decision: "auto-allow", desc: "brace group all safe && grep" },
+	{ cmd: "{ ls; rm a } && grep foo", simple: false, unsafe: true, decision: "prompt", desc: "brace group with rm && grep" },
+	{ cmd: "ls && cat | grep foo || echo none", simple: true, unsafe: false, decision: "auto-allow", desc: "&& chain | pipe || fallback — all safe" },
+	{ cmd: "rm a && cat | grep foo || echo none", simple: false, unsafe: true, decision: "prompt", desc: "rm && cat | grep || echo — rm in first segment" },
+	{ cmd: "(ls | cat) && (rm a || echo ok)", simple: false, unsafe: true, decision: "prompt", desc: "(safe|safe) && (unsafe||safe) — rm in second subshell" },
+	{ cmd: "{ ls | cat }; { rm a }", simple: false, unsafe: true, decision: "prompt", desc: "brace group pipeline; brace group rm — both segments" },
+
+	// ═══════════════════════════════════════════════════════════
+	// command -p (uses PATH to find command) — NOTE: isSimple=true
+	// because `command` is in LOOKUP_COMMANDS (treated as safe lookup).
+	// The dangerous pattern for `rm` still triggers via hasUnsafePattern
+	// when the argument is a dangerous command name.
+	// ═══════════════════════════════════════════════════════════
+	// `command` — only `-v`/`-V` are pure lookups; `-p` and no flags execute
+	{ cmd: "command -p ls", simple: true, unsafe: false, decision: "auto-allow", desc: "command -p ls (executes ls, but ls is safe)" },
+	{ cmd: "command -p rm file.txt", simple: false, unsafe: true, decision: "prompt", desc: "command -p rm (rm detected as dangerous)" },
+	{ cmd: "command rm file.txt", simple: false, unsafe: true, decision: "prompt", desc: "command rm (no flags, executes rm — detected)" },
+	{ cmd: "command -v python3", simple: true, unsafe: false, decision: "auto-allow", desc: "command -v (pure lookup, safe)" },
+	{ cmd: "command -V python3", simple: true, unsafe: false, decision: "auto-allow", desc: "command -V (pure lookup, safe)" },
+
+	// ═══════════════════════════════════════════════════════════
+	// empty / whitespace / edge cases
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: ";", simple: true, unsafe: false, decision: "prompt", desc: "lone semicolon (empty segment, prompts as fallback)" },
+	{ cmd: "ls ;", simple: true, unsafe: false, decision: "auto-allow", desc: "trailing semicolon" },
+	{ cmd: "; ls", simple: true, unsafe: false, decision: "auto-allow", desc: "leading semicolon" },
+	{ cmd: "ls &&", simple: false, unsafe: false, decision: "prompt", desc: "trailing && (incomplete, tree-sitter ERROR → not simple)" },
+	{ cmd: "&& ls", simple: true, unsafe: false, decision: "auto-allow", desc: "leading && (tree-sitter parses ls, auto-allows safe cmd)" },
 ];
 
 // ─── Run tests ───
