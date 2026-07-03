@@ -160,11 +160,27 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
             aggregatedSeverity = "high";
           }
         }
-        if (dangerousCommandPatterns.some(({ pattern }) => pattern.test(stageCmd))) {
-          aggregatedHasDanger = true;
+        for (const { pattern, label } of dangerousCommandPatterns) {
+          if (pattern.test(stageCmd)) {
+            aggregatedHasDanger = true;
+            if (!aggregatedSeverity) aggregatedSeverity = "medium";
+            const tagged = `[Pipeline] ${label}`;
+            const key = label.split(/\s|[\/]/)[0].toLowerCase();
+            if (!coveredKeys.has(key) && !aggregatedReasons.includes(tagged)) {
+              aggregatedReasons.push(tagged);
+            }
+          }
         }
-        if (dangerousContextPatterns.some(({ pattern }) => pattern.test(stage))) {
-          aggregatedHasDanger = true;
+        for (const { pattern, label } of dangerousContextPatterns) {
+          if (pattern.test(stage)) {
+            aggregatedHasDanger = true;
+            if (!aggregatedSeverity) aggregatedSeverity = "medium";
+            const tagged = `[Pipeline] ${label}`;
+            const key = label.split(/\s/)[0].toLowerCase();
+            if (!coveredKeys.has(key) && !aggregatedReasons.includes(tagged)) {
+              aggregatedReasons.push(tagged);
+            }
+          }
         }
         continue;
       }
