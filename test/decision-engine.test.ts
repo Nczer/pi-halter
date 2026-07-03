@@ -612,6 +612,55 @@ describe("Bash: credential path guard", () => {
 		expect(d2.kind).toBe("block");
 	});
 
+	// Bug 3 fix: --flag=value/.env syntax was previously skipped by checkCommandForCredentialPaths
+	// because the old eqIdx < slashIdx heuristic treated "--config=.env" as an env assignment.
+	describe("credential path via flag=value syntax", () => {
+		it("detects .env in --env-file=.env", async () => {
+			const store = createStore();
+			const d = await decide({ type: "bash", command: "docker --env-file=.env run app", cwd }, store);
+			expect(d.kind).toBe("prompt");
+		});
+
+		it("detects .env in --file=.env", async () => {
+			const store = createStore();
+			const d = await decide({ type: "bash", command: "cat --file=.env", cwd }, store);
+			expect(d.kind).toBe("prompt");
+		});
+
+		it("detects .aws in --config=~/.aws/config", async () => {
+			const store = createStore();
+			const d = await decide({ type: "bash", command: "cat --config=~/.aws/config", cwd }, store);
+			expect(d.kind).toBe("prompt");
+		});
+
+		it("detects .ssh in --identity=~/.ssh/id_rsa — blocks", async () => {
+			const store = createStore();
+			const d = await decide({ type: "bash", command: "cat --identity=~/.ssh/id_rsa", cwd }, store);
+			expect(d.kind).toBe("block");
+		});
+
+		it("still correctly skips real env assignments (FOO=bar)", async () => {
+			const store = createStore();
+			// FOO=bar is treated as the command name (not recognized) → always prompts.
+			// This is correct behavior: the command prefix 'FOO=bar' is not an allowed command.
+			const d = await decide({ type: "bash", command: "FOO=bar echo hi", cwd }, store);
+			expect(d.kind).toBe("prompt");
+		});
+
+		it("still correctly skips real env assignments with paths (FOO=/usr/bin)", async () => {
+			const store = createStore();
+			// Same as above: 'FOO=/usr/bin' is not a recognized command → prompts.
+			const d = await decide({ type: "bash", command: "FOO=/usr/bin ls", cwd }, store);
+			expect(d.kind).toBe("prompt");
+		});
+
+		it("skips normal arguments without = signs", async () => {
+			const store = createStore();
+			const d = await decide({ type: "bash", command: "cat regular.txt", cwd }, store);
+			expect(d.kind).toBe("auto-allow");
+		});
+	});
+
 	// — credential path with compound chains —
 	it("credential path in && chain still blocks", async () => {
 		const store = createStore();

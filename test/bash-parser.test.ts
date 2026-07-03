@@ -145,61 +145,89 @@ describe("parseCommand: paths", () => {
 	});
 });
 
-describe("parseCommand: hasSubshell", () => {
+describe("parseCommand: per-segment hasSubshell", () => {
 	it("detects subshell in command", async () => {
 		const r = await parseCommand("cat $(echo /etc/hosts)", cwd);
-		expect(r.hasSubshell).toBe(true);
+		expect(r.segments.some(s => s.hasSubshell)).toBe(true);
 	});
 
 	it("no subshell on simple command", async () => {
 		const r = await parseCommand("ls -la", cwd);
-		expect(r.hasSubshell).toBe(false);
+		expect(r.segments.some(s => s.hasSubshell)).toBe(false);
 	});
 });
 
 describe("parseCommand: command substitution", () => {
-	it("detects $()", async () => {
+	it("detects $", async () => {
 		const r = await parseCommand("$(cat /etc/passwd)", cwd);
-		expect(r.hasSubshell).toBe(true);
+		expect(r.segments.some(s => s.hasSubshell)).toBe(true);
 	});
 
 	it("detects backticks", async () => {
 		const r = await parseCommand("`whoami`", cwd);
-		expect(r.hasSubshell).toBe(true);
+		expect(r.segments.some(s => s.hasSubshell)).toBe(true);
 	});
 
 	it("detects process substitution", async () => {
 		const r = await parseCommand("cat <(ls)", cwd);
-		expect(r.hasSubshell).toBe(true);
+		expect(r.segments.some(s => s.hasSubshell)).toBe(true);
 	});
 });
 
 describe("parseCommand: no subshell", () => {
 	it("simple command has no subshell", async () => {
 		const r = await parseCommand("ls -la", cwd);
-		expect(r.hasSubshell).toBe(false);
+		expect(r.segments.some(s => s.hasSubshell)).toBe(false);
 	});
 
 	it("pipeline has no subshell", async () => {
 		const r = await parseCommand("cat file.txt | grep pattern", cwd);
-		expect(r.hasSubshell).toBe(false);
+		expect(r.segments.some(s => s.hasSubshell)).toBe(false);
 	});
 
 	it("single-quoted $() not flagged (literal string)", async () => {
 		const r = await parseCommand("echo 'hello $(world)'", cwd);
-		expect(r.hasSubshell).toBe(false);
+		expect(r.segments.some(s => s.hasSubshell)).toBe(false);
 	});
 });
 
 describe("parseCommand: edge cases", () => {
 	it("empty string has no subshell", async () => {
 		const r = await parseCommand("", cwd);
-		expect(r.hasSubshell).toBe(false);
+		expect(r.segments.length).toBe(0);
 	});
 
 	it("echo has no subshell", async () => {
 		const r = await parseCommand("echo hello", cwd);
-		expect(r.hasSubshell).toBe(false);
+		expect(r.segments.some(s => s.hasSubshell)).toBe(false);
+	});
+});
+
+describe("parseCommand: redirect fallback for empty compound", () => {
+	it("empty subshell with write redirect produces a redirect-only segment", async () => {
+		// Bug 4: () > out had its redirect silently dropped because the compound
+		// child walk produced zero segments. The redirect should survive.
+		const r = await parseCommand("() > /tmp/out.txt", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+		// The segment should contain the redirect text
+		const segText = r.segments.map(s => s.text).join(" ");
+		expect(segText).toContain("/tmp/out.txt");
+	});
+
+	it("empty subshell with multiple redirects", async () => {
+		const r = await parseCommand("() > /tmp/out.txt 2>/tmp/err.txt", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+		const segText = r.segments.map(s => s.text).join(" ");
+		expect(segText).toContain("/tmp/out.txt");
+		expect(segText).toContain("/tmp/err.txt");
+	});
+
+	it("non-empty subshell with redirect still works normally", async () => {
+		const r = await parseCommand("(echo hi) > /tmp/out.txt", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+		const segText = r.segments.map(s => s.text).join(" ");
+		expect(segText).toContain("echo hi");
+		expect(segText).toContain("/tmp/out.txt");
 	});
 });
 

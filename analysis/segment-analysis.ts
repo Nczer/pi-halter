@@ -217,15 +217,19 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   const isLookupOrEcho = LOOKUP_COMMANDS.has(firstWord) || ECHO_COMMANDS.has(firstWord) || PROCESS_INSPECTION_COMMANDS.has(firstWord);
   const isTrusted = isTrustedScriptCommand(segment, cwd);
 
+  // `command` is in LOOKUP_COMMANDS, but only `-v`/`-V` are pure lookups.
+  // `command -p rm` and `command rm` execute the command — must not skip pattern checks.
+  const isCommandExec = firstWord === "command" && !(/\s-[vV](?:\s|$)/.test(segment));
+
   let matchedDangerousCommand = false;
   let matchedDangerousContext = false;
-  if (!isTrusted && !isLookupOrEcho) {
+  if (!isTrusted && (!isLookupOrEcho || isCommandExec)) {
+    // Check firstWord against dangerousCommandPatterns (normal path)
     for (const { pattern, label } of dangerousCommandPatterns) {
       const tagged = `[Pattern] ${label}`;
       if (pattern.test(firstWord)) {
         matchedDangerousCommand = true;
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
-        // Only add reason if not already covered by an evaluator
         const key = label.split(/\s|[\/]/)[0].toLowerCase();
         if (!coveredKeys.has(key)) {
           if (!aggregatedReasons.includes(tagged)) {
@@ -234,12 +238,33 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
         }
       }
     }
+    // For `command -p <cmd>` or `command <cmd>`, also check the executed command
+    if (isCommandExec) {
+      const args = segment.trim().split(/\s+/);
+      for (let i = 1; i < args.length; i++) {
+        if (args[i].startsWith("-")) continue; // skip flags like -p
+        const execCmd = getFirstWord(args[i]);
+        for (const { pattern, label } of dangerousCommandPatterns) {
+          const tagged = `[Pattern] ${label}`;
+          if (pattern.test(execCmd)) {
+            matchedDangerousCommand = true;
+            if (!aggregatedSeverity) aggregatedSeverity = "medium";
+            const key = label.split(/\s|[\/]/)[0].toLowerCase();
+            if (!coveredKeys.has(key)) {
+              if (!aggregatedReasons.includes(tagged)) {
+                aggregatedReasons.push(tagged);
+              }
+            }
+          }
+        }
+        break; // only check the first non-flag argument (the command)
+      }
+    }
     for (const { pattern, label } of dangerousContextPatterns) {
       const tagged = `[Pattern] ${label}`;
       if (pattern.test(segment)) {
         matchedDangerousContext = true;
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
-        // Only add reason if not already covered by an evaluator
         const key = label.split(/\s/)[0].toLowerCase();
         if (!coveredKeys.has(key)) {
           if (!aggregatedReasons.includes(tagged)) {
@@ -250,8 +275,8 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
     }
   }
 
-  // Derive booleans
-  const hasDanger = aggregatedHasDanger;
+  // Derive booleans — merge evaluator danger with pattern-matched danger
+  const hasDanger = aggregatedHasDanger || matchedDangerousCommand || matchedDangerousContext;
   const writeRedirect = hasWriteRedirect(segment);
   const isRedirectOnly = REDIRECT_ONLY_RE.test(trimmed);
 

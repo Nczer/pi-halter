@@ -357,10 +357,16 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
     }
     if (!hasCompoundChild && cmdTexts.length > 0) {
       segments.push({ text: cmdTexts.join(" "), ops: [...ops], hasSubshell: segHasSubshell });
-    } else if (hasCompoundChild && redirectTexts.length > 0 && segments.length > 0) {
-      // Propagate redirects to the last segment so hasWriteRedirect can detect them
-      segments[segments.length - 1].text += " " + redirectTexts.join(" ");
-      for (const op of ops) segments[segments.length - 1].ops.push(op);
+    } else if (hasCompoundChild && redirectTexts.length > 0) {
+      if (segments.length > 0) {
+        // Propagate redirects to the last segment so hasWriteRedirect can detect them
+        segments[segments.length - 1].text += " " + redirectTexts.join(" ");
+        for (const op of ops) segments[segments.length - 1].ops.push(op);
+      } else {
+        // Compound child walk produced no segments (e.g. empty subshell "() > out").
+        // Create a redirect-only segment so write-redirect detection isn't silently lost.
+        segments.push({ text: redirectTexts.join(" "), ops: [...ops], hasSubshell: false });
+      }
     }
   };
 
@@ -452,8 +458,6 @@ function detectOpsInNode(node: TSNode): string[] {
 export interface ParseResult {
   segments: BashSegment[];
   paths: string[];
-  /** Whether any segment contains subshell constructs. */
-  hasSubshell: boolean;
   /** Whether tree-sitter produced ERROR nodes (malformed bash). */
   hasParseError: boolean;
 }
@@ -462,12 +466,12 @@ export interface ParseResult {
 
 /**
  * Single parse that extracts segments, paths, and subshell flags.
- * Replaces calling extractSegments, extractPathsFromBash, and hasSubshell separately.
+ * Single parse unified: segments, paths, and parse errors.
  */
 export async function parseCommand(command: string, cwd: string): Promise<ParseResult> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], paths: [], hasSubshell: false, hasParseError: false };
+  if (!tree) return { segments: [], paths: [], hasParseError: false };
 
   try {
     // Check for ERROR nodes in the AST (malformed bash)
@@ -531,9 +535,7 @@ export async function parseCommand(command: string, cwd: string): Promise<ParseR
       return true;
     });
 
-    const hasSubshell = segments.some(s => s.hasSubshell);
-
-    return { segments, paths, hasSubshell, hasParseError };
+    return { segments, paths, hasParseError };
   } finally {
     subshellCache = null;
     tree.delete();

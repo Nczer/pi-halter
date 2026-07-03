@@ -1,5 +1,5 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
-import { getFirstWord } from "../analysis/segment-helpers";
+import { getFirstWord, stripQuotedStrings } from "../analysis/segment-helpers";
 import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE } from "../analysis/path-analysis";
 import type { Store, BashRequest, Decision } from "../decision-engine";
 import type { CommandAnalysis } from "../analysis/command-analysis";
@@ -40,7 +40,11 @@ export const CredentialDenyRule: BashRule = (req) => {
  */
 export const FastAllowRule: BashRule = (req) => {
   const COMPOUND_RE = /\$\(|`|&&|\|\||[|;&<>]/;
-  if (COMPOUND_RE.test(req.command)) return null;
+  // Strip quoted strings so operators inside arguments (e.g. echo "a|b", grep "=>") don't
+  // falsely trigger the compound check. Unquoted $(...) is preserved as __CMD_SUBST__.
+  // Without this, echo "hello > world" or grep "setTimeout(() =>" waste a tree-sitter parse.
+  const stripped = stripQuotedStrings(req.command);
+  if (COMPOUND_RE.test(stripped)) return null;
 
   // Credential check — don't auto-allow if the command references credential paths
   if (CREDENTIAL_SCAN_RE.test(req.command)) return null;
