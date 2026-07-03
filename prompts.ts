@@ -12,9 +12,6 @@ enum Choice {
   Always = 1,
   AlwaysAlt = 2,   // broader / paths / file (variant by layout)
   AlwaysBroader = 2, // alias for AlwaysAlt
-  Permanent = 3,
-  NoWithReason = 4,
-  No = 5,
 }
 
 /** Tier-2 choice indices. */
@@ -42,23 +39,14 @@ export async function twoTierAlwaysPrompt(
   onAlwaysPaths: () => void,
   onAlwaysFile: () => void,
   onAlwaysBroader?: () => void,
-  onCustomAlways?: (pattern: string) => Promise<void>,
-): Promise<PromptResult | { kind: "custom"; pattern: string }> {
-  const { title, body, tier2Everything, tier2Paths, tier2File, tier2Broader, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, includePermanentOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel, permanentAllowExamples } = prompt;
+): Promise<PromptResult> {
+  const { title, body, tier2Everything, tier2Paths, tier2File, tier2Broader, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel } = prompt;
 
   while (true) {
     const { over, count } = store.incrementPromptCount();
 
-    // Build choices and a dispatch map: index → handler
-    type DispatchFn = () => PromptResult | { kind: "custom"; pattern: string } | null | Promise<PromptResult | { kind: "custom"; pattern: string } | null>;
-    let choices: string[];
-    let dispatch: Map<number, DispatchFn>;
-
-    // Permanent allow is suppressed for MCP (no `mcp` rule bucket) — see includePermanentOption.
-    const hasPermanent = includePermanentOption !== false;
-
     // Build the "Always" option labels (middle of the list), then append the tail
-    // (Permanent? + No-with-reason + No). Permanent sits 3rd from the end when present.
+    // (No-with-reason + No).
     const alwaysOptions: string[] = [];
     if (includeAlwaysOption) {
       if (includeBroaderOption && includePathsOption) {
@@ -73,9 +61,7 @@ export async function twoTierAlwaysPrompt(
         alwaysOptions.push(`Always: ${alwaysLabel}`);
       }
     }
-    choices = ["Yes", ...alwaysOptions];
-    if (hasPermanent) choices.push("Permanent Always (config)");
-    choices.push("No (with reason)", "No");
+    const choices = ["Yes", ...alwaysOptions, "No (with reason)", "No"];
 
     const warningPrefix = over
       ? `\u26a0\ufe0f High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
@@ -84,30 +70,15 @@ export async function twoTierAlwaysPrompt(
     const idx = await showSelectIndex(ctx, warningPrefix + title + "\n---\n" + body, choices);
     if (idx === null) return "no"; // cancelled
 
-    // ── Adjust indices when Always options are suppressed ──
-    const effectiveIdx = !includeAlwaysOption
-      ? idx // [Yes, Permanent, NoWithReason, No] → 0,1,2,3
-      : idx; // [Yes, Always, ..., Permanent, NoWithReason, No] → enum indices
-
     // ── Direct actions (no tier-2) ──
-    if (effectiveIdx === Choice.Yes) return "yes";
+    if (idx === Choice.Yes) return "yes";
 
-    // No index depends on layout; compute from end
+    // No / No-with-reason are the last two choices
     const noIdx = choices.length - 1;
     const noWithReasonIdx = choices.length - 2;
-    if (effectiveIdx === noIdx) return "no";
+    if (idx === noIdx) return "no";
 
-    // Permanent always: 3rd from end, present only when includePermanentOption !== false
-    if (hasPermanent && effectiveIdx === choices.length - 3) {
-      const examples = permanentAllowExamples || "Example: 'npm test *' or '/mnt/data/logs/*'";
-      const pattern = await showReasonEditor(ctx, `Enter a wildcard pattern for permanent allow (saved to ~/.pi/agent/permissions.json).\n\nPatterns are case-insensitive:\n• '*' matches any characters\n• '?' matches one character\n\n${examples}`);
-      if (pattern === null || pattern.trim().length === 0) continue;
-      const p = pattern.trim();
-      if (onCustomAlways) await onCustomAlways(p);
-      return { kind: "custom", pattern: p };
-    }
-
-    if (effectiveIdx === noWithReasonIdx) {
+    if (idx === noWithReasonIdx) {
       const reason = await showReasonEditor(ctx, "Reason for rejection:");
       if (reason === null) continue;
       return { kind: "no", reason: reason?.trim() || "No reason provided" };
@@ -165,4 +136,3 @@ export async function twoTierAlwaysPrompt(
     // tier2Idx === Back || null → loop
   }
 }
-

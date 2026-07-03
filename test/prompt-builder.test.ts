@@ -67,11 +67,6 @@ describe("bash body content", () => {
     expect(prompt.body).toContain("ls -la");
   });
 
-  it("offers permanent allow by default (undefined → treated as true)", () => {
-    const prompt = buildPrompt(bashDecision({ needsCommandApproval: true }));
-    expect(prompt.includePermanentOption).not.toBe(false);
-  });
-
   it("title is Bash when only command needs approval", () => {
     const prompt = buildPrompt(bashDecision({ needsCommandApproval: true }));
     expect(prompt.title).toBe("Bash");
@@ -232,17 +227,6 @@ describe("bash labels", () => {
     const prompt = buildPrompt(bashDecision({ signatures: ["rm"], needsCommandApproval: true, includeBroaderOption: false }));
     expect(prompt.alwaysBroaderLabel).toBeUndefined();
   });
-
-  it("permanentAllowExamples includes sig and broader for command-only", () => {
-    const prompt = buildPrompt(bashDecision({ command: "npm test", signatures: ["npm test"], needsCommandApproval: true, needsPathApproval: false }));
-    expect(prompt.permanentAllowExamples).toContain("npm test *");
-    expect(prompt.permanentAllowExamples).toContain("npm *");
-  });
-
-  it("permanentAllowExamples includes path rule when path approval needed", () => {
-    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["ls"], needsCommandApproval: true, needsPathApproval: true }));
-    expect(prompt.permanentAllowExamples).toContain("/etc/*");
-  });
 });
 
 // ── Bash: tier2 confirmations ──────────────────────────────────────────────
@@ -347,12 +331,6 @@ describe("file labels and tier2", () => {
     expect(prompt.includeBroaderOption).toBe(true);
     expect(prompt.tier2Broader).toBeDefined();
   });
-
-  it("permanentAllowExamples includes file name and directory", () => {
-    const prompt = buildPrompt(fileDecision({ action: "Read", outsideDir: "/etc", resolved: "/etc/hosts" }));
-    expect(prompt.permanentAllowExamples).toContain("hosts");
-    expect(prompt.permanentAllowExamples).toContain("/etc/*");
-  });
 });
 
 // ── MCP ────────────────────────────────────────────────────────────────────
@@ -384,12 +362,6 @@ describe("mcp", () => {
   it("alwaysLabel shows server wildcard", () => {
     const prompt = buildPrompt(mcpDecision({ server: "exa" }));
     expect(prompt.alwaysLabel).toBe("exa:*");
-  });
-
-  it("suppresses permanent allow option (no mcp rule bucket)", () => {
-    // Without this, a permanent MCP pattern would be misfiled as a bash rule and never match.
-    const prompt = buildPrompt(mcpDecision({ server: "exa" }));
-    expect(prompt.includePermanentOption).toBe(false);
   });
 });
 

@@ -6,19 +6,6 @@ import type { CommandAnalysis } from "../analysis/command-analysis";
 export type BashRule = (req: BashRequest, store: Store, analysis?: CommandAnalysis) => Decision | Promise<Decision | null> | null;
 
 /**
- * Blocks if a user rule explicitly denies this command.
- */
-export const UserDenyRule: BashRule = (req, store) => {
-  if (store.getUserRuleAction("bash", req.command) === "deny") {
-    return {
-      kind: "block",
-      reason: `Blocked by user rule: command matches a denied pattern.`,
-    };
-  }
-  return null;
-};
-
-/**
  * Blocks if the command was aborted recently (retry-loop prevention).
  */
 export const RetryLoopRule: BashRule = (req, store) => {
@@ -79,17 +66,12 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   const isSigApproved = (sig: string, segIdx: number) => {
     if (store.hasAllowedBash(sig)) return true;
     if (store.hasAllowedBashPrefix(sig)) return true;
-    if (store.getUserRuleAction("bash", sig) === "allow") return true;
     if (relPathIdxSet.has(segIdx)) return false;
     if (segIsSafeSubcommand[segIdx]) return true;
     return isAllowedCommand(sigFirstWords[segIdx]);
   };
 
   if (analysis.signatures.every((sig, i) => isSigApproved(sig, i)) && canAutoAllow) {
-    return { kind: "auto-allow" };
-  }
-
-  if (analysis.signatures.every(sig => store.getUserRuleAction("bash", sig) === "allow")) {
     return { kind: "auto-allow" };
   }
 

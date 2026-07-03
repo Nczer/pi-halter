@@ -2,8 +2,7 @@
  * twoTierAlwaysPrompt UI dispatch tests.
  *
  * Drives the choice-index dispatch with a fake ctx.ui.custom that returns
- * canned indices/strings. Verifies callback wiring, tier-2 confirmation flow,
- * and that the Permanent option is suppressed for MCP (includePermanentOption: false).
+ * canned indices/strings. Verifies callback wiring and tier-2 confirmation flow.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { twoTierAlwaysPrompt } from "../prompts";
@@ -49,12 +48,10 @@ function makePrompt(overrides: Partial<BuiltPrompt> = {}): BuiltPrompt {
 		includeFileOption: false,
 		includeBroaderOption: false,
 		includeAlwaysOption: true,
-		includePermanentOption: true,
 		alwaysLabel: "test *",
 		alwaysBroaderLabel: "test broader *",
 		alwaysPathsLabel: "/path/*",
 		alwaysFileLabel: "file.txt",
-		permanentAllowExamples: "Example: 'npm test *'",
 		...overrides,
 	};
 }
@@ -66,19 +63,18 @@ function makeCallbacks() {
 		onAlwaysPaths: vi.fn(),
 		onAlwaysFile: vi.fn(),
 		onAlwaysBroader: vi.fn(),
-		onCustomAlways: vi.fn().mockResolvedValue(undefined),
 	};
 }
 
 beforeEach(() => {
-	store.resetSessionState();
+	store.reset();
 });
 
-// ── Simple bash prompt (Yes / Always / Permanent / No-reason / No) ──────
+// ── Simple bash prompt (Yes / Always / No-reason / No) ─────────────────
 
 describe("twoTierAlwaysPrompt: simple bash layout", () => {
-	// choices = ["Yes", "Always: test *", "Permanent Always (config)", "No (with reason)", "No"]
-	// indices:     0          1                    2                       3                  4
+	// choices = ["Yes", "Always: test *", "No (with reason)", "No"]
+	// indices:     0          1                 2                3
 
 	it("returns 'yes' when index 0 is selected", async () => {
 		const cb = makeCallbacks();
@@ -100,30 +96,19 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 
 	it("loops back to tier-1 when tier-2 selects Back, then No", async () => {
 		const cb = makeCallbacks();
-		// tier-1: Always (1), tier-2: Back (1), tier-1: No (4)
+		// tier-1: Always (1), tier-2: Back (1), tier-1: No (3)
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([1, 1, 4]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+			makePrompt(), makeCtx([1, 1, 3]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");
 		expect(cb.onAlways).not.toHaveBeenCalled();
 	});
 
-	it("calls onCustomAlways with pattern when Permanent is selected", async () => {
-		const cb = makeCallbacks();
-		// tier-1: Permanent (2), editor: "npm test *"
-		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([2, "npm test *"]),
-			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, undefined, cb.onCustomAlways,
-		);
-		expect(result).toEqual({ kind: "custom", pattern: "npm test *" });
-		expect(cb.onCustomAlways).toHaveBeenCalledWith("npm test *");
-	});
-
 	it("returns {kind:'no', reason} when No-with-reason is selected", async () => {
 		const cb = makeCallbacks();
-		// tier-1: No with reason (3), editor: "because unsafe"
+		// tier-1: No with reason (2), editor: "because unsafe"
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([3, "because unsafe"]),
+			makePrompt(), makeCtx([2, "because unsafe"]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toEqual({ kind: "no", reason: "because unsafe" });
@@ -132,7 +117,7 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 	it("returns 'no' when No is selected", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([4]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+			makePrompt(), makeCtx([3]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");
 	});
@@ -144,24 +129,13 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 		);
 		expect(result).toBe("no");
 	});
-
-	it("loops when Permanent editor returns empty, then No", async () => {
-		const cb = makeCallbacks();
-		// tier-1: Permanent (2), editor: "" (empty → loop), tier-1: No (4)
-		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([2, "", 4]),
-			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, undefined, cb.onCustomAlways,
-		);
-		expect(result).toBe("no");
-		expect(cb.onCustomAlways).not.toHaveBeenCalled();
-	});
 });
 
 // ── Bash with paths + broader ──────────────────────────────────────────
 
 describe("twoTierAlwaysPrompt: bash with paths + broader", () => {
-	// choices = ["Yes", "Always: test *", "Always: test broader *", "Always (paths): /path/*", "Permanent", "No (reason)", "No"]
-	// indices:     0          1                    2                           3                              4            5             6
+	// choices = ["Yes", "Always: test *", "Always: test broader *", "Always (paths): /path/*", "No (reason)", "No"]
+	// indices:     0          1                    2                           3                              4            5
 
 	const prompt = makePrompt({ includeBroaderOption: true, includePathsOption: true });
 
@@ -193,8 +167,8 @@ describe("twoTierAlwaysPrompt: bash with paths + broader", () => {
 // ── File outside cwd (path + file options) ─────────────────────────────
 
 describe("twoTierAlwaysPrompt: file outside cwd layout", () => {
-	// choices = ["Yes", "Always (path): ...", "Always (file): ...", "Permanent", "No (reason)", "No"]
-	// indices:     0          1                     2                       3            4             5
+	// choices = ["Yes", "Always (path): ...", "Always (file): ...", "No (reason)", "No"]
+	// indices:     0          1                     2                       3            4
 
 	const prompt = makePrompt({
 		includeFileOption: true,
@@ -225,16 +199,13 @@ describe("twoTierAlwaysPrompt: file outside cwd layout", () => {
 	});
 });
 
-// ── MCP: permanent suppressed ──────────────────────────────────────────
+// ── MCP ────────────────────────────────────────────────────────────────
 
-describe("twoTierAlwaysPrompt: MCP layout (permanent suppressed)", () => {
-	// includePermanentOption: false →
+describe("twoTierAlwaysPrompt: MCP layout", () => {
 	// choices = ["Yes", "Always: exa:*", "No (with reason)", "No"]
 	// indices:     0          1               2                3
-	// NOTE: index 2 is "No (with reason)", NOT "Permanent" (which would be index 2 in bash layout)
 
 	const mcpPrompt = makePrompt({
-		includePermanentOption: false,
 		includeAlwaysOption: true,
 		alwaysLabel: "exa:*",
 	});
@@ -249,17 +220,15 @@ describe("twoTierAlwaysPrompt: MCP layout (permanent suppressed)", () => {
 		expect(cb.onAlways).toHaveBeenCalledTimes(1);
 	});
 
-	it("selecting index 2 triggers 'No with reason', NOT permanent (P3 regression)", async () => {
+	it("selecting index 2 triggers 'No with reason'", async () => {
 		const cb = makeCallbacks();
-		// tier-1: index 2, editor: "reason"
-		// In bash layout, index 2 = Permanent → onCustomAlways.
-		// In MCP layout, index 2 = "No with reason" → no onCustomAlways.
+		// tier-1: index 2 = "No with reason", editor: "reason"
 		const result = await twoTierAlwaysPrompt(
 			mcpPrompt, makeCtx([2, "because unsafe"]),
-			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, undefined, cb.onCustomAlways,
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toEqual({ kind: "no", reason: "because unsafe" });
-		expect(cb.onCustomAlways).not.toHaveBeenCalled();
+		expect(cb.onAlways).not.toHaveBeenCalled();
 	});
 
 	it("returns 'no' when index 3 (No) is selected", async () => {
@@ -285,8 +254,8 @@ describe("twoTierAlwaysPrompt: MCP layout (permanent suppressed)", () => {
 
 describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 	// includeAlwaysOption: false →
-	// choices = ["Yes", "Permanent Always (config)", "No (with reason)", "No"]
-	// indices:     0          1                            2                3
+	// choices = ["Yes", "No (with reason)", "No"]
+	// indices:     0          1                2
 
 	const prompt = makePrompt({ includeAlwaysOption: false });
 
@@ -298,14 +267,22 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 		expect(result).toBe("yes");
 	});
 
-	it("triggers Permanent at index 1 (not Always, which is absent)", async () => {
+	it("returns {kind:'no', reason} at index 1 (No with reason)", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([1, "rm *"]),
-			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, undefined, cb.onCustomAlways,
+			prompt, makeCtx([1, "unsafe"]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
-		expect(result).toEqual({ kind: "custom", pattern: "rm *" });
-		expect(cb.onCustomAlways).toHaveBeenCalledWith("rm *");
+		expect(result).toEqual({ kind: "no", reason: "unsafe" });
 		expect(cb.onAlways).not.toHaveBeenCalled();
+	});
+
+	it("returns 'no' at index 2", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([2]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+		);
+		expect(result).toBe("no");
 	});
 });

@@ -62,7 +62,6 @@ export function updateWidget(ctx: ExtensionContext): void {
   const readDirItems = filterSubPaths([...store.listAllowedReadDirs()]);
   const writeDirItems = filterSubPaths([...store.listAllowedWriteDirs()]);
   const mcpServerItems = [...store.listAllowedMcpServers()];
-  const userRules = store.listUserRulesSync();
 
   // Merge dirs + paths; since write implies read, R/W paths don't also appear in R
   const allReadPaths = filterSubPaths([...readDirItems, ...readPathItems]);
@@ -70,9 +69,8 @@ export function updateWidget(ctx: ExtensionContext): void {
   const readOnlyPaths = allReadPaths.filter(p => !allWritePaths.some(wp => p === wp || p.startsWith(wp + "/")));
 
   const hasSessionRules = bashItems.length > 0 || readOnlyPaths.length > 0 || allWritePaths.length > 0 || mcpServerItems.length > 0;
-  const hasPermRules = userRules.bash.length > 0 || userRules.read.length > 0 || userRules.write.length > 0;
 
-  if (!hasSessionRules && !hasPermRules) {
+  if (!hasSessionRules) {
     ctx.ui.setWidget("permissions", undefined);
     return;
   }
@@ -93,18 +91,6 @@ export function updateWidget(ctx: ExtensionContext): void {
       }
       if (mcpServerItems.length > 0) {
         baseLines.push(theme.fg("muted", "MCP:") + " " + theme.fg("dim", mcpServerItems.map(s => `${s}:*`).join(", ")));
-      }
-    }
-
-    if (hasPermRules) {
-      if (userRules.bash.length > 0) {
-        baseLines.push(theme.fg("muted", "⚙ Bash:") + " " + theme.fg("dim", userRules.bash.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
-      }
-      if (userRules.read.length > 0) {
-        baseLines.push(theme.fg("muted", "⚙ R:") + " " + theme.fg("dim", userRules.read.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
-      }
-      if (userRules.write.length > 0) {
-        baseLines.push(theme.fg("muted", "⚙ R/W:") + " " + theme.fg("dim", userRules.write.map(r => `[${r.action}] ${r.pattern}`).join(" ")));
       }
     }
 

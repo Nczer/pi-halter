@@ -15,24 +15,10 @@ import type { Store, AllowRules, FileRequest, Decision, FilePromptData } from ".
 export function decideFile(req: FileRequest, store: Store): Decision {
   const resolved = req.resolvedPath ?? resolvePathReal(expandTilde(req.filePath), req.cwd);
 
-  // 1. User Rule Check (Priority 1)
-  const type = req.toolName === "read" ? "read" : "write";
-  const userActionRaw = store.getUserRuleAction(type, req.filePath);
-  const userActionResolved = store.getUserRuleAction(type, resolved);
-  const finalUserAction = userActionRaw || userActionResolved;
-
-  if (finalUserAction === "deny") {
-    return { kind: "block", reason: `Blocked by user rule: path matches a denied pattern for ${type}.` };
-  }
-
-  // Denied paths block everything — check before any auto-allow
+  // Denied paths block everything — credentials/secrets
   const deniedResult = isPathDeniedResolved(req.filePath, resolved);
   if (deniedResult.denied) {
     return { kind: "block", reason: `Blocked: '${deniedResult.matchedRule}' is a denied path (credentials/secrets)` };
-  }
-
-  if (finalUserAction === "allow") {
-    return { kind: "auto-allow" };
   }
 
   // Warned paths — may contain credentials, prompt with warning
