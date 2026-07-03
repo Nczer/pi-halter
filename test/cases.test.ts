@@ -278,6 +278,55 @@ const cases: TestCase[] = [
 	{ cmd: "(rm a && ls b 2>/dev/null) | cat", simple: false, unsafe: true, decision: "prompt", desc: "subshell with redirect in pipeline (redirect propagated)" },
 
 	// ═══════════════════════════════════════════════════════════
+	// pipeline-merge bypass: && + fd-redirect + | (regression)
+	//   Before fix, "A && B 2>&1 | C" parsed as one pipeline whose left stage was a
+	//   redirected_statement wrapping "A && B"; handlePipeline merged all split
+	//   segments into one blob led by A's signature — hiding B (e.g. npx) from the
+	//   command-approval gate. Now A splits off and B joins the pipeline.
+	// ═══════════════════════════════════════════════════════════
+	// — && chains feeding a pipe —
+	{ cmd: "cd /tmp && npx vitest run 2>&1 | grep FAIL", simple: false, unsafe: false, decision: "prompt", desc: "cd && npx <pkg> 2>&1 | <allowed> — npx split off, prompts (bypass fix)" },
+	{ cmd: "cd /tmp && npx somepkg 2>&1 | cat", simple: false, unsafe: false, decision: "prompt", desc: "cd && npx <unknown> 2>&1 | cat — prompts (not hidden behind cd)" },
+	{ cmd: "cd /tmp && rm -rf foo 2>&1 | cat", simple: false, unsafe: true, decision: "prompt", desc: "cd && rm 2>&1 | cat — rm still caught by danger patterns" },
+	{ cmd: "(ls && npx somepkg) | cat", simple: false, unsafe: false, decision: "prompt", desc: "subshell (ls && npx) | cat — npx split off, prompts (subshell bypass fix)" },
+	// — && chains: safe commands should still auto-allow —
+	{ cmd: "cd /tmp && ls 2>&1 | grep foo", simple: true, unsafe: false, decision: "auto-allow", desc: "cd && ls 2>&1 | grep — all safe, auto-allow after split" },
+	{ cmd: "cd /tmp && cat file 2>&1 | grep foo", simple: true, unsafe: false, decision: "auto-allow", desc: "cd && cat 2>&1 | grep — all safe, auto-allow after split" },
+	{ cmd: "cd /tmp && ls && cat file 2>&1 | grep foo", simple: true, unsafe: false, decision: "auto-allow", desc: "cd && ls && cat 2>&1 | grep — triple safe chain, auto-allow" },
+	// — ; chains feeding a pipe (same bug as &&, different operator) —
+	{ cmd: "cd /tmp ; npx somepkg 2>&1 | cat", simple: false, unsafe: false, decision: "prompt", desc: "cd ; npx 2>&1 | cat — semicolon chain, npx split off, prompts" },
+	{ cmd: "cd /tmp ; ls 2>&1 | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "cd ; ls 2>&1 | cat — semicolon chain, all safe" },
+	{ cmd: "(ls ; npx somepkg) | cat", simple: false, unsafe: false, decision: "prompt", desc: "subshell (ls ; npx) | cat — semicolon in subshell, npx split off" },
+	// — || chains feeding a pipe —
+	{ cmd: "cd /tmp || npx somepkg 2>&1 | cat", simple: false, unsafe: false, decision: "prompt", desc: "cd || npx 2>&1 | cat — or-chain, npx split off, prompts" },
+	{ cmd: "cd /tmp || ls 2>&1 | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "cd || ls 2>&1 | cat — or-chain, all safe" },
+	// — brace group with && inside pipeline —
+	{ cmd: "{ ls && npx somepkg } | cat", simple: false, unsafe: false, decision: "prompt", desc: "brace group {ls && npx} | cat — npx split off from brace, prompts" },
+	{ cmd: "{ ls && cat file } | grep foo", simple: true, unsafe: false, decision: "auto-allow", desc: "brace group {ls && cat} | grep — all safe" },
+	// — && AFTER pipe (different structure, but verify no regression) —
+	{ cmd: "ls | grep foo && npx somepkg", simple: false, unsafe: false, decision: "prompt", desc: "ls | grep && npx — pipe then &&, npx is separate segment, prompts" },
+	{ cmd: "ls | grep foo && cat file", simple: true, unsafe: false, decision: "auto-allow", desc: "ls | grep && cat — pipe then &&, all safe" },
+	// — write redirect + && + pipe (redirect forces prompt, but verify npx not hidden) —
+	{ cmd: "ls > out.txt && npx somepkg 2>&1 | cat", simple: false, unsafe: true, decision: "prompt", desc: "ls > out && npx 2>&1 | cat — write redirect prompts, npx also split off" },
+	// — |& (tee pipe) with compound children —
+	{ cmd: "cd /tmp && npx somepkg |& cat", simple: false, unsafe: false, decision: "prompt", desc: "cd && npx |& cat — tee pipe, npx split off, prompts" },
+	// — multiple && before pipe —
+	{ cmd: "cd /tmp && echo start && npx somepkg 2>&1 | cat", simple: false, unsafe: false, decision: "prompt", desc: "cd && echo && npx 2>&1 | cat — double &&, npx split off (last joins pipe)" },
+	{ cmd: "cd /tmp && echo start && echo end 2>&1 | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "cd && echo && echo 2>&1 | cat — double &&, all safe" },
+	// — nested subshells —
+	{ cmd: "((ls && npx somepkg) | cat)", simple: true, unsafe: false, decision: "prompt", desc: "((...)) is bash arithmetic (tree-sitter ERROR node → 0 segments → prompts, never auto-allows)" },
+	// — subshell with ; inside pipeline —
+	{ cmd: "(cd /tmp ; npx somepkg) | cat", simple: false, unsafe: false, decision: "prompt", desc: "(cd ; npx) | cat — semicolon in subshell, npx split off" },
+	// — subshell with || inside pipeline —
+	{ cmd: "(cd /tmp || npx somepkg) | cat", simple: false, unsafe: false, decision: "prompt", desc: "(cd || npx) | cat — or-chain in subshell, npx split off" },
+	// — subshell with triple && —
+	{ cmd: "(ls && echo ok && npx somepkg) | cat", simple: false, unsafe: false, decision: "prompt", desc: "(ls && echo && npx) | cat — triple &&, npx split off, prompts" },
+	{ cmd: "(ls && echo ok && echo done) | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "(ls && echo && echo) | cat — triple &&, all safe" },
+	// — credential path in compound chain (should block/prompt regardless of split) —
+	{ cmd: "cd /tmp && cat .env 2>&1 | grep SECRET", simple: true, unsafe: false, decision: "prompt", desc: "cd && cat .env 2>&1 | grep — credential path detected (isSimple=true for 2-segment, but credential check still prompts)" },
+	{ cmd: "cd /tmp && cat .ssh/id_rsa 2>&1 | grep AAA", simple: true, unsafe: false, decision: "block", desc: "cd && cat .ssh 2>&1 | grep — denied credential detected (isSimple=true for 2-segment, but credential check still blocks)" },
+
+	// ═══════════════════════════════════════════════════════════
 	// write redirects
 	// ═══════════════════════════════════════════════════════════
 	{ cmd: "echo hello > file.txt", simple: false, unsafe: true, decision: "prompt", desc: "write redirect" },
