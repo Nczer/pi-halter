@@ -108,16 +108,32 @@ export function getOutsideCwdPaths(
 
 // ── Policy checks ──
 
-export function isProjectPiPath(filePath: string, cwd: string): boolean {
-  const resolved = resolvePathReal(expandTilde(filePath), cwd);
-  const piDir = resolvePathReal(".pi", cwd);
-  const homePiDir = resolvePathReal(path.join(os.homedir(), ".pi"), cwd);
-  return isChildOf(resolved, piDir) && !isChildOf(resolved, homePiDir);
+/** Cached realpath of `~/.pi` — constant for the session. The input is absolute, so
+ *  `path.resolve` ignores its base; resolving against homedir is equivalent to the previous
+ *  `resolvePathReal(path.join(os.homedir(), ".pi"), cwd)` but cwd-independent. */
+let cachedHomePiDir: string | null = null;
+function getHomePiDir(): string {
+  if (cachedHomePiDir !== null) return cachedHomePiDir;
+  cachedHomePiDir = resolvePathReal(path.join(os.homedir(), ".pi"), os.homedir());
+  return cachedHomePiDir;
 }
 
-/** Check a path against a list of denied/warned patterns. Returns matched pattern or null. */
-function checkPathAgainstPatterns(filePath: string, cwd: string, patterns: string[]): string | null {
+/**
+ * Check if a pre-resolved path is inside the project's `.pi` dir (but not `~/.pi`).
+ * Accepts the already-resolved real path to avoid redundant `realpathSync` calls on the hot path.
+ */
+export function isProjectPiPathResolved(resolved: string, cwd: string): boolean {
+  const piDir = resolvePathReal(".pi", cwd);
+  return isChildOf(resolved, piDir) && !isChildOf(resolved, getHomePiDir());
+}
+
+export function isProjectPiPath(filePath: string, cwd: string): boolean {
   const resolved = resolvePathReal(expandTilde(filePath), cwd);
+  return isProjectPiPathResolved(resolved, cwd);
+}
+
+/** Check a pre-resolved path against denied/warned patterns. Returns matched pattern or null. */
+function checkPatternsResolved(filePath: string, resolved: string, patterns: string[]): string | null {
   const names = [path.basename(filePath), path.basename(resolved)];
 
   for (const nameToCheck of names) {
@@ -131,17 +147,21 @@ function checkPathAgainstPatterns(filePath: string, cwd: string, patterns: strin
   return null;
 }
 
-export function isPathDenied(filePath: string, cwd: string): { denied: boolean; matchedRule: string | null } {
-  const matched = checkPathAgainstPatterns(filePath, cwd, deniedPaths);
+export function isPathDeniedResolved(filePath: string, resolved: string): { denied: boolean; matchedRule: string | null } {
+  const matched = checkPatternsResolved(filePath, resolved, deniedPaths);
   return { denied: matched !== null, matchedRule: matched };
 }
 
-export function isPathWarned(filePath: string, cwd: string): { warned: boolean; matchedRule: string | null } {
-  const matched = checkPathAgainstPatterns(filePath, cwd, warnPaths);
+export function isPathDenied(filePath: string, cwd: string): { denied: boolean; matchedRule: string | null } {
+  const resolved = resolvePathReal(expandTilde(filePath), cwd);
+  return isPathDeniedResolved(filePath, resolved);
+}
+
+export function isPathWarnedResolved(filePath: string, resolved: string): { warned: boolean; matchedRule: string | null } {
+  const matched = checkPatternsResolved(filePath, resolved, warnPaths);
   if (matched) return { warned: true, matchedRule: matched };
 
   // .env.* pattern (e.g. .env.production, .env.development)
-  const resolved = resolvePathReal(expandTilde(filePath), cwd);
   const names = [path.basename(filePath), path.basename(resolved)];
   for (const nameToCheck of names) {
     if (ENV_FILE_RE.test(nameToCheck)) {
@@ -149,6 +169,11 @@ export function isPathWarned(filePath: string, cwd: string): { warned: boolean; 
     }
   }
   return { warned: false, matchedRule: null };
+}
+
+export function isPathWarned(filePath: string, cwd: string): { warned: boolean; matchedRule: string | null } {
+  const resolved = resolvePathReal(expandTilde(filePath), cwd);
+  return isPathWarnedResolved(filePath, resolved);
 }
 
 // ── Path-to-directory resolution ──

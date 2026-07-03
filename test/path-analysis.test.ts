@@ -9,8 +9,11 @@ import {
 	isAllowedReadPath,
 	getOutsideCwdPaths,
 	isProjectPiPath,
+	isProjectPiPathResolved,
 	isPathDenied,
+	isPathDeniedResolved,
 	isPathWarned,
+	isPathWarnedResolved,
 } from "../analysis/path-analysis";
 
 const home = os.homedir();
@@ -221,4 +224,35 @@ describe("isPathWarned", () => {
 	it("does not warn src/index.ts", () => {
 		expect(isPathWarned("src/index.ts", cwd).warned).toBe(false);
 	});
+});
+
+describe("resolved-path variants (hot-path optimization)", () => {
+	// The *Resolved variants take a pre-resolved real path so decideFile can skip
+	// redundant realpathSync calls. They must match the public functions, which resolve
+	// internally. This pins the contract the file policy relies on.
+	const cases = [
+		".pi/agent/foo",
+		"~/other/.pi/foo",
+		"src/index.ts",
+		"~/.ssh/id_rsa",
+		".env.production",
+		"~/.aws/credentials",
+	];
+
+	for (const filePath of cases) {
+		it(`isPathDeniedResolved matches isPathDenied for ${filePath}`, () => {
+			const resolved = resolvePathReal(expandTilde(filePath), cwd);
+			expect(isPathDeniedResolved(filePath, resolved)).toEqual(isPathDenied(filePath, cwd));
+		});
+
+		it(`isPathWarnedResolved matches isPathWarned for ${filePath}`, () => {
+			const resolved = resolvePathReal(expandTilde(filePath), cwd);
+			expect(isPathWarnedResolved(filePath, resolved)).toEqual(isPathWarned(filePath, cwd));
+		});
+
+		it(`isProjectPiPathResolved matches isProjectPiPath for ${filePath}`, () => {
+			const resolved = resolvePathReal(expandTilde(filePath), cwd);
+			expect(isProjectPiPathResolved(resolved, cwd)).toBe(isProjectPiPath(filePath, cwd));
+		});
+	}
 });

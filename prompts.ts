@@ -44,7 +44,7 @@ export async function twoTierAlwaysPrompt(
   onAlwaysBroader?: () => void,
   onCustomAlways?: (pattern: string) => Promise<void>,
 ): Promise<PromptResult | { kind: "custom"; pattern: string }> {
-  const { title, body, tier2Everything, tier2Paths, tier2File, tier2Broader, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel, permanentAllowExamples } = prompt;
+  const { title, body, tier2Everything, tier2Paths, tier2File, tier2Broader, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, includePermanentOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel, permanentAllowExamples } = prompt;
 
   while (true) {
     const { over, count } = store.incrementPromptCount();
@@ -54,19 +54,28 @@ export async function twoTierAlwaysPrompt(
     let choices: string[];
     let dispatch: Map<number, DispatchFn>;
 
-    if (!includeAlwaysOption) {
-      choices = ["Yes", "Permanent Always (config)", "No (with reason)", "No"];
-    } else if (includeBroaderOption && includePathsOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, `Always (paths): ${alwaysPathsLabel}`, "Permanent Always (config)", "No (with reason)", "No"]
-    } else if (includeBroaderOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, "Permanent Always (config)", "No (with reason)", "No"];
-    } else if (includePathsOption) {
-      choices = ["Yes", `Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`, "Permanent Always (config)", "No (with reason)", "No"]
-    } else if (includeFileOption) {
-      choices = ["Yes", `Always (path): ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`, "Permanent Always (config)", "No (with reason)", "No"];
-    } else {
-      choices = ["Yes", `Always: ${alwaysLabel}`, "Permanent Always (config)", "No (with reason)", "No"];
+    // Permanent allow is suppressed for MCP (no `mcp` rule bucket) — see includePermanentOption.
+    const hasPermanent = includePermanentOption !== false;
+
+    // Build the "Always" option labels (middle of the list), then append the tail
+    // (Permanent? + No-with-reason + No). Permanent sits 3rd from the end when present.
+    const alwaysOptions: string[] = [];
+    if (includeAlwaysOption) {
+      if (includeBroaderOption && includePathsOption) {
+        alwaysOptions.push(`Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, `Always (paths): ${alwaysPathsLabel}`);
+      } else if (includeBroaderOption) {
+        alwaysOptions.push(`Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`);
+      } else if (includePathsOption) {
+        alwaysOptions.push(`Always: ${alwaysLabel}`, `Always (paths): ${alwaysPathsLabel}`);
+      } else if (includeFileOption) {
+        alwaysOptions.push(`Always (path): ${alwaysLabel}`, `Always (file): ${alwaysFileLabel}`);
+      } else {
+        alwaysOptions.push(`Always: ${alwaysLabel}`);
+      }
     }
+    choices = ["Yes", ...alwaysOptions];
+    if (hasPermanent) choices.push("Permanent Always (config)");
+    choices.push("No (with reason)", "No");
 
     const warningPrefix = over
       ? `\u26a0\ufe0f High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
@@ -88,9 +97,8 @@ export async function twoTierAlwaysPrompt(
     const noWithReasonIdx = choices.length - 2;
     if (effectiveIdx === noIdx) return "no";
 
-    // Permanent always: always 3rd from end (before NoWithReason and No)
-    const permanentIdx = choices.length - 3;
-    if (effectiveIdx === permanentIdx) {
+    // Permanent always: 3rd from end, present only when includePermanentOption !== false
+    if (hasPermanent && effectiveIdx === choices.length - 3) {
       const examples = permanentAllowExamples || "Example: 'npm test *' or '/mnt/data/logs/*'";
       const pattern = await showReasonEditor(ctx, `Enter a wildcard pattern for permanent allow (saved to ~/.pi/agent/permissions.json).\n\nPatterns are case-insensitive:\n• '*' matches any characters\n• '?' matches one character\n\n${examples}`);
       if (pattern === null || pattern.trim().length === 0) continue;

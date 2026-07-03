@@ -6,9 +6,9 @@ import {
   isInsideAutoAllowedDir,
   isAllowedReadPath,
   isAllowedWritePath,
-  isProjectPiPath,
-  isPathDenied,
-  isPathWarned,
+  isProjectPiPathResolved,
+  isPathDeniedResolved,
+  isPathWarnedResolved,
 } from "../analysis/path-analysis";
 import type { Store, AllowRules, FileRequest, Decision, FilePromptData } from "../decision-engine";
 
@@ -26,7 +26,7 @@ export function decideFile(req: FileRequest, store: Store): Decision {
   }
 
   // Denied paths block everything — check before any auto-allow
-  const deniedResult = isPathDenied(req.filePath, req.cwd);
+  const deniedResult = isPathDeniedResolved(req.filePath, resolved);
   if (deniedResult.denied) {
     return { kind: "block", reason: `Blocked: '${deniedResult.matchedRule}' is a denied path (credentials/secrets)` };
   }
@@ -36,10 +36,10 @@ export function decideFile(req: FileRequest, store: Store): Decision {
   }
 
   // Warned paths — may contain credentials, prompt with warning
-  const warnResult = isPathWarned(req.filePath, req.cwd);
+  const warnResult = isPathWarnedResolved(req.filePath, resolved);
 
   // Auto-allow checks
-  if (isProjectPiPath(req.filePath, req.cwd)) return { kind: "auto-allow" };
+  if (isProjectPiPathResolved(resolved, req.cwd)) return { kind: "auto-allow" };
   if (req.toolName === "read" && store.hasAllowedReadPath(resolved)) return { kind: "auto-allow" };
   if (req.toolName === "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" }; // write implies read
   if (req.toolName !== "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" };

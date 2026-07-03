@@ -16,6 +16,9 @@ export interface BuiltPrompt {
   includeFileOption: boolean;
   includeBroaderOption: boolean;
   includeAlwaysOption: boolean;
+  /** Whether to offer "Permanent Always (config)". Defaults to true; suppressed for MCP
+   *  because there is no `mcp` rule bucket — a permanent pattern would be misfiled as a bash rule. */
+  includePermanentOption?: boolean;
   /** Labels for "Always" choices (e.g. "npm test *", "npm *", "/path/*") */
   alwaysLabel: string;
   alwaysBroaderLabel?: string;
@@ -293,6 +296,7 @@ function buildMcpPrompt(
     includeFileOption: false,
     includeBroaderOption: false,
     includeAlwaysOption: true,
+    includePermanentOption: false,
     alwaysLabel: `${server}:*`,
   };
 }

@@ -67,6 +67,11 @@ describe("bash body content", () => {
     expect(prompt.body).toContain("ls -la");
   });
 
+  it("offers permanent allow by default (undefined → treated as true)", () => {
+    const prompt = buildPrompt(bashDecision({ needsCommandApproval: true }));
+    expect(prompt.includePermanentOption).not.toBe(false);
+  });
+
   it("title is Bash when only command needs approval", () => {
     const prompt = buildPrompt(bashDecision({ needsCommandApproval: true }));
     expect(prompt.title).toBe("Bash");
@@ -379,6 +384,12 @@ describe("mcp", () => {
   it("alwaysLabel shows server wildcard", () => {
     const prompt = buildPrompt(mcpDecision({ server: "exa" }));
     expect(prompt.alwaysLabel).toBe("exa:*");
+  });
+
+  it("suppresses permanent allow option (no mcp rule bucket)", () => {
+    // Without this, a permanent MCP pattern would be misfiled as a bash rule and never match.
+    const prompt = buildPrompt(mcpDecision({ server: "exa" }));
+    expect(prompt.includePermanentOption).toBe(false);
   });
 });
 
