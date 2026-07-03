@@ -32,7 +32,6 @@ export async function showPrompt(
   }
 
   const prompt = buildPrompt(decision);
-  const type = decision.promptData.type === "bash" ? "bash" : (decision.promptData.type === "file" ? (decision.promptData.isWriteOp ? "write" : "read") : "bash");
 
   const result = await twoTierAlwaysPrompt(prompt, ctx, () => {
     store.addAllowed(RuleGenerator.generatePrimaryRules(decision.promptData));
@@ -55,9 +54,6 @@ export async function showPrompt(
       store.addAllowed(rules);
       updateWidget(ctx);
     }
-  }, async (pattern) => {
-    await store.addUserRule(type, { pattern, action: "allow" });
-    updateWidget(ctx);
   });
 
   if (result === "no") {

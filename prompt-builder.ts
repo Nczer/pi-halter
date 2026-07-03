@@ -16,16 +16,11 @@ export interface BuiltPrompt {
   includeFileOption: boolean;
   includeBroaderOption: boolean;
   includeAlwaysOption: boolean;
-  /** Whether to offer "Permanent Always (config)". Defaults to true; suppressed for MCP
-   *  because there is no `mcp` rule bucket — a permanent pattern would be misfiled as a bash rule. */
-  includePermanentOption?: boolean;
   /** Labels for "Always" choices (e.g. "npm test *", "npm *", "/path/*") */
   alwaysLabel: string;
   alwaysBroaderLabel?: string;
   alwaysPathsLabel?: string;
   alwaysFileLabel?: string;
-  /** Context-aware examples for the permanent allow pattern editor. */
-  permanentAllowExamples?: string;
 }
 
 /**
@@ -185,16 +180,7 @@ function buildBashPrompt(
     ? outsideDirs.map(d => `Read ${d}/*`).join(", ")
     : undefined;
 
-  const cmdFirst = command.split(" ")[0];
-  const sigExample = uniqueSigs.length > 0 ? uniqueSigs[0] + " *" : cmdFirst + " *";
-  const broaderExample = cmdFirst + " *";
-  let permExamples = sigExample !== broaderExample
-    ? `Try: '${sigExample}' (these commands) or '${broaderExample}' (all ${cmdFirst} commands)`
-    : `Try: '${broaderExample}' (all ${cmdFirst} commands)`;
-  if (needsPathApproval) {
-    permExamples += `\nFor path access: '${outsideDirs[0]}/*' (add as read rule)`;
-  }
-  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, permanentAllowExamples: permExamples };
+  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel };
 }
 
 // ── File prompt ──
@@ -234,7 +220,6 @@ function buildFilePrompt(
       includeAlwaysOption: true,
       alwaysLabel: `${action} ${fileName}`,
       alwaysBroaderLabel: `${action} ${parentDir}/*`,
-      permanentAllowExamples: `Try: '${fileName}' (anywhere) or '${parentDir}/*' (this directory)`,
     };
   }
 
@@ -264,7 +249,6 @@ function buildFilePrompt(
     includeAlwaysOption: true,
     alwaysLabel: tier2Label,
     alwaysFileLabel: `${action} ${fileName}`,
-    permanentAllowExamples: `Try: '${fileName}' (anywhere) or '${outsideDir}/*' (this directory)`,
   };
 }
 
@@ -296,7 +280,6 @@ function buildMcpPrompt(
     includeFileOption: false,
     includeBroaderOption: false,
     includeAlwaysOption: true,
-    includePermanentOption: false,
     alwaysLabel: `${server}:*`,
   };
 }

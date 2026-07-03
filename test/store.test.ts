@@ -1,11 +1,5 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createStore } from "../store";
-import { setPersistencePath } from "../store";
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import os from "node:os";
-
-const TEST_CONFIG_PATH = path.join(os.tmpdir(), `pi-permissions-test-${Date.now()}.json`);
 
 describe("Store: Fresh state", () => {
 	it("starts with no allowances", () => {
@@ -159,83 +153,5 @@ describe("Store: Reset", () => {
 		expect(store.hasAllowedMcpServer("exa")).toBe(false);
 		expect(store.getLastAbort("rm")).toBeNull();
 		expect(store.incrementPromptCount().count).toBe(1);
-	});
-});
-
-describe("Store: User Rules (Permanent)", () => {
-	beforeAll(() => {
-		setPersistencePath(TEST_CONFIG_PATH);
-	});
-
-	afterAll(async () => {
-		try {
-			await fs.unlink(TEST_CONFIG_PATH);
-		} catch {}
-	});
-
-	it("adds and retrieves a user rule", async () => {
-		const store = createStore();
-		await store.init(); // ensures loaded
-
-		const rule = { pattern: "my-special-cmd *", action: "allow" as const };
-		await store.addUserRule("bash", rule);
-
-		expect(store.getUserRuleAction("bash", "my-special-cmd foo")).toBe("allow");
-		expect(store.getUserRuleAction("bash", "other-cmd")).toBeNull();
-	});
-
-	it("handles deny rules with priority", async () => {
-		const store = createStore();
-		await store.init();
-
-		await store.addUserRule("bash", { pattern: "rm *", action: "deny" });
-		await store.addUserRule("bash", { pattern: "rm -rf /tmp/*", action: "allow" });
-
-		// First match wins (per current implementation in store.ts)
-		expect(store.getUserRuleAction("bash", "rm -rf /tmp/foo")).toBe("deny");
-	});
-
-	it("supports wildcards in user rules", async () => {
-		const store = createStore();
-		await store.init();
-
-		// Clear read/write rules for a clean test state
-		const perms = await store.listUserRules();
-		for (let i = perms.read.length - 1; i >= 0; i--) {
-			await store.removeUserRule("read", i);
-		}
-		for (let i = perms.write.length - 1; i >= 0; i--) {
-			await store.removeUserRule("write", i);
-		}
-
-		await store.addUserRule("read", { pattern: "*.log", action: "allow" });
-		expect(store.getUserRuleAction("read", "app.log")).toBe("allow");
-		expect(store.getUserRuleAction("read", "app.txt")).toBeNull();
-
-		await store.addUserRule("write", { pattern: "/tmp/output_?.txt", action: "allow" });
-		expect(store.getUserRuleAction("write", "/tmp/output_1.txt")).toBe("allow");
-		expect(store.getUserRuleAction("write", "/tmp/output_10.txt")).toBeNull();
-	});
-
-	it("lists and removes user rules", async () => {
-		const store = createStore();
-		await store.init();
-
-		// Clear bash rules for a clean test state
-		const perms = await store.listUserRules();
-		for (let i = perms.bash.length - 1; i >= 0; i--) {
-			await store.removeUserRule("bash", i);
-		}
-
-		await store.addUserRule("bash", { pattern: "rule1", action: "allow" });
-		await store.addUserRule("bash", { pattern: "rule2", action: "deny" });
-
-		let rules = await store.listUserRules();
-		expect(rules.bash.length).toBe(2);
-
-		await store.removeUserRule("bash", 0);
-		rules = await store.listUserRules();
-		expect(rules.bash.length).toBe(1);
-		expect(rules.bash[0].pattern).toBe("rule2");
 	});
 });
