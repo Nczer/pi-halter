@@ -52,8 +52,8 @@ export function groupCommandVariants(items: string[]): string[] {
 }
 
 /**
- * Update the permissions status widget based on current store state.
- * Hides the widget when no permissions are active.
+ * Update the halter status widget based on current store state.
+ * Hides the widget when no halter rules are active.
  */
 export function updateWidget(ctx: ExtensionContext): void {
   const bashItems = [...store.listAllowedBash()];
@@ -71,12 +71,12 @@ export function updateWidget(ctx: ExtensionContext): void {
   const hasSessionRules = bashItems.length > 0 || readOnlyPaths.length > 0 || allWritePaths.length > 0 || mcpServerItems.length > 0;
 
   if (!hasSessionRules) {
-    ctx.ui.setWidget("permissions", undefined);
+    ctx.ui.setWidget("halter", undefined);
     return;
   }
 
-  ctx.ui.setWidget("permissions", (_tui, theme) => {
-    const baseLines: string[] = [theme.fg("accent", theme.bold("Permissions"))];
+  ctx.ui.setWidget("halter", (_tui, theme) => {
+    const baseLines: string[] = [theme.fg("accent", theme.bold("Halter"))];
 
     if (hasSessionRules) {
       if (bashItems.length > 0) {

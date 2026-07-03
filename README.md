@@ -1,6 +1,6 @@
-# Permissions (pi extension)
+# Halter (pi extension)
 
-A permission gate for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, and `mcp` calls, auto-allowing safe operations and prompting the user for anything risky.
+A halter for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, and `mcp` calls, auto-allowing safe operations and prompting the user for anything risky.
 
 ## Features
 
@@ -21,7 +21,7 @@ Every intercepted tool call flows through five stages:
 Handler → Gate → Decision Engine → Prompt Flow → Rule Generator
 ```
 
-1. **Handler** — validates the event, builds a `PermissionRequest`, passes it to `gate()`
+1. **Handler** — validates the event, builds a request, passes it to `gate()`
 2. **Gate** — shared flow: calls `decide()`, handles auto-allow / block / prompt routing, manages UI expand/collapse, and formats rejections
 3. **Decision Engine** — async policy function. Routes to the right policy (bash, file, mcp). Returns `auto-allow`, `block`, or `prompt` with `PromptData`
 4. **Prompt Flow** — on `prompt` decisions, builds and displays the two-tier confirmation UI. On "Always", generates rules and saves them
@@ -44,7 +44,7 @@ When the user selects "Always", a second prompt requires explicit confirmation b
 
 ```
 index.ts                          Extension entry — event registration, /dsp command
-gate.ts                           Shared permission gate — decide → prompt → reject flow
+gate.ts                           Shared halter gate — decide → prompt → reject flow
 rule-generator.ts                 Derives auto-allow rules from PromptData (on-demand)
 ├── handlers/                     Thin adapters (all call gate())
 │   ├── index.ts                  Re-exports for handlers
@@ -83,8 +83,8 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── prompts.ts                    Two-tier confirmation flow (orchestrates selector)
 ├── selector.ts                   Custom TUI components — showSelect + showReasonEditor
 ├── store.ts                      Auto-allow state — Store interface + singleton
-├── widget.ts                     TUI rendering — permissions status bar
-├── dsp-mode.ts                   DSP mode toggle — bypass all permissions with warning widget
+├── widget.ts                     TUI rendering — halter status bar
+├── dsp-mode.ts                   DSP mode toggle — bypass all halter checks with warning widget
 ├── renderers/                    Display formatting helpers
 │   ├── mcp.ts                    MCP tool call formatting (proxy + direct, args preview, truncation)
 │   └── tmux.ts                   Tmux command formatting (strips boilerplate flags, structures output)

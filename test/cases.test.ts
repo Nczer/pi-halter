@@ -1,5 +1,5 @@
 /**
- * Comprehensive test cases for the permissions extension.
+ * Comprehensive test cases for the halter extension.
  *
  * Agreed principles:
  *   1. Write → prompt (mkdir/touch are safe creation, auto-allow)
