@@ -262,6 +262,61 @@ describe("bash tier2 confirmations", () => {
   });
 });
 
+// ── Bash: includeAlwaysOption logic ────────────────────────────────────────
+
+describe("bash includeAlwaysOption logic", () => {
+  it("hasUnsafePattern=true disables Always option", () => {
+    const prompt = buildPrompt(bashDecision({
+      signatures: ["rm"], needsCommandApproval: true, hasUnsafePattern: true,
+    }));
+    expect(prompt.includeAlwaysOption).toBe(false);
+  });
+
+  it("credentialRule non-null disables Always option", () => {
+    const prompt = buildPrompt(bashDecision({
+      signatures: ["cat"], needsCommandApproval: true, credentialRule: ".env",
+    }));
+    expect(prompt.includeAlwaysOption).toBe(false);
+  });
+
+  it("hasUnsafePattern AND credentialRule disables Always option", () => {
+    const prompt = buildPrompt(bashDecision({
+      signatures: ["rm"], needsCommandApproval: true, hasUnsafePattern: true, credentialRule: ".env",
+    }));
+    expect(prompt.includeAlwaysOption).toBe(false);
+  });
+
+  it("no signatures + no outside dirs disables Always option (degenerate case)", () => {
+    const prompt = buildPrompt(bashDecision({
+      signatures: [], outsideDirs: [], needsCommandApproval: false, needsPathApproval: false,
+    }));
+    expect(prompt.includeAlwaysOption).toBe(false);
+  });
+
+  it("hasUnsafePattern=false + credentialRule=null + has sigs enables Always", () => {
+    const prompt = buildPrompt(bashDecision({
+      signatures: ["npm test"], needsCommandApproval: true,
+    }));
+    expect(prompt.includeAlwaysOption).toBe(true);
+  });
+
+  it("hasUnsafePattern=false + credentialRule=null + has outside dirs enables Always", () => {
+    const prompt = buildPrompt(bashDecision({
+      outsideDirs: ["/mnt/data"], needsPathApproval: true, needsCommandApproval: false,
+    }));
+    expect(prompt.includeAlwaysOption).toBe(true);
+  });
+
+  it("no unsafe pattern + only path approval: Always shows path label not command", () => {
+    const prompt = buildPrompt(bashDecision({
+      outsideDirs: ["/mnt/data"], signatures: ["uv run"],
+      needsPathApproval: true, needsCommandApproval: false,
+    }));
+    expect(prompt.alwaysLabel).toContain("Read /mnt/data/*");
+    expect(prompt.alwaysLabel).not.toContain("uv run");
+  });
+});
+
 // ── File: body content ─────────────────────────────────────────────────────
 
 describe("file body content", () => {
@@ -292,6 +347,25 @@ describe("file body content", () => {
   it("shows warned rule match", () => {
     const prompt = buildPrompt(fileDecision({ warnedRule: ".env.*" }));
     expect(prompt.body).toContain(".env.*");
+  });
+
+  it("shows both denied and warned rules when both match", () => {
+    const prompt = buildPrompt(fileDecision({ deniedRule: ".ssh", warnedRule: ".aws", outsideDir: "/home/user" }));
+    expect(prompt.body).toContain(".ssh");
+    expect(prompt.body).toContain(".aws");
+  });
+
+  it("inside-cwd write has no outside-dir warning", () => {
+    const prompt = buildPrompt(fileDecision({ action: "Write", isWriteOp: true, outsideDir: null }));
+    expect(prompt.title).toBe("Write");
+    expect(prompt.body).not.toContain("Outside cwd");
+  });
+
+  it("inside-cwd write with credential warn still shows warning", () => {
+    const prompt = buildPrompt(fileDecision({ action: "Edit", isWriteOp: true, outsideDir: null, warnedRule: ".env" }));
+    expect(prompt.title).toBe("Edit");
+    expect(prompt.body).toContain(".env");
+    expect(prompt.body).not.toContain("Outside cwd");
   });
 });
 

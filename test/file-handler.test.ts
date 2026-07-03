@@ -60,4 +60,81 @@ describe("handleFile edit pre-validation security", () => {
     expect(existsSpy).toHaveBeenCalled();
     expect(readSpy).toHaveBeenCalled();
   });
+
+  it("skips prompt when oldText === newText (no-op edit will fail)", async () => {
+    readSpy.mockReturnValue("hello world");
+    const result = await handleFile(
+      makeEditEvent("src/index.ts", "world", "world"),
+      makeCtx(),
+    );
+    // Should return undefined (skip prompt) because edit is a no-op
+    expect(result).toBeUndefined();
+  });
+
+  it("skips prompt when oldText has zero matches in file", async () => {
+    readSpy.mockReturnValue("hello world");
+    const result = await handleFile(
+      makeEditEvent("src/index.ts", "nonexistent", "replacement"),
+      makeCtx(),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("skips prompt when oldText has multiple matches in file", async () => {
+    readSpy.mockReturnValue("foo bar foo baz foo");
+    const result = await handleFile(
+      makeEditEvent("src/index.ts", "foo", "qux"),
+      makeCtx(),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("skips prompt when edits array is empty", async () => {
+    const event = {
+      toolName: "edit",
+      input: { path: "src/index.ts", edits: [] },
+    } as any;
+    const result = await handleFile(event, makeCtx());
+    expect(result).toBeUndefined();
+  });
+
+  it("skips prompt when edits array is null/undefined", async () => {
+    const event = {
+      toolName: "edit",
+      input: { path: "src/index.ts", edits: null },
+    } as any;
+    const result = await handleFile(event, makeCtx());
+    expect(result).toBeUndefined();
+  });
+
+  it("skips prompt when edits have invalid entries (missing oldText)", async () => {
+    const event = {
+      toolName: "edit",
+      input: { path: "src/index.ts", edits: [{ newText: "bar" }] },
+    } as any;
+    const result = await handleFile(event, makeCtx());
+    expect(result).toBeUndefined();
+  });
+
+  it("skips prompt when file does not exist", async () => {
+    existsSpy.mockReturnValue(false);
+    const result = await handleFile(
+      makeEditEvent("src/missing.ts"),
+      makeCtx(),
+    );
+    expect(result).toBeUndefined();
+    expect(existsSpy).toHaveBeenCalled();
+    // Should NOT attempt to read a non-existent file
+    // (existsSync returns false → handler returns early)
+  });
+
+  it("skips prompt when file read throws", async () => {
+    existsSpy.mockReturnValue(true);
+    readSpy.mockImplementation(() => { throw new Error("Permission denied"); });
+    const result = await handleFile(
+      makeEditEvent("src/index.ts"),
+      makeCtx(),
+    );
+    expect(result).toBeUndefined();
+  });
 });

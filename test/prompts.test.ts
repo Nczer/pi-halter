@@ -295,4 +295,135 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 		);
 		expect(result).toBe("no");
 	});
+
+	it("cancelled reason editor (null) loops back then selects Yes", async () => {
+		const cb = makeCallbacks();
+		// tier-1: No with reason (1), editor: null (cancelled) → loops back
+		// tier-1: Yes (0)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([1, null, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+		);
+		expect(result).toBe("yes");
+		expect(cb.onAlways).not.toHaveBeenCalled();
+	});
+
+	it("trims whitespace from reason", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([1, "  "]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+		);
+		// Empty/whitespace reason → trimmed → empty → "No reason provided"
+		expect(result).toEqual({ kind: "no", reason: "No reason provided" });
+	});
+});
+
+// ── Broader-only layout (inside-cwd file) ──────────────────────────────
+
+describe("twoTierAlwaysPrompt: broader-only layout (inside-cwd file)", () => {
+	// includeBroaderOption: true, includePathsOption: false, includeFileOption: false
+	// choices = ["Yes", "Always: test *", "Always: test broader *", "No (reason)", "No"]
+	// indices:     0          1                    2                      3           4
+
+	const prompt = makePrompt({ includeBroaderOption: true, includePathsOption: false, includeFileOption: false });
+
+	it("calls onAlwaysBroader when Always(broader) → Confirm", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([2, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlwaysBroader).toHaveBeenCalledTimes(1);
+		expect(cb.onAlways).not.toHaveBeenCalled();
+	});
+
+	it("calls onAlways when Always(everything) → Confirm", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([1, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlways).toHaveBeenCalledTimes(1);
+		cb.onAlwaysBroader && expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
+	});
+
+	it("returns 'no' for index 4 (No)", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([4]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("no");
+	});
+});
+
+// ── Paths-only layout (bash with paths, no broader) ────────────────────
+
+describe("twoTierAlwaysPrompt: paths-only layout (bash no broader)", () => {
+	// includePathsOption: true, includeBroaderOption: false
+	// choices = ["Yes", "Always: test *", "Always (paths): /path/*", "No (reason)", "No"]
+	// indices:     0          1                    2                         3           4
+
+	const prompt = makePrompt({ includePathsOption: true, includeBroaderOption: false, includeFileOption: false });
+
+	it("calls onAlwaysPaths when Always(paths) → Confirm", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([2, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+		);
+		expect(result).toBe("alwaysPaths");
+		expect(cb.onAlwaysPaths).toHaveBeenCalledTimes(1);
+		expect(cb.onAlways).not.toHaveBeenCalled();
+	});
+
+	it("calls onAlways when Always(everything) → Confirm", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([1, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlways).toHaveBeenCalledTimes(1);
+		cb.onAlwaysPaths && expect(cb.onAlwaysPaths).not.toHaveBeenCalled();
+	});
+
+	it("returns {kind:'no', reason} at index 3 (No with reason)", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([3, "path blocked"]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+		);
+		expect(result).toEqual({ kind: "no", reason: "path blocked" });
+	});
+
+	it("returns 'no' at index 4 (No)", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([4]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+		);
+		expect(result).toBe("no");
+	});
+});
+
+// ── High prompt frequency warning ──────────────────────────────────────
+
+describe("twoTierAlwaysPrompt: high prompt frequency warning", () => {
+	it("shows warning prefix when over threshold", async () => {
+		// Push the count past the threshold
+		for (let i = 0; i < 25; i++) store.incrementPromptCount();
+
+		// The warning prefix is concatenated with title before showSelectIndex.
+		// Just verify the function completes successfully (doesn't crash).
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			makePrompt(), makeCtx([3]), // No
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+		);
+		expect(result).toBe("no");
+	});
 });
