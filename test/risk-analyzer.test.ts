@@ -167,6 +167,18 @@ describe("analyzeRisk", () => {
     expect(risk.reasons.some(r => r.includes("sed -i") || r.includes("pipe"))).toBe(true);
   });
 
+  it("does not false-positive write redirect on quoted => (grep pattern)", async () => {
+    // Bug: WHOLE_CMD_WRITE_REDIRECT_RE tested the raw command string, so "=>"
+    // inside a quoted grep pattern was misread as a shell output redirect.
+    const risk = await analyze('grep -n "setTimeout(() => {" index.ts');
+    expect(risk.reasons.some(r => r.includes("shell output redirection"))).toBe(false);
+  });
+
+  it("does not false-positive input redirect on quoted < (grep pattern)", async () => {
+    const risk = await analyze('grep "a < b" file.txt');
+    expect(risk.reasons.some(r => r.includes("input redirection"))).toBe(false);
+  });
+
   it("does not match dangerousContextPatterns against heredoc body", async () => {
     // Heredoc body contains "sed -i" which matches dangerousContextPatterns.
     // But since we test against segment texts (excluding heredoc), it should NOT match.
