@@ -220,10 +220,15 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   // `command` is in LOOKUP_COMMANDS, but only `-v`/`-V` are pure lookups.
   // `command -p rm` and `command rm` execute the command — must not skip pattern checks.
   const isCommandExec = firstWord === "command" && !(/\s-[vV](?:\s|$)/.test(segment));
+  // echo/printf/pgrep are normally inert (so their arguments aren't scanned), but a
+  // command substitution (`$(...)` / backticks) inside one executes real code — once
+  // the segment has a subshell, it's no longer inert and must go through the pattern scan
+  // so RCE patterns like `curl | sh` inside `echo "$(curl |sh)"` are surfaced.
+  const isEchoWithSubshell = ECHO_COMMANDS.has(firstWord) && seg.hasSubshell;
 
   let matchedDangerousCommand = false;
   let matchedDangerousContext = false;
-  if (!isTrusted && (!isLookupOrEcho || isCommandExec)) {
+  if (!isTrusted && (!isLookupOrEcho || isCommandExec || isEchoWithSubshell)) {
     // Check firstWord against dangerousCommandPatterns (normal path)
     for (const { pattern, label } of dangerousCommandPatterns) {
       const tagged = `[Pattern] ${label}`;

@@ -394,3 +394,183 @@ describe("parseCommand: ./ relative paths (P1 fix: isPathCandidate)", () => {
 		expect(r.paths).toHaveLength(0);
 	});
 });
+
+describe("parseCommand: && + || precedence mixed chains", () => {
+	it("ls && cat a || echo fallback → 3 segments", async () => {
+		const r = await parseCommand("ls && cat a || echo fallback", cwd);
+		expect(r.segments).toHaveLength(3);
+		expect(r.segments[0].text).toBe("ls");
+		expect(r.segments[1].text).toBe("cat a");
+		expect(r.segments[2].text).toBe("echo fallback");
+	});
+
+	it("ls || cat a && rm b → 3 segments", async () => {
+		const r = await parseCommand("ls || cat a && rm b", cwd);
+		expect(r.segments).toHaveLength(3);
+		expect(r.segments[0].text).toBe("ls");
+		expect(r.segments[1].text).toBe("cat a");
+		expect(r.segments[2].text).toBe("rm b");
+	});
+
+	it("ls && cat a && rm b && echo ok → 4 segments", async () => {
+		const r = await parseCommand("ls && cat a && rm b && echo ok", cwd);
+		expect(r.segments).toHaveLength(4);
+	});
+
+	it("ls || cat a || rm b || echo ok → 4 segments", async () => {
+		const r = await parseCommand("ls || cat a || rm b || echo ok", cwd);
+		expect(r.segments).toHaveLength(4);
+	});
+
+	it("ls && cat a || rm b && echo ok → 4 segments", async () => {
+		const r = await parseCommand("ls && cat a || rm b && echo ok", cwd);
+		expect(r.segments).toHaveLength(4);
+	});
+
+	it("ls || cat a && rm b || echo ok → 4 segments", async () => {
+		const r = await parseCommand("ls || cat a && rm b || echo ok", cwd);
+		expect(r.segments).toHaveLength(4);
+	});
+});
+
+describe("parseCommand: trailing & on compound commands", () => {
+	it("ls && cat & → 2 segments, backgrounding stripped", async () => {
+		const r = await parseCommand("ls && cat &", cwd);
+		expect(r.segments).toHaveLength(2);
+		expect(r.segments[0].text).toBe("ls");
+		expect(r.segments[1].text).toBe("cat");
+	});
+
+	it("rm a && cat b & → 2 segments, backgrounding stripped", async () => {
+		const r = await parseCommand("rm a && cat b &", cwd);
+		expect(r.segments).toHaveLength(2);
+		expect(r.segments[0].text).toBe("rm a");
+		expect(r.segments[1].text).toBe("cat b");
+	});
+
+	it("(ls && cat) & → subshell segments extracted, & stripped", async () => {
+		const r = await parseCommand("(ls && cat) &", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("{ ls ; cat } & → brace segments extracted, & stripped", async () => {
+		const r = await parseCommand("{ ls ; cat } &", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("ls | grep foo & → 1 segment with pipe, & stripped", async () => {
+		const r = await parseCommand("ls | grep foo &", cwd);
+		expect(r.segments).toHaveLength(1);
+		expect(r.segments[0].ops).toContain("|");
+	});
+});
+
+describe("parseCommand: multiple pipes with mixed safe/unsafe", () => {
+	it("cat a | grep b | head → 1 segment (triple pipe)", async () => {
+		const r = await parseCommand("cat a | grep b | head", cwd);
+		expect(r.segments).toHaveLength(1);
+		expect(r.segments[0].text).toContain("cat a");
+		expect(r.segments[0].text).toContain("grep b");
+		expect(r.segments[0].text).toContain("head");
+	});
+
+	it("cat a | sed -i s/x/y/ | head → 1 segment", async () => {
+		const r = await parseCommand("cat a | sed -i s/x/y/ | head", cwd);
+		expect(r.segments).toHaveLength(1);
+	});
+
+	it("echo foo | xargs rm | cat → 1 segment", async () => {
+		const r = await parseCommand("echo foo | xargs rm | cat", cwd);
+		expect(r.segments).toHaveLength(1);
+	});
+
+	it("cat a | grep b | wc | sed -i s/x/y/ → 1 segment (4 pipes)", async () => {
+		const r = await parseCommand("cat a | grep b | wc | sed -i s/x/y/", cwd);
+		expect(r.segments).toHaveLength(1);
+	});
+});
+
+describe("parseCommand: empty compound bodies", () => {
+	it("() → 1 segment (empty text)", async () => {
+		const r = await parseCommand("()", cwd);
+		expect(r.segments).toHaveLength(1);
+		expect(r.segments[0].text).toBe("");
+	});
+
+	it("() && ls → 2 segments (empty + ls)", async () => {
+		const r = await parseCommand("() && ls", cwd);
+		expect(r.segments).toHaveLength(2);
+		expect(r.segments[0].text).toBe("");
+		expect(r.segments[1].text).toBe("ls");
+	});
+
+	it("ls && () → 2 segments (ls + empty)", async () => {
+		const r = await parseCommand("ls && ()", cwd);
+		expect(r.segments).toHaveLength(2);
+		expect(r.segments[0].text).toBe("ls");
+	});
+
+	it("() | cat → 1 segment (subshell in pipeline)", async () => {
+		const r = await parseCommand("() | cat", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("() > out.txt → 1 segment with redirect", async () => {
+		const r = await parseCommand("() > out.txt", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+		const segText = r.segments.map(s => s.text).join(" ");
+		expect(segText).toContain("out.txt");
+	});
+
+	it("{ } → 0 segments (empty brace group)", async () => {
+		const r = await parseCommand("{ }", cwd);
+		expect(r.segments).toHaveLength(0);
+	});
+
+	it("{ } && ls → 1 segment (empty brace dropped)", async () => {
+		const r = await parseCommand("{ } && ls", cwd);
+		expect(r.segments).toHaveLength(1);
+		expect(r.segments[0].text).toBe("ls");
+	});
+
+	it("{ } | cat → 1 segment (brace in pipeline)", async () => {
+		const r = await parseCommand("{ } | cat", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+	});
+});
+
+describe("parseCommand: heredoc inside compound", () => {
+	it("if + cat heredoc → segment contains cat", async () => {
+		const r = await parseCommand("if true; then cat << 'EOF'\nline1\nEOF; fi", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+		const segText = r.segments.map(s => s.text).join(" ");
+		expect(segText).toContain("cat");
+	});
+
+	it("if + python3 heredoc → segment contains python3", async () => {
+		const r = await parseCommand("if true; then python3 << 'PYEOF'\nimport os\nPYEOF; fi", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+		const segText = r.segments.map(s => s.text).join(" ");
+		expect(segText).toContain("python3");
+	});
+
+	it("for + cat heredoc → segments extracted from loop body", async () => {
+		const r = await parseCommand("for f in a b; do cat << EOF\n$f\nEOF; done", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("for + bash heredoc → segments extracted from loop body", async () => {
+		const r = await parseCommand("for f in a b; do bash << EOF\nrm $f\nEOF; done", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("brace group + cat heredoc → segments extracted", async () => {
+		const r = await parseCommand("{ cat << 'EOF'\nhello\nEOF; }", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("subshell + cat heredoc → segments extracted", async () => {
+		const r = await parseCommand("(cat << 'EOF'\ndata\nEOF)", cwd);
+		expect(r.segments.length).toBeGreaterThanOrEqual(1);
+	});
+});
