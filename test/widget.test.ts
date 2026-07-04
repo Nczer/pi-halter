@@ -30,7 +30,7 @@ describe("filterSubPaths", () => {
 describe("groupCommandVariants", () => {
   it("groups same command with different flags", () => {
     const result = groupCommandVariants(["git -m", "git -am"]);
-    expect(result).toContain("git[git -am, git -m]");
+    expect(result).toEqual(["git(-am, -m)"]);
   });
 
   it("shows single command without grouping", () => {
@@ -38,18 +38,23 @@ describe("groupCommandVariants", () => {
   });
 
   it("shows command with single flag variant", () => {
-    expect(groupCommandVariants(["git -m"])).toEqual(["git -m"]);
+    expect(groupCommandVariants(["git -m"])).toEqual(["git(-m)"]);
   });
 
-  it("handles mixed flag/no-flag variants", () => {
+  it("collapses bare cmd with variants to cmd(*)", () => {
     const result = groupCommandVariants(["git", "git -m"]);
-    expect(result).toContain("git[git, git -m]");
+    expect(result).toEqual(["git(*)"]);
   });
 
   it("handles multiple commands independently", () => {
     const result = groupCommandVariants(["ls", "git -m", "git -am"]);
     expect(result).toContain("ls");
-    expect(result).toContain("git[git -am, git -m]");
+    expect(result).toContain("git(-am, -m)");
+  });
+
+  it("collapses bare cmd + multiple variants to cmd(*)", () => {
+    const result = groupCommandVariants(["git", "git -m", "git -am"]);
+    expect(result).toEqual(["git(*)"]);
   });
 
   it("returns empty array for empty input", () => {

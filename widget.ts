@@ -23,29 +23,28 @@ export function filterSubPaths(paths: string[]): string[] {
 
 // ── Widget rendering ──
 
-/** Group command signature variants for compact display (e.g. "git[-m, -am]"). */
+/** Group command signature variants for compact display (e.g. "git(-am, -m)" or "ls(-a)"). */
 export function groupCommandVariants(items: string[]): string[] {
   const groups = new Map<string, Set<string>>();
   for (const sig of items) {
     const [cmd, ...flags] = sig.split(/\s+/);
     const group = groups.get(cmd) ?? new Set();
-    const flagStr = flags.length === 0 ? "" : flags.join(" ");
-    group.add(flagStr);
+    group.add(flags.join(" "));
     groups.set(cmd, group);
   }
   const result: string[] = [];
   for (const [cmd, flags] of groups) {
     const nonEmpty = [...flags].filter(f => f).sort();
     const hasNoFlags = flags.has("");
-    if (nonEmpty.length === 0 && hasNoFlags) {
+    if (nonEmpty.length === 0) {
       result.push(cmd);
-    } else if (nonEmpty.length === 1 && !hasNoFlags) {
-      result.push(`${cmd} ${nonEmpty[0]}`);
+    } else if (hasNoFlags) {
+      // bare cmd subsumes all variants
+      result.push(`${cmd}(*)`);
+    } else if (nonEmpty.length === 1) {
+      result.push(`${cmd}(${nonEmpty[0]})`);
     } else {
-      const sigs: string[] = [];
-      if (hasNoFlags) sigs.push(cmd);
-      for (const f of nonEmpty) sigs.push(`${cmd} ${f}`);
-      result.push(`${cmd}[${sigs.join(", ")}]`);
+      result.push(`${cmd}(${nonEmpty.join(", ")})`);
     }
   }
   return result;
