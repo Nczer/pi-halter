@@ -265,17 +265,17 @@ function buildFilePrompt(
 function buildMcpPrompt(
   data: McpPromptData,
 ): BuiltPrompt {
-  const { server, tool, op, argsPreview } = data;
+  const { server, tool, argsPreview } = data;
 
-  // tool is now a formatted call label (e.g. "mcp call foo @ server" or "tool_name")
-  const isCallLabel = tool.startsWith("mcp ") || tool.includes(": ");
-  const toolDisplay = isCallLabel ? tool : `${server}:${tool}`;
-
-  let body = `Server: ${server}\nTool: ${toolDisplay}\nOperation: ${op}`;
+  let body = `Server: ${server}\nTool: ${tool}`;
   if (argsPreview) {
-    body += `\nArguments:\n${argsPreview}`;
+    // Strip outer braces for a cleaner inline look
+    const inner = argsPreview.replace(/^\{\n/, "").replace(/\n\}$/, "").trim();
+    if (inner && inner !== "{}") {
+      body += `\nArguments: \n${inner}`;
+    }
   }
-  body += `\n\n\u26a0\ufe0f This MCP tool will be called through an external server.\n`;
+  body += `\n\n\u26a0\ufe0f Calling an external MCP tool.\n`;
 
   return {
     title: `\u26a0\ufe0f MCP`,
