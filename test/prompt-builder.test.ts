@@ -428,6 +428,13 @@ describe("mcp", () => {
     expect(prompt.body).toContain("hello");
   });
 
+  it("preserves indent on first args key after stripping braces", () => {
+    const prompt = buildPrompt(mcpDecision({ argsPreview: '{\n  "query": "test",\n  "numResults": 10\n}' }));
+    const argsSection = prompt.body.split("Arguments:")[1]?.split("\n⚠")[0] ?? "";
+    expect(argsSection).toContain('  "query"');
+    expect(argsSection).toContain('  "numResults"');
+  });
+
   it("generates server-level tier2 confirmation", () => {
     const prompt = buildPrompt(mcpDecision({ server: "exa" }));
     expect(prompt.tier2Everything.body).toContain("exa:*");
