@@ -416,10 +416,10 @@ describe("mcp", () => {
   });
 
   it("shows server, tool, and operation", () => {
-    const prompt = buildPrompt(mcpDecision({ server: "exa", tool: "exa_web_search", op: "call" }));
+    const prompt = buildPrompt(mcpDecision({ server: "exa", tool: "exa_web_search" }));
     expect(prompt.body).toContain("exa");
     expect(prompt.body).toContain("exa_web_search");
-    expect(prompt.body).toContain("call");
+    expect(prompt.body).toContain("Calling");
   });
 
   it("shows args preview when provided", () => {
