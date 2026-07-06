@@ -270,7 +270,7 @@ function buildMcpPrompt(
   let body = `Server: ${server}\nTool: ${tool}`;
   if (argsPreview) {
     // Strip outer braces for a cleaner inline look
-    const inner = argsPreview.replace(/^\{\n/, "").replace(/\n\}$/, "").trim();
+    const inner = argsPreview.replace(/^\{\n/, "").replace(/\n\}$/, "").trimEnd();
     if (inner && inner !== "{}") {
       body += `\nArguments: \n${inner}`;
     }
