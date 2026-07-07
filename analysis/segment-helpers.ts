@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
-import { isWriteOperation, PACKAGE_MANAGERS, dangerousFindFlags, wrapperCommands } from "../config";
+import { isWriteOperation, PACKAGE_MANAGERS } from "../config";
 import { splitOnPipe } from "./tokenizer";
 
 // splitPipeline is splitOnPipe — same semantics (split on | not ||)
@@ -216,59 +216,4 @@ export function isGitDangerous(segment: string): boolean {
   return GIT_DANGER_HANDLERS.some(h => h.match(sub, subArgs));
 }
 
-/**
- * Check if a pipeline stage is dangerous.
- * Used by both segment-analysis.ts (pipeline loop) and evaluators.
- * Returns { dangerous, reasons, severity } for the stage.
- */
-export interface StageDanger {
-  dangerous: boolean;
-  reasons: string[];
-  severity: "high" | "medium" | null;
-}
 
-// ── Pipeline stage danger handlers ──
-
-/** Stage danger check: match + evaluate → { dangerous, reason?, severity? } */
-const STAGE_DANGER_HANDLERS: Array<{
-  match: (cmd: string, stage: string) => boolean;
-  evaluate: (cmd: string, stage: string) => { dangerous: boolean; reason?: string; severity?: "high" | "medium" }
-}> = [
-  { match: (c, s) => c === "find" && dangerousFindFlags.test(s),
-    evaluate: () => ({ dangerous: true, reason: "find with dangerous flags" }) },
-  { match: (c, s) => c === "find" && isFindExecWrite(s),
-    evaluate: () => ({ dangerous: true, reason: "find -exec with write operation" }) },
-  { match: (c, s) => c === "fd" && isFdExecWrite(s),
-    evaluate: () => ({ dangerous: true, reason: "fd -x with write operation" }) },
-  { match: (c, s) => c === "rg" && isRgPreWrite(s),
-    evaluate: () => ({ dangerous: true, reason: "rg --pre with write operation" }) },
-  { match: (c, s) => c === "sed" && isWriteOperation(c, s),
-    evaluate: () => ({ dangerous: true, reason: "sed -i in pipeline (in-place file modification)", severity: "high" }) },
-  { match: (c, s) => c === "perl" && isWriteOperation(c, s),
-    evaluate: () => ({ dangerous: true, reason: "perl -pi/-i in pipeline (in-place file modification)", severity: "high" }) },
-  { match: (c) => wrapperCommands.has(c),
-    evaluate: (_, s) => ({ dangerous: isWrapperRunningWrite(s) }) },
-  { match: () => true,
-    evaluate: (_, s) => ({ dangerous: hasWriteRedirect(s) }) },
-];
-
-export function checkStageDanger(stage: string): StageDanger {
-  const reasons: string[] = [];
-  let severity: "high" | "medium" | null = null;
-  let dangerous = false;
-
-  const stageCmd = getFirstWord(stage);
-
-  for (const handler of STAGE_DANGER_HANDLERS) {
-    if (handler.match(stageCmd, stage)) {
-      const result = handler.evaluate(stageCmd, stage);
-      if (result.dangerous) {
-        dangerous = true;
-        if (result.reason) reasons.push(result.reason);
-        if (result.severity && (!severity || result.severity === "high")) severity = result.severity;
-      }
-    }
-  }
-
-  return { dangerous, reasons, severity };
-}

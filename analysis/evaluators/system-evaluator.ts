@@ -20,6 +20,7 @@ const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: 
   { match: (c) => ["rm", "rmdir", "unlink"].includes(c),
     evaluate: (cmd, rest, b) => {
       b.setHigh();
+      b.markDanger();
       if (rest.some((a) => hasShortFlag(a, "r") || hasShortFlag(a, "R")))
         b.addReason("recursive delete (-r/-R)");
       if (rest.some((a) => hasShortFlag(a, "f")))
@@ -28,6 +29,7 @@ const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: 
   // chmod/chown
   { match: (c) => c === "chmod" || c === "chown",
     evaluate: (cmd, rest, b) => {
+      b.markDanger();
       if (rest.includes("-R") || rest.includes("--recursive")) {
         b.addReason(`${cmd} -R (recursive ${cmd === "chmod" ? "permission" : "ownership"} changes)`);
         b.setHigh();
@@ -38,6 +40,7 @@ const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: 
   // mv/cp
   { match: (c) => c === "mv" || c === "cp",
     evaluate: (cmd, rest, b) => {
+      b.markDanger();
       if (rest.some((a) => hasShortFlag(a, "f")) || rest.includes("--force")) {
         b.addMedium(`${cmd} --force/-f (can overwrite files)`);
       } else {
@@ -46,13 +49,14 @@ const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: 
     } },
   // truncate
   { match: (c) => c === "truncate",
-    evaluate: (_cmd, _rest, b) => { b.addReason("truncate (in-place size change, can erase contents)"); b.setHigh(); } },
+    evaluate: (_cmd, _rest, b) => { b.addReason("truncate (in-place size change, can erase contents)"); b.setHigh(); b.markDanger(); } },
   // dd of=
   { match: (c) => c === "dd",
     evaluate: (_cmd, rest, b) => {
       if (rest.some(a => a.startsWith("of="))) {
         b.addReason("dd with output file/device (can overwrite data)");
         b.setHigh();
+        b.markDanger();
       }
     } },
   // kill/pkill/killall
@@ -61,18 +65,20 @@ const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: 
       b.addReason(`${cmd} (process termination)`);
       if (rest.includes("-9")) {
         b.setHigh();
+        b.markDanger();
         b.addReason("SIGKILL (-9)");
       }
     } },
   // shutdown/reboot
   { match: (c) => ["shutdown", "reboot"].includes(c),
-    evaluate: (cmd, _rest, b) => { b.addReason(`${cmd} (system power operation)`); b.setHigh(); } },
+    evaluate: (cmd, _rest, b) => { b.addReason(`${cmd} (system power operation)`); b.setHigh(); b.markDanger(); } },
   // systemctl
   { match: (c) => c === "systemctl",
     evaluate: (_cmd, rest, b) => {
       if (rest.includes("stop") || rest.includes("disable")) {
         b.addReason("systemctl stop/disable (service disruption)");
         b.setMedium();
+        b.markDanger();
       }
     } },
 ];
