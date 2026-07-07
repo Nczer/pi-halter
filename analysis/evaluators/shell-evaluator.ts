@@ -25,7 +25,7 @@ export const ShellEvaluator: RiskEvaluator = {
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const b = new EvaluationBuilder();
 
-    // Subshell
+    // Subshell — always high/dangerous (any $(…) is an execution vector)
     if (seg.hasSubshell) {
       b.addHigh("command substitution (subshell)");
     }
