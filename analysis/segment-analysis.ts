@@ -16,6 +16,7 @@ import {
   hasWriteRedirect,
   isGitDangerous,
   isWrapperRunningRelativePath,
+  stripQuotedStrings,
 } from "./segment-helpers";
 import { detectObfuscation } from "./obfuscation";
 import { ShellEvaluator } from "./evaluators/shell-evaluator";
@@ -232,9 +233,14 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
         break; // only check the first non-flag argument (the command)
       }
     }
+    // Strip quoted strings before context-pattern matching to avoid matching
+    // command names inside grep/echo arguments (e.g. `grep "curl | bash" file`
+    // should not trigger the "curl/wget | interpreter" pattern). The existing
+    // evaluators + pipeline analysis catch all real threats from $(…) content.
+    const cleanedForContext = stripQuotedStrings(segment);
     for (const { pattern, label } of dangerousContextPatterns) {
       const tagged = `[Pattern] ${label}`;
-      if (pattern.test(segment)) {
+      if (pattern.test(cleanedForContext)) {
         matchedDangerousContext = true;
         if (!aggregatedSeverity) aggregatedSeverity = "medium";
         const key = label.split(/\s/)[0].toLowerCase();

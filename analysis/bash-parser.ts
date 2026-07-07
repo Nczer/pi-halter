@@ -443,10 +443,11 @@ function extractSubshellInnerTexts(node: TSNode): string[] {
   const texts: string[] = [];
   function walk(n: TSNode): void {
     if (n.type === "command_substitution" || n.type === "process_substitution") {
-      // The inner command is typically child at index 1 (after $.( or `<).
+      // The inner content could be a command, pipeline, or list node.
+      // Walk children to find the executable content and extract its text.
       for (let i = 0; i < n.childCount; i++) {
         const child = n.child(i);
-        if (child && child.type === "command") {
+        if (child && (child.type === "command" || child.type === "pipeline" || child.type === "list")) {
           const inner = child.text.trim();
           if (inner) texts.push(inner);
           break;
