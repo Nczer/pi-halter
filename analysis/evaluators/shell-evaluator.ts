@@ -17,6 +17,9 @@ const HEREDOC_INTERPRETER_RE = /^(python|node|ruby|php|lua|perl|deno|bun|jruby|p
 /** Commands safe inside subshells (pure path formatting, no side effects or I/O). */
 const SAFE_SUBSHELL_CMDS = new Set(["basename", "dirname"]);
 
+/** Download-and-execute RCE pattern for subshell inner text: curl/wget piped to a shell interpreter. */
+const RCE_IN_SUBSHELL_RE = /\b(?:curl|wget)\b[\s\S]*?\|\s*(?:sh|bash|zsh|fish|ksh|dash|tcsh|csh|python[\d.]*|perl|ruby|node|php|lua|eval)\b/i;
+
 /**
  * Evaluates shell constructs: subshells, heredocs, redirects, sed/perl, obfuscation, wrappers.
  * Pipeline analysis is done in segment-analysis.ts (needs access to dangerousCommandPatterns).
@@ -45,6 +48,10 @@ export const ShellEvaluator: RiskEvaluator = {
           b.addMedium("command substitution (subshell)");
         } else {
           b.addHigh("command substitution (subshell)");
+          // Surface RCE reason for curl/wget piped to shell inside the subshell
+          if (innerTexts.some(inner => RCE_IN_SUBSHELL_RE.test(inner))) {
+            b.addReason("curl/wget | interpreter (download & execute remote code)");
+          }
         }
       } else {
         b.addHigh("command substitution (subshell)");
