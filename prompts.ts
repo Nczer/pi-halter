@@ -31,6 +31,11 @@ enum Tier2 {
  *
  * Uses index-based choice dispatch (not string matching) so label changes
  * cannot break the decision logic.
+ *
+ * For file prompts with broaderPaths, a three-level structure is used:
+ *   Level 1: Yes / file / path (1 level up) / broader (2+ levels up) / No
+ *   Level 2 (broader): pick which parent directory
+ *   Level 3: confirm "Always Yes"
  */
 export async function twoTierAlwaysPrompt(
   prompt: BuiltPrompt,
@@ -52,10 +57,11 @@ export async function twoTierAlwaysPrompt(
     const alwaysOptions: string[] = [];
     if (includeAlwaysOption) {
       if (includeBroaderOption && broaderPaths && broaderPaths.length > 0) {
-        // File prompt: single-file option followed by parent directory options
-        alwaysOptions.push(`Always (path): ${alwaysLabel}`);
-        for (const bp of broaderPaths) {
-          alwaysOptions.push(`Always (broader): ${bp.label}`);
+        // File prompt: file / path (1 parent) / broader (remaining parents)
+        alwaysOptions.push(`Always (file): ${alwaysLabel}`);
+        alwaysOptions.push(`Always (path): ${broaderPaths[0].label}`);
+        if (broaderPaths.length > 1) {
+          alwaysOptions.push(`Always (broader)`);
         }
       } else if (includeBroaderOption && includePathsOption) {
         alwaysOptions.push(`Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, `Always (paths): ${alwaysPathsLabel}`);
@@ -92,10 +98,12 @@ export async function twoTierAlwaysPrompt(
       return { kind: "no", reason: reason?.trim() || "No reason provided" };
     }
 
-    // ── Tier-2 confirmation for "Always" choices ──
-    // Build dispatch table: choice index → (tier2Config, callback)
+    // ── Tier-2 for "Always" choices ──
     interface Tier2Entry { config: { title: string; body: string }; fn: () => PromptResult; }
     const entries: Tier2Entry[] = [];
+
+    // Track whether the umbrella "broader" entry was added
+    let hasBroaderUmbrella = false;
 
     // Primary "Always" (always at Choice.Always = index 1)
     {
@@ -110,17 +118,23 @@ export async function twoTierAlwaysPrompt(
       entries.push({ config: primaryConfig, fn: () => { onAlways(); return "always" as PromptResult; } });
     }
 
-    // Broader options: multiple parent-directory levels (file prompts) or single (bash package managers)
+    // Broader options
     if (includeBroaderOption) {
       if (broaderPaths && broaderPaths.length > 0) {
-        // File prompt: one entry per parent directory level
-        for (const bp of broaderPaths) {
+        // File prompt: first parent level (path)
+        entries.push({
+          config: {
+            title: "Confirm Always Allow",
+            body: `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${broaderPaths[0].dir}/*`,
+          },
+          fn: () => { onAlwaysBroader?.(broaderPaths[0].dir); return "always" as PromptResult; },
+        });
+        // Remaining parent levels under umbrella "broader"
+        if (broaderPaths.length > 1) {
+          hasBroaderUmbrella = true;
           entries.push({
-            config: {
-              title: "Confirm Always Allow",
-              body: `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${bp.dir}/*`,
-            },
-            fn: () => { onAlwaysBroader?.(bp.dir); return "always" as PromptResult; },
+            config: { title: "", body: "" },
+            fn: () => "always" as PromptResult,
           });
         }
       } else {
@@ -155,9 +169,27 @@ export async function twoTierAlwaysPrompt(
       continue;
     }
 
-    // Show tier-2 confirmation
+    // ── Handle umbrella "Always (broader)" — show sub-prompt ──
+    if (hasBroaderUmbrella && entryIdx === 2) {
+      const subLabels = broaderPaths!.slice(1).map(bp => bp.label);
+      const subChoices = [...subLabels, "Back"];
+      const subIdx = await showSelectIndex(ctx, "Select a broader directory to always allow:", subChoices);
+      if (subIdx === null || subIdx === subLabels.length) continue; // Back / cancel
+
+      const chosen = broaderPaths![subIdx + 1]; // subIdx 0 → broaderPaths[1]
+      const tier2Body = `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${chosen.dir}/*`;
+      const tier2Idx = await showSelectIndex(ctx, "Confirm Always Allow\n---\n" + tier2Body, ["Always Yes", "Back"]);
+      if (tier2Idx === Tier2.Confirm) {
+        onAlwaysBroader?.(chosen.dir);
+        return "always" as PromptResult;
+      }
+      continue;
+    }
+
+    // ── Standard tier-2 confirmation ──
     const tier2Idx = await showSelectIndex(ctx, entry.config.title + "\n---\n" + entry.config.body, ["Always Yes", "Back"]);
     if (tier2Idx === Tier2.Confirm) return entry.fn();
+
     // tier2Idx === Back || null → loop
   }
 }
