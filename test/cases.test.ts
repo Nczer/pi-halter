@@ -776,6 +776,12 @@ const cases: TestCase[] = [
 	{ cmd: "find . -name '*.bak' -print | xargs rm", simple: false, unsafe: true, decision: "prompt", desc: "find | xargs rm (destructive pipeline)" },
 	{ cmd: "find . -name '*.bak' -print0 | xargs -0 rm -rf", simple: false, unsafe: true, decision: "prompt", desc: "find -print0 | xargs -0 rm -rf (null-separated)" },
 
+	// Pipeline: echo → pattern safety net skip (firstWord is echo, which skips the safety net;
+	// pipeline stage interpreter should still be caught by evaluators)
+	{ cmd: "echo 1 | python3 script.py", simple: false, unsafe: true, decision: "prompt", desc: "echo | python3 (pipeline, echo skips pattern safety net)" },
+	{ cmd: "echo 1 | bash -c 'echo hello'", simple: false, unsafe: true, decision: "prompt", desc: "echo | bash -c (pipeline, echo skips pattern safety net)" },
+	{ cmd: "echo 1 | eval echo hello", simple: false, unsafe: true, decision: "prompt", desc: "echo | eval (pipeline, echo skips pattern safety net)" },
+
 	// ═══════════════════════════════════════════════════════════
 	// && + || precedence mixed chains
 	// ═══════════════════════════════════════════════════════════
