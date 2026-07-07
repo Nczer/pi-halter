@@ -226,6 +226,8 @@ const cases: TestCase[] = [
 	{ cmd: "gunzip file.txt.gz", simple: false, unsafe: true, decision: "prompt", desc: "gunzip" },
 	// Package managers
 	{ cmd: "pip install requests", simple: false, unsafe: true, decision: "prompt", desc: "pip install" },
+	{ cmd: "apt install nginx", simple: false, unsafe: true, decision: "prompt", desc: "apt install" },
+	{ cmd: "dnf install vim", simple: false, unsafe: true, decision: "prompt", desc: "dnf install" },
 	{ cmd: "npm install lodash", simple: false, unsafe: true, decision: "prompt", desc: "npm install" },
 	{ cmd: "yarn add lodash", simple: false, unsafe: true, decision: "prompt", desc: "yarn add" },
 	{ cmd: "cargo build", simple: false, unsafe: true, decision: "prompt", desc: "cargo build" },
@@ -466,6 +468,11 @@ const cases: TestCase[] = [
 	{ cmd: "echo bash | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "echo bash | cat (not actually pipe to shell)" },
 	{ cmd: "grep fish file.txt | wc", simple: true, unsafe: false, decision: "auto-allow", desc: "grep fish | wc (not actually pipe to shell)" },
 	{ cmd: "ps aux | grep bash", simple: true, unsafe: false, decision: "auto-allow", desc: "ps | grep bash (bash is search term, not pipe target)" },
+
+	// — false-positive regression: quoted strings in non-echo commands —
+	{ cmd: 'grep "curl|wget|bash" file | head', simple: true, unsafe: false, decision: "auto-allow", desc: "grep quoted curl|wget file | head (search pattern, not RCE)" },
+	{ cmd: 'cat "apt install nginx"', simple: true, unsafe: false, decision: "auto-allow", desc: "cat quoted apt install (filename, not installation)" },
+	{ cmd: 'cat "dd if=/dev/zero"', simple: true, unsafe: false, decision: "auto-allow", desc: "cat quoted dd (filename, not raw disk access)" },
 
 	// ═══════════════════════════════════════════════════════════
 	// rm -r / rm -rf — MUST NEVER auto-allow in any situation
