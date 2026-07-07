@@ -56,6 +56,21 @@ export const ShellEvaluator: RiskEvaluator = {
       b.addHigh(`${firstWord} wrapper running write operation`);
     }
 
+    // bash -c/-i (shell with inline/script command)
+    if (firstWord === "bash" && /\s-(?:[a-z]*c[a-z]*|[a-z]*i[a-z]*)(?:\s|$)/.test(segment)) {
+      b.addHigh("bash -c/-i (shell with inline/script command)");
+    }
+
+    // source (config/secrets loading)
+    if (firstWord === "source" && /\.(?:env|bashrc|zshrc|profile|secret|local)\b/i.test(segment)) {
+      b.addHigh("source (config/secrets loading)");
+    }
+
+    // eval (arbitrary code execution)
+    if (firstWord === "eval") {
+      b.addHigh("eval (arbitrary code execution)");
+    }
+
     // Obfuscation (use cached result)
     const obfuscation = cache?.obfuscation ?? { detected: false, techniques: [] };
     if (obfuscation.detected) {

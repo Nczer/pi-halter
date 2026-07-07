@@ -81,6 +81,33 @@ const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: 
         b.markDanger();
       }
     } },
+  // crontab
+  { match: (c) => c === "crontab",
+    evaluate: (_cmd, _rest, b) => { b.addMedium("crontab (scheduled task management)"); b.markDanger(); } },
+  // nohup
+  { match: (c) => c === "nohup",
+    evaluate: (_cmd, _rest, b) => { b.addMedium("nohup (persist process after shell exit)"); b.markDanger(); } },
+  // screen
+  { match: (c) => c === "screen",
+    evaluate: (_cmd, _rest, b) => { b.addMedium("screen (terminal multiplexer)"); b.markDanger(); } },
+  // ssh
+  { match: (c) => c === "ssh",
+    evaluate: (_cmd, _rest, b) => { b.addMedium("ssh (remote command execution)"); b.markDanger(); } },
+  // scp/rsync
+  { match: (c) => ["scp", "rsync"].includes(c),
+    evaluate: (_cmd, _rest, b) => { b.addMedium(`${_cmd} (remote file transfer)`); b.markDanger(); } },
+  // patch
+  { match: (c) => c === "patch",
+    evaluate: (_cmd, _rest, b) => { b.addMedium("patch (file patching)"); b.markDanger(); } },
+  // install (not chmod install, which is cp-mode)
+  { match: (c) => c === "install",
+    evaluate: (_cmd, _rest, b) => { b.addMedium("install (copy and set permissions)"); b.markDanger(); } },
+  // ln
+  { match: (c) => c === "ln",
+    evaluate: (_cmd, _rest, b) => { b.addMedium("ln (link creation)"); b.markDanger(); } },
+  // tee
+  { match: (c) => c === "tee",
+    evaluate: (_cmd, _rest, b) => { b.addMedium("tee (file writing)"); b.markDanger(); } },
 ];
 
 /**

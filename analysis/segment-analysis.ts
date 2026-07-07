@@ -104,7 +104,8 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       const tagged = `[${tag}] ${reason}`;
       if (!aggregatedReasons.includes(tagged)) aggregatedReasons.push(tagged);
       // Extract first word of reason as coverage key (e.g. "rm" from "rm -rf (recursive deletion)")
-      const key = reason.split(/\s/)[0].toLowerCase();
+      // Split on space or forward slash so "curl/wget" → "curl" (matches pattern key extraction)
+      const key = reason.split(/[\s/]/)[0].toLowerCase();
       coveredKeys.add(key);
     }
   }
@@ -173,6 +174,15 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   // Regex-based safety net — single pass, results reused for isUnsafe
   const isLookupOrEcho = LOOKUP_COMMANDS.has(firstWord) || ECHO_COMMANDS.has(firstWord) || PROCESS_INSPECTION_COMMANDS.has(firstWord);
   const isTrusted = isTrustedScriptCommand(segment, cwd);
+
+  // Trusted scripts: evaluators flag python/node/uv etc., but the user has explicitly
+  // opted into running from these paths via the trusted-scripts config.
+  // Clear evaluator danger so the pattern safety net's `!isTrusted` alone governs.
+  if (isTrusted) {
+    aggregatedHasDanger = false;
+    aggregatedSeverity = null;
+    aggregatedReasons.length = 0;
+  }
 
   // `command` is in LOOKUP_COMMANDS, but only `-v`/`-V` are pure lookups.
   // `command -p rm` and `command rm` execute the command — must not skip pattern checks.
