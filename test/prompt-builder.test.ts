@@ -405,6 +405,86 @@ describe("file labels and tier2", () => {
     expect(prompt.includeBroaderOption).toBe(true);
     expect(prompt.tier2Broader).toBeDefined();
   });
+
+  it("does not generate broaderPaths for outside cwd", () => {
+    const prompt = buildPrompt(fileDecision({ action: "Read", outsideDir: "/etc", resolved: "/etc/hosts" }));
+    expect(prompt.broaderPaths).toBeUndefined();
+  });
+
+  it("generates broaderPaths for inside cwd with immediate parent at index 0", () => {
+    const prompt = buildPrompt(fileDecision({
+      action: "Read",
+      outsideDir: null,
+      filePath: "analysis/file.ts",
+      resolved: "/home/user/project/analysis/file.ts",
+    }));
+    expect(prompt.broaderPaths).toBeDefined();
+    expect(prompt.broaderPaths!.length).toBeGreaterThanOrEqual(1);
+    expect(prompt.broaderPaths![0].dir).toBe("/home/user/project/analysis");
+    expect(prompt.broaderPaths![0].label).toBe("Read /home/user/project/analysis/*");
+  });
+
+  it("broaderPaths includes up to 3 parent levels above immediate parent", () => {
+    const prompt = buildPrompt(fileDecision({
+      action: "Read",
+      outsideDir: null,
+      filePath: "a/b/file.ts",
+      resolved: "/home/user/project/a/b/file.ts",
+    }));
+    expect(prompt.broaderPaths).toBeDefined();
+    // immediate: /home/user/project/a/b
+    // level 1:   /home/user/project/a
+    // level 2:   /home/user/project
+    // level 3:   /home/user
+    expect(prompt.broaderPaths!.map(p => p.dir)).toEqual([
+      "/home/user/project/a/b",
+      "/home/user/project/a",
+      "/home/user/project",
+      "/home/user",
+    ]);
+  });
+
+  it("broaderPaths stops at root", () => {
+    const prompt = buildPrompt(fileDecision({
+      action: "Read",
+      outsideDir: null,
+      filePath: "file.ts",
+      resolved: "/etc/file.ts",
+    }));
+    expect(prompt.broaderPaths).toBeDefined();
+    // immediate: /etc, then / (root) — stops because dirname(/) === /
+    expect(prompt.broaderPaths!.map(p => p.dir)).toEqual([
+      "/etc",
+      "/",
+    ]);
+  });
+
+  it("broaderPaths labels use the action (Read/Write/Edit)", () => {
+    const prompt = buildPrompt(fileDecision({
+      action: "Write",
+      outsideDir: null,
+      isWriteOp: true,
+      filePath: "src/index.ts",
+      resolved: "/home/user/project/src/index.ts",
+    }));
+    expect(prompt.broaderPaths).toBeDefined();
+    for (const bp of prompt.broaderPaths!) {
+      expect(bp.label).toMatch(/^Write /);
+    }
+  });
+
+  it("broaderPaths dir values are absolute paths", () => {
+    const prompt = buildPrompt(fileDecision({
+      action: "Read",
+      outsideDir: null,
+      filePath: "src/index.ts",
+      resolved: "/home/user/project/src/index.ts",
+    }));
+    expect(prompt.broaderPaths).toBeDefined();
+    for (const bp of prompt.broaderPaths!) {
+      expect(bp.dir).toMatch(/^\//);
+    }
+  });
 });
 
 // ── MCP ────────────────────────────────────────────────────────────────────
