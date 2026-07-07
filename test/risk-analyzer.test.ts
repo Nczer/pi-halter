@@ -63,6 +63,13 @@ describe("analyzeRisk", () => {
     expect(risk.reasons.some(r => r.includes("force"))).toBe(true);
   });
 
+  it("non-dangerous git commands produce no [Git] reasons", async () => {
+    for (const cmd of ["git status", "git log", "git add .", "git commit -m 'msg'"]) {
+      const risk = await analyze(cmd);
+      expect(risk.reasons.some(r => r.startsWith("[Git]"))).toBe(false);
+    }
+  });
+
   it("detects sed -i as in-place edit", async () => {
     const risk = await analyze("sed -i 's/foo/bar/g' file.txt");
     expect(risk.dangerous).toBe(true);

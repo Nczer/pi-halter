@@ -268,6 +268,12 @@ const cases: TestCase[] = [
 	{ cmd: "python3.12 ~/.pi/agent/skills/test.py", simple: true, unsafe: false, decision: "auto-allow", desc: "python3.12 (versioned) trusted script auto-allows" },
 
 	// ═══════════════════════════════════════════════════════════
+	// subshells with basename/dirname (safe formatting — downgraded)
+	{ cmd: "echo \"$(basename /path/to/file)\"", simple: true, unsafe: false, decision: "auto-allow", desc: "basename subshell (safe formatting)" },
+	{ cmd: "echo \"$(dirname /path/to/file)\"", simple: true, unsafe: false, decision: "auto-allow", desc: "dirname subshell (safe formatting)" },
+	{ cmd: "echo `basename /path/to/file`", simple: true, unsafe: false, decision: "auto-allow", desc: "basename backtick (safe formatting)" },
+	{ cmd: 'for f in *.ts; do echo "$(basename $f)"; done', simple: true, unsafe: false, decision: "auto-allow", desc: "for loop with basename subshell (original false positive)" },
+
 	// subshells (always unsafe)
 	// ═══════════════════════════════════════════════════════════
 	{ cmd: "$(cat /etc/passwd)", simple: false, unsafe: true, decision: "prompt", desc: "command substitution" },

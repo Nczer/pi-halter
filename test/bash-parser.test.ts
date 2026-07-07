@@ -174,6 +174,45 @@ describe("parseCommand: command substitution", () => {
 	});
 });
 
+describe("parseCommand: subshellTexts extraction", () => {
+	it("basename in $() extracts inner text", async () => {
+		const r = await parseCommand('echo "$(basename /path/to/file)"', cwd);
+		const seg = r.segments.find(s => s.hasSubshell);
+		expect(seg?.subshellTexts).toBeDefined();
+		expect(seg!.subshellTexts!).toContain("basename /path/to/file");
+	});
+
+	it("backtick substitution extracts inner text", async () => {
+		const r = await parseCommand("echo `echo hello`", cwd);
+		const seg = r.segments.find(s => s.hasSubshell);
+		expect(seg?.subshellTexts).toBeDefined();
+		expect(seg!.subshellTexts!).toContain("echo hello");
+	});
+
+	it("multiple subshells extract all inner texts", async () => {
+		const r = await parseCommand("echo \"$(basename a) $(dirname b)\"", cwd);
+		const seg = r.segments.find(s => s.hasSubshell);
+		expect(seg?.subshellTexts).toBeDefined();
+		expect(seg!.subshellTexts!.length).toBe(2);
+		expect(seg!.subshellTexts!).toContain("basename a");
+		expect(seg!.subshellTexts!).toContain("dirname b");
+	});
+
+	it("no subshell returns empty subshellTexts", async () => {
+		const r = await parseCommand("ls -la", cwd);
+		const seg = r.segments[0];
+		expect(seg.subshellTexts).toBeDefined();
+		expect(seg.subshellTexts!.length).toBe(0);
+	});
+
+	it("process substitution extracts inner text", async () => {
+		const r = await parseCommand("cat <(echo hi)", cwd);
+		const seg = r.segments.find(s => s.hasSubshell);
+		expect(seg?.subshellTexts).toBeDefined();
+		expect(seg!.subshellTexts!).toContain("echo hi");
+	});
+});
+
 describe("parseCommand: no subshell", () => {
 	it("simple command has no subshell", async () => {
 		const r = await parseCommand("ls -la", cwd);

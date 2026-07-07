@@ -14,6 +14,9 @@ import {
 /** Pre-compiled regex for heredoc-to-interpreter detection. */
 const HEREDOC_INTERPRETER_RE = /^(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv|bash|sh|zsh|fish|csh|tcsh|ksh)$/i;
 
+/** Commands safe inside subshells (pure path formatting, no side effects or I/O). */
+const SAFE_SUBSHELL_CMDS = new Set(["basename", "dirname"]);
+
 /**
  * Evaluates shell constructs: subshells, heredocs, redirects, sed/perl, obfuscation, wrappers.
  * Pipeline analysis is done in segment-analysis.ts (needs access to dangerousCommandPatterns).
@@ -25,9 +28,27 @@ export const ShellEvaluator: RiskEvaluator = {
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const b = new EvaluationBuilder();
 
-    // Subshell — always high/dangerous (any $(…) is an execution vector)
+    // Subshell — downgrade to informational for known-safe formatting commands
     if (seg.hasSubshell) {
-      b.addHigh("command substitution (subshell)");
+      const innerTexts = seg.subshellTexts;
+      if (innerTexts && innerTexts.length > 0) {
+        const allSafe = innerTexts.every(inner => {
+          const fw = getFirstWord(inner);
+          if (!SAFE_SUBSHELL_CMDS.has(fw)) return false;
+          // Must not pipe, redirect, background, or contain nested subshells
+          if (/[|&><]/.test(inner)) return false;
+          if (/\(/.test(inner)) return false;    // nested $(…)
+          if (/`/.test(inner)) return false;      // nested backtick
+          return true;
+        });
+        if (allSafe) {
+          b.addMedium("command substitution (subshell)");
+        } else {
+          b.addHigh("command substitution (subshell)");
+        }
+      } else {
+        b.addHigh("command substitution (subshell)");
+      }
     }
 
     // Heredoc to interpreter
