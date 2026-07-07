@@ -319,7 +319,7 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 	});
 });
 
-// ── Broader-only layout (inside-cwd file) ──────────────────────────────
+// ── Broader-only layout (inside-cwd file, bash-style without broaderPaths) ─────────────
 
 describe("twoTierAlwaysPrompt: broader-only layout (inside-cwd file)", () => {
 	// includeBroaderOption: true, includePathsOption: false, includeFileOption: false
@@ -351,6 +351,186 @@ describe("twoTierAlwaysPrompt: broader-only layout (inside-cwd file)", () => {
 	});
 
 	it("returns 'no' for index 4 (No)", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([4]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("no");
+	});
+});
+
+// ── File with broaderPaths (3-level hierarchy) ────────────────────────
+
+describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
+	// File prompt with broaderPaths: immediate parent + 2 more levels
+	// choices = [
+	//   "Yes",                            // 0
+	//   "Always (file): index.ts",         // 1  → Always file
+	//   "Always (path): analysis/*",       // 2  → Always immediate parent
+	//   "Always (broader)",                // 3  → umbrella → sub-menu
+	//   "No (with reason)",                // 4
+	//   "No"                               // 5
+	// ]
+
+	const prompt = makePrompt({
+		includeBroaderOption: true,
+		includePathsOption: false,
+		includeFileOption: false,
+		alwaysLabel: "index.ts",
+		broaderPaths: [
+			{ label: "Read analysis/*", dir: "/home/user/project/analysis" },
+			{ label: "Read /home/user/project/*", dir: "/home/user/project" },
+			{ label: "Read /home/user/*", dir: "/home/user" },
+		],
+	});
+
+	it("calls onAlwaysBroader with dir for Always(path) → Confirm", async () => {
+		const cb = makeCallbacks();
+		// tier-1: Always(path) (2), tier-2: Confirm (0)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([2, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlwaysBroader).toHaveBeenCalledTimes(1);
+		expect(cb.onAlwaysBroader).toHaveBeenCalledWith("/home/user/project/analysis");
+	});
+
+	it("umbrella broader → sub-menu → select first level → confirm", async () => {
+		const cb = makeCallbacks();
+		// tier-1: umbrella broader (3)
+		// sub-menu: select first item (0) → /home/user/project
+		// tier-2: Confirm (0)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([3, 0, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlwaysBroader).toHaveBeenCalledTimes(1);
+		expect(cb.onAlwaysBroader).toHaveBeenCalledWith("/home/user/project");
+	});
+
+	it("umbrella broader → sub-menu → select second level → confirm", async () => {
+		const cb = makeCallbacks();
+		// tier-1: umbrella broader (3)
+		// sub-menu: select second item (1) → /home/user
+		// tier-2: Confirm (0)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([3, 1, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlwaysBroader).toHaveBeenCalledTimes(1);
+		expect(cb.onAlwaysBroader).toHaveBeenCalledWith("/home/user");
+	});
+
+	it("umbrella broader → sub-menu → Back → loops back to tier-1", async () => {
+		const cb = makeCallbacks();
+		// tier-1: umbrella broader (3)
+		// sub-menu: Back (2, last index)
+		// tier-1: No (5)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([3, 2, 5]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("no");
+		expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
+	});
+
+	it("umbrella broader → sub-menu → cancel (null) → loops back to tier-1", async () => {
+		const cb = makeCallbacks();
+		// tier-1: umbrella broader (3)
+		// sub-menu: cancel (null)
+		// tier-1: No (5)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([3, null, 5]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("no");
+		expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
+	});
+
+	it("umbrella broader → sub-menu → tier-2 Back → loops back to tier-1", async () => {
+		const cb = makeCallbacks();
+		// tier-1: umbrella broader (3)
+		// sub-menu: select first item (0)
+		// tier-2: Back (1)
+		// tier-1: No (5)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([3, 0, 1, 5]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("no");
+		expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
+	});
+
+	it("Always(file) → Confirm uses onAlways (not onAlwaysBroader)", async () => {
+		const cb = makeCallbacks();
+		// tier-1: Always(file) (1), tier-2: Confirm (0)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([1, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlways).toHaveBeenCalledTimes(1);
+		expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
+	});
+
+	it("returns 'no' at index 5 (No)", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([5]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("no");
+	});
+
+	it("returns {kind:'no', reason} at index 4 (No with reason)", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([4, "not safe"]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toEqual({ kind: "no", reason: "not safe" });
+	});
+});
+
+// ── File with broaderPaths (single level, no umbrella) ────────────────
+
+describe("twoTierAlwaysPrompt: file broaderPaths (single level, no umbrella)", () => {
+	// File at root — only immediate parent, no parent above
+	// choices = [
+	//   "Yes",                      // 0
+	//   "Always (file): hosts",      // 1
+	//   "Always (path): /etc/*",     // 2  → immediate parent only
+	//   "No (with reason)",          // 3
+	//   "No"                         // 4
+	// ]
+
+	const prompt = makePrompt({
+		includeBroaderOption: true,
+		includePathsOption: false,
+		includeFileOption: false,
+		alwaysLabel: "hosts",
+		broaderPaths: [
+			{ label: "Read /etc/*", dir: "/etc" },
+		],
+	});
+
+	it("calls onAlwaysBroader with dir for Always(path) → Confirm", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([2, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlwaysBroader).toHaveBeenCalledTimes(1);
+		expect(cb.onAlwaysBroader).toHaveBeenCalledWith("/etc");
+	});
+
+	it("no umbrella option (only 1 broaderPaths entry)", async () => {
+		// Verify there's no "Always (broader)" option — only file + path + no
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
 			prompt, makeCtx([4]),
