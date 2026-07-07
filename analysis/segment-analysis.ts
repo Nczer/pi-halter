@@ -8,19 +8,15 @@ import {
   SHELL_INTERPRETERS,
 } from "../config";
 import type { BashSegment } from "./bash-parser";
-import type { StageDanger } from "./segment-helpers";
 import { isFirstTokenRelativePath } from "./path-analysis";
 import {
   containsCommandSubstitution,
   getFirstWord,
   splitPipeline,
   hasWriteRedirect,
-  checkStageDanger,
   isGitDangerous,
   isWrapperRunningRelativePath,
 } from "./segment-helpers";
-// StageDanger imported as type above
-import { isTmuxDangerous } from "./tmux-helpers";
 import { detectObfuscation } from "./obfuscation";
 import { ShellEvaluator } from "./evaluators/shell-evaluator";
 import { SystemEvaluator } from "./evaluators/system-evaluator";
@@ -28,7 +24,7 @@ import { GitEvaluator } from "./evaluators/git-evaluator";
 import { TmuxEvaluator } from "./evaluators/tmux-evaluator";
 import { DiskEvaluator } from "./evaluators/disk-evaluator";
 import { ToolEvaluator } from "./evaluators/tool-evaluator";
-import type { EvaluatorResult, RiskEvaluator } from "./evaluators/types";
+import type { RiskEvaluator } from "./evaluators/types";
 
 // ── Constants ──
 
@@ -43,27 +39,6 @@ const EVALUATORS: RiskEvaluator[] = [
   DiskEvaluator,
   ToolEvaluator,
 ];
-
-// ── Pipeline stage danger check ──
-
-/** Check if a pipeline stage (after first) is dangerous. Combines shared + pipeline-specific checks. */
-function checkPipelineStageDanger(stage: string, stageCmd: string): StageDanger {
-  // Start with shared danger checks (sed/perl, find/fd/rg, wrapper, write redirect)
-  const shared = checkStageDanger(stage);
-  if (shared.dangerous) {
-    // Git/tmux/pattern checks only set boolean, no extra reasons beyond shared
-    return { ...shared, dangerous: true };
-  }
-
-  // Pipeline-specific checks (git, tmux, dangerous patterns)
-  let dangerous = false;
-  if (stageCmd === "git" && isGitDangerous(stage)) dangerous = true;
-  if (stageCmd === "tmux" && isTmuxDangerous(stage)) dangerous = true;
-  if (dangerousCommandPatterns.some(({ pattern }) => pattern.test(stageCmd))) dangerous = true;
-  if (dangerousContextPatterns.some(({ pattern }) => pattern.test(stage))) dangerous = true;
-
-  return { ...shared, dangerous };
-}
 
 // ── Result type ──
 
@@ -132,27 +107,27 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       const key = reason.split(/\s/)[0].toLowerCase();
       coveredKeys.add(key);
     }
-    if (result.isSimple === false) allStagesSimple = false;
   }
 
-  // Pipeline analysis
+  // Pipeline analysis: route secondary stages through evaluators
+  // (eliminates duplicate dangerousCommandPatterns/dangerousContextPatterns checks
+  //  and checkStageDanger — evaluators handle all of these uniformly)
   const stages = splitPipeline(segment);
   if (stages.length > 1) {
     for (let i = 1; i < stages.length; i++) {
       const stage = stages[i];
-      // Extract first token once (avoids double split in getFirstWord + isFirstTokenRelativePath)
       const stageTokens = stage.trim().split(/\s+/);
       const stageFirst = stageTokens[0];
       const stageCmd = path.basename(stageFirst.toLowerCase());
-      const isRelativeFirst = PIPELINE_RELATIVE_RE1.test(stageFirst) || PIPELINE_RELATIVE_RE2.test(stageFirst);
 
-      if (isRelativeFirst) {
+      if (PIPELINE_RELATIVE_RE1.test(stageFirst) || PIPELINE_RELATIVE_RE2.test(stageFirst)) {
         allStagesSimple = false;
         continue;
       }
 
       if (!isAllowedCommand(stageCmd)) {
         allStagesSimple = false;
+        // Pipe-to-interpreter is a unique pipeline concern — not caught by evaluators
         if (SHELL_INTERPRETERS.has(stageCmd)) {
           const reason = "[Pipeline] pipe to a shell (possible remote code execution)";
           if (!aggregatedReasons.includes(reason)) {
@@ -160,45 +135,27 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
             aggregatedSeverity = "high";
           }
         }
-        for (const { pattern, label } of dangerousCommandPatterns) {
-          if (pattern.test(stageCmd)) {
-            aggregatedHasDanger = true;
-            if (!aggregatedSeverity) aggregatedSeverity = "medium";
-            const tagged = `[Pipeline] ${label}`;
-            const key = label.split(/\s|[\/]/)[0].toLowerCase();
-            if (!coveredKeys.has(key) && !aggregatedReasons.includes(tagged)) {
-              aggregatedReasons.push(tagged);
-            }
-          }
-        }
-        for (const { pattern, label } of dangerousContextPatterns) {
-          if (pattern.test(stage)) {
-            aggregatedHasDanger = true;
-            if (!aggregatedSeverity) aggregatedSeverity = "medium";
-            const tagged = `[Pipeline] ${label}`;
-            const key = label.split(/\s/)[0].toLowerCase();
-            if (!coveredKeys.has(key) && !aggregatedReasons.includes(tagged)) {
-              aggregatedReasons.push(tagged);
-            }
-          }
-        }
-        continue;
       }
 
-      // Combined danger checks (shared + pipeline-specific)
-      const stageDanger = checkPipelineStageDanger(stage, stageCmd);
-      if (stageDanger.dangerous) {
-        for (const reason of stageDanger.reasons) {
-          const tagged = `[Pipeline] ${reason}`;
-          if (!aggregatedReasons.includes(tagged)) {
-            aggregatedReasons.push(tagged);
-          }
+      // Run evaluators on each pipeline stage — catches system/tool/git/tmux/shell danger
+      // that evaluators handle for the primary segment but can't see in pipeline stages.
+      // (Main segment analysis only examines the first command's firstWord, so rm/sed -i
+      //  in stage 2+ would be invisible without this per-stage pass.)
+      const pseudoSeg: BashSegment = { text: stage, ops: [], hasSubshell: false };
+      for (const ev of EVALUATORS) {
+        const result = ev.evaluate(pseudoSeg, cwd);
+        if (result.hasDanger) {
+          aggregatedHasDanger = true;
+          allStagesSimple = false;
         }
-        if (stageDanger.severity === "high" || (!aggregatedSeverity && stageDanger.severity === "medium")) {
-          aggregatedSeverity = stageDanger.severity;
+        if (result.severity === "high" || (!aggregatedSeverity && result.severity === "medium")) {
+          aggregatedSeverity = result.severity;
         }
-        allStagesSimple = false;
-        aggregatedHasDanger = true;
+        for (const reason of result.reasons) {
+          const tag = ev.name.charAt(0).toUpperCase() + ev.name.slice(1);
+          const tagged = `[Pipeline/${tag}] ${reason}`;
+          if (!aggregatedReasons.includes(tagged)) aggregatedReasons.push(tagged);
+        }
       }
     }
   }

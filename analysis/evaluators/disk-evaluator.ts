@@ -41,6 +41,7 @@ export const DiskEvaluator: RiskEvaluator = {
           }
         }
         b.setSeverity(handler.severity);
+        b.markDanger();
         return b.build();
       }
     }

@@ -58,7 +58,6 @@ export class EvaluationBuilder {
       reasons: this.reasons,
       severity: this.severity,
       hasDanger: this.hasDanger,
-      isSimple: undefined,
     };
   }
 }

@@ -63,6 +63,7 @@ export const ShellEvaluator: RiskEvaluator = {
         b.addReason(tech);
       }
       b.setHigh();
+      b.markDanger();
     }
 
     return b.build();

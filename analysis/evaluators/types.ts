@@ -4,7 +4,6 @@ export interface EvaluatorResult {
   reasons: string[];
   severity: "high" | "medium" | null;
   hasDanger: boolean;
-  isSimple: boolean | undefined; // Optional override for isSimple
 }
 
 /** Cached results to avoid redundant computation across evaluators. */
