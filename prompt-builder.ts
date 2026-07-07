@@ -21,6 +21,8 @@ export interface BuiltPrompt {
   alwaysBroaderLabel?: string;
   alwaysPathsLabel?: string;
   alwaysFileLabel?: string;
+  /** Broader parent-directory alternatives for file prompts (1–3 levels up). */
+  broaderPaths?: { label: string; dir: string }[];
 }
 
 /**
@@ -211,6 +213,19 @@ function buildFilePrompt(
       : `auto-allow read for this directory this session (write/edit will still prompt)`;
     const fileName = resolved.split("/").pop() || resolved;
     const parentDir = path.dirname(resolved);
+    // Compute broader parent directories up to 3 levels above parentDir
+    const broaderPaths: { label: string; dir: string }[] = [];
+    let cur = parentDir;
+    for (let i = 0; i < 3; i++) {
+      const parent = path.dirname(cur);
+      if (parent === cur) break; // hit root
+      cur = parent;
+      const baseName = path.basename(cur) || cur; // cur itself for root
+      broaderPaths.push({
+        label: `${action} ${cur}/*`,
+        dir: cur,
+      });
+    }
     return {
       title: action,
       body: `Path:\n  ${filePath}${warnLine}${deniedLine}${symlinkLine}\n`,
@@ -228,6 +243,7 @@ function buildFilePrompt(
       includeAlwaysOption: true,
       alwaysLabel: `${action} ${fileName}`,
       alwaysBroaderLabel: `${action} ${parentDir}/*`,
+      broaderPaths,
     };
   }
 

@@ -38,9 +38,9 @@ export async function twoTierAlwaysPrompt(
   onAlways: () => void,
   onAlwaysPaths: () => void,
   onAlwaysFile: () => void,
-  onAlwaysBroader?: () => void,
+  onAlwaysBroader?: (dir?: string) => void,
 ): Promise<PromptResult> {
-  const { title, body, tier2Everything, tier2Paths, tier2File, tier2Broader, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel } = prompt;
+  const { title, body, tier2Everything, tier2Paths, tier2File, tier2Broader, includePathsOption, includeFileOption, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, alwaysFileLabel, broaderPaths } = prompt;
 
   // Count this prompt once — not once per loop iteration (Back from tier-2
   // shouldn't inflate the frequency warning).
@@ -51,7 +51,13 @@ export async function twoTierAlwaysPrompt(
     // (No-with-reason + No).
     const alwaysOptions: string[] = [];
     if (includeAlwaysOption) {
-      if (includeBroaderOption && includePathsOption) {
+      if (includeBroaderOption && broaderPaths && broaderPaths.length > 0) {
+        // File prompt: single-file option followed by parent directory options
+        alwaysOptions.push(`Always (path): ${alwaysLabel}`);
+        for (const bp of broaderPaths) {
+          alwaysOptions.push(`Always (broader): ${bp.label}`);
+        }
+      } else if (includeBroaderOption && includePathsOption) {
         alwaysOptions.push(`Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`, `Always (paths): ${alwaysPathsLabel}`);
       } else if (includeBroaderOption) {
         alwaysOptions.push(`Always: ${alwaysLabel}`, `Always: ${alwaysBroaderLabel}`);
@@ -104,9 +110,26 @@ export async function twoTierAlwaysPrompt(
       entries.push({ config: primaryConfig, fn: () => { onAlways(); return "always" as PromptResult; } });
     }
 
-    // Broader option (e.g. "npm *" instead of "npm test *")
+    // Broader options: multiple parent-directory levels (file prompts) or single (bash package managers)
     if (includeBroaderOption) {
-      entries.push({ config: tier2Broader ?? tier2Everything, fn: () => { onAlwaysBroader?.(); return "always" as PromptResult; } });
+      if (broaderPaths && broaderPaths.length > 0) {
+        // File prompt: one entry per parent directory level
+        for (const bp of broaderPaths) {
+          entries.push({
+            config: {
+              title: "Confirm Always Allow",
+              body: `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${bp.dir}/*`,
+            },
+            fn: () => { onAlwaysBroader?.(bp.dir); return "always" as PromptResult; },
+          });
+        }
+      } else {
+        // Bash: single broader option (package manager prefix)
+        entries.push({
+          config: tier2Broader ?? tier2Everything,
+          fn: () => { onAlwaysBroader?.(); return "always" as PromptResult; },
+        });
+      }
     }
 
     // Paths-only option (bash with outside dirs)
