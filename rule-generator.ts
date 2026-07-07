@@ -24,15 +24,17 @@ export class RuleGenerator {
 
   /**
    * Generate broader auto-allow rules (e.g. all commands from a package manager).
+   * @param data - The prompt data.
+   * @param targetDir - For file prompts, the specific parent directory to allow (instead of one dirname up).
    */
-  static generateBroaderRules(data: PromptData): AllowRules | undefined {
+  static generateBroaderRules(data: PromptData, targetDir?: string): AllowRules | undefined {
     if (data.type !== "bash" && data.type !== "file") return undefined;
 
     if (data.type === "bash") {
       return this.generateBashBroaderRules(data);
     }
     if (data.type === "file") {
-      return this.generateFileBroaderRules(data);
+      return this.generateFileBroaderRules(data, targetDir);
     }
   }
 
@@ -105,12 +107,12 @@ export class RuleGenerator {
       : { readPaths: [resolved] };
   }
 
-  private static generateFileBroaderRules(data: FilePromptData): AllowRules | undefined {
-    if (data.outsideDir !== null) return undefined; // Only for inside-cwd
-    const parentDir = path.dirname(data.resolved);
+  private static generateFileBroaderRules(data: FilePromptData, targetDir?: string): AllowRules | undefined {
+    if (data.outsideDir !== null && !targetDir) return undefined; // Only for inside-cwd (or explicit target)
+    const dir = targetDir ?? (data.outsideDir ?? path.dirname(data.resolved));
     return data.isWriteOp
-      ? { writeDirs: [parentDir], readDirs: [parentDir] }
-      : { readDirs: [parentDir] };
+      ? { writeDirs: [dir], readDirs: [dir] }
+      : { readDirs: [dir] };
   }
 
   // ── MCP Internal ──

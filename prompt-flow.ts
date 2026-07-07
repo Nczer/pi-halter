@@ -48,8 +48,8 @@ export async function showPrompt(
       store.addAllowed(rules);
       updateWidget(ctx);
     }
-  }, () => {
-    const rules = RuleGenerator.generateBroaderRules(decision.promptData);
+  }, (dir?: string) => {
+    const rules = RuleGenerator.generateBroaderRules(decision.promptData, dir);
     if (rules) {
       store.addAllowed(rules);
       updateWidget(ctx);
