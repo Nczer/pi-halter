@@ -213,14 +213,19 @@ function buildFilePrompt(
       : `auto-allow read for this directory this session (write/edit will still prompt)`;
     const fileName = resolved.split("/").pop() || resolved;
     const parentDir = path.dirname(resolved);
-    // Compute broader parent directories up to 3 levels above parentDir
+    // Compute broader parent directories: immediate parent then up to 3 levels above
     const broaderPaths: { label: string; dir: string }[] = [];
+    // Immediate parent is the file's containing directory
+    broaderPaths.push({
+      label: `${action} ${parentDir}/*`,
+      dir: parentDir,
+    });
+    // Additional levels above the parent
     let cur = parentDir;
     for (let i = 0; i < 3; i++) {
       const parent = path.dirname(cur);
       if (parent === cur) break; // hit root
       cur = parent;
-      const baseName = path.basename(cur) || cur; // cur itself for root
       broaderPaths.push({
         label: `${action} ${cur}/*`,
         dir: cur,
