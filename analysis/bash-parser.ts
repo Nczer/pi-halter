@@ -233,6 +233,8 @@ export interface BashSegment {
   ops: string[];
   /** Whether this segment contains subshell constructs ($(), ``). */
   hasSubshell: boolean;
+  /** Inner command texts of subshell $() and process >() substitutions (empty if none). */
+  subshellTexts?: string[];
 }
 
 /** Node types that are shell operators (split points or internal ops). */
@@ -306,7 +308,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       }
     }
     if (cmdTexts.length > 0) {
-      segments.push({ text: cmdTexts.join(" | "), ops: [...ops], hasSubshell: segHasSubshell });
+      segments.push({ text: cmdTexts.join(" | "), ops: [...ops], hasSubshell: segHasSubshell, subshellTexts: extractSubshellInnerTexts(n) });
     }
   };
 
@@ -356,7 +358,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       }
     }
     if (!hasCompoundChild && cmdTexts.length > 0) {
-      segments.push({ text: cmdTexts.join(" "), ops: [...ops], hasSubshell: segHasSubshell });
+      segments.push({ text: cmdTexts.join(" "), ops: [...ops], hasSubshell: segHasSubshell, subshellTexts: extractSubshellInnerTexts(n) });
     } else if (hasCompoundChild && redirectTexts.length > 0) {
       if (segments.length > 0) {
         // Propagate redirects to the last segment so hasWriteRedirect can detect them
@@ -365,7 +367,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       } else {
         // Compound child walk produced no segments (e.g. empty subshell "() > out").
         // Create a redirect-only segment so write-redirect detection isn't silently lost.
-        segments.push({ text: redirectTexts.join(" "), ops: [...ops], hasSubshell: false });
+        segments.push({ text: redirectTexts.join(" "), ops: [...ops], hasSubshell: false, subshellTexts: extractSubshellInnerTexts(n) });
       }
     }
   };
@@ -373,7 +375,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
   /** Leaf: single command or redirect. */
   const handleLeaf: Handler = (n) => {
     const ops = detectOpsInNode(n);
-    segments.push({ text: n.text.trim(), ops, hasSubshell: nodeHasSubshell(n) });
+    segments.push({ text: n.text.trim(), ops, hasSubshell: nodeHasSubshell(n), subshellTexts: extractSubshellInnerTexts(n) });
   };
 
   // ── Handler map ──
@@ -430,6 +432,34 @@ function nodeHasSubshell(node: TSNode): boolean {
 
   subshellCache?.set(node, result);
   return result;
+}
+
+/**
+ * Extract inner command texts from all $() and `cmd` command substitutions,
+ * and >()/ <() process substitutions in the subtree. Returns an empty array
+ * if none are found.
+ */
+function extractSubshellInnerTexts(node: TSNode): string[] {
+  const texts: string[] = [];
+  function walk(n: TSNode): void {
+    if (n.type === "command_substitution" || n.type === "process_substitution") {
+      // The inner command is typically child at index 1 (after $.( or `<).
+      for (let i = 0; i < n.childCount; i++) {
+        const child = n.child(i);
+        if (child && child.type === "command") {
+          const inner = child.text.trim();
+          if (inner) texts.push(inner);
+          break;
+        }
+      }
+    }
+    for (let i = 0; i < n.childCount; i++) {
+      const child = n.child(i);
+      if (child) walk(child);
+    }
+  }
+  walk(node);
+  return texts;
 }
 
 /** Detect operators within a command/redirect node. */
