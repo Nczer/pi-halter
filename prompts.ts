@@ -143,7 +143,7 @@ export async function twoTierAlwaysPrompt(
           entries.push({
             config: {
               title: "Confirm Always Allow",
-              body: `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${broaderPaths[0].dir}/*`,
+              body: tier2Broader?.body ?? `"Always Yes" will auto-allow for this directory this session:\n\n  ${broaderPaths[0].dir}/*`,
             },
             fn: () => { onAlwaysBroader?.(broaderPaths[0].dir); return "always" as PromptResult; },
           });
@@ -194,7 +194,12 @@ export async function twoTierAlwaysPrompt(
       if (subIdx === null || subIdx === subLabels.length) continue; // Back / cancel
 
       const chosen = broaderPaths![subIdx + startIdx];
-      const tier2Body = `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${chosen.dir}/*`;
+      // Extract action from label (e.g., "Write /path/*" -> "Write")
+      const action = chosen.label.split(' ')[0];
+      const isWrite = action !== "Read";
+      const tier2Body = isWrite
+        ? `"Always Yes" will auto-allow ${action.toLowerCase()} for this directory this session (includes read):\n\n  ${chosen.dir}/*`
+        : `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${chosen.dir}/*`;
       const tier2Idx = await showSelectIndex(ctx, "Confirm Always Allow\n---\n" + tier2Body, ["Always Yes", "Back"]);
       if (tier2Idx === Tier2.Confirm) {
         onAlwaysBroader?.(chosen.dir);
