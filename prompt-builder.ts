@@ -217,7 +217,7 @@ function buildFilePrompt(
     const broaderPaths: { label: string; dir: string }[] = [];
     // Immediate parent is the file's containing directory
     broaderPaths.push({
-      label: `${action} ${parentDir}/*`,
+      label: `${action} ${path.join(parentDir, '*')}`,
       dir: parentDir,
     });
     // Additional levels above the parent
@@ -227,7 +227,7 @@ function buildFilePrompt(
       if (parent === cur) break; // hit root
       cur = parent;
       broaderPaths.push({
-        label: `${action} ${cur}/*`,
+        label: `${action} ${path.join(cur, '*')}`,
         dir: cur,
       });
     }
@@ -240,14 +240,14 @@ function buildFilePrompt(
       },
       tier2Broader: {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will ${dirScope}:\n\n  ${parentDir}/*`,
+        body: `"Always Yes" will ${dirScope}:\n\n  ${path.join(parentDir, '*')}`,
       },
       includePathsOption: false,
       includeFileOption: false,
       includeBroaderOption: true,
       includeAlwaysOption: true,
       alwaysLabel: `${action} ${fileName}`,
-      alwaysBroaderLabel: `${action} ${parentDir}/*`,
+      alwaysBroaderLabel: `${action} ${path.join(parentDir, '*')}`,
       broaderPaths,
     };
   }
@@ -255,18 +255,33 @@ function buildFilePrompt(
   const scope = isWriteOp
     ? `auto-allow ${action.toLowerCase()} for this directory this session`
     : `auto-allow read for this directory this session (write/edit will still prompt)`;
-  const tier2Label = isWriteOp ? `${action} ${outsideDir}/*` : `Read ${outsideDir}/*`;
+  const tier2Label = isWriteOp ? `${action} ${path.join(outsideDir, '*')}` : `Read ${path.join(outsideDir, '*')}`;
   const fileName = resolved.split("/").pop() || resolved;
   const fileScope = isWriteOp
     ? `auto-allow ${action.toLowerCase()} on this file this session (includes read)`
     : `auto-allow read on this file this session (write/edit will still prompt)`;
+
+  // Broader paths: parents of outsideDir (1–3 levels above)
+  const broaderPaths: { label: string; dir: string }[] = [];
+  let cur = outsideDir;
+  for (let i = 0; i < 3; i++) {
+    const parent = path.dirname(cur);
+    if (parent === cur) break; // hit root
+    cur = parent;
+    broaderPaths.push({
+      label: `${action} ${path.join(cur, '*')}`,
+      dir: cur,
+    });
+  }
+
+  const outsideDirGlob = path.join(outsideDir, '*');
 
   return {
     title: `\u26a0\ufe0f ${action} outside cwd`,
     body: `Path:\n  ${filePath}\n\n\u26a0\ufe0f Outside cwd: ${outsideDir}${warnLine}${deniedLine}${symlinkLine}\n`,
     tier2Everything: {
       title: `Confirm Always Allow`,
-      body: `"Always Yes" will ${scope}:\n\n  ${outsideDir}/*`,
+      body: `"Always Yes" will ${scope}:\n\n  ${outsideDirGlob}`,
     },
     tier2File: {
       title: `Confirm Always Allow`,
@@ -274,10 +289,12 @@ function buildFilePrompt(
     },
     includePathsOption: false,
     includeFileOption: true,
-    includeBroaderOption: false,
+    includeBroaderOption: broaderPaths.length > 0,
     includeAlwaysOption: true,
     alwaysLabel: tier2Label,
     alwaysFileLabel: `${action} ${fileName}`,
+    alwaysBroaderLabel: broaderPaths.length > 0 ? broaderPaths[0].label : undefined,
+    broaderPaths: broaderPaths.length > 0 ? broaderPaths : undefined,
   };
 }
 

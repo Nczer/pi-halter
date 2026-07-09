@@ -174,7 +174,100 @@ describe("twoTierAlwaysPrompt: bash with paths + broader", () => {
 	});
 });
 
-// ── File outside cwd (path + file options) ─────────────────────────────
+// ── File outside cwd with broader (path + file + broader) ──────────────
+
+describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
+	// choices = ["Yes", "Always (path): ...", "Always (file): ...", "Always (broader)", "No (reason)", "No"]
+	// indices:     0          1                     2                       3                    4               5
+	// entries:  [0]=primary, [1]=file, [2]=broader umbrella
+
+	const prompt = makePrompt({
+		includeFileOption: true,
+		includePathsOption: false,
+		includeBroaderOption: true,
+		alwaysLabel: "Read /outside/data/*",
+		alwaysFileLabel: "data.txt",
+		broaderPaths: [
+			{ label: "Read /outside/*", dir: "/outside" },
+			{ label: "Read /*", dir: "/" },
+		],
+	});
+
+	it("calls onAlwaysFile when Always(file) → Confirm", async () => {
+		const cb = makeCallbacks();
+		// tier-1: Always(file) (2), tier-2: Confirm (0)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([2, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("alwaysFile");
+		expect(cb.onAlwaysFile).toHaveBeenCalledTimes(1);
+	});
+
+	it("calls onAlways when Always(path) → Confirm", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([1, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlways).toHaveBeenCalledTimes(1);
+	});
+
+	it("umbrella broader → sub-menu selects first parent → confirm", async () => {
+		const cb = makeCallbacks();
+		// tier-1: umbrella broader (3)
+		// sub-menu: first item (0) → /outside
+		// tier-2: Confirm (0)
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([3, 0, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlwaysBroader).toHaveBeenCalledTimes(1);
+		expect(cb.onAlwaysBroader).toHaveBeenCalledWith("/outside");
+	});
+
+	it("umbrella broader → sub-menu selects second parent → confirm", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([3, 1, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("always");
+		expect(cb.onAlwaysBroader).toHaveBeenCalledWith("/");
+	});
+
+	it("umbrella broader → sub-menu Back → loops back", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([3, 2, 5]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("no");
+		expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
+	});
+
+	it("returns 'no' at last index", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([5]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toBe("no");
+	});
+
+	it("returns reason at No-with-reason index", async () => {
+		const cb = makeCallbacks();
+		const result = await twoTierAlwaysPrompt(
+			prompt, makeCtx([4, "outside"]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+		);
+		expect(result).toEqual({ kind: "no", reason: "outside" });
+	});
+});
+
+// ── File outside cwd (path + file options, no broader) ─────────────────
 
 describe("twoTierAlwaysPrompt: file outside cwd layout", () => {
 	// choices = ["Yes", "Always (path): ...", "Always (file): ...", "No (reason)", "No"]
