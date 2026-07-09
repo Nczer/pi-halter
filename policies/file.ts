@@ -61,6 +61,7 @@ export function decideFile(req: FileRequest, store: Store): Decision {
     cwd: req.cwd,
     outsideDir: insideCwd ? null : resolvedDir,
     isWriteOp,
+    // deniedRule is always null here — denied paths are blocked before reaching prompt
     deniedRule: deniedResult.matchedRule,
     warnedRule: warnResult.matchedRule,
     symlinkHint,

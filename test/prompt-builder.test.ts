@@ -339,9 +339,10 @@ describe("file body content", () => {
     expect(prompt.body).toContain("/home/user/link");
   });
 
-  it("shows denied rule match", () => {
+  it("denied rules are not rendered (denied paths are blocked before prompt)", () => {
     const prompt = buildPrompt(fileDecision({ deniedRule: ".env" }));
-    expect(prompt.body).toContain(".env");
+    expect(prompt.body).not.toContain(".env");
+    expect(prompt.body).not.toContain("denied");
   });
 
   it("shows warned rule match", () => {
@@ -349,9 +350,9 @@ describe("file body content", () => {
     expect(prompt.body).toContain(".env.*");
   });
 
-  it("shows both denied and warned rules when both match", () => {
+  it("shows warned rule but not denied rule", () => {
     const prompt = buildPrompt(fileDecision({ deniedRule: ".ssh", warnedRule: ".aws", outsideDir: "/home/user" }));
-    expect(prompt.body).toContain(".ssh");
+    expect(prompt.body).not.toContain(".ssh");
     expect(prompt.body).toContain(".aws");
   });
 

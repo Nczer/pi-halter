@@ -6,9 +6,7 @@ import {
   isFdExecWrite,
   isRgPreWrite,
 } from "../segment-helpers";
-import {
-  dangerousFindFlags,
-} from "../../config";
+import { dangerousFindFlags } from "../../config/bash-patterns";
 
 /** Check if args contain subcommand chain (e.g. s3 rm), skipping global flags like --profile. */
 function hasSubcommand(args: string[], ...subcommands: string[]): boolean {

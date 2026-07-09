@@ -1,10 +1,7 @@
 import { EvaluationBuilder } from "./builder";
 import { EvalCache, RiskEvaluator } from "./types";
-import {
-  dangerousSedFlags,
-  dangerousPerlFlags,
-  wrapperCommands,
-} from "../../config";
+import { wrapperCommands } from "../../config";
+import { dangerousSedFlags, dangerousPerlFlags } from "../../config/bash-patterns";
 import {
   getFirstWord,
   hasWriteRedirect,

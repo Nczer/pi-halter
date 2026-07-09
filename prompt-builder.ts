@@ -190,7 +190,15 @@ function buildBashPrompt(
     ? outsideDirs.map(d => `Read ${d}/*`).join(", ")
     : undefined;
 
-  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel };
+  // Tier 2 — broader (package manager prefix only, e.g. "npm *")
+  const tier2Broader = includeBroaderOption
+    ? {
+        title: `Confirm Always Allow`,
+        body: `"Always Yes" will auto-allow all commands from these package managers this session:\n\n${broaderSigs.map(s => `  \u2022 ${s} *`).join("\n")}`,
+      }
+    : undefined;
+
+  return { title, body, tier2Everything, tier2Paths, tier2Broader, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel };
 }
 
 // ── File prompt ──
@@ -198,11 +206,11 @@ function buildBashPrompt(
 function buildFilePrompt(
   data: FilePromptData,
 ): BuiltPrompt {
-  const { action, filePath, resolved, cwd, outsideDir, isWriteOp, deniedRule, warnedRule, symlinkHint } = data;
+  const { action, filePath, resolved, cwd, outsideDir, isWriteOp, warnedRule, symlinkHint } = data;
   const insideCwd = outsideDir === null;
   const symlinkLine = symlinkHint ? `\n\n\u{1F517} Resolved via symlink: ${symlinkHint}` : "";
   const warnLine = warnedRule ? `\n\n\u26a0\ufe0f Matches credential pattern "${warnedRule}" — may contain secrets or tokens.` : "";
-  const deniedLine = deniedRule ? `\n\n\u26a0\ufe0f Matches denied rule "${deniedRule}" — typically contains credentials or generated files.` : "";
+  // deniedRule is not rendered: denied paths are blocked before reaching a prompt decision.
 
   if (insideCwd) {
     const scopeNote = isWriteOp
@@ -233,7 +241,7 @@ function buildFilePrompt(
     }
     return {
       title: action,
-      body: `Path:\n  ${filePath}${warnLine}${deniedLine}${symlinkLine}\n`,
+      body: `Path:\n  ${filePath}${warnLine}${symlinkLine}\n`,
       tier2Everything: {
         title: `Confirm Always Allow`,
         body: `${scopeNote}\n\n  ${resolved}`,
@@ -278,7 +286,7 @@ function buildFilePrompt(
 
   return {
     title: `\u26a0\ufe0f ${action} outside cwd`,
-    body: `Path:\n  ${filePath}\n\n\u26a0\ufe0f Outside cwd: ${outsideDir}${warnLine}${deniedLine}${symlinkLine}\n`,
+    body: `Path:\n  ${filePath}\n\n\u26a0\ufe0f Outside cwd: ${outsideDir}${warnLine}${symlinkLine}\n`,
     tier2Everything: {
       title: `Confirm Always Allow`,
       body: `"Always Yes" will ${scope}:\n\n  ${outsideDirGlob}`,
