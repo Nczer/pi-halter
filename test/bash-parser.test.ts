@@ -143,6 +143,51 @@ describe("parseCommand: paths", () => {
 		const r = await parseCommand("cat https://example.com", cwd);
 		expect(r.paths).toHaveLength(0);
 	});
+
+	describe("parseCommand: backslash-escaped paths", () => {
+		it("strips backslash before space (\\) in path", async () => {
+			// find /tmp/foo\ bar → resolved path should not contain backslash
+			const r = await parseCommand("find /tmp/foo\\ bar -type f", cwd);
+			expect(r.paths.length).toBeGreaterThan(0);
+			const p = r.paths[0];
+			expect(p).not.toContain("\\");
+			expect(p).toContain("/tmp/foo bar");
+		});
+
+		it("strips backslash before bracket (\[) in path", async () => {
+			const r = await parseCommand("cat /tmp/\\[test\\].txt", cwd);
+			expect(r.paths.length).toBeGreaterThan(0);
+			const p = r.paths[0];
+			expect(p).not.toContain("\\");
+			expect(p).toContain("/tmp/[test].txt");
+		});
+
+		it("strips backslash before space and bracket in complex path (find)", async () => {
+			// Simulating: find /path/[dir]\ name/file
+			const r = await parseCommand("find /tmp/\\[dir\\]\\ name/file -type f", cwd);
+			expect(r.paths.length).toBeGreaterThan(0);
+			const p = r.paths[0];
+			expect(p).not.toContain("\\");
+			expect(p).toContain("/tmp/[dir] name/file");
+		});
+
+		it("preserves double-backslash (\\) as literal backslash", async () => {
+			// \\ → \ (single literal backslash)
+			const r = await parseCommand("cat /tmp/foo\\\\bar", cwd);
+			expect(r.paths.length).toBeGreaterThan(0);
+			const p = r.paths[0];
+			expect(p).toContain("foo\\bar");
+			expect(p).not.toContain("\\\\");
+		});
+
+		it("preserves unescaped path without backslashes", async () => {
+			const r = await parseCommand("cat /tmp/normal_path.txt", cwd);
+			expect(r.paths.length).toBeGreaterThan(0);
+			const p = r.paths[0];
+			expect(p).toContain("/tmp/normal_path.txt");
+			expect(p).not.toContain("\\");
+		});
+	});
 });
 
 describe("parseCommand: per-segment hasSubshell", () => {
