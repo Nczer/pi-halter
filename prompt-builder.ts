@@ -23,6 +23,8 @@ export interface BuiltPrompt {
   alwaysFileLabel?: string;
   /** Broader parent-directory alternatives for file prompts (1–3 levels up). */
   broaderPaths?: { label: string; dir: string }[];
+  /** Whether the operation is a write (vs read) — used for accurate prompt text. */
+  isWriteOp?: boolean;
 }
 
 /**

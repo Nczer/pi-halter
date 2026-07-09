@@ -3,22 +3,21 @@ import {
   formatMcpProxyToolCallLines,
   formatMcpDirectToolCallLines,
   buildArgsPreview,
-  type McpProxyToolCallInput,
 } from "../renderers/mcp";
 
 describe("formatMcpProxyToolCallLines", () => {
   it("formats tool call without server", () => {
-    const input: McpProxyToolCallInput = { tool: "my_tool" };
+    const input = { tool: "my_tool" };
     expect(formatMcpProxyToolCallLines(input)).toEqual(["mcp call my_tool"]);
   });
 
   it("formats tool call with server", () => {
-    const input: McpProxyToolCallInput = { tool: "my_tool", server: "context7" };
+    const input = { tool: "my_tool", server: "context7" };
     expect(formatMcpProxyToolCallLines(input)).toEqual(["mcp call my_tool @ context7"]);
   });
 
   it("formats tool call with args", () => {
-    const input: McpProxyToolCallInput = { tool: "my_tool", args: '{"key":"value"}' };
+    const input = { tool: "my_tool", args: '{"key":"value"}' };
     const lines = formatMcpProxyToolCallLines(input);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toBe("mcp call my_tool");
@@ -26,7 +25,7 @@ describe("formatMcpProxyToolCallLines", () => {
   });
 
   it("omits args when includeArgs is false", () => {
-    const input: McpProxyToolCallInput = { tool: "my_tool", args: '{"key":"value"}' };
+    const input = { tool: "my_tool", args: '{"key":"value"}' };
     expect(formatMcpProxyToolCallLines(input, 1500, false)).toEqual(["mcp call my_tool"]);
   });
 
@@ -72,7 +71,7 @@ describe("formatMcpProxyToolCallLines", () => {
 
   it("truncates long args", () => {
     const longJson = JSON.stringify({ data: "x".repeat(2000) });
-    const input: McpProxyToolCallInput = { tool: "my_tool", args: longJson };
+    const input = { tool: "my_tool", args: longJson };
     const lines = formatMcpProxyToolCallLines(input, 100);
     expect(lines[1].length).toBeLessThanOrEqual(101); // 100 + ellipsis char
     expect(lines[1]).toContain("\u2026");
