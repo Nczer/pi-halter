@@ -56,8 +56,13 @@ export async function twoTierAlwaysPrompt(
     // (No-with-reason + No).
     const alwaysOptions: string[] = [];
     if (includeAlwaysOption) {
-      if (includeBroaderOption && broaderPaths && broaderPaths.length > 0) {
-        // File prompt: file / path (1 parent) / broader (remaining parents)
+      if (includeFileOption && includeBroaderOption && broaderPaths && broaderPaths.length > 0) {
+        // Outside-cwd with broader: path / file / broader
+        alwaysOptions.push(`Always (path): ${alwaysLabel}`);
+        alwaysOptions.push(`Always (file): ${alwaysFileLabel}`);
+        alwaysOptions.push(`Always (broader)`);
+      } else if (includeBroaderOption && broaderPaths && broaderPaths.length > 0) {
+        // Inside-cwd: file / path (1 parent) / broader (remaining parents)
         alwaysOptions.push(`Always (file): ${alwaysLabel}`);
         alwaysOptions.push(`Always (path): ${broaderPaths[0].label}`);
         if (broaderPaths.length > 1) {
@@ -118,24 +123,38 @@ export async function twoTierAlwaysPrompt(
       entries.push({ config: primaryConfig, fn: () => { onAlways(); return "always" as PromptResult; } });
     }
 
+    // File-only option — always at entries[1] for outside-cwd
+    if (includeFileOption) {
+      entries.push({ config: tier2File!, fn: () => { onAlwaysFile(); return "alwaysFile" as PromptResult; } });
+    }
+
     // Broader options
     if (includeBroaderOption) {
       if (broaderPaths && broaderPaths.length > 0) {
-        // File prompt: first parent level (path)
-        entries.push({
-          config: {
-            title: "Confirm Always Allow",
-            body: `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${broaderPaths[0].dir}/*`,
-          },
-          fn: () => { onAlwaysBroader?.(broaderPaths[0].dir); return "always" as PromptResult; },
-        });
-        // Remaining parent levels under umbrella "broader"
-        if (broaderPaths.length > 1) {
+        if (includeFileOption) {
+          // Outside-cwd: all broader paths under umbrella sub-prompt (entries[2] since file is at [1])
           hasBroaderUmbrella = true;
           entries.push({
             config: { title: "", body: "" },
             fn: () => "always" as PromptResult,
           });
+        } else {
+          // Inside-cwd: first parent level (path) shown directly
+          entries.push({
+            config: {
+              title: "Confirm Always Allow",
+              body: `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${broaderPaths[0].dir}/*`,
+            },
+            fn: () => { onAlwaysBroader?.(broaderPaths[0].dir); return "always" as PromptResult; },
+          });
+          // Remaining parent levels under umbrella "broader"
+          if (broaderPaths.length > 1) {
+            hasBroaderUmbrella = true;
+            entries.push({
+              config: { title: "", body: "" },
+              fn: () => "always" as PromptResult,
+            });
+          }
         }
       } else {
         // Bash: single broader option (package manager prefix)
@@ -149,11 +168,6 @@ export async function twoTierAlwaysPrompt(
     // Paths-only option (bash with outside dirs)
     if (includePathsOption) {
       entries.push({ config: tier2Paths ?? tier2Everything, fn: () => { onAlwaysPaths(); return "alwaysPaths" as PromptResult; } });
-    }
-
-    // File-only option (file outside cwd)
-    if (includeFileOption) {
-      entries.push({ config: tier2File!, fn: () => { onAlwaysFile(); return "alwaysFile" as PromptResult; } });
     }
 
     // Resolve: idx maps to entry index (Choice.Always=1 → entries[0], Choice.AlwaysAlt=2 → entries[1], etc.)
@@ -171,12 +185,15 @@ export async function twoTierAlwaysPrompt(
 
     // ── Handle umbrella "Always (broader)" — show sub-prompt ──
     if (hasBroaderUmbrella && entryIdx === 2) {
-      const subLabels = broaderPaths!.slice(1).map(bp => bp.label);
+      // For outside-cwd (includeFileOption): show all broaderPaths
+      // For inside-cwd: skip the first broaderPath (shown directly as "path")
+      const startIdx = includeFileOption ? 0 : 1;
+      const subLabels = broaderPaths!.slice(startIdx).map(bp => bp.label);
       const subChoices = [...subLabels, "Back"];
       const subIdx = await showSelectIndex(ctx, "Select a broader directory to always allow:", subChoices);
       if (subIdx === null || subIdx === subLabels.length) continue; // Back / cancel
 
-      const chosen = broaderPaths![subIdx + 1]; // subIdx 0 → broaderPaths[1]
+      const chosen = broaderPaths![subIdx + startIdx];
       const tier2Body = `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${chosen.dir}/*`;
       const tier2Idx = await showSelectIndex(ctx, "Confirm Always Allow\n---\n" + tier2Body, ["Always Yes", "Back"]);
       if (tier2Idx === Tier2.Confirm) {

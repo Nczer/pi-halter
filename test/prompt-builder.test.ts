@@ -406,9 +406,44 @@ describe("file labels and tier2", () => {
     expect(prompt.tier2Broader).toBeDefined();
   });
 
-  it("does not generate broaderPaths for outside cwd", () => {
+  it("generates broaderPaths for outside cwd (parents of outsideDir)", () => {
     const prompt = buildPrompt(fileDecision({ action: "Read", outsideDir: "/etc", resolved: "/etc/hosts" }));
+    expect(prompt.broaderPaths).toBeDefined();
+    // parent of /etc is /
+    expect(prompt.broaderPaths!.map(p => p.dir)).toEqual(["/"]);
+  });
+
+  it("broaderPaths for outside cwd includes up to 3 levels above outsideDir", () => {
+    const prompt = buildPrompt(fileDecision({
+      action: "Write",
+      isWriteOp: true,
+      outsideDir: "/home/user/project/a/b",
+      resolved: "/home/user/project/a/b/file.ts",
+    }));
+    expect(prompt.broaderPaths).toBeDefined();
+    expect(prompt.broaderPaths!.map(p => p.dir)).toEqual([
+      "/home/user/project/a",
+      "/home/user/project",
+      "/home/user",
+    ]);
+    // all labels use path.join so no double slashes
+    expect(prompt.broaderPaths![0].label).toBe("Write /home/user/project/a/*");
+  });
+
+  it("outside cwd broader paths includeBroaderOption is true when parents exist", () => {
+    const prompt = buildPrompt(fileDecision({
+      action: "Read",
+      outsideDir: "/mnt/data",
+      resolved: "/mnt/data/file.txt",
+    }));
+    expect(prompt.includeBroaderOption).toBe(true);
+  });
+
+  it("outside cwd excludes root as broader path (loops stops at root)", () => {
+    const prompt = buildPrompt(fileDecision({ action: "Read", outsideDir: "/", resolved: "/hosts" }));
+    // When outsideDir is /, no parent beyond root exists → broaderPaths undefined
     expect(prompt.broaderPaths).toBeUndefined();
+    expect(prompt.includeBroaderOption).toBe(false);
   });
 
   it("generates broaderPaths for inside cwd with immediate parent at index 0", () => {
@@ -456,6 +491,11 @@ describe("file labels and tier2", () => {
     expect(prompt.broaderPaths!.map(p => p.dir)).toEqual([
       "/etc",
       "/",
+    ]);
+    // labels use path.join so no double slashes
+    expect(prompt.broaderPaths!.map(p => p.label)).toEqual([
+      "Read /etc/*",
+      "Read /*",
     ]);
   });
 
