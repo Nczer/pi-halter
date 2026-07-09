@@ -83,7 +83,7 @@ export interface FilePromptData {
   cwd: string;
   outsideDir: string | null; // null if inside cwd
   isWriteOp: boolean;
-  deniedRule: string | null;
+  deniedRule: string | null; // always null for prompt decisions (denied paths are blocked)
   warnedRule: string | null; // credential warning (prompt, not block)
   symlinkHint: string | null; // e.g. "/home/user/data → /mnt/storage"
 }

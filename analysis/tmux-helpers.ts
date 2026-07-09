@@ -49,7 +49,7 @@ export function getTmuxSubcommand(segment: string): string | null {
   let i = 1;
   while (i < args.length) {
     const arg = args[i];
-    if ((arg === "-S" || arg === "-L") && i + 1 < args.length) { i += 2; continue; }
+    if ((arg === "-S" || arg === "-L" || arg === "-f") && i + 1 < args.length) { i += 2; continue; }
     if (arg.startsWith("-") && !arg.startsWith("--")) { i++; continue; }
     if (arg.startsWith("--")) { i += 2; continue; }
     return args[i].toLowerCase();
@@ -75,7 +75,7 @@ export function extractTmuxSendKeys(segment: string): string | null {
   // Find the actual index of "send-keys" (may be after -S/-L flags)
   let subIdx = -1;
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === "-S" || args[i] === "-L") { i++; continue; } // skip socket flags
+    if (args[i] === "-S" || args[i] === "-L" || args[i] === "-f") { i++; continue; } // skip socket flags
     if (args[i] === "send-keys") { subIdx = i; break; }
     break;
   }

@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { PermissionRequest, Decision, PromptData } from "./decision-engine";
+import type { PermissionRequest, Decision } from "./decision-engine";
 import { decide } from "./decision-engine";
 import { showPrompt } from "./prompt-flow";
 import type { Store } from "./store";

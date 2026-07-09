@@ -497,23 +497,12 @@ function detectOpsInNode(node: TSNode): string[] {
   return [...ops];
 }
 
-// ── Combined parse result ───────────────────────────────────────────────────
-
-/** Unified result of a single tree-sitter parse. Replaces triple-parse in analyzeCommand. */
-export interface ParseResult {
-  segments: BashSegment[];
-  paths: string[];
-  /** Whether tree-sitter produced ERROR nodes (malformed bash). */
-  hasParseError: boolean;
-}
-
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
  * Single parse that extracts segments, paths, and subshell flags.
- * Single parse unified: segments, paths, and parse errors.
  */
-export async function parseCommand(command: string, cwd: string): Promise<ParseResult> {
+export async function parseCommand(command: string, cwd: string): Promise<{ segments: BashSegment[]; paths: string[]; hasParseError: boolean }> {
   const parser = await getParser();
   const tree = parser.parse(command);
   if (!tree) return { segments: [], paths: [], hasParseError: false };
