@@ -45,11 +45,25 @@ const SKIP_TYPES = new Set(["heredoc_body", "heredoc_end", "comment"]);
 /** Node types that represent a shell word (for command name/argument detection). */
 const WORD_TYPES = new Set(["word", "concatenation", "string", "raw_string"]);
 
+/** Strip backslash escapes from a shell word (\X → X for any character). */
+function stripBackslashEscapes(text: string): string {
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\\" && i + 1 < text.length) {
+      result += text[i + 1];
+      i++; // skip the escaped character
+    } else {
+      result += text[i];
+    }
+  }
+  return result;
+}
+
 /** Resolve the shell value of an argument node (quote removal, concatenation). */
 function resolveNodeText(node: TSNode): string {
   switch (node.type) {
     case "word":
-      return node.text;
+      return stripBackslashEscapes(node.text);
     case "raw_string": {
       const t = node.text;
       return t.length >= 2 && t[0] === "'" && t[t.length - 1] === "'"
