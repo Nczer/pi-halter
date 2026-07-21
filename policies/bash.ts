@@ -10,8 +10,8 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   ];
 
   for (const rule of rules) {
-    const decision = rule(req, store);
-    if (decision) return decision as Decision;
+    const decision = await rule(req, store);
+    if (decision) return decision;
   }
 
   const analysis = await analyzeCommand(req.command, req.cwd, {

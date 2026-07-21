@@ -14,7 +14,7 @@ export const RetryLoopRule: BashRule = (req, store) => {
   if (lastAbort && Date.now() - lastAbort < ABORT_REMEMBER_MS) {
     return {
       kind: "block",
-      reason: "Blocked by bash-guard: command was already aborted recently.",
+      reason: "Blocked by halter: command was already aborted recently.",
     };
   }
   return null;
@@ -56,8 +56,6 @@ export const FastAllowRule: BashRule = (req) => {
   if (CREDENTIAL_SCAN_RE.test(req.command)) return null;
 
   const tokens = req.command.trim().split(/\s+/);
-  if (tokens.length < 1) return null;
-
   const bare = getFirstWord(req.command);
   if (!unconditionallySafeCommands.has(bare)) return null;
 

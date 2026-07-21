@@ -33,7 +33,7 @@ export async function showPrompt(
 
   const prompt = buildPrompt(decision);
 
-  const result = await twoTierAlwaysPrompt(prompt, ctx, () => {
+  const result = await twoTierAlwaysPrompt(prompt, store, ctx, () => {
     store.addAllowed(RuleGenerator.generatePrimaryRules(decision.promptData));
     updateWidget(ctx);
   }, () => {

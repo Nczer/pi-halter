@@ -118,7 +118,6 @@ Follow a bash command (`ls -la`) through the system:
 2. **`gate.ts`** — calls `decide(request, store)`
 3. **`decision-engine.ts`** — routes to `policies/bash.ts`
 4. **`policies/bash.ts`** — runs the rule pipeline from `bash-rules.ts`:
-   - `UserDenyRule` — is it explicitly denied? → block
    - `RetryLoopRule` — was it recently aborted? → block
    - `CredentialDenyRule` — does it reference a denied credential path (`.ssh`, `.gnupg`)? → block
    - `FastAllowRule` — is it trivially safe? → auto-allow (skipped if credential pattern detected)

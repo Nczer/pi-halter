@@ -109,6 +109,7 @@ export function rejectBash(
 export function rejectFile(
   decision: Decision,
   result: PromptResult,
+  store: Store,
   ctx: ExtensionContext,
 ): { block: true; reason: string } {
   if (decision.kind !== "prompt") return { block: true, reason: "Permission denied" };
@@ -135,6 +136,7 @@ export function rejectFile(
 export function rejectMcp(
   decision: Decision,
   result: PromptResult,
+  store: Store,
   ctx: ExtensionContext,
 ): { block: true; reason: string } {
   if (decision.kind !== "prompt") return { block: true, reason: "Permission denied" };

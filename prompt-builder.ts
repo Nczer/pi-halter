@@ -212,7 +212,6 @@ function buildFilePrompt(
   const insideCwd = outsideDir === null;
   const symlinkLine = symlinkHint ? `\n\n\u{1F517} Resolved via symlink: ${symlinkHint}` : "";
   const warnLine = warnedRule ? `\n\n\u26a0\ufe0f Matches credential pattern "${warnedRule}" — may contain secrets or tokens.` : "";
-  // deniedRule is not rendered: denied paths are blocked before reaching a prompt decision.
 
   if (insideCwd) {
     const scopeNote = isWriteOp

@@ -42,7 +42,6 @@ export async function handleFile(
 
     if (!isCredentialPath) {
       try {
-        if (!fs.existsSync(resolvedPath)) return;
         const content = fs.readFileSync(resolvedPath, "utf-8");
         for (const edit of edits) {
           if (edit.oldText === edit.newText) return; // Identical content — edit will fail
@@ -71,6 +70,6 @@ export async function handleFile(
   };
 
   return await gate(request, ctx, store, (decision, result) =>
-    rejectFile(decision, result, ctx),
+    rejectFile(decision, result, store, ctx),
   );
 }

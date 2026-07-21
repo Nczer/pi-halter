@@ -37,7 +37,6 @@ function fileDecision(overrides: Partial<PromptDecision["promptData"]> = {}): Pr
       cwd: "/home/user/project",
       outsideDir: null,
       isWriteOp: false,
-      deniedRule: null,
       warnedRule: null,
       symlinkHint: null,
       ...overrides,
@@ -339,10 +338,11 @@ describe("file body content", () => {
     expect(prompt.body).toContain("/home/user/link");
   });
 
-  it("denied rules are not rendered (denied paths are blocked before prompt)", () => {
-    const prompt = buildPrompt(fileDecision({ deniedRule: ".env" }));
-    expect(prompt.body).not.toContain(".env");
-    expect(prompt.body).not.toContain("denied");
+  it("blocked paths never reach prompt builder (deniedRule field removed)", () => {
+    // deniedRule was removed from FilePromptData — denied paths are blocked before prompt.
+    // Warned paths still appear as expected.
+    const prompt = buildPrompt(fileDecision({ warnedRule: ".env" }));
+    expect(prompt.body).toContain(".env");
   });
 
   it("shows warned rule match", () => {
@@ -350,9 +350,8 @@ describe("file body content", () => {
     expect(prompt.body).toContain(".env.*");
   });
 
-  it("shows warned rule but not denied rule", () => {
-    const prompt = buildPrompt(fileDecision({ deniedRule: ".ssh", warnedRule: ".aws", outsideDir: "/home/user" }));
-    expect(prompt.body).not.toContain(".ssh");
+  it("shows warned rule outside cwd", () => {
+    const prompt = buildPrompt(fileDecision({ warnedRule: ".aws", outsideDir: "/home/user" }));
     expect(prompt.body).toContain(".aws");
   });
 
