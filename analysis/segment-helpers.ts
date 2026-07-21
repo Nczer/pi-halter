@@ -213,7 +213,7 @@ export function isRgPreWrite(segment: string): boolean {
 }
 
 /** Pre-compiled regex for git clean flags. */
-const GIT_CLEAN_FLAGS_RE = /-[fdx]/;
+const GIT_CLEAN_FLAGS_RE = /-[a-z]*[fdx][a-z]*/;
 
 // ── Git subcommand danger handlers ──
 
@@ -226,15 +226,41 @@ const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => bo
   { match: (sub, a) => sub === "gc" && a.some(x => x.startsWith("--prune")) },
 ];
 
+/** Git global flags that appear before the subcommand. */
+const GIT_GLOBAL_FLAGS = new Set(["-c", "-C", "--git-dir", "--work-tree", "--no-pager", "-p", "--paginate", "--no-replace-objects", "--literal-pathspec", "--no-optional-locks", "--bare", "--help"]);
+
 /**
  * Check if a git command is dangerous.
  * Used by segment-analysis.ts (pipeline loop) and GitEvaluator.
+ * Skips global flags to find the actual subcommand.
  */
 export function isGitDangerous(segment: string): boolean {
   const args = segment.trim().split(/\s+/);
   if (args.length < 2) return false;
-  const sub = args[1].toLowerCase();
-  const subArgs = args.slice(2);
+
+  // Skip global flags to find the actual subcommand
+  let subIdx = 1;
+  while (subIdx < args.length) {
+    const arg = args[subIdx];
+    if (GIT_GLOBAL_FLAGS.has(arg)) {
+      // -c and -C take a value argument
+      if (arg === "-c" || arg === "-C") subIdx++;
+      // --git-dir, --work-tree take a value argument
+      if (arg.startsWith("--git-dir") || arg.startsWith("--work-tree")) subIdx++;
+      subIdx++;
+      continue;
+    }
+    // --flag=value form (e.g., --git-dir=x)
+    if (arg.startsWith("--") && arg.includes("=")) {
+      subIdx++;
+      continue;
+    }
+    break;
+  }
+
+  if (subIdx >= args.length) return false;
+  const sub = args[subIdx].toLowerCase();
+  const subArgs = args.slice(subIdx + 1);
   return GIT_DANGER_HANDLERS.some(h => h.match(sub, subArgs));
 }
 

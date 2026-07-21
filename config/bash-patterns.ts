@@ -93,13 +93,13 @@ export const pathAwareCommands = new Set([
 ]);
 
 /** Flags on `find` that make it dangerous (excluding -exec which depends on the subcommand). */
-export const dangerousFindFlags = /-(?:delete|empty|truncate)\b/;
+export const dangerousFindFlags = /-(?:delete|empty|truncate|fprint|fprintf|fls)\b/;
 
 /** Flags that make `sed` dangerous (in-place editing). */
-export const dangerousSedFlags = /-\bi(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/;
+export const dangerousSedFlags = /-[a-z]*i(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/;
 
 /** Flags that make `perl` dangerous (in-place editing via -i). */
-export const dangerousPerlFlags = /-\bi(?:\.\S*)?(?:\s|$)|-pi\b|-p.*-i\b/;
+export const dangerousPerlFlags = /-[a-z]*i(?:\.\S*)?(?:\s|$)|-[a-z]*pi[a-z]*(?:\s|$)|-[a-z]*ip[a-z]*(?:\s|$)/;
 
 /** Command + subcommand pairs that are always safe (read-only, no side effects). */
 const allowedBashSubcommands = new Set([
@@ -151,6 +151,16 @@ export const wrapperCommands = new Set([
 /** Shell interpreters used by find -exec and similar constructs. */
 export const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh"]);
 
+/** Script interpreters that execute arbitrary code (treated as write-capable). */
+const SCRIPT_INTERPRETERS = new Set([
+  "python", "python3", "python2", "py",
+  "node", "nodejs",
+  "ruby", "rb",
+  "perl", "php", "lua",
+  "deno", "bun", "julia", "r",
+  "go run", "rustc",
+]);
+
 /** Package manager commands that use subcommands (npm install, cargo check, etc.). */
 export const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "npx", "cargo", "pip", "pip3", "uv", "go", "bun"]);
 
@@ -176,9 +186,9 @@ const WRITE_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: s
   { match: (c) => ALWAYS_WRITE.has(c), evaluate: () => true },
   { match: (c) => ALWAYS_WRITE_ARCHIVE_PKG.has(c), evaluate: () => true },
   { match: (c) => c === "sed", evaluate: (_, ctx) => dangerousSedFlags.test(ctx) },
-  { match: (c) => c === "perl", evaluate: (_, ctx) => dangerousPerlFlags.test(ctx) },
   { match: (c) => c === "tee", evaluate: (_, ctx) => TEE_WRITE_RE.test(ctx) },
   { match: (c) => SHELL_INTERPRETERS.has(c), evaluate: () => true },
+  { match: (c) => SCRIPT_INTERPRETERS.has(c), evaluate: () => true },
 ];
 
 /**
