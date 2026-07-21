@@ -487,6 +487,59 @@ function extractSubshellInnerTexts(node: TSNode): string[] {
   return texts;
 }
 
+/**
+ * Check if an argument to `sed` looks like a pattern expression
+ * (address, range, or substitution) rather than a file path.
+ *
+ * Sed patterns start with a delimiter (typically `/`) and have:
+ * - A matching closing delimiter
+ * - Optionally followed by a single-letter command (p, d, q, w, etc.)
+ * - Or a range expression: /pat1/,/pat2/action
+ *
+ * Real file paths have multi-character directory/file segments.
+ */
+function isSedPatternArg(arg: string): boolean {
+  // Sed substitution: s/pattern/replacement/flags
+  if (arg.startsWith("s") && arg.length > 2 && arg[1] !== "/" && !arg[1].match(/[a-zA-Z0-9]/)) {
+    return true;
+  }
+
+  if (!arg.startsWith("/")) return false;
+
+  // Range pattern: /pat1/,/pat2/action or /pat1/,/pat2/
+  if (/,\//.test(arg)) return true;
+
+  // Single address: /pattern/ or /pattern/p
+  // Find the last `/` — if what follows is a short letter sequence (sed command)
+  // or empty, it's a pattern, not a path.
+  const lastSlashIdx = arg.lastIndexOf("/");
+  if (lastSlashIdx > 0) {
+    const afterLastSlash = arg.slice(lastSlashIdx + 1);
+    // Empty → /pattern/ (address with no explicit command, defaults to print)
+    if (afterLastSlash.length === 0) return true;
+    // 1-3 letters → /pattern/p, /pattern/d, /pattern/gp, etc.
+    if (afterLastSlash.length <= 3 && /^[a-zA-Z]+$/.test(afterLastSlash)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if an argument to `awk` looks like an inline script rather than a file path.
+ *
+ * Awk scripts are typically the first non-flag argument. When they start with `/`,
+ * they're regex address patterns like `/pattern/ {action}`. These get mistaken for
+ * absolute paths because they begin with `/`.
+ *
+ * Detection: awk scripts that start with `/` contain awk action syntax:
+ * spaces, braces { }, $NF, $0, print, etc. — characters never found in bare paths.
+ */
+function isAwkScriptArg(arg: string): boolean {
+  if (!arg.startsWith("/")) return false;
+  // Awk scripts contain awk-specific syntax that never appears in file paths
+  return /[\s{}\(\)\$\^\*\+\?\|\\!=;]/.test(arg) || /,\//.test(arg);
+}
+
 /** Detect operators within a command/redirect node. */
 function detectOpsInNode(node: TSNode): string[] {
   const ops = new Set<string>();
@@ -544,6 +597,14 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
 
       if (cmdName && pathAwareCommands.has(cmdName)) {
         for (const arg of args) {
+          // Skip inline script/pattern expressions that look like paths but aren't:
+          //   sed: /pattern/p, /describe(...)/,/^});/p, s/foo/bar/
+          //   awk: /pattern/ {print}, /foo/ {action}
+          if ((cmdName === "sed" && isSedPatternArg(arg)) ||
+              (cmdName === "awk" && isAwkScriptArg(arg))) {
+            continue;
+          }
+
           if (isPathCandidate(arg)) {
             // For flag values (--file=/path), resolve the value, not the flag itself.
             // isPathCandidate already accepts these; match its extraction logic.

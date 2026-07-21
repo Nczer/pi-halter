@@ -480,7 +480,7 @@ const cases: TestCase[] = [
 	{ cmd: "grep rm file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "grep rm (rm is arg, not command)" },
 	{ cmd: "cat file.txt | grep rm", simple: true, unsafe: false, decision: "auto-allow", desc: "cat | grep rm (rm is arg)" },
 	{ cmd: "grep -rn 'rm' .", simple: true, unsafe: false, decision: "auto-allow", desc: "grep -rn rm (rm is search pattern)" },
-	{ cmd: "sed -n /rm/p file.txt", simple: true, unsafe: false, decision: "prompt", desc: "sed /rm/p (rm in sed pattern; prompts because /rm/p looks like absolute path)" },
+	{ cmd: "sed -n /rm/p file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "sed /rm/p (rm in sed pattern; sed patterns no longer treated as paths)" },
 	{ cmd: "find . -name '*.rm'", simple: true, unsafe: false, decision: "auto-allow", desc: "find -name *.rm (rm in filename)" },
 	{ cmd: "ps aux | grep python", simple: true, unsafe: false, decision: "auto-allow", desc: "ps | grep python (python is arg)" },
 	{ cmd: "grep pkill", simple: true, unsafe: false, decision: "auto-allow", desc: "grep pkill (pkill is arg)" },
