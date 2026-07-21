@@ -73,6 +73,23 @@ describe("File: Write inside cwd", () => {
 			expect(d.promptData.outsideDir).toBeNull();
 		}
 	});
+
+	it("does not show a bogus symlink hint for relative paths", async () => {
+		const store = createStore();
+		const req: FileRequest = { type: "file", toolName: "write", filePath: "src/output.txt", cwd };
+		const d = await decide(req, store);
+		expect(d.kind).toBe("prompt");
+		if (d.kind === "prompt" && d.promptData.type === "file") {
+			// Regression: relative inputs used to compare "." against the absolute
+			// resolved dir, producing a bogus ". → /abs/dir" hint on every relative path.
+			// A hint is only legitimate when a parent dir is actually a symlink.
+			if (realPath(cwd) === path.resolve(cwd)) {
+				expect(d.promptData.symlinkHint).toBeNull();
+			} else {
+				expect(d.promptData.symlinkHint).not.toMatch(/^\./);
+			}
+		}
+	});
 });
 
 describe("File: Write outside cwd", () => {
@@ -507,6 +524,17 @@ describe("Bash: retry-loop prevention", () => {
 		clock = 1_000_000 + 10_000;
 		const d = await decide({ type: "bash", command: "ls", cwd }, store);
 		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("blocks trivial whitespace variations of an aborted command", async () => {
+		const store = createStore(() => clock);
+		store.recordAbort("rm -rf /tmp");
+		clock = 1_000_000 + 10_000;
+		// Extra/leading/trailing whitespace used to evade the retry-loop block
+		const d1 = await decide({ type: "bash", command: "rm  -rf   /tmp", cwd }, store);
+		expect(d1.kind).toBe("block");
+		const d2 = await decide({ type: "bash", command: "  rm -rf /tmp ", cwd }, store);
+		expect(d2.kind).toBe("block");
 	});
 });
 

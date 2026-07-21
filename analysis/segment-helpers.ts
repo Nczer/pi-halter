@@ -38,7 +38,11 @@ const RG_PRE_RE = /--pre(?:=|\s+)(\S+)/;
 const QUOTE_DOUBLE_RE = /"(?:[^"\\]|\\.)*"/g;
 const QUOTE_SINGLE_RE = /'[^']*'/g;
 const QUOTE_DOLLAR_RE = /\$'[^']*'/g;
-const QUOTE_COMMENT_RE = /\s*#.*$/gm;
+// Bash only treats `#` as a comment at the START of a word (line start or after
+// whitespace). A mid-word `#` is literal: `cat foo#;rm -rf .` executes rm.
+// A looser regex (\s*#) would strip the `;rm -rf .` and hide the chained command
+// from COMPOUND_RE in FastAllowRule — an auto-allow bypass.
+const QUOTE_COMMENT_RE = /(^|\s)#.*$/gm;
 
 /** Check if a string contains command substitution markers from stripQuotedStrings. */
 export function containsCommandSubstitution(s: string): boolean {
@@ -52,7 +56,7 @@ export function stripQuotedStrings(cmd: string): string {
   });
   s = s.replace(QUOTE_SINGLE_RE, "__STR__");
   s = s.replace(QUOTE_DOLLAR_RE, "__STR__");
-  s = s.replace(QUOTE_COMMENT_RE, "");
+  s = s.replace(QUOTE_COMMENT_RE, "$1");
   return s;
 }
 

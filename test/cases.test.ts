@@ -945,6 +945,14 @@ const cases: TestCase[] = [
 	{ cmd: "cat .en''v", simple: true, unsafe: false, decision: "prompt", desc: ".en''v must be credential (prompt, not auto-allow)" },
 	{ cmd: "cat ~/.s''sh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "~/.s''sh/id_rsa must BLOCK (quote-splitting bypass)" },
 	{ cmd: "cat ~/.s\\sh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "~/.s\\sh/id_rsa must BLOCK (backslash-splitting bypass)" },
+
+	// ── Regression: Bug 3 — mid-word `#` stripped as comment (FastAllow bypass) ──
+	// Bash only treats `#` as a comment at word start. A looser strip regex hid the
+	// rest of the line from COMPOUND_RE, auto-allowing chained commands.
+	{ cmd: "cat foo#;rm -rf .", simple: false, unsafe: true, decision: "prompt", desc: "mid-word # is literal in bash — chained rm must NOT fast-allow" },
+	{ cmd: "echo a#b > /etc/x", simple: false, unsafe: true, decision: "prompt", desc: "mid-word # must not hide a write redirect" },
+	{ cmd: "ls # list files", simple: true, unsafe: false, decision: "auto-allow", desc: "real comment after whitespace is stripped (safe)" },
+	{ cmd: "ls # comment && rm -rf .", simple: true, unsafe: false, decision: "auto-allow", desc: "comment swallows rest of line (real bash semantics)" },
 ];
 
 // ─── Run tests ───

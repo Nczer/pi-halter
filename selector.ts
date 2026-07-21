@@ -120,7 +120,10 @@ export async function showReasonEditor(
 ): Promise<string | null> {
   return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
     let cachedLines: string[] | undefined;
-    const editor = new Editor(tui, createEditorTheme(theme));
+    // pi-coding-agent bundles its own copy of pi-tui, so the TUI instance passed to
+    // ctx.ui.custom() is a structurally-identical but nominally-different type than
+    // the one Editor's constructor expects (private-field clash). Safe to cast: same API.
+    const editor = new Editor(tui as unknown as ConstructorParameters<typeof Editor>[0], createEditorTheme(theme));
 
     editor.onSubmit = (value) => {
       const trimmed = value.trim();

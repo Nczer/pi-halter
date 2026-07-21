@@ -195,6 +195,16 @@ function loadDirectToolMap(): Map<string, { server: string; originalName: string
           if (directTools !== true && !Array.isArray(directTools)) continue;
 
           map.set(`__server__:${serverName}`, { server: serverName, originalName: "" });
+
+          // Array-form directTools lists exact tool names — map them directly so
+          // resolution doesn't depend on prefix/suffix pattern matching.
+          if (Array.isArray(directTools)) {
+            for (const toolName of directTools) {
+              if (typeof toolName === "string" && toolName) {
+                map.set(toolName, { server: serverName, originalName: toolName });
+              }
+            }
+          }
         }
       } catch {
         // Skip invalid configs
@@ -225,6 +235,11 @@ export function resolveServerFromToolName(
 
   // Fall back to pattern matching against mcp.json server names
   const directToolMap = loadDirectToolMap();
+
+  // Exact match from array-form directTools (registered without __server__ prefix)
+  const exact = directToolMap.get(toolName);
+  if (exact && exact.originalName !== "") return exact.server;
+
   for (const [key] of directToolMap) {
     if (!key.startsWith("__server__:")) continue;
     const serverName = key.slice(11); // strip "__server__:"
@@ -238,6 +253,18 @@ export function resolveServerFromToolName(
     const suffix = `_${serverName}`;
     if (toolName.endsWith(suffix) && !toolName.startsWith(`${serverName}_`)) {
       return serverName;
+    }
+
+    // Pattern: {shortName}_{tool} / {tool}_{shortName} (prefix=short — last path segment)
+    const shortName = serverName.split("/").pop() ?? serverName;
+    if (shortName !== serverName) {
+      if (toolName.startsWith(`${shortName}_`)) {
+        return serverName;
+      }
+      const shortSuffix = `_${shortName}`;
+      if (toolName.endsWith(shortSuffix) && !toolName.startsWith(`${shortName}_`)) {
+        return serverName;
+      }
     }
   }
 
