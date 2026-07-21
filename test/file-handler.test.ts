@@ -24,11 +24,13 @@ function makeCtx() {
 describe("handleFile edit pre-validation security", () => {
   let readSpy: ReturnType<typeof vi.spyOn>;
   let existsSpy: ReturnType<typeof vi.spyOn>;
+  let statSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     // Isolate from any state left by other tests.
     store.reset();
     existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    statSpy = vi.spyOn(fs, "statSync").mockReturnValue({ size: 100 } as fs.Stats);
     readSpy = vi.spyOn(fs, "readFileSync").mockReturnValue("some content that has no match");
   });
 
@@ -116,14 +118,27 @@ describe("handleFile edit pre-validation security", () => {
   });
 
   it("skips prompt when file does not exist", async () => {
-    // Without existsSync guard, readFileSync throws for missing files → handler catches and returns early.
-    readSpy.mockImplementation(() => { throw new Error("ENOENT"); });
+    // statSync throws ENOENT for missing files → handler catches and returns early
+    // before ever reading content.
+    statSpy.mockImplementation(() => { throw new Error("ENOENT"); });
     const result = await handleFile(
       makeEditEvent("src/missing.ts"),
       makeCtx(),
     );
     expect(result).toBeUndefined();
-    expect(readSpy).toHaveBeenCalled();
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips pre-validation for files larger than 1 MB (still prompts via gate)", async () => {
+    // Large file: size cap avoids a full blocking read; the edit proceeds to the
+    // gate instead of being pre-validated. No UI in this ctx → gate auto-blocks.
+    statSpy.mockReturnValue({ size: 2 * 1024 * 1024 } as fs.Stats);
+    const result = await handleFile(
+      makeEditEvent("src/big.ts"),
+      makeCtx(),
+    );
+    expect(readSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
   });
 
   it("skips prompt when file read throws", async () => {

@@ -70,6 +70,40 @@ describe("Signatures: compound", () => {
 	});
 });
 
+describe("Signatures: package managers (flag-value skipping)", () => {
+	// Regression: `npm --prefix /x test` used to yield signature "npm /x" —
+	// the flag's value was mistaken for the subcommand.
+	it("skips space-separated flag values before the subcommand", async () => {
+		const a = await analyzeCommand("npm --prefix /x test", cwd);
+		expect(a.signatures[0]).toBe("npm test");
+	});
+
+	it("skips inline flag values before the subcommand", async () => {
+		const a = await analyzeCommand("npm --prefix=/x test", cwd);
+		expect(a.signatures[0]).toBe("npm test");
+	});
+
+	it("cargo --manifest-path <file> build → cargo build", async () => {
+		const a = await analyzeCommand("cargo --manifest-path Cargo.toml build", cwd);
+		expect(a.signatures[0]).toBe("cargo build");
+	});
+
+	it("pip --cache-dir <dir> install → pip install", async () => {
+		const a = await analyzeCommand("pip --cache-dir /tmp/c install foo", cwd);
+		expect(a.signatures[0]).toBe("pip install");
+	});
+
+	it("plain subcommand unchanged", async () => {
+		const a = await analyzeCommand("npm test", cwd);
+		expect(a.signatures[0]).toBe("npm test");
+	});
+
+	it("flags only → bare command", async () => {
+		const a = await analyzeCommand("npm -v", cwd);
+		expect(a.signatures[0]).toBe("npm");
+	});
+});
+
 describe("Segments: basic", () => {
 	it("single command → 1 segment", async () => {
 		const a = await analyzeCommand("ls -la", cwd);
