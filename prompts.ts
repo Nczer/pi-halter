@@ -10,7 +10,6 @@ type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | { k
 enum Choice {
   Yes = 0,
   Always = 1,
-  AlwaysAlt = 2,   // broader / paths / file (variant by layout)
 }
 
 /** Tier-2 choice indices. */
@@ -107,10 +106,11 @@ export async function twoTierAlwaysPrompt(
     interface Tier2Entry { config: { title: string; body: string }; fn: () => PromptResult; }
     const entries: Tier2Entry[] = [];
 
-    // Track whether the umbrella "broader" entry was added
-    let hasBroaderUmbrella = false;
+    // Tracks the entry index for a broader umbrella that opens a sub-prompt
+    // instead of a standard tier-2 confirmation. -1 = no umbrella entry.
+    let broaderUmbrellaIdx = -1;
 
-    // Primary "Always" (always at Choice.Always = index 1)
+    // Primary "Always" (always at choice index 1, entries[0])
     {
       const primaryConfig = includeBroaderOption || includePathsOption || includeFileOption
         ? tier2Everything
@@ -123,7 +123,7 @@ export async function twoTierAlwaysPrompt(
       entries.push({ config: primaryConfig, fn: () => { onAlways(); return "always" as PromptResult; } });
     }
 
-    // File-only option — always at entries[1] for outside-cwd
+    // File-only option
     if (includeFileOption) {
       entries.push({ config: tier2File!, fn: () => { onAlwaysFile(); return "alwaysFile" as PromptResult; } });
     }
@@ -132,12 +132,8 @@ export async function twoTierAlwaysPrompt(
     if (includeBroaderOption) {
       if (broaderPaths && broaderPaths.length > 0) {
         if (includeFileOption) {
-          // Outside-cwd: all broader paths under umbrella sub-prompt (entries[2] since file is at [1])
-          hasBroaderUmbrella = true;
-          entries.push({
-            config: { title: "", body: "" },
-            fn: () => "always" as PromptResult,
-          });
+          // Outside-cwd: all broader paths under umbrella sub-prompt
+          broaderUmbrellaIdx = entries.length; // No entry pushed — handled separately
         } else {
           // Inside-cwd: first parent level (path) shown directly
           entries.push({
@@ -147,13 +143,9 @@ export async function twoTierAlwaysPrompt(
             },
             fn: () => { onAlwaysBroader?.(broaderPaths[0].dir); return "always" as PromptResult; },
           });
-          // Remaining parent levels under umbrella "broader"
+          // Remaining parent levels under umbrella sub-prompt
           if (broaderPaths.length > 1) {
-            hasBroaderUmbrella = true;
-            entries.push({
-              config: { title: "", body: "" },
-              fn: () => "always" as PromptResult,
-            });
+            broaderUmbrellaIdx = entries.length; // No entry pushed — handled separately
           }
         }
       } else {
@@ -170,23 +162,12 @@ export async function twoTierAlwaysPrompt(
       entries.push({ config: tier2Paths ?? tier2Everything, fn: () => { onAlwaysPaths(); return "alwaysPaths" as PromptResult; } });
     }
 
-    // Resolve: idx maps to entry index (Choice.Always=1 → entries[0], Choice.AlwaysAlt=2 → entries[1], etc.)
+    // Resolve entry by choice index (Choice.Always=1 maps to entries[0])
     const entryIdx = idx - Choice.Always;
-    const entry = entries[entryIdx];
-    if (!entry) {
-      // Fallback: should not happen given the choices array is built consistently
-      const tier2Body = "\u26a0\ufe0f This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
-      const tier2Config = { title: tier2Everything.title, body: tier2Body };
-      const callback = () => { onAlways(); return "always" as PromptResult; };
-      const tier2Idx = await showSelectIndex(ctx, tier2Config.title + "\n---\n" + tier2Config.body, ["Always Yes", "Back"]);
-      if (tier2Idx === Tier2.Confirm) return callback();
-      continue;
-    }
 
-    // ── Handle umbrella "Always (broader)" — show sub-prompt ──
-    if (hasBroaderUmbrella && entryIdx === 2) {
-      // For outside-cwd (includeFileOption): show all broaderPaths
-      // For inside-cwd: skip the first broaderPath (shown directly as "path")
+    // ── Handle umbrella broader sub-prompt (check before bounds guard —
+    //     entryIdx may equal entries.length since no placeholder is pushed) ──
+    if (entryIdx === broaderUmbrellaIdx) {
       const startIdx = includeFileOption ? 0 : 1;
       const subLabels = broaderPaths!.slice(startIdx).map(bp => bp.label);
       const subChoices = [...subLabels, "Back"];
@@ -194,7 +175,6 @@ export async function twoTierAlwaysPrompt(
       if (subIdx === null || subIdx === subLabels.length) continue; // Back / cancel
 
       const chosen = broaderPaths![subIdx + startIdx];
-      // Extract action from label (e.g., "Write /path/*" -> "Write")
       const action = chosen.label.split(' ')[0];
       const isWrite = action !== "Read";
       const tier2Body = isWrite
@@ -208,7 +188,11 @@ export async function twoTierAlwaysPrompt(
       continue;
     }
 
+    // Guard against index mismatch (entries array length vs alwaysOptions count)
+    if (entryIdx < 0 || entryIdx >= entries.length) continue;
+
     // ── Standard tier-2 confirmation ──
+    const entry = entries[entryIdx];
     const tier2Idx = await showSelectIndex(ctx, entry.config.title + "\n---\n" + entry.config.body, ["Always Yes", "Back"]);
     if (tier2Idx === Tier2.Confirm) return entry.fn();
 

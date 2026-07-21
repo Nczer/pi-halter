@@ -37,6 +37,9 @@ export interface Store {
   listAllowedWritePaths(): Set<string>;
   listAllowedMcpServers(): Set<string>;
 
+  /** Get current time (uses injected clock for testability). */
+  now(): number;
+
   /** Clear all session state. */
   reset(): void;
 }
@@ -65,6 +68,7 @@ export function createStore(nowFn = Date.now): Store {
   };
 
   return {
+    now() { return nowFn(); },
     hasAllowedBash(s) { return bashSigs.has(s); },
     hasAllowedBashPrefix(s) {
       for (const allowed of bashSigs) {

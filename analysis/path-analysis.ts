@@ -53,7 +53,7 @@ export function resolvePathReal(inputPath: string, cwd: string): string {
         const result = suffix ? path.join(real, suffix) : real;
         return result;
       } catch {
-        suffix = path.join(path.basename(p), suffix) || path.basename(p);
+        suffix = path.join(path.basename(p), suffix);
         p = path.dirname(p);
       }
     }
