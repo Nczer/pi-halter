@@ -12,18 +12,19 @@ export interface AllowRules {
   mcpServers?: string[];
 }
 
-// ── SessionState (volatile, in-memory) ──
+// ── Store (volatile, in-memory) ──
 
 /**
- * Volatile session state: auto-allow sets, abort history, prompt counter.
- * Resets on session restart. No disk I/O.
+ * Store: auto-allow sets, abort tracking, prompt counter.
+ * Resets on session restart. No persistence.
  */
-export interface SessionState {
+export interface Store {
   hasAllowedBash(signature: string): boolean;
   hasAllowedBashPrefix(signature: string): boolean;
   hasAllowedReadPath(path: string): boolean;
   hasAllowedWritePath(path: string): boolean;
   hasAllowedMcpServer(server: string): boolean;
+  /** Check if a resolved path is inside a session-auto-allowed dir (no Set copy). */
   isInsideAllowedDir(resolved: string, kind: "read" | "write"): boolean;
   addAllowed(rules: AllowRules): void;
   recordAbort(command: string): void;
@@ -35,10 +36,16 @@ export interface SessionState {
   listAllowedReadPaths(): Set<string>;
   listAllowedWritePaths(): Set<string>;
   listAllowedMcpServers(): Set<string>;
-  clear(): void;
+
+  /** Clear all session state. */
+  reset(): void;
 }
 
-function createSessionState(nowFn = Date.now): SessionState {
+/**
+ * Create a Store backed by fresh collections.
+ * Used for both the runtime singleton and test fakes — one implementation, zero duplication.
+ */
+export function createStore(nowFn = Date.now): Store {
   const bashSigs = new Set<string>();
   const readDirs = new Set<string>();
   const writeDirs = new Set<string>();
@@ -110,7 +117,7 @@ function createSessionState(nowFn = Date.now): SessionState {
       return { over: pcount > PROMPT_WARNING_THRESHOLD, count: pcount };
     },
 
-    clear() {
+    reset() {
       bashSigs.clear();
       readDirs.clear();
       writeDirs.clear();
@@ -119,66 +126,6 @@ function createSessionState(nowFn = Date.now): SessionState {
       mcpServers.clear();
       aborted.clear();
       pcount = 0;
-    },
-  };
-}
-
-// ── Store (session-scoped auto-allow state) ──
-
-/**
- * Volatile store: auto-allow sets, abort tracking, prompt counter.
- * Resets on session restart. No persistence.
- */
-export interface Store {
-  hasAllowedBash(signature: string): boolean;
-  hasAllowedBashPrefix(signature: string): boolean;
-  hasAllowedReadPath(path: string): boolean;
-  hasAllowedWritePath(path: string): boolean;
-  hasAllowedMcpServer(server: string): boolean;
-  /** Check if a resolved path is inside a session-auto-allowed dir (no Set copy). */
-  isInsideAllowedDir(resolved: string, kind: "read" | "write"): boolean;
-  addAllowed(rules: AllowRules): void;
-  recordAbort(command: string): void;
-  getLastAbort(command: string): number | null;
-  incrementPromptCount(): { over: boolean; count: number };
-  listAllowedBash(): Set<string>;
-  listAllowedReadDirs(): Set<string>;
-  listAllowedWriteDirs(): Set<string>;
-  listAllowedReadPaths(): Set<string>;
-  listAllowedWritePaths(): Set<string>;
-  listAllowedMcpServers(): Set<string>;
-
-  /** Clear all session state. */
-  reset(): void;
-}
-
-/**
- * Create a Store backed by fresh collections.
- * Used for both the runtime singleton and test fakes — one implementation, zero duplication.
- */
-export function createStore(nowFn = Date.now): Store {
-  const session = createSessionState(nowFn);
-
-  return {
-    hasAllowedBash: s => session.hasAllowedBash(s),
-    hasAllowedBashPrefix: s => session.hasAllowedBashPrefix(s),
-    hasAllowedReadPath: p => session.hasAllowedReadPath(p),
-    hasAllowedWritePath: p => session.hasAllowedWritePath(p),
-    hasAllowedMcpServer: s => session.hasAllowedMcpServer(s),
-    isInsideAllowedDir: (p, k) => session.isInsideAllowedDir(p, k),
-    addAllowed: r => session.addAllowed(r),
-    recordAbort: c => session.recordAbort(c),
-    getLastAbort: c => session.getLastAbort(c),
-    incrementPromptCount: () => session.incrementPromptCount(),
-    listAllowedBash: () => session.listAllowedBash(),
-    listAllowedReadDirs: () => session.listAllowedReadDirs(),
-    listAllowedWriteDirs: () => session.listAllowedWriteDirs(),
-    listAllowedReadPaths: () => session.listAllowedReadPaths(),
-    listAllowedWritePaths: () => session.listAllowedWritePaths(),
-    listAllowedMcpServers: () => session.listAllowedMcpServers(),
-
-    reset() {
-      session.clear();
     },
   };
 }
