@@ -58,6 +58,10 @@ export function createStore(nowFn = Date.now): Store {
   const aborted = new Map<string, number>();
   let pcount = 0;
 
+  // Normalize so trivial whitespace variations ("rm  -rf foo" vs "rm -rf foo")
+  // can't evade the retry-loop block.
+  const normalizeCmd = (cmd: string) => cmd.trim().replace(/\s+/g, " ");
+
   const pruneAborted = () => {
     if (aborted.size > 100) {
       const cutoff = nowFn() - ABORT_REMEMBER_MS;
@@ -101,12 +105,12 @@ export function createStore(nowFn = Date.now): Store {
     },
 
     recordAbort(cmd) {
-      aborted.set(cmd, nowFn());
+      aborted.set(normalizeCmd(cmd), nowFn());
       pruneAborted();
     },
     getLastAbort(cmd) {
       pruneAborted();
-      return aborted.get(cmd) ?? null;
+      return aborted.get(normalizeCmd(cmd)) ?? null;
     },
 
     listAllowedBash() { return new Set(bashSigs); },

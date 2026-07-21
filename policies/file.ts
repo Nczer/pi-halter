@@ -49,7 +49,10 @@ export function decideFile(req: FileRequest, store: Store): Decision {
 
   // Pre-compute values reused multiple times
   const resolvedDir = path.dirname(resolved);
-  const originalParent = path.dirname(expandTilde(req.filePath));
+  // Compare against the absolute lexical parent — path.dirname(expandTilde(...)) alone
+  // is relative for relative inputs (".") and would mismatch resolvedDir on every
+  // relative path, producing a bogus symlink hint.
+  const originalParent = path.dirname(path.resolve(req.cwd, expandTilde(req.filePath)));
   const symlinkHint = originalParent !== resolvedDir
     ? `${originalParent} → ${resolvedDir}`
     : null;

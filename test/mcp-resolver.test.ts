@@ -130,6 +130,29 @@ describe("resolveServerFromToolName: fallback pattern matching", () => {
 	});
 });
 
+// ── Array-form directTools ─────────────────────────────────────────────
+
+describe("resolveServerFromToolName: array-form directTools", () => {
+	it("resolves exact tool names from array-form directTools", async () => {
+		writeConfig(tmpBase, { mcpServers: { joplin: { directTools: ["get_notes", "search"] } } });
+		const mod = await loadResolver(tmpBase);
+		expect(mod.resolveServerFromToolName("get_notes", null)).toBe("joplin");
+		expect(mod.resolveServerFromToolName("search", null)).toBe("joplin");
+		expect(mod.resolveServerFromToolName("other_tool", null)).toBeNull();
+	});
+});
+
+// ── Short-prefix fallback (prefix=short, no cache) ─────────────────────
+
+describe("resolveServerFromToolName: short-prefix fallback", () => {
+	it("matches {shortName}_{tool} for slash-qualified server names", async () => {
+		writeConfig(tmpBase, { mcpServers: { "earendil-works/exa": { directTools: true } } });
+		const mod = await loadResolver(tmpBase);
+		expect(mod.resolveServerFromToolName("exa_web_search", null)).toBe("earendil-works/exa");
+		expect(mod.resolveServerFromToolName("web_search_exa", null)).toBe("earendil-works/exa");
+	});
+});
+
 // ── No match ───────────────────────────────────────────────────────────
 
 describe("resolveServerFromToolName: no match", () => {
