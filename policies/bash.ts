@@ -15,7 +15,7 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   }
 
   const analysis = await analyzeCommand(req.command, req.cwd, {
-    isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read") || store.isInsideAllowedDir(p, "write"),
+    isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
   });
 
   const analysisRules = [

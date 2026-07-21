@@ -11,7 +11,7 @@ export type BashRule = (req: BashRequest, store: Store, analysis?: CommandAnalys
  */
 export const RetryLoopRule: BashRule = (req, store) => {
   const lastAbort = store.getLastAbort(req.command);
-  if (lastAbort && Date.now() - lastAbort < ABORT_REMEMBER_MS) {
+  if (lastAbort && store.now() - lastAbort < ABORT_REMEMBER_MS) {
     return {
       kind: "block",
       reason: "Blocked by halter: command was already aborted recently.",
@@ -63,6 +63,15 @@ export const FastAllowRule: BashRule = (req) => {
     const token = tokens[i];
     if (token.startsWith("/") || token.startsWith("~/") || token.startsWith("./") || token.startsWith("../")) {
       return null;
+    }
+    // --flag=/abs/path embeds a path that isn't caught by the prefix checks above.
+    // Fall through to SafetyRule so tree-sitter handles it properly.
+    const eqIdx = token.indexOf("=");
+    if (eqIdx > 0) {
+      const val = token.slice(eqIdx + 1);
+      if (val.startsWith("/") || val.startsWith("~/") || val.startsWith("./") || val.startsWith("../")) {
+        return null;
+      }
     }
   }
 

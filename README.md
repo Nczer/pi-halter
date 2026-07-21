@@ -132,21 +132,21 @@ Follow a bash command (`ls -la`) through the system:
 | File | Lines | What it does |
 |------|-------|---|
 | `handlers/bash.ts` | ~20 | Intercept bash commands |
-| `handlers/file.ts` | ~63 | Intercept file operations |
+| `handlers/file.ts` | ~75 | Intercept file operations |
 | `handlers/mcp.ts` | ~86 | Intercept MCP tool calls (proxy + direct) |
 | `gate.ts` | ~153 | Shared decide → prompt → reject flow |
 | `rule-generator.ts` | ~121 | Derive auto-allow rules from data |
 | `prompt-flow.ts` | ~71 | Prompt orchestration |
-| `policies/bash.ts` | ~36 | Bash policy entry point |
-| `policies/bash-rules.ts` | ~125 | Composable bash rules |
+| `policies/bash.ts` | ~35 | Bash policy entry point |
+| `policies/bash-rules.ts` | ~140 | Composable bash rules |
 | `analysis/command-analysis.ts` | ~140 | Command analysis orchestrator |
 | `analysis/segment-analysis.ts` | ~263 | Segment safety analysis |
 | `analysis/segment-helpers.ts` | ~270 | Shared analysis utilities |
 | `analysis/bash-parser.ts` | ~507 | tree-sitter parser wrapper, `parseCommand()` API |
-| `analysis/mcp-resolver.ts` | ~227 | MCP server/tool resolution |
+| `analysis/mcp-resolver.ts` | ~245 | MCP server/tool resolution |
 | `prompt-builder.ts` | ~298 | Build prompt content |
-| `prompts.ts` | ~160 | Two-tier confirmation UI |
-| `store.ts` | ~370 | Auto-allow state management |
+| `prompts.ts` | ~217 | Two-tier confirmation UI |
+| `store.ts` | ~136 | Auto-allow state management |
 | `renderers/tmux.ts` | ~336 | Tmux command formatting |
 
 ## Configuration

@@ -52,6 +52,9 @@ export async function handleMcp(
   );
 }
 
+/** Known built-in tool names that are never MCP direct tools. */
+const BUILT_IN_TOOLS = new Set(["bash", "read", "write", "edit", "mcp"]);
+
 /**
  * Handle direct MCP tool calls (e.g., exa_web_search_exa, context7_...);
  * These are MCP tools registered as individual pi tools, bypassing the proxy.
@@ -63,8 +66,9 @@ export async function handleMcpDirectTool(
 ) {
   const toolName = event.toolName as string;
 
-  // Skip if it's the mcp proxy tool (handled by handleMcp)
-  if (toolName === "mcp") return;
+  // Skip built-in tools — they're never MCP direct tools, and resolving would
+  // waste statSync calls on every command/file operation.
+  if (BUILT_IN_TOOLS.has(toolName)) return;
 
   const resolvedServer = resolveServerFromToolName(toolName, null);
   if (!resolvedServer) return;
