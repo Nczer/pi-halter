@@ -12,6 +12,9 @@ import {
 
 const FILE_TOOLS = ["read", "write", "edit"] as const;
 
+/** Skip edit pre-validation above this size — a full readFileSync would stall the TUI. */
+const EDIT_PREVALIDATE_MAX_BYTES = 1_048_576; // 1 MB
+
 export async function handleFile(
   event: ToolCallEvent,
   ctx: ExtensionContext,
@@ -42,18 +45,22 @@ export async function handleFile(
 
     if (!isCredentialPath) {
       try {
-        const content = fs.readFileSync(resolvedPath, "utf-8");
-        for (const edit of edits) {
-          if (edit.oldText === edit.newText) return; // Identical content — edit will fail
-          const matches: number[] = [];
-          let idx = 0;
-          while (idx < content.length) {
-            const pos = content.indexOf(edit.oldText, idx);
-            if (pos === -1) break;
-            matches.push(pos);
-            idx = pos + 1;
+        // Size cap: skip pre-validation on large files rather than blocking the
+        // event loop on a full synchronous read. The edit will simply prompt.
+        if (fs.statSync(resolvedPath).size <= EDIT_PREVALIDATE_MAX_BYTES) {
+          const content = fs.readFileSync(resolvedPath, "utf-8");
+          for (const edit of edits) {
+            if (edit.oldText === edit.newText) return; // Identical content — edit will fail
+            const matches: number[] = [];
+            let idx = 0;
+            while (idx < content.length) {
+              const pos = content.indexOf(edit.oldText, idx);
+              if (pos === -1) break;
+              matches.push(pos);
+              idx = pos + 1;
+            }
+            if (matches.length !== 1) return; // 0 or multiple matches — edit will fail
           }
-          if (matches.length !== 1) return; // 0 or multiple matches — edit will fail
         }
       } catch {
         return; // Can't read file — skip prompt

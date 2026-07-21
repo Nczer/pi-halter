@@ -34,6 +34,18 @@ const WRAPPER_NICE_RE = /^\d+$/;
 const FIND_EXEC_RE = /-(?:exec|execdir)\b\s+(\S+)/;
 const FD_EXEC_RE = /-(?:x|X)\b\s+(\S+)/;
 const RG_PRE_RE = /--pre(?:=|\s+)(\S+)/;
+
+/**
+ * Package-manager flags that consume the NEXT token as their value (space-separated
+ * form). Without this, `npm --prefix /x test` yields signature "npm /x" — junk in the
+ * auto-allow list and a misleading "Always" label.
+ * Flags with inline values (--prefix=/x) start with "-" and are skipped already.
+ */
+const PM_VALUE_FLAGS = new Set([
+  "--prefix", "--registry", "--cache", "--cache-dir", "--userconfig", "--globalconfig",
+  "--workspace", "-w", "--loglevel", "--cwd", "--manifest-path", "--config",
+  "--target", "--target-dir", "-Z", "--index-url", "--extra-index-url", "-i",
+]);
 /** stripQuotedStrings. */
 const QUOTE_DOUBLE_RE = /"(?:[^"\\]|\\.)*"/g;
 const QUOTE_SINGLE_RE = /'[^']*'/g;
@@ -158,10 +170,16 @@ export function getCommandSignature(segment: string): string {
   // npm -v → "npm" (flag only, no subcommand)
   const cmdBase = path.basename(cmd);
   if (PACKAGE_MANAGERS.has(cmdBase)) {
-    const subIdx = tokens.findIndex((t, i) => i > 0 && !t.startsWith("-"));
-    if (subIdx >= 0) {
-      const sub = tokens[subIdx];
-      return `${cmdBase} ${sub}`;
+    // Find the subcommand: first non-flag token, skipping values of flags that
+    // consume the next token (--prefix /x). Inline values (--prefix=/x) are
+    // part of the flag token and skipped with it.
+    for (let i = 1; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t.startsWith("-")) {
+        if (PM_VALUE_FLAGS.has(t) && !t.includes("=")) i++; // skip the flag's value
+        continue;
+      }
+      return `${cmdBase} ${t}`;
     }
     return cmdBase; // e.g. "npm" with only flags
   }
