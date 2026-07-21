@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BuiltPrompt } from "./prompt-builder";
-import { store } from "./store";
+import type { Store } from "./store";
 import { showSelectIndex, showReasonEditor } from "./selector";
 
 /** User's response to a two-tier prompt. */
@@ -11,7 +11,6 @@ enum Choice {
   Yes = 0,
   Always = 1,
   AlwaysAlt = 2,   // broader / paths / file (variant by layout)
-  AlwaysBroader = 2, // alias for AlwaysAlt
 }
 
 /** Tier-2 choice indices. */
@@ -39,6 +38,7 @@ enum Tier2 {
  */
 export async function twoTierAlwaysPrompt(
   prompt: BuiltPrompt,
+  store: Store,
   ctx: ExtensionContext,
   onAlways: () => void,
   onAlwaysPaths: () => void,

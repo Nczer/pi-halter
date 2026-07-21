@@ -57,7 +57,6 @@ describe("handleFile edit pre-validation security", () => {
     // A normal project file: pre-validation reads it to decide whether to skip a
     // useless prompt. This confirms the guard only suppresses credential paths.
     await handleFile(makeEditEvent("src/index.ts"), makeCtx());
-    expect(existsSpy).toHaveBeenCalled();
     expect(readSpy).toHaveBeenCalled();
   });
 
@@ -117,15 +116,14 @@ describe("handleFile edit pre-validation security", () => {
   });
 
   it("skips prompt when file does not exist", async () => {
-    existsSpy.mockReturnValue(false);
+    // Without existsSync guard, readFileSync throws for missing files → handler catches and returns early.
+    readSpy.mockImplementation(() => { throw new Error("ENOENT"); });
     const result = await handleFile(
       makeEditEvent("src/missing.ts"),
       makeCtx(),
     );
     expect(result).toBeUndefined();
-    expect(existsSpy).toHaveBeenCalled();
-    // Should NOT attempt to read a non-existent file
-    // (existsSync returns false → handler returns early)
+    expect(readSpy).toHaveBeenCalled();
   });
 
   it("skips prompt when file read throws", async () => {

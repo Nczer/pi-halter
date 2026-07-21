@@ -487,6 +487,7 @@ describe("Bash: retry-loop prevention", () => {
 		expect(d.kind).toBe("block");
 		if (d.kind === "block") {
 			expect(d.reason).toContain("aborted");
+			expect(d.reason).toContain("halter");
 		}
 	});
 

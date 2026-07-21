@@ -48,7 +48,7 @@ export async function handleMcp(
   };
 
   return await gate(request, ctx, store, (decision, result) =>
-    rejectMcp(decision, result, ctx),
+    rejectMcp(decision, result, store, ctx),
   );
 }
 
@@ -81,6 +81,6 @@ export async function handleMcpDirectTool(
   };
 
   return await gate(request, ctx, store, (decision, result) =>
-    rejectMcp(decision, result, ctx),
+    rejectMcp(decision, result, store, ctx),
   );
 }

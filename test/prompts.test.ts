@@ -79,7 +79,7 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 	it("returns 'yes' when index 0 is selected", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([0]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+			makePrompt(), store, makeCtx([0]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("yes");
 		expect(cb.onAlways).not.toHaveBeenCalled();
@@ -88,7 +88,7 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 	it("calls onAlways and returns 'always' when Always → Confirm is selected", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([1, 0]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+			makePrompt(), store, makeCtx([1, 0]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("always");
 		expect(cb.onAlways).toHaveBeenCalledTimes(1);
@@ -98,7 +98,7 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 		const cb = makeCallbacks();
 		// tier-1: Always (1), tier-2: Back (1), tier-1: No (3)
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([1, 1, 3]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+			makePrompt(), store, makeCtx([1, 1, 3]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");
 		expect(cb.onAlways).not.toHaveBeenCalled();
@@ -108,7 +108,7 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 		const cb = makeCallbacks();
 		// tier-1: Always (1), tier-2: Back (1), tier-1: Yes (0)
 		await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([1, 1, 0]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+			makePrompt(), store, makeCtx([1, 1, 0]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		// Should be 1 prompt, not 2 (Back shouldn't inflate the count)
 		expect(store.incrementPromptCount().count).toBe(2); // 1 from twoTierAlwaysPrompt + 1 from this check
@@ -118,7 +118,7 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 		const cb = makeCallbacks();
 		// tier-1: No with reason (2), editor: "because unsafe"
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([2, "because unsafe"]),
+			makePrompt(), store, makeCtx([2, "because unsafe"]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toEqual({ kind: "no", reason: "because unsafe" });
@@ -127,7 +127,7 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 	it("returns 'no' when No is selected", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([3]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+			makePrompt(), store, makeCtx([3]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");
 	});
@@ -135,7 +135,7 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 	it("returns 'no' when selection is cancelled (null)", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([null]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+			makePrompt(), store, makeCtx([null]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");
 	});
@@ -153,7 +153,7 @@ describe("twoTierAlwaysPrompt: bash with paths + broader", () => {
 		const cb = makeCallbacks();
 		// tier-1: Always(paths) (3), tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, 0]),
+			prompt, store, makeCtx([3, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("alwaysPaths");
@@ -165,7 +165,7 @@ describe("twoTierAlwaysPrompt: bash with paths + broader", () => {
 		const cb = makeCallbacks();
 		// tier-1: Always(broader) (2), tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([2, 0]),
+			prompt, store, makeCtx([2, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -197,7 +197,7 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
 		const cb = makeCallbacks();
 		// tier-1: Always(file) (2), tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([2, 0]),
+			prompt, store, makeCtx([2, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("alwaysFile");
@@ -207,7 +207,7 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
 	it("calls onAlways when Always(path) → Confirm", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([1, 0]),
+			prompt, store, makeCtx([1, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -220,7 +220,7 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
 		// sub-menu: first item (0) → /outside
 		// tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, 0, 0]),
+			prompt, store, makeCtx([3, 0, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -231,7 +231,7 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
 	it("umbrella broader → sub-menu selects second parent → confirm", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, 1, 0]),
+			prompt, store, makeCtx([3, 1, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -241,7 +241,7 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
 	it("umbrella broader → sub-menu Back → loops back", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, 2, 5]),
+			prompt, store, makeCtx([3, 2, 5]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("no");
@@ -251,7 +251,7 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
 	it("returns 'no' at last index", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([5]),
+			prompt, store, makeCtx([5]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("no");
@@ -260,7 +260,7 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
 	it("returns reason at No-with-reason index", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([4, "outside"]),
+			prompt, store, makeCtx([4, "outside"]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toEqual({ kind: "no", reason: "outside" });
@@ -283,7 +283,7 @@ describe("twoTierAlwaysPrompt: file outside cwd layout", () => {
 		const cb = makeCallbacks();
 		// tier-1: Always(file) (2), tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([2, 0]),
+			prompt, store, makeCtx([2, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("alwaysFile");
@@ -294,7 +294,7 @@ describe("twoTierAlwaysPrompt: file outside cwd layout", () => {
 		const cb = makeCallbacks();
 		// tier-1: Always(path) (1), tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([1, 0]),
+			prompt, store, makeCtx([1, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("always");
@@ -316,7 +316,7 @@ describe("twoTierAlwaysPrompt: MCP layout", () => {
 	it("calls onAlways and returns 'always' when Always → Confirm", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			mcpPrompt, makeCtx([1, 0]),
+			mcpPrompt, store, makeCtx([1, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("always");
@@ -327,7 +327,7 @@ describe("twoTierAlwaysPrompt: MCP layout", () => {
 		const cb = makeCallbacks();
 		// tier-1: index 2 = "No with reason", editor: "reason"
 		const result = await twoTierAlwaysPrompt(
-			mcpPrompt, makeCtx([2, "because unsafe"]),
+			mcpPrompt, store, makeCtx([2, "because unsafe"]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toEqual({ kind: "no", reason: "because unsafe" });
@@ -337,7 +337,7 @@ describe("twoTierAlwaysPrompt: MCP layout", () => {
 	it("returns 'no' when index 3 (No) is selected", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			mcpPrompt, makeCtx([3]),
+			mcpPrompt, store, makeCtx([3]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");
@@ -346,7 +346,7 @@ describe("twoTierAlwaysPrompt: MCP layout", () => {
 	it("cancel (null) returns 'no'", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			mcpPrompt, makeCtx([null]),
+			mcpPrompt, store, makeCtx([null]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");
@@ -365,7 +365,7 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 	it("returns 'yes' at index 0", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([0]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+			prompt, store, makeCtx([0]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("yes");
 	});
@@ -373,7 +373,7 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 	it("returns {kind:'no', reason} at index 1 (No with reason)", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([1, "unsafe"]),
+			prompt, store, makeCtx([1, "unsafe"]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toEqual({ kind: "no", reason: "unsafe" });
@@ -383,7 +383,7 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 	it("returns 'no' at index 2", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([2]),
+			prompt, store, makeCtx([2]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");
@@ -394,7 +394,7 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 		// tier-1: No with reason (1), editor: null (cancelled) → loops back
 		// tier-1: Yes (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([1, null, 0]),
+			prompt, store, makeCtx([1, null, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("yes");
@@ -404,7 +404,7 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 	it("trims whitespace from reason", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([1, "  "]),
+			prompt, store, makeCtx([1, "  "]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		// Empty/whitespace reason → trimmed → empty → "No reason provided"
@@ -424,7 +424,7 @@ describe("twoTierAlwaysPrompt: broader-only layout (inside-cwd file)", () => {
 	it("calls onAlwaysBroader when Always(broader) → Confirm", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([2, 0]),
+			prompt, store, makeCtx([2, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -435,7 +435,7 @@ describe("twoTierAlwaysPrompt: broader-only layout (inside-cwd file)", () => {
 	it("calls onAlways when Always(everything) → Confirm", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([1, 0]),
+			prompt, store, makeCtx([1, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -446,7 +446,7 @@ describe("twoTierAlwaysPrompt: broader-only layout (inside-cwd file)", () => {
 	it("returns 'no' for index 4 (No)", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([4]),
+			prompt, store, makeCtx([4]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("no");
@@ -482,7 +482,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
 		const cb = makeCallbacks();
 		// tier-1: Always(path) (2), tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([2, 0]),
+			prompt, store, makeCtx([2, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -496,7 +496,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
 		// sub-menu: select first item (0) → /home/user/project
 		// tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, 0, 0]),
+			prompt, store, makeCtx([3, 0, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -510,7 +510,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
 		// sub-menu: select second item (1) → /home/user
 		// tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, 1, 0]),
+			prompt, store, makeCtx([3, 1, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -524,7 +524,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
 		// sub-menu: Back (2, last index)
 		// tier-1: No (5)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, 2, 5]),
+			prompt, store, makeCtx([3, 2, 5]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("no");
@@ -537,7 +537,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
 		// sub-menu: cancel (null)
 		// tier-1: No (5)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, null, 5]),
+			prompt, store, makeCtx([3, null, 5]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("no");
@@ -551,7 +551,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
 		// tier-2: Back (1)
 		// tier-1: No (5)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, 0, 1, 5]),
+			prompt, store, makeCtx([3, 0, 1, 5]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("no");
@@ -562,7 +562,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
 		const cb = makeCallbacks();
 		// tier-1: Always(file) (1), tier-2: Confirm (0)
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([1, 0]),
+			prompt, store, makeCtx([1, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -573,7 +573,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
 	it("returns 'no' at index 5 (No)", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([5]),
+			prompt, store, makeCtx([5]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("no");
@@ -582,7 +582,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
 	it("returns {kind:'no', reason} at index 4 (No with reason)", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([4, "not safe"]),
+			prompt, store, makeCtx([4, "not safe"]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toEqual({ kind: "no", reason: "not safe" });
@@ -614,7 +614,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (single level, no umbrella)", (
 	it("calls onAlwaysBroader with dir for Always(path) → Confirm", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([2, 0]),
+			prompt, store, makeCtx([2, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("always");
@@ -626,7 +626,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (single level, no umbrella)", (
 		// Verify there's no "Always (broader)" option — only file + path + no
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([4]),
+			prompt, store, makeCtx([4]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
 		);
 		expect(result).toBe("no");
@@ -645,7 +645,7 @@ describe("twoTierAlwaysPrompt: paths-only layout (bash no broader)", () => {
 	it("calls onAlwaysPaths when Always(paths) → Confirm", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([2, 0]),
+			prompt, store, makeCtx([2, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("alwaysPaths");
@@ -656,7 +656,7 @@ describe("twoTierAlwaysPrompt: paths-only layout (bash no broader)", () => {
 	it("calls onAlways when Always(everything) → Confirm", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([1, 0]),
+			prompt, store, makeCtx([1, 0]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("always");
@@ -667,7 +667,7 @@ describe("twoTierAlwaysPrompt: paths-only layout (bash no broader)", () => {
 	it("returns {kind:'no', reason} at index 3 (No with reason)", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([3, "path blocked"]),
+			prompt, store, makeCtx([3, "path blocked"]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toEqual({ kind: "no", reason: "path blocked" });
@@ -676,7 +676,7 @@ describe("twoTierAlwaysPrompt: paths-only layout (bash no broader)", () => {
 	it("returns 'no' at index 4 (No)", async () => {
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			prompt, makeCtx([4]),
+			prompt, store, makeCtx([4]),
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");
@@ -694,7 +694,7 @@ describe("twoTierAlwaysPrompt: high prompt frequency warning", () => {
 		// Just verify the function completes successfully (doesn't crash).
 		const cb = makeCallbacks();
 		const result = await twoTierAlwaysPrompt(
-			makePrompt(), makeCtx([3]), // No
+			makePrompt(), store, makeCtx([3]), // No
 			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
 		);
 		expect(result).toBe("no");

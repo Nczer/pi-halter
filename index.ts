@@ -3,6 +3,7 @@ import { updateWidget } from "./widget";
 import { handleBash, handleFile, handleMcp, handleMcpDirectTool } from "./handlers";
 import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
 import { store } from "./store";
+import { showSelectIndex } from "./selector";
 
 // ── Main extension ──
 
@@ -19,6 +20,12 @@ export default async function halterExtension(pi: ExtensionAPI) {
   pi.registerCommand("dsp", {
     description: "Toggle Dangerous Skip Permissions mode (bypass all permission checks)",
     handler: async (_args, ctx) => {
+      // Show confirm prompt before enabling; disabling toggles instantly
+      if (!isDspActive() && ctx.hasUI) {
+        const confirm = await showSelectIndex(ctx, "Enable DSP (Dangerously Skip Permissions)?\nThis bypasses ALL permission checks.", ["Yes", "No"]);
+        if (confirm !== 0) return; // cancelled or No
+      }
+
       setDspActive(!isDspActive());
       updateDspWidget(ctx);
       // Hide the normal halter widget when DSP is active; restore it when DSP is off

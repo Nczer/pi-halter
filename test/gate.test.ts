@@ -47,7 +47,6 @@ function filePrompt(overrides: Partial<Extract<Extract<Decision, { kind: "prompt
       cwd: "/home/user/project",
       outsideDir: "/etc",
       isWriteOp: false,
-      deniedRule: null,
       warnedRule: null,
       symlinkHint: null,
       ...overrides,
@@ -162,7 +161,7 @@ describe("rejectFile", () => {
   it("does NOT record abort (file accesses are deterministic)", () => {
     const store = createStore();
     const ctx = fakeCtx();
-    rejectFile(filePrompt(), fakeResult(false), ctx);
+    rejectFile(filePrompt(), fakeResult(false), createStore(), ctx);
     // Store has no file-specific abort tracking — nothing to assert besides
     // that we don't call recordAbort. Verified by no side effects on store.
     expect(store.getLastAbort("/etc/hosts")).toBeNull();
@@ -170,7 +169,7 @@ describe("rejectFile", () => {
 
   it("sends error notification with file name", () => {
     const ctx = fakeCtx();
-    rejectFile(filePrompt(), fakeResult(false), ctx);
+    rejectFile(filePrompt(), fakeResult(false), createStore(), ctx);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("hosts"),
       "error",
@@ -179,7 +178,7 @@ describe("rejectFile", () => {
 
   it("includes action label in notification", () => {
     const ctx = fakeCtx();
-    rejectFile(filePrompt({ action: "Write" }), fakeResult(false), ctx);
+    rejectFile(filePrompt({ action: "Write" }), fakeResult(false), createStore(), ctx);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("write"),
       "error",
@@ -191,7 +190,7 @@ describe("rejectFile", () => {
     const result = rejectFile(
       filePrompt({ resolved: "/etc/hosts", filePath: "/etc/hosts" }),
       fakeResult(false),
-      ctx,
+      createStore(), ctx,
     );
     expect(result.reason).toContain("/etc/hosts");
   });
@@ -201,7 +200,7 @@ describe("rejectFile", () => {
     const result = rejectFile(
       filePrompt(),
       fakeResult(false, "Outside project scope"),
-      ctx,
+      createStore(), ctx,
     );
     expect(result.reason).toContain("Outside project scope");
   });
@@ -211,7 +210,7 @@ describe("rejectFile", () => {
     const result = rejectFile(
       { kind: "auto-allow" } as Decision,
       fakeResult(false),
-      ctx,
+      createStore(), ctx,
     );
     expect(result.block).toBe(true);
     expect(result.reason).toBe("Permission denied");
@@ -222,7 +221,7 @@ describe("rejectFile", () => {
     const result = rejectFile(
       bashPrompt() as any,
       fakeResult(false),
-      ctx,
+      createStore(), ctx,
     );
     expect(result.block).toBe(true);
     expect(result.reason).toBe("Permission denied");
@@ -234,7 +233,7 @@ describe("rejectFile", () => {
 describe("rejectMcp", () => {
   it("sends error notification with tool name", () => {
     const ctx = fakeCtx();
-    rejectMcp(mcpPrompt(), fakeResult(false), ctx);
+    rejectMcp(mcpPrompt(), fakeResult(false), createStore(), ctx);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("exa_web_search"),
       "error",
@@ -246,7 +245,7 @@ describe("rejectMcp", () => {
     const result = rejectMcp(
       mcpPrompt({ server: "context7", tool: "resolve-library-id" }),
       fakeResult(false),
-      ctx,
+      createStore(), ctx,
     );
     expect(result.reason).toContain("context7");
     expect(result.reason).toContain("resolve-library-id");
@@ -257,7 +256,7 @@ describe("rejectMcp", () => {
     const result = rejectMcp(
       mcpPrompt(),
       fakeResult(false, "Don't trust this server"),
-      ctx,
+      createStore(), ctx,
     );
     expect(result.reason).toContain("Don't trust this server");
   });
@@ -267,7 +266,7 @@ describe("rejectMcp", () => {
     const result = rejectMcp(
       { kind: "auto-allow" } as Decision,
       fakeResult(false),
-      ctx,
+      createStore(), ctx,
     );
     expect(result.block).toBe(true);
     expect(result.reason).toBe("Permission denied");
@@ -278,7 +277,7 @@ describe("rejectMcp", () => {
     const result = rejectMcp(
       bashPrompt() as any,
       fakeResult(false),
-      ctx,
+      createStore(), ctx,
     );
     expect(result.block).toBe(true);
     expect(result.reason).toBe("Permission denied");
