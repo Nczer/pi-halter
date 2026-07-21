@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import {
   resolvePathReal,
   expandTilde,
@@ -53,6 +54,10 @@ export function decideFile(req: FileRequest, store: Store): Decision {
     ? `${originalParent} → ${resolvedDir}`
     : null;
 
+  // Check if the target file already exists (informational for write prompts).
+  // Skip for warned paths (.env, .aws, etc.) — no filesystem operations on credential paths.
+  const exists = req.toolName === "write" && !warnResult.warned && fs.existsSync(resolved);
+
   const promptData: FilePromptData = {
     type: "file",
     action,
@@ -63,6 +68,7 @@ export function decideFile(req: FileRequest, store: Store): Decision {
     isWriteOp,
     warnedRule: warnResult.matchedRule,
     symlinkHint,
+    exists,
   };
 
   return { kind: "prompt", promptData };

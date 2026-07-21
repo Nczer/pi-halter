@@ -85,6 +85,8 @@ export interface FilePromptData {
   isWriteOp: boolean;
   warnedRule: string | null; // credential warning (prompt, not block)
   symlinkHint: string | null; // e.g. "/home/user/data → /mnt/storage"
+  /** Whether the target file already exists on disk. */
+  exists: boolean;
 }
 
 export interface McpPromptData {
