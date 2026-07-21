@@ -29,12 +29,10 @@ describe("isWriteOperation", () => {
     expect(isWriteOperation("sed", "sed 's/foo/bar/g' file.txt")).toBe(false);
   });
 
-  it("detects perl -pi as write", () => {
+  it("detects perl as write (script interpreter = arbitrary code execution)", () => {
     expect(isWriteOperation("perl", "perl -pi -e 's/foo/bar/g' file.txt")).toBe(true);
-  });
-
-  it("does not flag perl without -i as write", () => {
-    expect(isWriteOperation("perl", "perl -e 'print 42'")).toBe(false);
+    expect(isWriteOperation("perl", "perl -e 'print 42'")).toBe(true);
+    expect(isWriteOperation("perl", "perl script.pl")).toBe(true);
   });
 
   it("detects tee as write", () => {

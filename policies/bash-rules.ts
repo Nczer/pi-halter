@@ -40,7 +40,7 @@ export const CredentialDenyRule: BashRule = (req) => {
  * Auto-allows trivial commands without needing full tree-sitter analysis.
  */
 export const FastAllowRule: BashRule = (req) => {
-  const COMPOUND_RE = /\$\(|`|&&|\|\||[|;&<>]/;
+  const COMPOUND_RE = /\$\(|`|&&|\|\||[|;&<>\n\r]/;
   // Strip quoted strings so operators inside arguments (e.g. echo "a|b", grep "=>") don't
   // falsely trigger the compound check. Unquoted $(...) is preserved as __CMD_SUBST__.
   // Without this, echo "hello > world" or grep "setTimeout(() =>" waste a tree-sitter parse.

@@ -108,6 +108,8 @@ export function extractTmuxSendKeys(segment: string): string | null {
 const SEND_KEYS_ENTER_RE1 = /\s+Enter$/;
 const SEND_KEYS_ENTER_RE2 = /^Enter$/;
 const SEND_KEYS_QUOTE_RE = /^("|')(.*\1)$/;
+/** Shell operators that would chain commands inside send-keys. */
+const SEND_KEYS_SHELL_OPS_RE = /[;|&]/;
 
 // ── Tmux send-keys safety ──
 
@@ -136,6 +138,9 @@ export function isTmuxSendKeysSafe(keys: string): boolean {
 
   // Must not match dangerous context patterns
   if (dangerousContextPatterns.some(({ pattern }) => pattern.test(unquoted))) return false;
+
+  // Must not have shell operators (would chain multiple commands)
+  if (SEND_KEYS_SHELL_OPS_RE.test(unquoted)) return false;
 
   // Must not have write redirects, subshells, or obfuscation
   if (hasWriteRedirect(unquoted)) return false;
