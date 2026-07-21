@@ -39,6 +39,7 @@ function fileDecision(overrides: Partial<PromptDecision["promptData"]> = {}): Pr
       isWriteOp: false,
       warnedRule: null,
       symlinkHint: null,
+      exists: false,
       ...overrides,
     },
   };

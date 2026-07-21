@@ -208,10 +208,13 @@ function buildBashPrompt(
 function buildFilePrompt(
   data: FilePromptData,
 ): BuiltPrompt {
-  const { action, filePath, resolved, cwd, outsideDir, isWriteOp, warnedRule, symlinkHint } = data;
+  const { action, filePath, resolved, cwd, outsideDir, isWriteOp, warnedRule, symlinkHint, exists } = data;
   const insideCwd = outsideDir === null;
   const symlinkLine = symlinkHint ? `\n\n\u{1F517} Resolved via symlink: ${symlinkHint}` : "";
   const warnLine = warnedRule ? `\n\n\u26a0\ufe0f Matches credential pattern "${warnedRule}" — may contain secrets or tokens.` : "";
+  const existsNote = exists && action === "Write"
+    ? `\n\n\u2139\ufe0f File already exists at this path. Writing will overwrite it.`
+    : "";
 
   if (insideCwd) {
     const scopeNote = isWriteOp
@@ -242,7 +245,7 @@ function buildFilePrompt(
     }
     return {
       title: action,
-      body: `Path:\n  ${filePath}${warnLine}${symlinkLine}\n`,
+      body: `Path:\n  ${filePath}${warnLine}${symlinkLine}${existsNote}\n`,
       tier2Everything: {
         title: `Confirm Always Allow`,
         body: `${scopeNote}\n\n  ${resolved}`,
@@ -287,7 +290,7 @@ function buildFilePrompt(
 
   return {
     title: `\u26a0\ufe0f ${action} outside cwd`,
-    body: `Path:\n  ${filePath}\n\n\u26a0\ufe0f Outside cwd: ${outsideDir}${warnLine}${symlinkLine}\n`,
+    body: `Path:\n  ${filePath}\n\n\u26a0\ufe0f Outside cwd: ${outsideDir}${warnLine}${symlinkLine}${existsNote}\n`,
     tier2Everything: {
       title: `Confirm Always Allow`,
       body: `"Always Yes" will ${scope}:\n\n  ${outsideDirGlob}`,
