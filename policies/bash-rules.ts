@@ -1,6 +1,7 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
 import { containsCommandSubstitution, getFirstWord, stripQuotedStrings } from "../analysis/segment-helpers";
 import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE } from "../analysis/path-analysis";
+import { tokenizeSegment } from "../analysis/tokenizer";
 import type { Store, BashRequest, Decision } from "../decision-engine";
 import type { CommandAnalysis } from "../analysis/command-analysis";
 
@@ -52,15 +53,27 @@ export const FastAllowRule: BashRule = (req) => {
   // Single quotes are already neutralized ("__STR__") and never reach this branch.
   if (containsCommandSubstitution(stripped)) return null;
 
-  // Credential check — don't auto-allow if the command references credential paths
+  // Credential check — don't auto-allow if the command references credential paths.
+  // Check both raw and dequoted versions to prevent quote-splitting bypasses (e.g., .en''v).
   if (CREDENTIAL_SCAN_RE.test(req.command)) return null;
+  const dequotedCmd = tokenizeSegment(req.command).join(" ");
+  if (CREDENTIAL_SCAN_RE.test(dequotedCmd)) return null;
 
-  const tokens = req.command.trim().split(/\s+/);
+  // Escape sequences outside quotes can hide paths (e.g., \/etc\/passwd).
+  // stripQuotedStrings only strips quotes, not bare backslashes.
+  // Fall through to tree-sitter when escape chars are present outside of quotes.
+  if (/\\/.test(stripped)) return null;
+
   const bare = getFirstWord(req.command);
   if (!unconditionallySafeCommands.has(bare)) return null;
 
+  // Use quote-aware tokenizer so quoted paths (e.g., "/etc/passwd", '/etc/passwd')
+  // and flag=value with quotes (e.g., --file="/etc/passwd") are properly detected.
+  const tokens = tokenizeSegment(req.command);
   for (let i = 1; i < tokens.length; i++) {
     const token = tokens[i];
+    // FastAllowRule is for unconditionally-safe commands with no outside-cwd paths.
+    // ANY path-like token (quoted, escaped, or flag-embedded) must fall through.
     if (token.startsWith("/") || token.startsWith("~/") || token.startsWith("./") || token.startsWith("../")) {
       return null;
     }
