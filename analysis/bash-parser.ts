@@ -172,16 +172,26 @@ const BARE_SLASH_RE = /^\/\/+$/;
 /** Check if a token looks like a filesystem path worth resolving. */
 function isPathCandidate(token: string): boolean {
   if (!token) return false;
-  if (token.startsWith("-")) return false; // flag
   if (URL_PATTERN.test(token)) return false; // URL
 
-  // Env assignment (FOO=/bar) — skip
-  const eqIdx = token.indexOf("=");
-  const slashIdx = token.indexOf("/");
-  if (eqIdx !== -1 && (slashIdx === -1 || eqIdx < slashIdx)) return false;
+  // For flag values like --file=/etc/passwd or -f=/etc/passwd,
+  // extract the value after = and check if that is a path.
+  // Plain flags without = are never paths.
+  if (token.startsWith("-")) {
+    const eqIdx = token.indexOf("=");
+    if (eqIdx === -1 || eqIdx >= token.length - 1) return false;
+    token = token.slice(eqIdx + 1);
+    if (!token) return false;
+    // Fall through to path checks below
+  } else {
+    // Env assignment (FOO=/bar) — skip
+    const eqIdx = token.indexOf("=");
+    const slashIdx = token.indexOf("/");
+    if (eqIdx !== -1 && (slashIdx === -1 || eqIdx < slashIdx)) return false;
 
-  // @scope/package patterns
-  if (token.startsWith("@") && !token.startsWith("@/")) return false;
+    // @scope/package patterns
+    if (token.startsWith("@") && !token.startsWith("@/")) return false;
+  }
 
   // Bare slashes (// JS comments, lone /)
   if (BARE_SLASH_RE.test(token)) return false;
@@ -535,7 +545,12 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
       if (cmdName && pathAwareCommands.has(cmdName)) {
         for (const arg of args) {
           if (isPathCandidate(arg)) {
-            allPaths.push(resolvePathReal(expandTilde(arg), cwd));
+            // For flag values (--file=/path), resolve the value, not the flag itself.
+            // isPathCandidate already accepts these; match its extraction logic.
+            const resolveArg = arg.startsWith("-") && arg.includes("=")
+              ? arg.slice(arg.indexOf("=") + 1)
+              : arg;
+            allPaths.push(resolvePathReal(expandTilde(resolveArg), cwd));
           }
         }
       }

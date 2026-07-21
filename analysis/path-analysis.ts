@@ -200,13 +200,17 @@ export function checkCommandForCredentialPaths(
   command: string,
   cwd: string,
 ): { denied: string | null; warned: string | null } {
-  // Fast pre-scan: if no credential pattern appears in the command, skip entirely
-  if (!CREDENTIAL_SCAN_RE.test(command)) {
+  // Quote-aware tokenization (strips quotes so '.env' is detected as .env).
+  const tokens = tokenizeSegment(command);
+
+  // Fast pre-scan: if no credential pattern appears in the command, skip entirely.
+  // Also check the dequoted version to prevent quote-splitting bypasses (e.g., .en''v).
+  // Also check the backslash-stripped version to prevent backslash-splitting (e.g., .s\sh).
+  const dequoted = tokens.join(" ");
+  const unstripped = command.replace(/\\/g, "");
+  if (!CREDENTIAL_SCAN_RE.test(command) && !CREDENTIAL_SCAN_RE.test(dequoted) && !CREDENTIAL_SCAN_RE.test(unstripped)) {
     return { denied: null, warned: null };
   }
-
-  // Quote-aware tokenization (strips quotes so '.env' is detected as .env)
-  const tokens = tokenizeSegment(command);
   let denied: string | null = null;
   let warned: string | null = null;
 
@@ -224,35 +228,51 @@ export function checkCommandForCredentialPaths(
     return { denied: null, warned: warnedResult.matchedRule };
   };
 
-  for (const token of tokens) {
-    if (!token) continue;
+  /** Check one token (or value) against denied/warned path patterns. */
+  const checkToken = (t: string): { denied: string | null; warned: string | null } | "skip" => {
+    if (!t) return "skip";
 
-    // Handle --flag=value syntax: extract value after = and check it as a path.
-    // Handles cases like docker --env-file=.env, cat --config=~/.aws/config, etc.
-    if (token.startsWith("-") || token.startsWith("--")) {
-      const eqIdx = token.indexOf("=");
-      if (eqIdx > 0 && eqIdx < token.length - 1) {
-        const value = token.slice(eqIdx + 1);
-        if (value) {
-          const result = checkPath(value);
-          if (result.denied) return { denied: result.denied, warned };
-          if (result.warned && !warned) warned = result.warned;
-        }
+    // Handle --flag=value syntax
+    if (t.startsWith("-") || t.startsWith("--")) {
+      const eqIdx = t.indexOf("=");
+      if (eqIdx > 0 && eqIdx < t.length - 1) {
+        const value = t.slice(eqIdx + 1);
+        if (value) return checkPath(value);
       }
-      continue;
+      return "skip";
     }
 
-    // Skip actual env assignments (FOO=bar, FOO=/path) — the part before = is a
-    // valid environment variable name (no leading dash).
-    const eqIdx = token.indexOf("=");
+    // Skip env assignments (FOO=bar, FOO=/path)
+    const eqIdx = t.indexOf("=");
     if (eqIdx !== -1) {
-      const beforeEquals = token.slice(0, eqIdx);
-      if (ENV_VAR_NAME_RE.test(beforeEquals)) continue;
+      const beforeEquals = t.slice(0, eqIdx);
+      if (ENV_VAR_NAME_RE.test(beforeEquals)) return "skip";
     }
 
-    const result = checkPath(token);
-    if (result.denied) return { denied: result.denied, warned };
+    return checkPath(t);
+  };
+
+  /** Check a token and accumulate denied/warned results. */
+  const accumulateResult = (result: { denied: string | null; warned: string | null } | "skip"): boolean => {
+    if (result === "skip") return false;
+    if (result.denied) { denied = result.denied; return true; }
     if (result.warned && !warned) warned = result.warned;
+    return false;
+  };
+
+  for (const token of tokens) {
+    // Check original token
+    const result = checkToken(token);
+    if (accumulateResult(result)) return { denied, warned };
+
+    // Also check token with backslashes stripped to prevent backslash-splitting
+    // bypasses (e.g., .s\sh instead of .ssh). Tokenizer preserves backslashes
+    // outside quotes, so we handle it here.
+    if (token.includes("\\")) {
+      const unescaped = token.replace(/\\/g, "");
+      const unescapedResult = checkToken(unescaped);
+      if (accumulateResult(unescapedResult)) return { denied, warned };
+    }
   }
 
   return { denied, warned };

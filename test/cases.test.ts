@@ -934,6 +934,17 @@ const cases: TestCase[] = [
 	{ cmd: "cat < .ssh/id_rsa | head", simple: true, unsafe: false, decision: "block", desc: "input .ssh/id_rsa | head (denied credential in pipeline)" },
 	{ cmd: "ls && cat < .env", simple: true, unsafe: false, decision: "prompt", desc: "safe && input .env" },
 	{ cmd: "cat < .env && ls", simple: true, unsafe: false, decision: "prompt", desc: "input .env && safe" },
+
+	// ── Regression: Bug 1 — FastAllowRule quoted/escaped path bypass (auto-allow → prompt) ──
+	{ cmd: 'cat "/etc/passwd"', simple: true, unsafe: false, decision: "prompt", desc: "quoted path /etc/passwd (not auto-allow)" },
+	{ cmd: "cat '/etc/passwd'", simple: true, unsafe: false, decision: "prompt", desc: "single-quoted path /etc/passwd (not auto-allow)" },
+	{ cmd: 'cat --file="/etc/passwd"', simple: true, unsafe: false, decision: "prompt", desc: "flag with quoted value /etc/passwd (not auto-allow)" },
+	{ cmd: "cat \\/etc\\/passwd", simple: true, unsafe: false, decision: "prompt", desc: "escaped path \/etc\/passwd (not auto-allow)" },
+
+	// ── Regression: Bug 2 — Credential deny quote-splitting/backslash bypass ──
+	{ cmd: "cat .en''v", simple: true, unsafe: false, decision: "prompt", desc: ".en''v must be credential (prompt, not auto-allow)" },
+	{ cmd: "cat ~/.s''sh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "~/.s''sh/id_rsa must BLOCK (quote-splitting bypass)" },
+	{ cmd: "cat ~/.s\\sh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "~/.s\\sh/id_rsa must BLOCK (backslash-splitting bypass)" },
 ];
 
 // ─── Run tests ───
