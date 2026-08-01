@@ -38,6 +38,17 @@ export function isTrustedScriptPath(resolvedPath: string): boolean {
 }
 
 /**
+ * Resolve a --with-editable/--with-requirements value and require it to be inside
+ * a trusted directory. Without this, any attacker-writable deps file/dir (e.g. a
+ * downloaded artifact in /tmp) grants arbitrary dependency installation under the
+ * trusted-script umbrella, defeating the TRUSTED_PACKAGES allowlist.
+ */
+function isTrustedDepsPath(value: string, cwd: string): boolean {
+  const resolved = path.resolve(cwd, expandTilde(value));
+  return isTrustedScriptPath(resolved);
+}
+
+/**
  * Check if a command segment is an interpreter (python, node, etc.) running
  * a script file from a trusted directory.
  */
@@ -55,7 +66,8 @@ export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
   if (cmd === "uv" && tokens[startIdx]?.toLowerCase() === "run") {
     startIdx++;
     // Skip --with, --with-editable, --with-requirements and their values
-    // Validate --with packages against allowlist (supply chain defense)
+    // Validate --with packages against allowlist (supply chain defense);
+    // --with-editable/--with-requirements sources must themselves be trusted paths.
     while (startIdx < tokens.length) {
       const t = tokens[startIdx].toLowerCase();
       if (t === "--with" && startIdx + 1 < tokens.length) {
@@ -64,7 +76,9 @@ export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
         continue;
       }
       if (t === "--with-editable" || t === "--with-requirements") {
-        startIdx += 2; // skip flag and its value (no pkg check for editable/requirements)
+        const value = tokens[startIdx + 1];
+        if (value === undefined || !isTrustedDepsPath(value, cwd)) return false;
+        startIdx += 2;
         continue;
       }
       if (t.startsWith("--with=")) {
@@ -74,7 +88,9 @@ export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
         continue;
       }
       if (t.startsWith("--with-editable=") || t.startsWith("--with-requirements=")) {
-        startIdx++; // no pkg check for editable/requirements
+        const value = t.slice(t.indexOf("=") + 1);
+        if (!isTrustedDepsPath(value, cwd)) return false;
+        startIdx++;
         continue;
       }
       break;

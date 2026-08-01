@@ -82,8 +82,23 @@ describe("isTrustedScriptCommand", () => {
     expect(isTrustedScriptCommand("uv run --with=pymupdf python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
   });
 
-  it("detects uv run --with-editable and trusted script", () => {
-    expect(isTrustedScriptCommand("uv run --with-editable ./pkg python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+  it("rejects uv run --with-editable outside trusted dirs (supply chain defense)", () => {
+    expect(isTrustedScriptCommand("uv run --with-editable ./pkg python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("uv run --with-editable=/tmp/evil-dir python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+  });
+
+  it("allows uv run --with-editable inside trusted dirs", () => {
+    expect(isTrustedScriptCommand("uv run --with-editable ~/.pi/agent/skills/pkg python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+    expect(isTrustedScriptCommand("uv run --with-editable=~/.pi/agent/skills/pkg python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+  });
+
+  it("rejects uv run --with-requirements outside trusted dirs (supply chain defense)", () => {
+    expect(isTrustedScriptCommand("uv run --with-requirements /tmp/evil.txt python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("uv run --with-requirements=/tmp/evil.txt python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+  });
+
+  it("allows uv run --with-requirements inside trusted dirs", () => {
+    expect(isTrustedScriptCommand("uv run --with-requirements ~/.pi/agent/skills/reqs.txt python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
   });
 
   it("rejects uv run with script outside skills dir", () => {

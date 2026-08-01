@@ -178,6 +178,7 @@ Config is split across focused modules in `config/`:
 `config/trusted-scripts.ts` maintains a `TRUSTED_PACKAGES` allowlist. Commands like `uv run --with <pkg> python script.py` are only auto-trusted if:
 1. The script is in a trusted directory (e.g. `~/.pi/agent/skills/`)
 2. All packages in `--with` are in the `TRUSTED_PACKAGES` set
+3. `--with-requirements` / `--with-editable` sources are also inside a trusted directory (they bypass the package allowlist, so the deps file/dir must be trusted too)
 
 To add a new package, edit the `TRUSTED_PACKAGES` set in `config/trusted-scripts.ts` (lowercase, no extras — `markitdown[pptx]` is matched against `markitdown`).
 

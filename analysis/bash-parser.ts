@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { pathAwareCommands } from "../config";
 import { expandTilde, resolvePathReal } from "./path-analysis";
+import { decodeAnsiCEscapes } from "./tokenizer";
 
 // ── Lazy tree-sitter parser ────────────────────────────────────────────────
 
@@ -43,7 +44,7 @@ function getParser(): Promise<TSParser> {
 /** Node types whose subtrees are not command arguments. */
 const SKIP_TYPES = new Set(["heredoc_body", "heredoc_end", "comment"]);
 /** Node types that represent a shell word (for command name/argument detection). */
-const WORD_TYPES = new Set(["word", "concatenation", "string", "raw_string"]);
+const WORD_TYPES = new Set(["word", "concatenation", "string", "raw_string", "ansi_c_string"]);
 
 /** Strip backslash escapes from a shell word (\X → X for any character). */
 function stripBackslashEscapes(text: string): string {
@@ -64,6 +65,16 @@ function resolveNodeText(node: TSNode): string {
   switch (node.type) {
     case "word":
       return stripBackslashEscapes(node.text);
+    case "ansi_c_string": {
+      // $'...' — decode runtime escapes (\xHH, \NNN, \n, ...) so decoded
+      // paths/credentials are visible to path extraction.
+      const t = node.text;
+      if (t.startsWith("$")) {
+        const content = t.endsWith("'") ? t.slice(2, -1) : t.slice(2);
+        return decodeAnsiCEscapes(content);
+      }
+      return t;
+    }
     case "raw_string": {
       const t = node.text;
       return t.length >= 2 && t[0] === "'" && t[t.length - 1] === "'"
