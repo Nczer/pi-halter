@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { rejectBash, rejectFile, rejectMcp } from "../gate";
+import { gate, rejectBash, rejectFile, rejectMcp } from "../gate";
 import { createStore } from "../store";
 import type { Decision } from "../decision-engine";
+import * as decisionEngine from "../decision-engine";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -281,5 +282,66 @@ describe("rejectMcp", () => {
     );
     expect(result.block).toBe(true);
     expect(result.reason).toBe("Permission denied");
+  });
+});
+
+// ── gate(): fail-closed on internal analysis errors ────────────────────
+
+function fakeGateCtx(hasUI: boolean) {
+  return {
+    hasUI,
+    ui: {
+      getToolsExpanded: () => false,
+      setToolsExpanded: vi.fn(),
+      notify: vi.fn(),
+    },
+  } as any;
+}
+
+const bashRequest = { type: "bash" as const, command: "cat /etc/passwd", cwd: "/home/user/project" };
+
+async function runGate(ctx: any) {
+  return gate(
+    bashRequest,
+    ctx,
+    createStore(),
+    (d, r) => rejectBash(d, r, createStore(), ctx),
+  );
+}
+
+describe("gate fail-closed", () => {
+  it("blocks when decide() throws (internal error never allows)", async () => {
+    const spy = vi.spyOn(decisionEngine, "decide").mockRejectedValue(new Error("boom"));
+    const ctx = fakeGateCtx(true);
+    try {
+      const result = await runGate(ctx);
+      expect(result).toEqual({ block: true, reason: expect.stringContaining("fail closed") });
+      expect(result!.reason).toContain("boom");
+      expect(ctx.ui.notify).toHaveBeenCalledWith("Permission gate failed closed (internal error)", "error");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("blocks without notify when no UI is available", async () => {
+    const spy = vi.spyOn(decisionEngine, "decide").mockRejectedValue(new Error("boom"));
+    const ctx = fakeGateCtx(false);
+    try {
+      const result = await runGate(ctx);
+      expect(result).toEqual({ block: true, reason: expect.stringContaining("fail closed") });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("still auto-allows when decide() succeeds (no behavior change)", async () => {
+    const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue({ kind: "auto-allow" } as Decision);
+    const ctx = fakeGateCtx(true);
+    try {
+      const result = await runGate(ctx);
+      expect(result).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
