@@ -38,7 +38,7 @@ export async function gate(
   store: Store,
   onReject: RejectHandler,
 ): Promise<undefined | { block: true; reason: string }> {
-  const decision = await decide(request, store);
+  const decision = await gateDecide(request, store, ctx);
 
   if (decision.kind === "auto-allow") return;
 
@@ -64,6 +64,33 @@ export async function gate(
   }
 
   return;
+}
+
+/**
+ * Run decide() with a fail-closed guard: an internal analysis crash must
+ * never resolve to "allowed". pi's agent loop also converts handler
+ * exceptions into tool errors, but this invariant belongs to the gate — it
+ * must hold even if the extension runs outside pi (evals, embeds, refactors).
+ */
+async function gateDecide(
+  request: PermissionRequest,
+  store: Store,
+  ctx: ExtensionContext,
+): Promise<Decision> {
+  try {
+    return await decide(request, store);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    try {
+      if (ctx.hasUI) ctx.ui.notify("Permission gate failed closed (internal error)", "error");
+    } catch {
+      // Notification must never mask the block.
+    }
+    return {
+      kind: "block",
+      reason: `[INTERNAL ERROR] Permission analysis failed — blocked (fail closed): ${msg.slice(0, 200)}`,
+    };
+  }
 }
 
 // ── Helper: construct rejection reason + notify ────────────────────────

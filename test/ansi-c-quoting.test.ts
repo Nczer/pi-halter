@@ -50,6 +50,27 @@ describe("decodeAnsiCEscapes", () => {
     expect(decodeAnsiCEscapes("\\U0000D800")).toBe("\ud800"); // lone surrogate ok
   });
 
+  it("never throws on structured fuzz of escape sequences", () => {
+    // Every 1- and 2-char tail after a backslash, plus malformed/truncated forms.
+    const alphabet = "xX0123456789abcdefABCDEFuUoctnrtvaeEf\\'\"?c ";
+    for (const c1 of alphabet) {
+      expect(() => decodeAnsiCEscapes("\\" + c1)).not.toThrow();
+      for (const c2 of alphabet) {
+        expect(() => decodeAnsiCEscapes("\\" + c1 + c2)).not.toThrow();
+      }
+    }
+    // Boundary \U values.
+    for (const v of ["10ffff", "110000", "ffffffff", "00000000", "d800", "1234567890abcdef"]) {
+      expect(() => decodeAnsiCEscapes("\\U" + v)).not.toThrow();
+      expect(() => decodeAnsiCEscapes("\\u" + v)).not.toThrow();
+    }
+    // Truncated / dangling escapes.
+    expect(() => decodeAnsiCEscapes("\\")).not.toThrow();
+    expect(() => decodeAnsiCEscapes("\\c")).not.toThrow();
+    expect(() => decodeAnsiCEscapes("\\x")).not.toThrow();
+    expect(() => decodeAnsiCEscapes("$'\\")).not.toThrow();
+  });
+
   it("decodes control-char escapes", () => {
     expect(decodeAnsiCEscapes("\\cC")).toBe("\x03");
   });
