@@ -44,6 +44,12 @@ describe("decodeAnsiCEscapes", () => {
     expect(decodeAnsiCEscapes("\\u002fz")).toBe("/z"); // max 4 hex digits
   });
 
+  it("never throws on out-of-range unicode (gate crash defense)", () => {
+    expect(decodeAnsiCEscapes("\\Uffffffff")).toBe("\ufffd");
+    expect(decodeAnsiCEscapes("\\U00110000")).toBe("\ufffd");
+    expect(decodeAnsiCEscapes("\\U0000D800")).toBe("\ud800"); // lone surrogate ok
+  });
+
   it("decodes control-char escapes", () => {
     expect(decodeAnsiCEscapes("\\cC")).toBe("\x03");
   });
