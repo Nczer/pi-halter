@@ -152,7 +152,14 @@ export function decodeAnsiCEscapes(content: string): string {
         while (j < content.length && hex.length < maxDigits && /[0-9a-fA-F]/.test(content[j])) {
           hex += content[j]; j++;
         }
-        if (hex) { out += String.fromCodePoint(parseInt(hex, 16)); i = j; continue; }
+        if (hex) {
+          const cp = parseInt(hex, 16);
+          // > U+10FFFF is invalid — bash silently drops it; never let
+          // String.fromCodePoint throw (would crash the permission gate).
+          out += cp > 0x10ffff ? "\ufffd" : String.fromCodePoint(cp);
+          i = j;
+          continue;
+        }
         out += "\\" + next; i += 2; continue; // no digits — bash keeps the escape
       }
       default:
