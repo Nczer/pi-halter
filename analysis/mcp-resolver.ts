@@ -6,6 +6,13 @@ import { homedir } from "node:os";
 export const METADATA_OPS = new Set(["connect", "describe", "search", "list", "status"]);
 
 /**
+ * MCP gateway actions that are read-only local state retrieval.
+ * Everything else (`auth-start`, `auth-complete`, future actions) must be
+ * permission-gated — they must never fall through to an auto-allow op.
+ */
+export const METADATA_ACTIONS = new Set(["ui-messages"]);
+
+/**
  * Parse a qualified MCP tool name of the form `server:tool`.
  * Returns `{ server, tool }` or `null` if not qualified.
  */
@@ -27,10 +34,15 @@ export function deriveProxyTarget(params: Record<string, unknown>): { server: st
   const connectParam = typeof params.connect === "string" ? params.connect : null;
   const describeParam = typeof params.describe === "string" ? params.describe : null;
   const searchParam = typeof params.search === "string" ? params.search : null;
+  // Explicit action params (auth-start, auth-complete, ui-messages, …) must be
+  // labeled as their own op — falling through to `list` (serverParam present)
+  // or `status` would auto-allow them as metadata.
+  const actionParam = typeof params.action === "string" ? params.action : null;
   if (toolParam) {
     const qualified = parseQualifiedMcpToolName(toolParam);
     return { server: qualified?.server ?? serverParam, tool: qualified?.tool ?? toolParam, op: "call" };
   }
+  if (actionParam) return { server: serverParam, tool: actionParam, op: actionParam };
   if (connectParam) return { server: connectParam, tool: null, op: "connect" };
   if (describeParam) {
     const qualified = parseQualifiedMcpToolName(describeParam);

@@ -75,7 +75,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── decision-engine.ts            Pure policy dispatcher — async decide(request, store) → Decision
 ├── policies/                     Request-specific decision logic
 │   ├── bash.ts                   Bash policy (runs bash-rules.ts pipeline)
-│   ├── bash-rules.ts             Composable bash rules: UserDeny → RetryLoop → FastAllow → Safety → PromptFallback
+│   ├── bash-rules.ts             Composable bash rules: RetryLoop → CredentialDeny → FastAllow → Safety → PromptFallback
 │   ├── file.ts                   File policy
 │   └── mcp.ts                    MCP policy
 ├── prompt-flow.ts                UI interaction loop — showPrompt(decision, ctx, store)

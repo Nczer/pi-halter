@@ -72,6 +72,23 @@ export function stripQuotedStrings(cmd: string): string {
   return s;
 }
 
+/**
+ * Detect terminal escape/OSC sequences in echo/printf arguments — screen
+ * spoofing (\033[2J + fake prompt) or OSC 52 clipboard write (\033]52;c;…).
+ * Matches both literal ESC bytes and the escape notations bash interprets:
+ * \033, \x1b, \e (printf always; echo with -e or $'…' quoting).
+ */
+const TERMINAL_ESCAPE_RE = /\\033|\\x1[bB]|\\x9[dD]|\\e(?![a-zA-Z0-9_])|[\x1b\x9d]/;
+
+export function hasTerminalEscape(segment: string): boolean {
+  return TERMINAL_ESCAPE_RE.test(segment);
+}
+
+/** True if an `echo` invocation will interpret backslash escapes (-e or $'…'). */
+export function echoInterpretsEscapes(segment: string): boolean {
+  return /(?:^|\s)-e(?:\s|$)/.test(segment) || /\$'/.test(segment);
+}
+
 export function getFirstWord(segment: string): string {
   const word = segment.trim().split(/\s+/)[0].toLowerCase();
   return path.basename(word);
@@ -215,6 +232,31 @@ export function isRgPreWrite(segment: string): boolean {
 /** Pre-compiled regex for git clean flags. */
 const GIT_CLEAN_FLAGS_RE = /-[a-z]*[fdx][a-z]*/;
 
+/**
+ * `git -c name=value` / `--config name=value` inline config values that make
+ * git execute a command:
+ *   - alias.*=!…      → shell alias: `git st` runs the `!` command
+ *   - core.pager=…    → run as pager (tty)
+ *   - core.editor=…   → run as editor
+ *   - core.sshCommand=… → run instead of ssh
+ *   - core.fsmonitor=…  → run on every refresh (unconditional)
+ *   - core.askpass=…    → run to prompt for credentials
+ */
+const GIT_DANGEROUS_CONFIG_RE = /^(?:alias\.[^=]+=!|core\.(?:pager|editor|sshCommand|fsmonitor|askpass)=)/;
+
+/** True if a `-c`/`--config` value configures git to execute a command. */
+function isDangerousGitConfigValue(value: string | undefined): boolean {
+  return value !== undefined && GIT_DANGEROUS_CONFIG_RE.test(value);
+}
+
+/** True if a git global arg (plus its value token) carries dangerous inline config. */
+function hasDangerousInlineConfig(arg: string, next: string | undefined): boolean {
+  if (arg === "-c" || arg === "--config") return isDangerousGitConfigValue(next);
+  if (arg.startsWith("-c") && !arg.startsWith("-C") && arg.includes("=")) return isDangerousGitConfigValue(arg.slice(2));
+  if (arg.startsWith("--config=")) return isDangerousGitConfigValue(arg.slice("--config=".length));
+  return false;
+}
+
 // ── Git subcommand danger handlers ──
 
 const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => boolean }> = [
@@ -242,6 +284,8 @@ export function isGitDangerous(segment: string): boolean {
   let subIdx = 1;
   while (subIdx < args.length) {
     const arg = args[subIdx];
+    // Inline config that executes code is dangerous regardless of subcommand.
+    if (hasDangerousInlineConfig(arg, args[subIdx + 1])) return true;
     if (GIT_GLOBAL_FLAGS.has(arg)) {
       // -c and -C take a value argument
       if (arg === "-c" || arg === "-C") subIdx++;

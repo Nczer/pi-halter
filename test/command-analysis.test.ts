@@ -410,13 +410,15 @@ describe("Signature store round-trip: relative paths", () => {
 		expect(a.signatures).toContain("./scripts/foo.sh");
 	});
 
-	it("relative path signature after approval auto-allows via store", async () => {
+	it("relative path signature after approval does NOT auto-allow via store", async () => {
 		const { decide } = await import("../decision-engine");
 		const { createStore } = await import("../store");
 		const store = createStore();
 		store.addAllowed({ bashSigs: ["./scripts/foo.sh"] });
 		const d = await decide({ type: "bash", command: "./scripts/foo.sh", cwd }, store);
-		expect(d.kind).toBe("auto-allow");
+		// Relative-path segments must never inherit bare-name grants — a
+		// repo-shipped executable would otherwise inherit session grants.
+		expect(d.kind).toBe("prompt");
 	});
 });
 

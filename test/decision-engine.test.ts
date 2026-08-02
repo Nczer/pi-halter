@@ -905,13 +905,13 @@ describe("Bash: pipeline-merge auto-allow with stored signatures", () => {
 		expect(d.kind).toBe("auto-allow");
 	});
 
-	it("safe chain with brace group auto-allows", async () => {
+	it("safe chain with brace group prompts (tree-sitter parse error)", async () => {
 		const store = createStore();
 		const d = await decide(
 			{ type: "bash", command: "{ ls && cat file } | grep foo", cwd },
 			store,
 		);
-		expect(d.kind).toBe("auto-allow");
+		expect(d.kind).toBe("prompt");
 	});
 });
 
@@ -1268,10 +1268,10 @@ describe("Bash: trailing & on compound commands", () => {
 		expect(d.kind).toBe("prompt");
 	});
 
-	it("brace safe ; safe backgrounded auto-allows", async () => {
+	it("brace safe ; safe backgrounded prompts (tree-sitter parse error)", async () => {
 		const store = createStore();
 		const d = await decide({ type: "bash", command: "{ ls ; cat } &", cwd }, store);
-		expect(d.kind).toBe("auto-allow");
+		expect(d.kind).toBe("prompt");
 	});
 
 	it("brace unsafe ; safe backgrounded prompts", async () => {

@@ -169,7 +169,7 @@ const cases: TestCase[] = [
 	{ cmd: "uname -a", simple: true, unsafe: false, decision: "auto-allow", desc: "uname" },
 	{ cmd: "hostname", simple: true, unsafe: false, decision: "auto-allow", desc: "hostname" },
 	{ cmd: "groups", simple: true, unsafe: false, decision: "auto-allow", desc: "groups" },
-	{ cmd: "printenv", simple: true, unsafe: false, decision: "auto-allow", desc: "printenv" },
+	{ cmd: "printenv", simple: false, unsafe: false, decision: "prompt", desc: "printenv (env dump — prompts, leaks secrets)" },
 	{ cmd: "uptime", simple: true, unsafe: false, decision: "auto-allow", desc: "uptime" },
 	{ cmd: "tty", simple: true, unsafe: false, decision: "auto-allow", desc: "tty" },
 	{ cmd: "tput cols", simple: true, unsafe: false, decision: "auto-allow", desc: "tput" },
@@ -320,7 +320,7 @@ const cases: TestCase[] = [
 	{ cmd: "cd /tmp || ls 2>&1 | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "cd || ls 2>&1 | cat — or-chain, all safe" },
 	// — brace group with && inside pipeline —
 	{ cmd: "{ ls && npx somepkg } | cat", simple: false, unsafe: false, decision: "prompt", desc: "brace group {ls && npx} | cat — npx split off from brace, prompts" },
-	{ cmd: "{ ls && cat file } | grep foo", simple: true, unsafe: false, decision: "auto-allow", desc: "brace group {ls && cat} | grep — all safe" },
+	{ cmd: "{ ls && cat file } | grep foo", simple: true, unsafe: false, decision: "prompt", desc: "brace group {ls && cat} | grep — tree-sitter parse error (mangled segments) → prompt" },
 	// — && AFTER pipe (different structure, but verify no regression) —
 	{ cmd: "ls | grep foo && npx somepkg", simple: false, unsafe: false, decision: "prompt", desc: "ls | grep && npx — pipe then &&, npx is separate segment, prompts" },
 	{ cmd: "ls | grep foo && cat file", simple: true, unsafe: false, decision: "auto-allow", desc: "ls | grep && cat — pipe then &&, all safe" },
@@ -755,7 +755,7 @@ const cases: TestCase[] = [
 	// ═══════════════════════════════════════════════════════════
 	{ cmd: "(ls && cat) | grep && echo done", simple: true, unsafe: false, decision: "auto-allow", desc: "(safe&&safe) | safe && safe — all safe" },
 	{ cmd: "(ls && rm a) | grep && echo done", simple: false, unsafe: true, decision: "prompt", desc: "(safe&&unsafe) | safe && safe — rm in subshell" },
-	{ cmd: "{ ls; cat } && grep foo", simple: true, unsafe: false, decision: "auto-allow", desc: "brace group all safe && grep" },
+	{ cmd: "{ ls; cat } && grep foo", simple: true, unsafe: false, decision: "prompt", desc: "brace group all safe && grep — tree-sitter parse error → prompt" },
 	{ cmd: "{ ls; rm a } && grep foo", simple: false, unsafe: true, decision: "prompt", desc: "brace group with rm && grep" },
 	{ cmd: "ls && cat | grep foo || echo none", simple: true, unsafe: false, decision: "auto-allow", desc: "&& chain | pipe || fallback — all safe" },
 	{ cmd: "rm a && cat | grep foo || echo none", simple: false, unsafe: true, decision: "prompt", desc: "rm && cat | grep || echo — rm in first segment" },
@@ -780,9 +780,9 @@ const cases: TestCase[] = [
 	// ═══════════════════════════════════════════════════════════
 	{ cmd: ";", simple: true, unsafe: false, decision: "prompt", desc: "lone semicolon (empty segment, prompts as fallback)" },
 	{ cmd: "ls ;", simple: true, unsafe: false, decision: "auto-allow", desc: "trailing semicolon" },
-	{ cmd: "; ls", simple: true, unsafe: false, decision: "auto-allow", desc: "leading semicolon" },
+	{ cmd: "; ls", simple: true, unsafe: false, decision: "prompt", desc: "leading semicolon (tree-sitter parse error) → prompt" },
 	{ cmd: "ls &&", simple: false, unsafe: false, decision: "prompt", desc: "trailing && (incomplete, tree-sitter ERROR → not simple)" },
-	{ cmd: "&& ls", simple: true, unsafe: false, decision: "auto-allow", desc: "leading && (tree-sitter parses ls, auto-allows safe cmd)" },
+	{ cmd: "&& ls", simple: true, unsafe: false, decision: "prompt", desc: "leading && (tree-sitter parse error — bash rejects; prompt anyway)" },
 
 	// ═══════════════════════════════════════════════════════════
 	// heredoc inside compound statements
@@ -875,7 +875,7 @@ const cases: TestCase[] = [
 	{ cmd: "rm a ; cat b &", simple: false, unsafe: true, decision: "prompt", desc: "unsafe ; safe backgrounded" },
 	{ cmd: "(ls && cat) &", simple: true, unsafe: false, decision: "auto-allow", desc: "subshell safe && safe backgrounded" },
 	{ cmd: "(rm a && cat b) &", simple: false, unsafe: true, decision: "prompt", desc: "subshell unsafe && safe backgrounded" },
-	{ cmd: "{ ls ; cat } &", simple: true, unsafe: false, decision: "auto-allow", desc: "brace group safe ; safe backgrounded" },
+	{ cmd: "{ ls ; cat } &", simple: true, unsafe: false, decision: "prompt", desc: "brace group safe ; safe backgrounded — tree-sitter parse error → prompt" },
 	{ cmd: "{ rm a ; cat b } &", simple: false, unsafe: true, decision: "prompt", desc: "brace group unsafe ; safe backgrounded" },
 	{ cmd: "ls | grep foo &", simple: true, unsafe: false, decision: "auto-allow", desc: "safe | safe pipeline backgrounded" },
 	{ cmd: "cat a | sed -i s/x/y/ &", simple: false, unsafe: true, decision: "prompt", desc: "safe | unsafe pipeline backgrounded" },
