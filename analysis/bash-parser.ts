@@ -638,8 +638,12 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
             target = args[i + 1] ?? null;
           } else if (arg.startsWith("--output=")) {
             target = arg.slice("--output=".length);
-          } else if (arg.startsWith("-o") && arg.length > 2) {
-            target = arg.slice(2); // -oFILE (attached form)
+          } else if (/^-[a-zA-Z]*o/.test(arg)) {
+            // Short-option cluster: the first `o` consumes the rest of the
+            // token as its argument (-ox → x); if it's the last char, the
+            // argument is the next token (-ro FILE → FILE).
+            const oIdx = arg.indexOf("o");
+            target = oIdx === arg.length - 1 ? (args[i + 1] ?? null) : arg.slice(oIdx + 1);
           }
           // `-` means stdout; skip it and bare flags (e.g. `sort -o -k 1`).
           if (target && target !== "-" && !target.startsWith("-")) {

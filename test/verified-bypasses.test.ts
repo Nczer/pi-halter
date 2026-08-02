@@ -92,6 +92,46 @@ describe("P1: git -c inline config (code execution)", () => {
     const d = await decide({ type: "bash", command: "git -c core.quotePath=false status", cwd }, createStore());
     expect(d.kind).toBe("auto-allow");
   });
+
+  it("git --config \"alias.st=!rm /tmp/x\" st → prompts (quoted value w/ space)", async () => {
+    const d = await decide({ type: "bash", command: `git --config "alias.st=!rm /tmp/x" st`, cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("git -c \"core.pager=less -R\" diff → prompts (quoted value w/ space)", async () => {
+    const d = await decide({ type: "bash", command: `git -c "core.pager=less -R" diff`, cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("git -c credential.helper='!sh -c id' fetch → prompts", async () => {
+    const d = await decide({ type: "bash", command: `git -c credential.helper='!sh -c id' fetch`, cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("git -c diff.external='sh /tmp/x' diff → prompts", async () => {
+    const d = await decide({ type: "bash", command: `git -c diff.external='sh /tmp/x' diff`, cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("git -c \"filter.foo.clean=rm /tmp/x\" status → prompts", async () => {
+    const d = await decide({ type: "bash", command: `git -c "filter.foo.clean=rm /tmp/x" status`, cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("git -c pager.log='less -R' status → prompts (per-subcommand pager)", async () => {
+    const d = await decide({ type: "bash", command: `git -c pager.log='less -R' status`, cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("control: quoted benign -c config stays auto-allow", async () => {
+    const d = await decide({ type: "bash", command: `git -c "core.quotepath=off" status`, cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: benign credential.helper=store stays auto-allow (no ! prefix)", async () => {
+    const d = await decide({ type: "bash", command: `git -c credential.helper=store fetch`, cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -115,6 +155,26 @@ describe("P1: sort -o write primitive", () => {
 
   it("control: sort without -o stays auto-allow", async () => {
     const d = await decide({ type: "bash", command: "sort -k 2 in.txt", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("sort -ox out.txt → prompts (attached short form)", async () => {
+    const d = await decide({ type: "bash", command: "sort -ox out.txt", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("sort -ro out.txt → prompts (cluster form)", async () => {
+    const d = await decide({ type: "bash", command: "sort -ro out.txt", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("timeout 5 sort -ox out.txt → prompts (attached form under wrapper)", async () => {
+    const d = await decide({ type: "bash", command: "timeout 5 sort -ox out.txt", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("control: sort -r stays auto-allow (no output flag)", async () => {
+    const d = await decide({ type: "bash", command: "sort -r in.txt", cwd }, createStore());
     expect(d.kind).toBe("auto-allow");
   });
 });
@@ -234,6 +294,36 @@ describe("P3: terminal escape sequences", () => {
   it("echo $'\\033[31m' → prompts (ANSI-C quoting)", async () => {
     const d = await decide({ type: "bash", command: "echo $'\\033[31m'", cwd }, createStore());
     expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("command printf '\\033]52;c;AAAA' → prompts (command prefix)", async () => {
+    const d = await decide({ type: "bash", command: "command printf '\\033]52;c;AAAA'", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("command -p printf '\\033]52;c;AAAA' → prompts (command -p prefix)", async () => {
+    const d = await decide({ type: "bash", command: "command -p printf '\\033]52;c;AAAA'", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("env printf '\\033]52;c;AAAA' → prompts (env prefix)", async () => {
+    const d = await decide({ type: "bash", command: "env printf '\\033]52;c;AAAA'", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("env -i FOO=bar echo -e '\\033[2J' → prompts (env flags+assignments)", async () => {
+    const d = await decide({ type: "bash", command: "env -i FOO=bar echo -e '\\033[2J'", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("\\printf '\\033]52;c;AAAA' → prompts (backslash prefix)", async () => {
+    const d = await decide({ type: "bash", command: "\\printf '\\033]52;c;AAAA'", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("control: command printf hello stays auto-allow (no ESC)", async () => {
+    const d = await decide({ type: "bash", command: "command printf hello", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
   });
 
   it("control: echo hello stays auto-allow", async () => {

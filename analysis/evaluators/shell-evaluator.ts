@@ -4,6 +4,7 @@ import { wrapperCommands } from "../../config";
 import { dangerousSedFlags, dangerousPerlFlags, SORT_OUTPUT_RE } from "../../config/bash-patterns";
 import {
   getFirstWord,
+  getEffectiveCommand,
   hasWriteRedirect,
   isWrapperRunningWrite,
   hasTerminalEscape,
@@ -28,6 +29,9 @@ export const ShellEvaluator: RiskEvaluator = {
   evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
+    // `command printf …`, `env sort -o …`, `\printf …` execute the same
+    // command — firstWord-based checks must use the effective command name.
+    const effectiveFirst = getEffectiveCommand(segment);
     const b = new EvaluationBuilder();
 
     // Subshell — downgrade to informational for known-safe formatting commands
@@ -59,7 +63,7 @@ export const ShellEvaluator: RiskEvaluator = {
 
     // Heredoc to interpreter
     const hasHeredoc = seg.ops.includes("<<") || seg.ops.includes("<<<");
-    const isInterpreterWithHeredoc = hasHeredoc && HEREDOC_INTERPRETER_RE.test(firstWord);
+    const isInterpreterWithHeredoc = hasHeredoc && HEREDOC_INTERPRETER_RE.test(effectiveFirst);
     if (isInterpreterWithHeredoc) {
       b.addHigh("heredoc to shell interpreter (executable code)");
     }
@@ -71,25 +75,25 @@ export const ShellEvaluator: RiskEvaluator = {
     }
 
     // sed/perl flags
-    if (firstWord === "sed" && dangerousSedFlags.test(segment)) {
+    if (effectiveFirst === "sed" && dangerousSedFlags.test(segment)) {
       b.addHigh("sed -i (in-place file modification)");
     }
-    if (firstWord === "perl" && dangerousPerlFlags.test(segment)) {
+    if (effectiveFirst === "perl" && dangerousPerlFlags.test(segment)) {
       b.addHigh("perl -pi/-i (in-place file modification)");
     }
 
     // sort -o/--output (writes/truncates a file)
-    if (firstWord === "sort" && SORT_OUTPUT_RE.test(segment)) {
+    if (effectiveFirst === "sort" && SORT_OUTPUT_RE.test(segment)) {
       b.addHigh("sort -o/--output (can truncate files)");
     }
 
     // echo/printf terminal escape sequences — screen spoofing (\033[2J + fake
     // prompt) and OSC 52 clipboard writes (\033]52;c;…). printf interprets
     // escapes unconditionally; echo only with -e or $'…' ANSI-C quoting.
-    if (firstWord === "printf" && hasTerminalEscape(segment)) {
+    if (effectiveFirst === "printf" && hasTerminalEscape(segment)) {
       b.addHigh("terminal escape sequence in printf (screen spoofing / clipboard write)");
     }
-    if (firstWord === "echo" && echoInterpretsEscapes(segment) && hasTerminalEscape(segment)) {
+    if (effectiveFirst === "echo" && echoInterpretsEscapes(segment) && hasTerminalEscape(segment)) {
       b.addHigh("terminal escape sequence in echo (screen spoofing / clipboard write)");
     }
 
@@ -99,17 +103,17 @@ export const ShellEvaluator: RiskEvaluator = {
     }
 
     // bash -c/-i (shell with inline/script command)
-    if (firstWord === "bash" && /\s-(?:[a-z]*c[a-z]*|[a-z]*i[a-z]*)(?:\s|$)/.test(segment)) {
+    if (effectiveFirst === "bash" && /\s-(?:[a-z]*c[a-z]*|[a-z]*i[a-z]*)(?:\s|$)/.test(segment)) {
       b.addHigh("bash -c/-i (shell with inline/script command)");
     }
 
     // source (config/secrets loading)
-    if (firstWord === "source" && /\.(?:env|bashrc|zshrc|profile|secret|local)\b/i.test(segment)) {
+    if (effectiveFirst === "source" && /\.(?:env|bashrc|zshrc|profile|secret|local)\b/i.test(segment)) {
       b.addHigh("source (config/secrets loading)");
     }
 
     // eval (arbitrary code execution)
-    if (firstWord === "eval") {
+    if (effectiveFirst === "eval") {
       b.addHigh("eval (arbitrary code execution)");
     }
 

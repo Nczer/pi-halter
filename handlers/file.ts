@@ -1,8 +1,7 @@
 import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import type { FileRequest } from "../decision-engine";
-import { decide } from "../decision-engine";
-import { gate, rejectFile } from "../gate";
+import { gate, gateDecide, rejectFile } from "../gate";
 import { store } from "../store";
 import {
   expandTilde,
@@ -46,11 +45,13 @@ export async function handleFile(
     resolvedPath,
   };
 
-  // Decide BEFORE any file-content read. Pre-validation only runs for paths the
-  // gate would auto-allow anyway — reading a prompted/blocked path first would
-  // leak its content through prompt visibility (e.g. "oldText occurs exactly
-  // once" only appearing when the edit would succeed).
-  const decision = await decide(request, store);
+  // Decide BEFORE any file-content read — and through gateDecide's fail-closed
+  // guard (an analysis crash must yield a block decision, not an exception).
+  // Pre-validation only runs for paths the gate would auto-allow anyway —
+  // reading a prompted/blocked path first would leak its content through
+  // prompt visibility (e.g. "oldText occurs exactly once" only appearing when
+  // the edit would succeed).
+  const decision = await gateDecide(request, store, ctx);
 
   if (toolName === "edit" && decision.kind === "auto-allow" && edits) {
     // Defense-in-depth: never read credential paths even if some auto-allow
