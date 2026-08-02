@@ -98,7 +98,7 @@ export async function gate(
  * exceptions into tool errors, but this invariant belongs to the gate — it
  * must hold even if the extension runs outside pi (evals, embeds, refactors).
  */
-async function gateDecide(
+export async function gateDecide(
   request: PermissionRequest,
   store: Store,
   ctx: ExtensionContext,

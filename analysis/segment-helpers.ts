@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
 import { isWriteOperation, PACKAGE_MANAGERS } from "../config";
-import { splitOnPipe } from "./tokenizer";
+import { splitOnPipe, tokenizeSegment } from "./tokenizer";
 
 // splitPipeline is splitOnPipe — same semantics (split on | not ||)
 export { splitOnPipe as splitPipeline };
@@ -92,6 +92,39 @@ export function echoInterpretsEscapes(segment: string): boolean {
 export function getFirstWord(segment: string): string {
   const word = segment.trim().split(/\s+/)[0].toLowerCase();
   return path.basename(word);
+}
+
+/**
+ * Get the effective command name after shell prefix wrappers. `command …`,
+ * `builtin …`, `exec …`, and `env …` all *execute* the following command, so
+ * checks keyed on the first word (printf/echo terminal escapes, sort -o, …)
+ * would miss `command printf '\033]52;…'` or `env sort -o x y`. Also strips
+ * leading backslashes (\printf) and `env` flags/assignments. Pure text.
+ */
+export function getEffectiveCommand(segment: string): string {
+  const words = tokenizeSegment(segment);
+  let i = 0;
+  let first = (words[i] ?? "").replace(/^\\+/, "");
+  if (first === "command" || first === "builtin" || first === "exec") {
+    i++;
+    // `command [-p] [-v|-V] name` / `exec [-cl] [-a name] [command]` — skip
+    // lookup/exec flags so the real command name is found.
+    while (i < words.length && /^-[pVvlc]$/.test(words[i])) i++;
+    if (words[i] === "-a" && i + 1 < words.length) i += 2;
+  } else if (first === "env") {
+    i++;
+    // env [-i] [-u NAME] [--unset=NAME] [-C DIR] [FOO=bar …] cmd
+    while (i < words.length) {
+      const a = words[i];
+      if (a === "-i" || a === "--ignore-environment" || a === "-S" || a === "--split-string") { i++; continue; }
+      if ((a === "-u" || a === "--unset" || a === "-C" || a === "--chdir") && i + 1 < words.length) { i += 2; continue; }
+      if (a.startsWith("--unset=") || a.startsWith("--chdir=")) { i++; continue; }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { i++; continue; }
+      break;
+    }
+  }
+  const word = words[i] ?? "";
+  return path.basename(word.toLowerCase());
 }
 
 /** Strip /dev/null, /dev/stderr redirects and fd-to-fd redirects from a command string. */
@@ -242,7 +275,7 @@ const GIT_CLEAN_FLAGS_RE = /-[a-z]*[fdx][a-z]*/;
  *   - core.fsmonitor=…  → run on every refresh (unconditional)
  *   - core.askpass=…    → run to prompt for credentials
  */
-const GIT_DANGEROUS_CONFIG_RE = /^(?:alias\.[^=]+=!|core\.(?:pager|editor|sshCommand|fsmonitor|askpass)=)/;
+const GIT_DANGEROUS_CONFIG_RE = /^(?:alias\.[^=]+=!|credential\.helper=!|diff\.external=|filter\.[^=]+\.(?:clean|smudge)=|pager\.[^=]+=|interactive\.diffFilter=|sequence\.editor=|core\.(?:pager|editor|sshCommand|fsmonitor|askpass)=)/;
 
 /** True if a `-c`/`--config` value configures git to execute a command. */
 function isDangerousGitConfigValue(value: string | undefined): boolean {
@@ -277,7 +310,9 @@ const GIT_GLOBAL_FLAGS = new Set(["-c", "-C", "--git-dir", "--work-tree", "--no-
  * Skips global flags to find the actual subcommand.
  */
 export function isGitDangerous(segment: string): boolean {
-  const args = segment.trim().split(/\s+/);
+  // Quote-aware tokenization: `git -c "alias.st=!rm /tmp/x" st` must be seen
+  // as -c + one value token, not split on the space inside the quotes.
+  const args = tokenizeSegment(segment);
   if (args.length < 2) return false;
 
   // Skip global flags to find the actual subcommand

@@ -173,8 +173,10 @@ export const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "npx", "cargo", 
 /** Pre-compiled regex for tee write check. */
 const TEE_WRITE_RE = /\btee\b.*\S/;
 
-/** Pre-compiled regex for sort -o / --output= write target. */
-export const SORT_OUTPUT_RE = /(?:^|\s)(?:-o|--output)(?:\s|=)\S+/;
+/** Pre-compiled regex for sort -o / --output write target (space, `=`, attached
+ *  -ox, and cluster -ro forms — getopt lets -o consume the rest of the token
+ *  or the next token). */
+export const SORT_OUTPUT_RE = /(?:^|\s)(?:--output(?:\s+|=)\S+|-[a-zA-Z]*o(?:\S+|\s+\S+))/;
 
 /** Commands that always perform write operations (unconditional — no flag-dependent behavior). */
 const ALWAYS_WRITE = new Set([
