@@ -18,8 +18,10 @@ const allowedBashPatternStrings: string[] = [
   "echo", "printf", "basename", "dirname", "realpath", "readlink",
   "test", "true", "false",
   // System info (read-only, no file side effects)
+  // NOTE: `printenv` is excluded — with args it prints env vars (often secrets:
+  // OPENAI_API_KEY) into the transcript; bare it dumps ALL environment variables.
   "pwd", "cd", "date", "whoami", "id", "uname", "hostname",
-  "groups", "printenv", "uptime", "tty", "tput",
+  "groups", "uptime", "tty", "tput",
   // Disk / process inspection (read-only)
   "df", "du", "free", "ps", "pgrep", "pidof",
   // Command lookup
@@ -46,8 +48,10 @@ const allowedBashCommands = new Set(allowedBashPatternStrings);
  */
 export const unconditionallySafeCommands = new Set([
   // Inspection / read-only
+  // NOTE: `sort` is excluded — `sort -o file` / `--output=file` truncates/writes
+  // files. It stays in `allowedBashCommands`; SafetyRule + ShellEvaluator handle it.
   "ls", "cat", "head", "tail", "wc", "file",
-  "sort", "uniq", "cut", "tr", "diff",
+  "uniq", "cut", "tr", "diff",
   "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
   "join", "comm", "paste", "column", "seq",
   // Hashing / binary inspection
@@ -58,7 +62,7 @@ export const unconditionallySafeCommands = new Set([
   "test", "true", "false",
   // System info (read-only, no file side effects)
   "pwd", "cd", "date", "whoami", "id", "uname", "hostname",
-  "groups", "printenv", "uptime", "tty", "tput",
+  "groups", "uptime", "tty", "tput",
   // Disk / process inspection (read-only)
   "df", "du", "free", "ps", "pgrep", "pidof",
   // Command lookup
@@ -82,7 +86,9 @@ export const pathAwareCommands = new Set([
   // File/dir ops
   "mkdir", "rm", "cp", "mv", "chmod", "chown", "mktemp",
   "find", "grep", "diff", "patch",
-  "pushd", "popd",
+  // `cd` is path-aware: `cd ~/.s?sh && cat id_rsa` must resolve the target so
+  // outside-cwd and credential checks see it (glob-encoded dir names included).
+  "cd", "pushd", "popd",
   "tar", "zip", "unzip", "gzip", "gunzip",
   "python", "python3", "node", "ruby", "perl", "php",
   "sed", "awk", "sort", "uniq", "cut", "tr", "tee",
@@ -167,6 +173,9 @@ export const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "npx", "cargo", 
 /** Pre-compiled regex for tee write check. */
 const TEE_WRITE_RE = /\btee\b.*\S/;
 
+/** Pre-compiled regex for sort -o / --output= write target. */
+export const SORT_OUTPUT_RE = /(?:^|\s)(?:-o|--output)(?:\s|=)\S+/;
+
 /** Commands that always perform write operations (unconditional — no flag-dependent behavior). */
 const ALWAYS_WRITE = new Set([
   "rm", "rmdir", "unlink", "mv", "cp", "chmod", "chown",
@@ -177,6 +186,9 @@ const ALWAYS_WRITE = new Set([
 const ALWAYS_WRITE_ARCHIVE_PKG = new Set([
   "tar", "zip", "unzip", "gzip", "gunzip",
   "pip", "npm", "yarn", "cargo", "go", "uv",
+  // npx executes (and can fetch) arbitrary packages — wrapper delegation
+  // (timeout npx …) must not treat it as benign.
+  "npx",
 ]);
 
 // ── Write operation handlers ──
@@ -187,6 +199,7 @@ const WRITE_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: s
   { match: (c) => ALWAYS_WRITE_ARCHIVE_PKG.has(c), evaluate: () => true },
   { match: (c) => c === "sed", evaluate: (_, ctx) => dangerousSedFlags.test(ctx) },
   { match: (c) => c === "tee", evaluate: (_, ctx) => TEE_WRITE_RE.test(ctx) },
+  { match: (c) => c === "sort", evaluate: (_, ctx) => SORT_OUTPUT_RE.test(ctx) },
   { match: (c) => SHELL_INTERPRETERS.has(c), evaluate: () => true },
   { match: (c) => SCRIPT_INTERPRETERS.has(c), evaluate: () => true },
 ];

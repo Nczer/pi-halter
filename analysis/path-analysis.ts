@@ -148,6 +148,10 @@ function checkPatternsResolved(filePath: string, resolved: string, patterns: str
       if (resolved.includes(`/${pattern}/`) || resolved.endsWith(`/${pattern}`)) {
         return pattern;
       }
+      // Glob patterns (e.g. "*.pem") — suffix match on the basename.
+      if (pattern.startsWith("*.") && nameToCheck.endsWith(pattern.slice(1))) {
+        return pattern;
+      }
     }
   }
   return null;
@@ -187,9 +191,10 @@ export function isPathWarned(filePath: string, cwd: string): { warned: boolean; 
 /**
  * Pre-compiled regex for fast credential pattern detection in bash commands.
  * Loose match — false positives just trigger the more expensive resolve+check.
- * Matches credential file/dir name roots: .ssh, .env, .aws, .docker/config.json, etc.
+ * Matches credential file/dir name roots: .ssh, .env, .aws, .docker/config.json,
+ * standalone keyfile basenames (id_rsa), .envrc, and *.pem file names.
  */
-export const CREDENTIAL_SCAN_RE = /\.(?:ssh|gnupg|gpg|vault|secret|secrets|env|aws|gcloud|azure|git-credentials|hg|netrc|npmrc|pypirc|docker)\b/;
+export const CREDENTIAL_SCAN_RE = /\.(?:ssh|gnupg|gpg|vault|secret|secrets|env|envrc|aws|gcloud|azure|git-credentials|hg|netrc|npmrc|pypirc|docker|pem)\b|\bid_(?:rsa|ed25519|ecdsa|dsa)\b/;
 
 /**
  * Check a bash command string for credential path references.
@@ -206,9 +211,17 @@ export function checkCommandForCredentialPaths(
   // Fast pre-scan: if no credential pattern appears in the command, skip entirely.
   // Also check the dequoted version to prevent quote-splitting bypasses (e.g., .en''v).
   // Also check the backslash-stripped version to prevent backslash-splitting (e.g., .s\sh).
+  // Glob chars defeat the string regex (.s?sh ≠ .ssh) — run the precise per-token
+  // glob check instead of trusting the pre-scan.
   const dequoted = tokens.join(" ");
   const unstripped = command.replace(/\\/g, "");
-  if (!CREDENTIAL_SCAN_RE.test(command) && !CREDENTIAL_SCAN_RE.test(dequoted) && !CREDENTIAL_SCAN_RE.test(unstripped)) {
+  const hasGlob = /[*?\[\]]/.test(command);
+  if (
+    !hasGlob &&
+    !CREDENTIAL_SCAN_RE.test(command) &&
+    !CREDENTIAL_SCAN_RE.test(dequoted) &&
+    !CREDENTIAL_SCAN_RE.test(unstripped)
+  ) {
     return { denied: null, warned: null };
   }
   let denied: string | null = null;
@@ -260,6 +273,39 @@ export function checkCommandForCredentialPaths(
     return false;
   };
 
+  /**
+   * Glob-aware token check: a globbed name can decode to a credential name
+   * (~/.s*sh → ~/.ssh, id_rs? → id_rsa, *.env → .env). Convert each path
+   * component into a regex (* → .*, ? and [..] → .) and test it against every
+   * denied/warned pattern name. Returns "skip" if the token has no glob chars
+   * or cannot match any pattern.
+   */
+  const checkTokenGlob = (t: string): { denied: string | null; warned: string | null } | "skip" => {
+    if (!/[*?\[\]]/.test(t)) return "skip";
+    for (const comp of t.split("/")) {
+      if (!/[*?\[\]]/.test(comp)) continue;
+      // A purely-wild component (*, ?, [x]) matches every name — must not
+      // match any pattern. Require at least one literal character (e.g.
+      // *.pem → ".pem").
+      if (!comp.replace(/[*?\[\]]/g, "")) continue;
+      const escaped = comp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(
+        "^" + escaped
+          .replace(/\\\*/g, ".*")
+          .replace(/\\\?/g, ".")
+          .replace(/\\\[[^\\\]]*\\\]/g, ".") +
+        "$",
+      );
+      for (const pattern of deniedPaths) {
+        if (re.test(pattern)) return { denied: pattern, warned: null };
+      }
+      for (const pattern of warnPaths) {
+        if (re.test(pattern)) return { denied: null, warned: pattern };
+      }
+    }
+    return "skip";
+  };
+
   for (const token of tokens) {
     // Check original token
     const result = checkToken(token);
@@ -273,6 +319,10 @@ export function checkCommandForCredentialPaths(
       const unescapedResult = checkToken(unescaped);
       if (accumulateResult(unescapedResult)) return { denied, warned };
     }
+
+    // Also check glob-expanded variants (~/.s*sh → .ssh, id_rs? → id_rsa).
+    const globResult = checkTokenGlob(token);
+    if (accumulateResult(globResult)) return { denied, warned };
   }
 
   return { denied, warned };

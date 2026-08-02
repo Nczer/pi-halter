@@ -3,7 +3,7 @@ import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import type { McpRequest } from "../decision-engine";
 import { gate, rejectMcp } from "../gate";
 import { store } from "../store";
-import { resolveServerFromToolName, deriveProxyTarget, METADATA_OPS } from "../analysis/mcp-resolver";
+import { resolveServerFromToolName, deriveProxyTarget, METADATA_OPS, METADATA_ACTIONS } from "../analysis/mcp-resolver";
 import { formatMcpProxyToolCallLines, formatMcpDirectToolCallLines, buildArgsPreview } from "../renderers/mcp";
 
 // ── Handlers ───────────────────────────────────────────────────────────
@@ -24,9 +24,30 @@ export async function handleMcp(
 
   // Metadata operations are always allowed
   if (METADATA_OPS.has(op)) return;
+  // Read-only local-state actions (ui-messages) are always allowed
+  if (METADATA_ACTIONS.has(op)) return;
 
-  // Only tool calls need permission
-  if (op !== "call") return;
+  // Explicit actions (auth-start, auth-complete, unknown future actions) must
+  // NOT pass through silently — gate them like tool calls. Any new MCP action
+  // that falls through here auto-allows, so fail closed.
+  if (op !== "call") {
+    const actionServer = resolveServerFromToolName(tool ?? "", server);
+    if (!actionServer) {
+      return {
+        block: true,
+        reason: `[Permission Policy] Could not resolve MCP server for action '${op}'. Refusing to proceed with unresolvable server identifier.`,
+      };
+    }
+    const actionRequest: McpRequest = {
+      type: "mcp",
+      server: actionServer,
+      tool: `action:${op}`,
+      argsPreview: buildArgsPreview(params),
+    };
+    return await gate(actionRequest, ctx, store, (decision, result) =>
+      rejectMcp(decision, result, store, ctx),
+    );
+  }
 
   const callLabel = formatMcpProxyToolCallLines(params, 1500, false).join(": ");
   const argsPreview = buildArgsPreview(params);

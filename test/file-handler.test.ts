@@ -55,17 +55,28 @@ describe("handleFile edit pre-validation security", () => {
     expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
   });
 
-  it("still pre-validates ordinary inside-cwd paths (reads to check edit viability)", async () => {
-    // A normal project file: pre-validation reads it to decide whether to skip a
-    // useless prompt. This confirms the guard only suppresses credential paths.
-    await handleFile(makeEditEvent("src/index.ts"), makeCtx());
+  it("does NOT pre-validate inside-cwd edits (they prompt — no read before gate)", async () => {
+    // A normal project file: edit decisions for inside-cwd writes are prompts,
+    // so no file content may be read before the gate. Pre-validation is
+    // restricted to paths that would auto-allow anyway.
+    const result = await handleFile(makeEditEvent("src/index.ts"), makeCtx());
+    expect(readSpy).not.toHaveBeenCalled();
+    // No UI → gate auto-blocks the prompt.
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
+  });
+
+  it("pre-validates edits to auto-allow paths (e.g. /tmp)", async () => {
+    // /tmp is an allowed write path → the edit decision is auto-allow →
+    // pre-validation may read it to skip a useless prompt.
+    const result = await handleFile(makeEditEvent("/tmp/out.ts"), makeCtx());
     expect(readSpy).toHaveBeenCalled();
+    expect(result).toBeUndefined();
   });
 
   it("skips prompt when oldText === newText (no-op edit will fail)", async () => {
     readSpy.mockReturnValue("hello world");
     const result = await handleFile(
-      makeEditEvent("src/index.ts", "world", "world"),
+      makeEditEvent("/tmp/out.ts", "world", "world"),
       makeCtx(),
     );
     // Should return undefined (skip prompt) because edit is a no-op
@@ -75,7 +86,7 @@ describe("handleFile edit pre-validation security", () => {
   it("skips prompt when oldText has zero matches in file", async () => {
     readSpy.mockReturnValue("hello world");
     const result = await handleFile(
-      makeEditEvent("src/index.ts", "nonexistent", "replacement"),
+      makeEditEvent("/tmp/out.ts", "nonexistent", "replacement"),
       makeCtx(),
     );
     expect(result).toBeUndefined();
@@ -84,7 +95,7 @@ describe("handleFile edit pre-validation security", () => {
   it("skips prompt when oldText has multiple matches in file", async () => {
     readSpy.mockReturnValue("foo bar foo baz foo");
     const result = await handleFile(
-      makeEditEvent("src/index.ts", "foo", "qux"),
+      makeEditEvent("/tmp/out.ts", "foo", "qux"),
       makeCtx(),
     );
     expect(result).toBeUndefined();
@@ -119,10 +130,10 @@ describe("handleFile edit pre-validation security", () => {
 
   it("skips prompt when file does not exist", async () => {
     // statSync throws ENOENT for missing files → handler catches and returns early
-    // before ever reading content.
+    // before ever reading content. /tmp is auto-allowed so pre-validation runs.
     statSpy.mockImplementation(() => { throw new Error("ENOENT"); });
     const result = await handleFile(
-      makeEditEvent("src/missing.ts"),
+      makeEditEvent("/tmp/missing.ts"),
       makeCtx(),
     );
     expect(result).toBeUndefined();
@@ -145,7 +156,7 @@ describe("handleFile edit pre-validation security", () => {
     existsSpy.mockReturnValue(true);
     readSpy.mockImplementation(() => { throw new Error("Permission denied"); });
     const result = await handleFile(
-      makeEditEvent("src/index.ts"),
+      makeEditEvent("/tmp/out.ts"),
       makeCtx(),
     );
     expect(result).toBeUndefined();

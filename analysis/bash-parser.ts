@@ -626,6 +626,27 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
           }
         }
       }
+
+      // `sort -o FILE` / `--output=FILE` writes/truncates FILE — the target may
+      // not look like a path (bare filename: `sort -o package.json x`), so it
+      // would escape outside-cwd checks. Extract it explicitly.
+      if (cmdName === "sort") {
+        for (let i = 0; i < args.length; i++) {
+          const arg = args[i];
+          let target: string | null = null;
+          if (arg === "-o" || arg === "--output") {
+            target = args[i + 1] ?? null;
+          } else if (arg.startsWith("--output=")) {
+            target = arg.slice("--output=".length);
+          } else if (arg.startsWith("-o") && arg.length > 2) {
+            target = arg.slice(2); // -oFILE (attached form)
+          }
+          // `-` means stdout; skip it and bare flags (e.g. `sort -o -k 1`).
+          if (target && target !== "-" && !target.startsWith("-")) {
+            allPaths.push(resolvePathReal(expandTilde(target), cwd));
+          }
+        }
+      }
     }
 
     // Extract redirect paths

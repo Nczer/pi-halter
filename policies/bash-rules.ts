@@ -1,5 +1,5 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
-import { containsCommandSubstitution, getFirstWord, stripQuotedStrings } from "../analysis/segment-helpers";
+import { containsCommandSubstitution, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes } from "../analysis/segment-helpers";
 import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE } from "../analysis/path-analysis";
 import { tokenizeSegment } from "../analysis/tokenizer";
 import type { Store, BashRequest, Decision } from "../decision-engine";
@@ -55,9 +55,12 @@ export const FastAllowRule: BashRule = (req) => {
 
   // Credential check — don't auto-allow if the command references credential paths.
   // Check both raw and dequoted versions to prevent quote-splitting bypasses (e.g., .en''v).
+  // Glob chars defeat the string regex (.s?sh ≠ .ssh, id_rs? ≠ id_rsa) — fall through
+  // to SafetyRule, whose analysis runs the glob-aware credential check.
   if (CREDENTIAL_SCAN_RE.test(req.command)) return null;
   const dequotedCmd = tokenizeSegment(req.command).join(" ");
   if (CREDENTIAL_SCAN_RE.test(dequotedCmd)) return null;
+  if (/[*?\[\]]/.test(req.command)) return null;
 
   // Escape sequences outside quotes can hide paths (e.g., \/etc\/passwd).
   // stripQuotedStrings only strips quotes, not bare backslashes.
@@ -66,6 +69,12 @@ export const FastAllowRule: BashRule = (req) => {
 
   const bare = getFirstWord(req.command);
   if (!unconditionallySafeCommands.has(bare)) return null;
+
+  // Terminal escape sequences in echo/printf can spoof the TUI or write the
+  // clipboard (OSC 52). printf interprets escapes unconditionally; echo only
+  // with -e or $'…' ANSI-C quoting. Fall through to SafetyRule.
+  if (bare === "printf" && hasTerminalEscape(req.command)) return null;
+  if (bare === "echo" && echoInterpretsEscapes(req.command) && hasTerminalEscape(req.command)) return null;
 
   // Use quote-aware tokenizer so quoted paths (e.g., "/etc/passwd", '/etc/passwd')
   // and flag=value with quotes (e.g., --file="/etc/passwd") are properly detected.
@@ -97,10 +106,11 @@ export const FastAllowRule: BashRule = (req) => {
 export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) => {
   if (!analysis) return null;
 
-  // Zero segments + parse error means tree-sitter couldn't parse the command.
-  // Never auto-allow — prompt so the user can inspect.
-  // (Zero segments without parse error is valid: shell builtins like export/unset.)
-  if (analysis.segments.length === 0 && analysis.hasParseError) return null;
+  // Any tree-sitter parse error means bash may not see what we see — parser
+  // divergence is where bypasses live. Never auto-allow; prompt so the user can
+  // inspect. (Zero segments without parse error is valid: shell builtins like
+  // export/unset.)
+  if (analysis.hasParseError) return null;
 
   const outsidePaths = analysis.prompt.outsidePaths ?? [];
   const canAutoAllow = analysis.safety.canBeAutoAllowed && outsidePaths.length === 0 && !analysis.hasCredentialPath;
@@ -118,9 +128,13 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
   const sigFirstWords = analysis.signatures.map(getFirstWord);
   const isSigApproved = (sig: string, segIdx: number) => {
+    // Relative-path segments (./node_modules/.bin/npm test) must never inherit
+    // grants for the bare command name — a repo-shipped executable named npm/pip
+    // would otherwise inherit session-wide `npm *` grants. Check BEFORE the
+    // store grants.
+    if (relPathIdxSet.has(segIdx)) return false;
     if (store.hasAllowedBash(sig)) return true;
     if (store.hasAllowedBashPrefix(sig)) return true;
-    if (relPathIdxSet.has(segIdx)) return false;
     if (segIsSafeSubcommand[segIdx]) return true;
     return isAllowedCommand(sigFirstWords[segIdx]);
   };

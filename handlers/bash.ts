@@ -9,8 +9,16 @@ export async function handleBash(
   ctx: ExtensionContext,
 ) {
   if (!isToolCallEventType("bash", event)) return;
-  const cmd = event.input.command;
-  if (!cmd || cmd.trim().length === 0) return;
+  // Fail closed on unexpected input shape: a direct MCP/custom tool named `bash`
+  // (or a malformed builtin call) with no `command` string would otherwise pass
+  // every handler unchecked and execute without a permission decision.
+  const cmd = event.input?.command;
+  if (typeof cmd !== "string" || cmd.trim().length === 0) {
+    return {
+      block: true,
+      reason: "[Permission Policy] Built-in bash tool called with unexpected input shape — blocked (missing `command` string).",
+    };
+  }
 
   const request: BashRequest = { type: "bash", command: cmd, cwd: ctx.cwd };
 

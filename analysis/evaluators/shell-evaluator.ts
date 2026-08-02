@@ -1,11 +1,13 @@
 import { EvaluationBuilder } from "./builder";
 import { EvalCache, RiskEvaluator } from "./types";
 import { wrapperCommands } from "../../config";
-import { dangerousSedFlags, dangerousPerlFlags } from "../../config/bash-patterns";
+import { dangerousSedFlags, dangerousPerlFlags, SORT_OUTPUT_RE } from "../../config/bash-patterns";
 import {
   getFirstWord,
   hasWriteRedirect,
   isWrapperRunningWrite,
+  hasTerminalEscape,
+  echoInterpretsEscapes,
 } from "../segment-helpers";
 
 /** Pre-compiled regex for heredoc-to-interpreter detection. */
@@ -74,6 +76,21 @@ export const ShellEvaluator: RiskEvaluator = {
     }
     if (firstWord === "perl" && dangerousPerlFlags.test(segment)) {
       b.addHigh("perl -pi/-i (in-place file modification)");
+    }
+
+    // sort -o/--output (writes/truncates a file)
+    if (firstWord === "sort" && SORT_OUTPUT_RE.test(segment)) {
+      b.addHigh("sort -o/--output (can truncate files)");
+    }
+
+    // echo/printf terminal escape sequences — screen spoofing (\033[2J + fake
+    // prompt) and OSC 52 clipboard writes (\033]52;c;…). printf interprets
+    // escapes unconditionally; echo only with -e or $'…' ANSI-C quoting.
+    if (firstWord === "printf" && hasTerminalEscape(segment)) {
+      b.addHigh("terminal escape sequence in printf (screen spoofing / clipboard write)");
+    }
+    if (firstWord === "echo" && echoInterpretsEscapes(segment) && hasTerminalEscape(segment)) {
+      b.addHigh("terminal escape sequence in echo (screen spoofing / clipboard write)");
     }
 
     // Wrapper running write (not relative path - that only affects isSimple)

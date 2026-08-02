@@ -11,6 +11,28 @@ interface PromptResult {
 }
 
 /**
+ * Refcount for the tools-panel expansion hack. `setToolsExpanded(true)` before a
+ * prompt makes the tool list visible; the restore must not collapse the panel
+ * while another (parallel) prompt is still showing. Only the call that first
+ * expanded restores — and only when the last concurrent user is done.
+ */
+let toolExpansionDepth = 0;
+let toolExpansionBase = false;
+
+function expandTools(ctx: ExtensionContext): void {
+  if (toolExpansionDepth === 0) {
+    toolExpansionBase = ctx.ui.getToolsExpanded();
+    if (!toolExpansionBase) ctx.ui.setToolsExpanded(true);
+  }
+  toolExpansionDepth++;
+}
+
+function restoreTools(ctx: ExtensionContext): void {
+  toolExpansionDepth = Math.max(0, toolExpansionDepth - 1);
+  if (toolExpansionDepth === 0) ctx.ui.setToolsExpanded(toolExpansionBase);
+}
+
+/**
  * Callback invoked when the user rejects a permission.
  * The handler is responsible for recording aborts, formatting the rejection reason,
  * and sending the UI notification.
@@ -31,14 +53,19 @@ type RejectHandler = (
  *  5. Prompt → show prompt, handle rejection via onReject
  *
  * The handler only needs to provide request construction and rejection formatting.
+ *
+ * @param precomputedDecision - Optional decision already computed by the handler
+ *   (avoids a second decide() call when the handler needed the decision anyway,
+ *   e.g. to gate pre-validation reads on the outcome).
  */
 export async function gate(
   request: PermissionRequest,
   ctx: ExtensionContext,
   store: Store,
   onReject: RejectHandler,
+  precomputedDecision?: Decision,
 ): Promise<undefined | { block: true; reason: string }> {
-  const decision = await gateDecide(request, store, ctx);
+  const decision = precomputedDecision ?? await gateDecide(request, store, ctx);
 
   if (decision.kind === "auto-allow") return;
 
@@ -51,8 +78,7 @@ export async function gate(
     return { block: true, reason: "[Permission Policy] Auto-blocked (no UI): requires confirmation" };
   }
 
-  const wasExpanded = ctx.ui.getToolsExpanded();
-  if (!wasExpanded) ctx.ui.setToolsExpanded(true);
+  expandTools(ctx);
 
   try {
     const result = await showPrompt(decision, ctx, store);
@@ -60,7 +86,7 @@ export async function gate(
       return onReject(decision, result);
     }
   } finally {
-    ctx.ui.setToolsExpanded(wasExpanded);
+    restoreTools(ctx);
   }
 
   return;

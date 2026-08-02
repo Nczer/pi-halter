@@ -42,4 +42,9 @@ export const warnPaths: string[] = [
   ".env", ".aws", ".gcloud", ".azure",
   ".git-credentials", ".hg/hgrc",
   ".netrc", ".npmrc", ".pypirc", ".docker/config.json",
+  // Standalone keyfile basenames (not covered by dir-name rules like .ssh).
+  ".envrc",
+  "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+  // Glob patterns: *.pem matches any basename ending in .pem (suffix match).
+  "*.pem",
 ];

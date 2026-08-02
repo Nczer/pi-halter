@@ -1,6 +1,7 @@
 import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import type { FileRequest } from "../decision-engine";
+import { decide } from "../decision-engine";
 import { gate, rejectFile } from "../gate";
 import { store } from "../store";
 import {
@@ -29,16 +30,31 @@ export async function handleFile(
   // Resolve once — reused by pre-validation and decision engine
   const resolvedPath = resolvePathReal(expandTilde(filePath), ctx.cwd);
 
-  // Pre-validate edit calls — skip the permission prompt if the edit would fail anyway.
-  // Structurally validate first (no fs access), then only read file content for ordinary
-  // paths. Denied/warned paths are credentials (secrets) — they must reach the gate before
-  // any read, otherwise this handler would read sensitive content before the permission
-  // check decides whether the access is even allowed.
+  // Structurally validate edit calls first (no fs access).
+  let edits: Array<{ oldText: string; newText: string }> | null = null;
   if (toolName === "edit") {
-    const edits = input.edits;
+    edits = input.edits ?? null;
     if (!edits || !Array.isArray(edits) || edits.length === 0) return;
     if (!edits.every(e => typeof e.oldText === "string" && typeof e.newText === "string")) return;
+  }
 
+  const request: FileRequest = {
+    type: "file",
+    toolName: toolName as "read" | "write" | "edit",
+    filePath,
+    cwd: ctx.cwd,
+    resolvedPath,
+  };
+
+  // Decide BEFORE any file-content read. Pre-validation only runs for paths the
+  // gate would auto-allow anyway — reading a prompted/blocked path first would
+  // leak its content through prompt visibility (e.g. "oldText occurs exactly
+  // once" only appearing when the edit would succeed).
+  const decision = await decide(request, store);
+
+  if (toolName === "edit" && decision.kind === "auto-allow" && edits) {
+    // Defense-in-depth: never read credential paths even if some auto-allow
+    // path (e.g. an allowed dir) overlaps a warned name.
     const isCredentialPath =
       isPathDeniedResolved(filePath, resolvedPath).denied ||
       isPathWarnedResolved(filePath, resolvedPath).warned;
@@ -68,15 +84,8 @@ export async function handleFile(
     }
   }
 
-  const request: FileRequest = {
-    type: "file",
-    toolName: toolName as "read" | "write" | "edit",
-    filePath,
-    cwd: ctx.cwd,
-    resolvedPath,
-  };
-
   return await gate(request, ctx, store, (decision, result) =>
     rejectFile(decision, result, store, ctx),
+    decision,
   );
 }
