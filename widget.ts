@@ -75,7 +75,7 @@ export function updateWidget(ctx: ExtensionContext): void {
   }
 
   ctx.ui.setWidget("halter", (_tui, theme) => {
-    const baseLines: string[] = [theme.fg("accent", theme.bold("Halter"))];
+    const baseLines: string[] = [];
 
     if (hasSessionRules) {
       if (bashItems.length > 0) {
