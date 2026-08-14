@@ -150,7 +150,7 @@ export function rejectBash(
 
   return {
     block: true,
-    reason: `[USER REJECTED] You denied this bash command: ${pd.command.slice(0, 120)}.${detail}${reasonDetail}`,
+    reason: `[USER REJECTED] Bash command rejected: ${pd.command.slice(0, 120)}.${detail}${reasonDetail}`,
   };
 }
 
@@ -178,7 +178,7 @@ export function rejectFile(
 
   return {
     block: true,
-    reason: `[USER REJECTED] You denied ${action} access to ${pd.filePath.split("/").pop() || pd.filePath} (${resolved}).${reasonDetail}`,
+    reason: `[USER REJECTED] ${action} access to ${pd.filePath.split("/").pop() || pd.filePath} (${resolved}) rejected.${reasonDetail}`,
   };
 }
 
@@ -203,6 +203,6 @@ export function rejectMcp(
 
   return {
     block: true,
-    reason: `[USER REJECTED] You denied MCP tool '${pd.tool}' from server '${pd.server}'.${reasonDetail}`,
+    reason: `[USER REJECTED] MCP tool '${pd.tool}' from server '${pd.server}' rejected.${reasonDetail}`,
   };
 }
