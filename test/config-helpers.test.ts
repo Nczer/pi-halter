@@ -128,6 +128,50 @@ describe("isTrustedScriptCommand", () => {
   it("rejects uv run with unknown package in extras form", () => {
     expect(isTrustedScriptCommand('uv run --with "evil[payload]" python ~/.pi/agent/skills/my-script.py', "/tmp")).toBe(false);
   });
+
+  // ── Shell scripts (direct exec + shell interpreter) ──
+
+  it("trusts direct exec of a .sh inside skills dir (~ form)", () => {
+    expect(isTrustedScriptCommand("~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query", "/tmp")).toBe(true);
+  });
+
+  it("trusts direct exec of a .sh inside skills dir (relative ./ form, cwd in skill dir)", () => {
+    expect(isTrustedScriptCommand("./scripts/find-sessions.sh -S /tmp/sock", "~/.pi/agent/skills/tmux")).toBe(true);
+  });
+
+  it("trusts direct exec of a .py inside skills dir (shebang exec)", () => {
+    expect(isTrustedScriptCommand(`~/.pi/agent/skills/docx/scripts/comment.py file.docx`, "/tmp")).toBe(true);
+  });
+
+  it("rejects direct exec of a script outside skills dir", () => {
+    expect(isTrustedScriptCommand("/tmp/evil.sh", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("./scripts/foo.sh", "/tmp/project")).toBe(false);
+  });
+
+  it("trusts bash/sh running a script from skills dir", () => {
+    expect(isTrustedScriptCommand("bash ~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query", "/tmp")).toBe(true);
+    expect(isTrustedScriptCommand("sh ~/.pi/agent/skills/tmux/scripts/wait-for-text.sh -t a:0.0 -p done", "/tmp")).toBe(true);
+    expect(isTrustedScriptCommand("bash -u ./scripts/q.sh /corpus query", "~/.pi/agent/skills/doc-search")).toBe(true);
+  });
+
+  it("rejects bash/sh running a script outside skills dir", () => {
+    expect(isTrustedScriptCommand("bash /tmp/evil.sh", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("bash ./scripts/foo.sh", "/tmp/project")).toBe(false);
+  });
+
+  it("never trusts shell -c/--command forms (command strings are opaque)", () => {
+    expect(isTrustedScriptCommand("bash -c '~/skills/doc-search/scripts/q.sh /corpus query'", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("bash -c '~/skills/doc-search/scripts/q.sh /corpus; rm -rf /'", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("bash -c '~/skills/doc-search/scripts/q.sh; rm -rf /'", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("sh --command 'ls'", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("bash -c 'rm -rf /'", "/tmp")).toBe(false);
+  });
+
+  it("rejects bare shell interpreters with no script file", () => {
+    expect(isTrustedScriptCommand("bash", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("bash --norc", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("bash -e", "/tmp")).toBe(false);
+  });
 });
 
 // ── Obfuscation false positive defenses (via analyzeCommand) ──

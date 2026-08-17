@@ -182,6 +182,23 @@ Config is split across focused modules in `config/`:
 
 To add a new package, edit the `TRUSTED_PACKAGES` set in `config/trusted-scripts.ts` (lowercase, no extras — `markitdown[pptx]` is matched against `markitdown`).
 
+## Trusted Scripts (skills dir)
+
+Scripts resolving into a trusted directory (`~/.pi/agent/skills/`) are auto-allowed — the directory is treated as user-curated. Three invocation forms qualify:
+
+1. **Interpreter + script** — `python3 ~/…/skills/x/script.py`, `uv run --with <trusted-pkg> python ~/…/skills/x/script.py` (package allowlist applies)
+2. **Shell interpreter + script** — `bash ~/…/skills/x/script.sh`, `sh ./scripts/script.sh` (cwd inside the skill dir). Only the *first non-flag token* may be the script file; anything else falls back to normal analysis.
+3. **Direct exec** — `~/…/skills/x/script.sh`, `./scripts/script.sh` (executable scripts are invoked this way by skill docs). Any file path resolving into the trusted dir qualifies.
+
+**`-c`/`--command` is never trusted** for shell interpreters: `bash -c '~/skills/q.sh; rm -rf /'` must not inherit trust from the path inside the opaque quoted string.
+
+**Trust covers the script invocation only — never shell operators around it.** These still prompt:
+- pipe stages that are unsafe: `q.sh … | bash` (RCE via the output), `q.sh … | ./evil`, `q.sh … | sort -o file`
+- write redirects: `q.sh … > ./out` (the write is a side effect the user didn't curate)
+- command substitution in arguments: `script.py "$(cmd)"` (executed by the shell before the script runs)
+
+Piping a trusted script into safe read-only stages (`| head`, `| grep`) remains auto-allowed.
+
 ## Dependencies
 
 - `tree-sitter-bash` + `web-tree-sitter` — full bash AST parsing for segmentation, path extraction, operator detection, and subshell detection (handles heredocs, comments, quotes, subshells, and redirects correctly)

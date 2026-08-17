@@ -713,15 +713,28 @@ const cases: TestCase[] = [
 	{ cmd: "local x=1", simple: true, unsafe: false, decision: "auto-allow", desc: "local (function scope var, safe)" },
 
 	// ═══════════════════════════════════════════════════════════
-	// .sh scripts — NOT auto-passed (not interpreter-based trusted scripts)
-	// Path-like tokens (./scripts/foo, /usr/bin/foo) are excluded from allowlist matching
-	// to prevent ./scripts/find-sessions.sh from matching /^find\b/
+	// .sh scripts — auto-passed ONLY when the script resolves into the trusted
+	// skills dir (bash/sh + trusted path, or direct exec of a trusted path).
+	// .sh elsewhere is NOT auto-passed. Path-like tokens (./scripts/foo,
+	// /usr/bin/foo) are excluded from allowlist matching to prevent
+	// ./scripts/find-sessions.sh from matching /^find\b/
 	// ═══════════════════════════════════════════════════════════
+	{ cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query", simple: true, unsafe: false, decision: "auto-allow", desc: "direct exec of trusted .sh in skills dir" },
 	{ cmd: "./scripts/wait-for-text.sh -t 30 -p python", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (not in allowlist → prompt)" },
 	{ cmd: "bash scripts/wait-for-text.sh -t 30", simple: false, unsafe: false, decision: "prompt", desc: "bash script.sh (bash not in allowlist → prompt)" },
 	{ cmd: "./scripts/find-sessions.sh", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (path-like token excluded from allowlist)" },
 	{ cmd: "./scripts/ghidra-analyze.sh -s ExportAll.java -o ./analysis binary", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (ghidra wrapper, not in allowlist)" },
-	{ cmd: "bash ~/.pi/agent/skills/tmux/scripts/wait-for-text.sh -t 30", simple: false, unsafe: false, decision: "prompt", desc: ".sh in skills dir still prompts (bash not an interpreter match)" },
+	{ cmd: "bash ~/.pi/agent/skills/tmux/scripts/wait-for-text.sh -t 30", simple: true, unsafe: false, decision: "auto-allow", desc: "bash + trusted .sh in skills dir" },
+	{ cmd: "bash -c '~/skills/doc-search/scripts/q.sh /corpus; rm -rf /'", simple: false, unsafe: true, decision: "prompt", desc: "bash -c is never trusted, even with a trusted path inside the string" },
+
+	// ── Trust bypass regressions: trust covers the script invocation only, never
+	//    shell operators around it (pipe stages, write redirects, arg substitution) ──
+	{ cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query | bash", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: pipe stage to shell is not covered by script trust" },
+	{ cmd: "python3 ~/.pi/agent/skills/docx/scripts/comment.py x.docx | bash", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: pipe to shell after trusted .py" },
+	{ cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query | ./evil", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: pipe to relative-path script" },
+	{ cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query > ./pwned.txt", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: write redirect after trusted script" },
+	{ cmd: "python3 ~/.pi/agent/skills/docx/scripts/comment.py x.docx \"$(rm -rf /tmp/xyz)\"", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: command substitution in trusted script args" },
+	{ cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query | head -5", simple: true, unsafe: false, decision: "auto-allow", desc: "trusted script piped to safe stage stays auto-allow" },
 	{ cmd: "./scripts/find-ghidra.sh", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (path-like token excluded from allowlist)" },
 	{ cmd: "../scripts/foo.sh", simple: false, unsafe: false, decision: "prompt", desc: "../ relative path (not in allowlist → prompt)" },
 	{ cmd: "./scripts/foo.sh && ls", simple: false, unsafe: false, decision: "prompt", desc: "./ script && compound (relative path blocks allowlist)" },
