@@ -113,7 +113,17 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
 
   // Pipeline analysis: route secondary stages through evaluators
   // (eliminates duplicate dangerousCommandPatterns/dangerousContextPatterns checks
-  //  and checkStageDanger — evaluators handle all of these uniformly)
+  //  and checkStageDanger — evaluators handle all of these uniformly).
+  //
+  // Pipeline-stage danger is tracked in its OWN accumulators, separate from the
+  // core (script/interpreter) danger. A trusted script covers only the
+  // interpreter+script invocation — it does NOT cover other commands joined by
+  // `|`. Keeping them apart lets the trust clear wipe the core "arbitrary code
+  // execution" flag while leaving pipeline danger (e.g. `trusted.sh | bash`) intact.
+  let pipelineHasDanger = false;
+  let pipelineSeverity: "high" | "medium" | null = null;
+  const pipelineReasons: string[] = [];
+
   const stages = splitPipeline(segment);
   if (stages.length > 1) {
     for (let i = 1; i < stages.length; i++) {
@@ -132,9 +142,9 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
         // Pipe-to-interpreter is a unique pipeline concern — not caught by evaluators
         if (SHELL_INTERPRETERS.has(stageCmd)) {
           const reason = "[Pipeline] pipe to a shell (possible remote code execution)";
-          if (!aggregatedReasons.includes(reason)) {
-            aggregatedReasons.push(reason);
-            aggregatedSeverity = "high";
+          if (!pipelineReasons.includes(reason)) {
+            pipelineReasons.push(reason);
+            pipelineSeverity = "high";
           }
         }
       }
@@ -147,16 +157,16 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       for (const ev of EVALUATORS) {
         const result = ev.evaluate(pseudoSeg, cwd);
         if (result.hasDanger) {
-          aggregatedHasDanger = true;
+          pipelineHasDanger = true;
           allStagesSimple = false;
         }
-        if (result.severity === "high" || (!aggregatedSeverity && result.severity === "medium")) {
-          aggregatedSeverity = result.severity;
+        if (result.severity === "high" || (!pipelineSeverity && result.severity === "medium")) {
+          pipelineSeverity = result.severity;
         }
         for (const reason of result.reasons) {
           const tag = ev.name.charAt(0).toUpperCase() + ev.name.slice(1);
           const tagged = `[Pipeline/${tag}] ${reason}`;
-          if (!aggregatedReasons.includes(tagged)) aggregatedReasons.push(tagged);
+          if (!pipelineReasons.includes(tagged)) pipelineReasons.push(tagged);
         }
       }
     }
@@ -183,6 +193,17 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
     aggregatedHasDanger = false;
     aggregatedSeverity = null;
     aggregatedReasons.length = 0;
+  }
+
+  // Re-merge pipeline-stage danger AFTER the trust clear. Script trust must not
+  // extend to other commands joined by `|`, so `trusted.sh | bash` / `trusted.sh | rm -rf`
+  // keep their danger and prompt even though the leading script is trusted.
+  if (pipelineHasDanger) aggregatedHasDanger = true;
+  if (pipelineSeverity === "high" || (!aggregatedSeverity && pipelineSeverity === "medium")) {
+    aggregatedSeverity = pipelineSeverity;
+  }
+  for (const r of pipelineReasons) {
+    if (!aggregatedReasons.includes(r)) aggregatedReasons.push(r);
   }
 
   // `command` is in LOOKUP_COMMANDS, but only `-v`/`-V` are pure lookups.
@@ -263,7 +284,12 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   if (isRedirectOnly) {
     isSimple = !writeRedirect;
   } else if (isTrusted) {
-    isSimple = true;
+    // The interpreter+script invocation is trusted, but shell operators AROUND
+    // it are separate side effects not covered by trust and still require review:
+    //   • a pipe stage is another command (`q.sh | bash` → RCE via the output)
+    //   • a write redirect writes the output to a file (`q.sh > ./pwned`)
+    //   • command substitution in args runs before the script (`script.py "$(rm …)"`)
+    isSimple = allStagesSimple && !writeRedirect && !seg.hasSubshell;
   } else if (isFirstTokenRelativePath(segment)) {
     isSimple = false;
   } else {
