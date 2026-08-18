@@ -208,9 +208,34 @@ export const CREDENTIAL_SCAN_RE = /\.(?:ssh|gnupg|gpg|vault|secret|secrets|env|e
  * (`<<<`), and UNTERMINATED heredocs are left untouched (fail-closed: the
  * text is still scanned; an unterminated heredoc also fails the tree-sitter
  * parse and prompts anyway).
+ *
+ * A line is only treated as a heredoc START when bash unambiguously starts one:
+ * `<<` is a standalone word (a glued `x<<EOF` is a literal word in bash), it
+ * is not inside a comment, and it is not inside an unterminated quoted string.
+ * When in doubt the body is KEPT and still scanned — every decline is
+ * fail-closed, so a false start can never hide a live command line.
  */
 export function stripHeredocBodies(cmd: string): string {
   const HEREDOC_START_RE = /<<(?!<)(-?)\s*(['"]?)([A-Za-z0-9_][A-Za-z0-9_.-]*)\2\s*(?:[#|&;].*)?$/;
+  /** Return the heredoc delimiter if this line unambiguously starts one, else null. */
+  const findHeredocStart = (line: string): string | null => {
+    const m = line.match(HEREDOC_START_RE);
+    if (!m) return null;
+    const opIdx = line.lastIndexOf("<<");
+    // `<<` must be a standalone word: start of line or preceded by whitespace.
+    // Glued forms (x<<EOF, =<<EOF) are literal words in bash, not redirects.
+    if (opIdx > 0 && !/\s/.test(line[opIdx - 1])) return null;
+    const before = line.slice(0, opIdx);
+    // A word-boundary `#` before the operator puts it inside a comment —
+    // bash starts no heredoc there (covers `# c <<EOF` and `cmd;# c <<EOF`).
+    if (/^#|[\s;|&(]#/.test(before)) return null;
+    // Unbalanced unescaped quotes before the operator mean it sits inside a
+    // multi-line string — literal text, not a redirect.
+    const dq = (before.match(/(?<!\\)"/g) ?? []).length;
+    const sq = (before.match(/(?<!\\)'/g) ?? []).length;
+    if (dq % 2 || sq % 2) return null;
+    return m[3];
+  };
   const lines = cmd.split("\n");
   const drop = new Set<number>();
   const pending: string[] = [];
@@ -227,9 +252,8 @@ export function stripHeredocBodies(cmd: string): string {
       }
       continue;
     }
-    const m = line.match(HEREDOC_START_RE);
-    if (m) {
-      const delim = m[3];
+    const delim = findHeredocStart(line);
+    if (delim) {
       if (!pending.includes(delim)) bodyStart.set(delim, i + 1);
       pending.push(delim);
     }

@@ -357,6 +357,40 @@ describe("checkCommandForCredentialPaths", () => {
 		expect(result.denied).toBeNull();
 		expect(result.warned).toBeNull();
 	});
+
+	// Bypass regression: a FALSE heredoc start (operator text bash does not
+	// actually parse as a redirect) must not put the scanner in body mode —
+	// that would drop live command lines from the credential scan.
+	it("line comment ending in <<EOF does not hide a live credential line (bypass)", () => {
+		const result = checkCommandForCredentialPaths("# usage: tool <<EOF\ncat .ssh/id_rsa\nEOF", cwd);
+		expect(result.denied).toBe(".ssh");
+	});
+
+	it("semicolon-comment <<EOF does not hide a live credential line (bypass)", () => {
+		const result = checkCommandForCredentialPaths("echo hi;# c <<EOF\ncat .ssh/id_rsa\nEOF", cwd);
+		expect(result.denied).toBe(".ssh");
+	});
+
+	it("glued x<<EOF (literal word, not a redirect) does not hide a live credential line (bypass)", () => {
+		const result = checkCommandForCredentialPaths("echo foo<<EOF\ncat .ssh/id_rsa\nEOF", cwd);
+		expect(result.denied).toBe(".ssh");
+	});
+
+	it("string closed before a live credential line is not hidden (false start in unterminated string)", () => {
+		// line 0: operator text inside an unterminated string (no bash redirect);
+		// the string closes on line 1, so line 2 is a LIVE command
+		const result = checkCommandForCredentialPaths(
+			'x="docs: <<EOF\nend of docs"\ncat .ssh/id_rsa\nEOF',
+			cwd,
+		);
+		expect(result.denied).toBe(".ssh");
+	});
+
+	it("real heredoc with a comment AFTER the operator still strips the body", () => {
+		const result = checkCommandForCredentialPaths("cat <<EOF # c\n.ssh/id_rsa\nEOF", cwd);
+		expect(result.denied).toBeNull();
+		expect(result.warned).toBeNull();
+	});
 });
 
 describe("stripHeredocBodies", () => {
@@ -379,5 +413,23 @@ describe("stripHeredocBodies", () => {
 
 	it("handles <<-'EOF' (tab-trimmed, quoted) delimiters", () => {
 		expect(stripHeredocBodies("cat <<-\u0027EOF\'\n\tbody\n\tEOF\ndone")).toBe("cat <<-'EOF'\n\tEOF\ndone");
+	});
+
+	// False-start declines: bash parses none of these as heredoc starts, so
+	// the following lines must stay in the text (never enter body mode).
+	it("keeps text when <<EOF sits inside a line comment", () => {
+		expect(stripHeredocBodies("# c <<EOF\nbody\nEOF")).toBe("# c <<EOF\nbody\nEOF");
+	});
+
+	it("keeps text when <<EOF follows a semicolon comment", () => {
+		expect(stripHeredocBodies("echo hi;# c <<EOF\nbody\nEOF")).toBe("echo hi;# c <<EOF\nbody\nEOF");
+	});
+
+	it("keeps text when <<EOF is glued to a preceding word", () => {
+		expect(stripHeredocBodies("echo foo<<EOF\nbody\nEOF")).toBe("echo foo<<EOF\nbody\nEOF");
+	});
+
+	it("keeps text when <<EOF sits in an unterminated double-quoted string", () => {
+		expect(stripHeredocBodies('x="s <<EOF\nbody\nEOF')).toBe('x="s <<EOF\nbody\nEOF');
 	});
 });
