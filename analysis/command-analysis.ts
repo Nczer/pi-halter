@@ -90,28 +90,35 @@ function normalizeTmuxPayload(keys: string | null): string {
  * tokens (real command separators the parser would otherwise see as arguments)
  * and analyzes each chunk with the full segment pipeline. Recurses through
  * nested tmux send-keys (depth-capped; beyond the cap = unsafe).
+ *
+ * Also returns the payload chunks' resolved paths so the caller can run them
+ * through outside-cwd approval — a payload reading an outside path must
+ * prompt exactly as the same command run directly would.
  */
 async function analyzeTmuxSendKeysPayload(
   payload: string,
   cwd: string,
   depth: number,
-): Promise<{ simple: boolean; unsafe: boolean }> {
-  if (depth > TMUX_PAYLOAD_MAX_DEPTH) return { simple: false, unsafe: true };
+): Promise<{ simple: boolean; unsafe: boolean; paths: string[] }> {
+  if (depth > TMUX_PAYLOAD_MAX_DEPTH) return { simple: false, unsafe: true, paths: [] };
   const chunks = payload.split(TMUX_PAYLOAD_ENTER_RE).map(p => p.trim()).filter(Boolean);
   let simple = true;
   let unsafe = false;
+  const paths: string[] = [];
   for (const chunk of chunks) {
     const parsed = await parseCommand(chunk, cwd);
-    if (parsed.hasParseError) return { simple: false, unsafe: true };
+    if (parsed.hasParseError) return { simple: false, unsafe: true, paths: [] };
+    paths.push(...parsed.paths);
     for (const seg of parsed.segments) {
       const text = seg.text.trim();
       if (getFirstWord(text) === "tmux" && getTmuxSubcommand(text) === "send-keys") {
         const innerPayload = normalizeTmuxPayload(extractTmuxSendKeys(text));
         const r = innerPayload
           ? await analyzeTmuxSendKeysPayload(innerPayload, cwd, depth + 1)
-          : { simple: true, unsafe: false };
+          : { simple: true, unsafe: false, paths: [] };
         simple &&= r.simple;
         unsafe ||= r.unsafe;
+        paths.push(...r.paths);
       } else {
         const a = await analyzeSegment(seg, cwd);
         simple &&= a.isSimple;
@@ -119,7 +126,7 @@ async function analyzeTmuxSendKeysPayload(
       }
     }
   }
-  return { simple, unsafe };
+  return { simple, unsafe, paths };
 }
 
 export async function analyzeCommand(
@@ -155,6 +162,9 @@ export async function analyzeCommand(
     const r = await analyzeTmuxSendKeysPayload(payload, cwd, 1);
     tmuxPayloadSimple &&= r.simple;
     tmuxPayloadUnsafe ||= r.unsafe;
+    // Payload paths join the command's path set so getOutsideCwdPaths below
+    // applies the same outside-cwd approval bar as for direct commands.
+    paths.push(...r.paths);
   }
 
   // Merge per-segment risks with whole-command risk
