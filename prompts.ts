@@ -1,7 +1,11 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BuiltPrompt } from "./prompt-builder";
 import type { Store } from "./store";
-import { showSelectIndex, showReasonEditor } from "./selector";
+/** Native select → option index, or null on cancel. Keeps index-based dispatch. */
+async function selectIndex(ctx: ExtensionContext, title: string, options: string[]): Promise<number | null> {
+  const sel = await ctx.ui.select(title, options);
+  return sel === undefined ? null : options.indexOf(sel);
+}
 
 /** User's response to a two-tier prompt. */
 type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | { kind: "no"; reason: string };
@@ -130,7 +134,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
 
 /** Show a tier-2 confirmation ("Always Yes" / "Back"). Returns true on confirm. */
 async function confirmAlways(ctx: ExtensionContext, title: string, body: string): Promise<boolean> {
-  const idx = await showSelectIndex(ctx, title + "\n---\n" + body, ["Always Yes", "Back"]);
+  const idx = await selectIndex(ctx, title + "\n---\n" + body, ["Always Yes", "Back"]);
   return idx === Tier2.Confirm;
 }
 
@@ -147,7 +151,7 @@ async function runBroaderUmbrella(
 ): Promise<PromptResult | null> {
   const broaderPaths = prompt.broaderPaths!;
   const subLabels = broaderPaths.slice(startIdx).map(bp => bp.label);
-  const subIdx = await showSelectIndex(ctx, "Select a broader directory to always allow:", [...subLabels, "Back"]);
+  const subIdx = await selectIndex(ctx, "Select a broader directory to always allow:", [...subLabels, "Back"]);
   if (subIdx === null || subIdx === subLabels.length) return null; // Back / cancel
 
   const chosen = broaderPaths[subIdx + startIdx];
@@ -204,7 +208,7 @@ export async function twoTierAlwaysPrompt(
       ? `⚠️ High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
       : "";
 
-    const idx = await showSelectIndex(ctx, warningPrefix + prompt.title + "\n---\n" + prompt.body, choices);
+    const idx = await selectIndex(ctx, warningPrefix + prompt.title + "\n---\n" + prompt.body, choices);
     if (idx === null) return "no"; // cancelled
 
     // ── Direct actions (no tier-2) ──
@@ -212,8 +216,8 @@ export async function twoTierAlwaysPrompt(
     if (idx === choices.length - 1) return "no";
 
     if (idx === choices.length - 2) {
-      const reason = await showReasonEditor(ctx, "Reason for rejection:");
-      if (reason === null) continue;
+      const reason = await ctx.ui.input("Reason for rejection:");
+      if (reason === undefined) continue;
       return { kind: "no", reason: reason.trim() || "No reason provided" };
     }
 

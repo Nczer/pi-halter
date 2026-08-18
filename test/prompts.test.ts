@@ -1,8 +1,8 @@
 /**
  * twoTierAlwaysPrompt UI dispatch tests.
  *
- * Drives the choice-index dispatch with a fake ctx.ui.custom that returns
- * canned indices/strings. Verifies callback wiring and tier-2 confirmation flow.
+ * Drives the choice-index dispatch with fake ctx.ui.select / ctx.ui.input that
+ * return canned indices/strings. Verifies callback wiring and tier-2 confirmation flow.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { twoTierAlwaysPrompt } from "../prompts";
@@ -12,23 +12,22 @@ import { store } from "../store";
 // ── Fake ctx ───────────────────────────────────────────────────────────
 
 /**
- * Build a fake ExtensionContext whose ui.custom resolves with scripted values.
- * Each ctx.ui.custom call consumes one value (interleaves select + editor calls).
+ * Build a fake ExtensionContext whose ui.select / ui.input resolve with scripted
+ * values. Each call consumes one value (interleaves select + editor calls).
+ * Scripted numbers index into the live options array (select); null = cancel.
  */
 function makeCtx(scripted: (number | string | null)[]): any {
 	let idx = 0;
 	return {
 		ui: {
-			custom: <T>(callback: any): Promise<T> => {
+			select: async (_title: string, options: string[]): Promise<string | undefined> => {
 				const val = scripted[idx++];
-				// Call the callback for setup (harmless in tests; ignores the handler)
-				callback(
-					{ requestRender: () => {} },
-					{ fg: (_c: string, t: string) => t },
-					null,
-					() => {},
-				);
-				return Promise.resolve(val as T);
+				if (val === null || val === undefined) return undefined;
+				return typeof val === "number" ? options[val] : val;
+			},
+			input: async (_title?: string): Promise<string | undefined> => {
+				const val = scripted[idx++];
+				return val === null || val === undefined ? undefined : val;
 			},
 		},
 	};

@@ -74,14 +74,6 @@ export function isInsideCwd(resolved: string, cwd: string): boolean {
   return isChildOf(resolved, cwd);
 }
 
-export function isInsideAutoAllowedDir(resolved: string, dirs: Set<string>): boolean {
-  if (dirs.has(resolved)) return true;
-  for (const d of dirs) {
-    if (isChildOf(resolved, d)) return true;
-  }
-  return false;
-}
-
 export function isAllowedReadPath(resolved: string): boolean {
   return allowedReadPaths.some(d => isChildOf(resolved, d));
 }
@@ -133,11 +125,6 @@ export function isProjectPiPathResolved(resolved: string, cwd: string): boolean 
   return isChildOf(resolved, piDir) && !isChildOf(resolved, getHomePiDir());
 }
 
-export function isProjectPiPath(filePath: string, cwd: string): boolean {
-  const resolved = resolvePathReal(expandTilde(filePath), cwd);
-  return isProjectPiPathResolved(resolved, cwd);
-}
-
 /** Check a pre-resolved path against denied/warned patterns. Returns matched pattern or null. */
 function checkPatternsResolved(filePath: string, resolved: string, patterns: string[]): string | null {
   const names = [path.basename(filePath), path.basename(resolved)];
@@ -162,11 +149,6 @@ export function isPathDeniedResolved(filePath: string, resolved: string): { deni
   return { denied: matched !== null, matchedRule: matched };
 }
 
-export function isPathDenied(filePath: string, cwd: string): { denied: boolean; matchedRule: string | null } {
-  const resolved = resolvePathReal(expandTilde(filePath), cwd);
-  return isPathDeniedResolved(filePath, resolved);
-}
-
 export function isPathWarnedResolved(filePath: string, resolved: string): { warned: boolean; matchedRule: string | null } {
   const matched = checkPatternsResolved(filePath, resolved, warnPaths);
   if (matched) return { warned: true, matchedRule: matched };
@@ -179,11 +161,6 @@ export function isPathWarnedResolved(filePath: string, resolved: string): { warn
     }
   }
   return { warned: false, matchedRule: null };
-}
-
-export function isPathWarned(filePath: string, cwd: string): { warned: boolean; matchedRule: string | null } {
-  const resolved = resolvePathReal(expandTilde(filePath), cwd);
-  return isPathWarnedResolved(filePath, resolved);
 }
 
 // ── Credential path detection for bash commands ──
