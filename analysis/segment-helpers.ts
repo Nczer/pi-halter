@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
-import { isWriteOperation, PACKAGE_MANAGERS } from "../config";
+import { isWriteOperation, PACKAGE_MANAGERS, wrapperCommands } from "../config";
 import { splitOnPipe, tokenizeSegment } from "./tokenizer";
 
 // splitPipeline is splitOnPipe — same semantics (split on | not ||)
@@ -28,8 +28,22 @@ const SIG_REDIRECT_RE = /&?[0-9]*>>?\s*\S+/g;
 const SIG_INPUT_RE = /<\s*\S+/g;
 /** Wrapper arg skip. */
 const WRAPPER_ENV_ASSIGN_RE = /=/;
-const WRAPPER_TIMEOUT_RE = /^\d+(\.\d+)?(?:[smhd])?$/;
+// GNU timeout durations: plain (5), suffixed (5s, 1.5m), suffixed chains
+// (1h30m, 1h30m5s), or clock form (00:05, 1:30:00).
+const WRAPPER_TIMEOUT_RE = /^(?:(?:\d+(\.\d+)?[smhd])+\d*|\d+(\.\d+)?|\d{1,2}(?::\d{1,2}){1,2})$/;
 const WRAPPER_NICE_RE = /^\d+$/;
+
+/**
+ * Wrapper flags that consume the NEXT token as their value (space form).
+ * Without this, `watch -n 1 curl` would resolve "1" as the delegated command.
+ */
+const WRAPPER_VALUE_FLAGS: Record<string, Set<string>> = {
+  watch: new Set(["-n", "--interval"]),
+  xargs: new Set(["-n", "--max-args", "-L", "--max-lines", "-P", "--max-procs", "-s", "--arg-size", "-I", "--replace", "-d", "--delimiter", "-a", "--arg-file", "-E", "--eof"]),
+  parallel: new Set(["-j", "--jobs", "-i", "--input-file", "--block-size", "--group-size", "--jobserver", "--jobserver-batch-size", "--tmpdir", "--basefile", "--results"]),
+  timeout: new Set(["-s", "--signal"]),
+  stdbuf: new Set(["-i", "-o", "-e"]),
+};
 /** Find/fd/rg exec detection. */
 const FIND_EXEC_RE = /-(?:exec|execdir)\b\s+(\S+)/;
 const FD_EXEC_RE = /-(?:x|X)\b\s+(\S+)/;
@@ -84,14 +98,92 @@ export function hasTerminalEscape(segment: string): boolean {
   return TERMINAL_ESCAPE_RE.test(segment);
 }
 
-/** True if an `echo` invocation will interpret backslash escapes (-e or $'…'). */
+/**
+ * True if an `echo` invocation will interpret backslash escapes.
+ * Echo options are the LEADING flag tokens; clusters are legal (-ne = -n -e)
+ * and the last e/E in a cluster wins (bash processes left to right: -Ee →
+ * escapes on, -eE → off). ANSI-C quoting ($'…') always interprets escapes.
+ * Stops at the first non-option token (once arguments start, -e is data).
+ */
 export function echoInterpretsEscapes(segment: string): boolean {
-  return /(?:^|\s)-e(?:\s|$)/.test(segment) || /\$'/.test(segment);
+  if (/\$'/.test(segment)) return true;
+  const tokens = tokenizeSegment(segment);
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (!t.startsWith("-") || t === "--" || t.startsWith("--")) break;
+    if (t.lastIndexOf("e") > t.lastIndexOf("E")) return true;
+  }
+  return false;
 }
 
 export function getFirstWord(segment: string): string {
   const word = segment.trim().split(/\s+/)[0].toLowerCase();
   return path.basename(word);
+}
+
+/** Result of resolving the command a prefix/wrapper delegates to. */
+interface DelegatedResolution {
+  /** Lowercased basename of the delegated command. */
+  cmd: string;
+  /** Index of the delegated command token in `words`. */
+  index: number;
+  /** True for `command -v/-V` lookups (no command is executed). */
+  lookup: boolean;
+}
+
+/**
+ * Resolve the command a shell prefix (command/builtin/exec/env) or wrapper
+ * (timeout/xargs/watch/parallel/nice/ionice/stdbuf) delegates to. Skips the
+ * prefix/wrapper flags, option values, and env assignments to find the actual
+ * command token. Returns null when the segment doesn't delegate to another
+ * command (or the delegated token isn't a command name).
+ */
+function resolveDelegatedTokens(words: string[]): DelegatedResolution | null {
+  if (words.length < 2) return null;
+  const first = (words[0] ?? "").replace(/^\\+/, "");
+  const f = first.toLowerCase();
+  let i = 1;
+  let lookup = false;
+  if (f === "command" || f === "builtin" || f === "exec") {
+    // `command [-p] [-v|-V] name` / `exec [-cl] [-a name] [command]` — skip
+    // lookup/exec flags so the real command name is found.
+    while (i < words.length && /^-[pVvlc]+$/.test(words[i])) {
+      if (f === "command" && /[vV]/.test(words[i])) lookup = true;
+      i++;
+    }
+    if (words[i] === "-a" && i + 1 < words.length) i += 2;
+  } else if (f === "env") {
+    // env [-i] [-u NAME] [--unset=NAME] [-C DIR] [FOO=bar …] cmd
+    while (i < words.length) {
+      const a = words[i];
+      if (a === "-i" || a === "--ignore-environment" || a === "-S" || a === "--split-string") { i++; continue; }
+      if ((a === "-u" || a === "--unset" || a === "-C" || a === "--chdir") && i + 1 < words.length) { i += 2; continue; }
+      if (a.startsWith("--unset=") || a.startsWith("--chdir=")) { i++; continue; }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { i++; continue; }
+      break;
+    }
+  } else if (wrapperCommands.has(f)) {
+    // wrapper [FLAGS/VALUES] cmd — skip flags, their values, and wrapper
+    // option arguments (timeout durations, nice/ionice numbers, env assigns).
+    const valueFlags = WRAPPER_VALUE_FLAGS[f];
+    let skipNext = false;
+    while (i < words.length) {
+      const a = words[i];
+      if (skipNext) { skipNext = false; i++; continue; }
+      if (a.startsWith("-")) {
+        if (valueFlags?.has(a)) skipNext = true;
+        i++;
+        continue;
+      }
+      if (skipWrapperArg(f, a)) { i++; continue; }
+      break;
+    }
+  } else {
+    return null;
+  }
+  const word = words[i] ?? "";
+  if (!word || word.startsWith("-") || word === "__STR__" || word === "__CMD_SUBST__") return null;
+  return { cmd: path.basename(word.toLowerCase()), index: i, lookup };
 }
 
 /**
@@ -103,28 +195,26 @@ export function getFirstWord(segment: string): string {
  */
 export function getEffectiveCommand(segment: string): string {
   const words = tokenizeSegment(segment);
-  let i = 0;
-  let first = (words[i] ?? "").replace(/^\\+/, "");
-  if (first === "command" || first === "builtin" || first === "exec") {
-    i++;
-    // `command [-p] [-v|-V] name` / `exec [-cl] [-a name] [command]` — skip
-    // lookup/exec flags so the real command name is found.
-    while (i < words.length && /^-[pVvlc]$/.test(words[i])) i++;
-    if (words[i] === "-a" && i + 1 < words.length) i += 2;
-  } else if (first === "env") {
-    i++;
-    // env [-i] [-u NAME] [--unset=NAME] [-C DIR] [FOO=bar …] cmd
-    while (i < words.length) {
-      const a = words[i];
-      if (a === "-i" || a === "--ignore-environment" || a === "-S" || a === "--split-string") { i++; continue; }
-      if ((a === "-u" || a === "--unset" || a === "-C" || a === "--chdir") && i + 1 < words.length) { i += 2; continue; }
-      if (a.startsWith("--unset=") || a.startsWith("--chdir=")) { i++; continue; }
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { i++; continue; }
-      break;
-    }
-  }
-  const word = words[i] ?? "";
+  const res = resolveDelegatedTokens(words);
+  if (res) return res.cmd;
+  // Non-delegating segment: effective command is the first word itself
+  // (same as pre-wrapper-resolution behavior, incl. leading-backslash forms).
+  const word = words[0] ?? "";
   return path.basename(word.toLowerCase());
+}
+
+/**
+ * The command a segment actually executes when its first word is a shell
+ * prefix (command/builtin/exec/env) or wrapper (timeout/xargs/watch/…).
+ * `tail` is the text from the delegated command onward (quote-stripped tokens
+ * re-joined) so it can be evaluated as if it were a bare first word.
+ * Returns null for non-delegating segments and `command -v/-V` lookups.
+ */
+export function getDelegatedCommand(segment: string): { cmd: string; tail: string } | null {
+  const words = tokenizeSegment(segment);
+  const res = resolveDelegatedTokens(words);
+  if (!res || res.lookup) return null;
+  return { cmd: res.cmd, tail: words.slice(res.index).join(" ") };
 }
 
 /** Strip /dev/null, /dev/stderr redirects and fd-to-fd redirects from a command string. */
@@ -215,10 +305,18 @@ export function getCommandSignature(segment: string): string {
   const tokens = stripQuotedStrings(cleaned).split(/\s+/);
   const cmd = tokens[0].toLowerCase();
 
+  const cmdBase = path.basename(cmd);
+  // Wrapper/prefix transparency: a wrapped command's signature must name the
+  // delegated command, so an "Always" grant on `timeout curl` can't cover
+  // `timeout ssh`, and a bare `timeout` grant covers nothing wrapped at all.
+  const deleg = resolveDelegatedTokens(tokens);
+  if (deleg && !deleg.lookup) {
+    return `${cmdBase} ${deleg.cmd}`;
+  }
+
   // Package managers: include subcommand for granular control
   // npm test → "npm test", npm install → "npm install"
   // npm -v → "npm" (flag only, no subcommand)
-  const cmdBase = path.basename(cmd);
   if (PACKAGE_MANAGERS.has(cmdBase)) {
     // Find the subcommand: first non-flag token, skipping values of flags that
     // consume the next token (--prefix /x). Inline values (--prefix=/x) are

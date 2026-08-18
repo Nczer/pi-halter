@@ -1,5 +1,5 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
-import { containsCommandSubstitution, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes } from "../analysis/segment-helpers";
+import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes } from "../analysis/segment-helpers";
 import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE } from "../analysis/path-analysis";
 import { tokenizeSegment } from "../analysis/tokenizer";
 import type { Store, BashRequest, Decision } from "../decision-engine";
@@ -127,12 +127,33 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
 
   const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
   const sigFirstWords = analysis.signatures.map(getFirstWord);
+  // Wrapper transparency for grants: a segment that delegates to another
+  // command (timeout/xargs/command/env …) is approved by
+  //   (a) an exact signature grant — the signature includes the delegated
+  //       command name ("timeout curl"), so it can't cover a different
+  //       wrapped command, or
+  //   (b) a grant for the wrapped command itself ("curl") — the user already
+  //       approved that command, and wrapping must not force re-approval.
+  // A grant for the wrapper name ("timeout") matches NEITHER: that is the
+  // bypass being closed, and the static wrapper allowlist fallback must not
+  // apply either.
+  const delegatedBySeg = analysis.segments.map(getDelegatedCommand);
   const isSigApproved = (sig: string, segIdx: number) => {
     // Relative-path segments (./node_modules/.bin/npm test) must never inherit
     // grants for the bare command name — a repo-shipped executable named npm/pip
     // would otherwise inherit session-wide `npm *` grants. Check BEFORE the
     // store grants.
     if (relPathIdxSet.has(segIdx)) return false;
+    const deleg = delegatedBySeg[segIdx];
+    if (deleg) {
+      // No static allowlist fallback: the delegating word (env/command/exec/…)
+      // is not itself user-approved, so the segment needs an explicit grant —
+      // otherwise `env cat …` would inherit `cat`'s allowlist membership and
+      // skip env's PATH/LD_PRELOAD warning entirely.
+      if (store.hasAllowedBash(sig)) return true; // exact "timeout curl"
+      if (store.hasAllowedBash(deleg.cmd)) return true; // grant for wrapped cmd
+      return store.hasAllowedBashPrefix(deleg.cmd);
+    }
     if (store.hasAllowedBash(sig)) return true;
     if (store.hasAllowedBashPrefix(sig)) return true;
     if (segIsSafeSubcommand[segIdx]) return true;
