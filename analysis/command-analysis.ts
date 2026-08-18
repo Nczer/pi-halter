@@ -1,5 +1,6 @@
 import { parseCommand } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
+import { getTmuxSubcommand, extractTmuxSendKeys } from "./tmux-helpers";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs, checkCommandForCredentialPaths } from "./path-analysis";
 import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE } from "./segment-helpers";
@@ -67,6 +68,60 @@ export interface AnalyzeCommandOptions {
   isInsideAllowedDir?: (path: string) => boolean;
 }
 
+const TMUX_PAYLOAD_MAX_DEPTH = 3;
+const TMUX_PAYLOAD_ENTER_RE = /\s+(?:Enter|C-m)\s+/;
+const TMUX_PAYLOAD_QUOTE_RE = /^("|')(.*)\1$/;
+
+/**
+ * Normalize a raw send-keys key string into a parseable command payload:
+ * strip the trailing Enter keystroke and an outer quote pair (key sequences
+ * commonly arrive as one quoted argument: 'ls -la').
+ */
+function normalizeTmuxPayload(keys: string | null): string {
+  if (!keys) return "";
+  return keys.replace(/\s+Enter$/, "").replace(/^Enter$/, "")
+    .trim().replace(TMUX_PAYLOAD_QUOTE_RE, "$2").trim();
+}
+
+/**
+ * Analyze a `tmux send-keys` payload with the same bar as a direct command.
+ * The payload is typed into a pane's shell, so every Enter-terminated chunk
+ * must be as safe as running it directly. Splits on standalone Enter/C-m key
+ * tokens (real command separators the parser would otherwise see as arguments)
+ * and analyzes each chunk with the full segment pipeline. Recurses through
+ * nested tmux send-keys (depth-capped; beyond the cap = unsafe).
+ */
+async function analyzeTmuxSendKeysPayload(
+  payload: string,
+  cwd: string,
+  depth: number,
+): Promise<{ simple: boolean; unsafe: boolean }> {
+  if (depth > TMUX_PAYLOAD_MAX_DEPTH) return { simple: false, unsafe: true };
+  const chunks = payload.split(TMUX_PAYLOAD_ENTER_RE).map(p => p.trim()).filter(Boolean);
+  let simple = true;
+  let unsafe = false;
+  for (const chunk of chunks) {
+    const parsed = await parseCommand(chunk, cwd);
+    if (parsed.hasParseError) return { simple: false, unsafe: true };
+    for (const seg of parsed.segments) {
+      const text = seg.text.trim();
+      if (getFirstWord(text) === "tmux" && getTmuxSubcommand(text) === "send-keys") {
+        const innerPayload = normalizeTmuxPayload(extractTmuxSendKeys(text));
+        const r = innerPayload
+          ? await analyzeTmuxSendKeysPayload(innerPayload, cwd, depth + 1)
+          : { simple: true, unsafe: false };
+        simple &&= r.simple;
+        unsafe ||= r.unsafe;
+      } else {
+        const a = await analyzeSegment(seg, cwd);
+        simple &&= a.isSimple;
+        unsafe ||= a.isUnsafe;
+      }
+    }
+  }
+  return { simple, unsafe };
+}
+
 export async function analyzeCommand(
   cmd: string,
   cwd: string,
@@ -84,6 +139,23 @@ export async function analyzeCommand(
 
   const allSimple = segmentAnalyses.every(a => a.isSimple);
   const hasUnsafe = segmentAnalyses.some(a => a.isUnsafe);
+
+  // tmux send-keys payloads inherit the session's auto-allow rules — and must
+  // meet the same auto-allow bar as a direct command. The sync evaluator's
+  // quick check (isTmuxSendKeysSafe) predates wrapper/prefix delegation, so
+  // the payload is recursively analyzed here with the full pipeline
+  // (timeout 5 curl, command -p sh -c, nice rm, git config, … all prompt).
+  let tmuxPayloadSimple = true;
+  let tmuxPayloadUnsafe = false;
+  for (const seg of segments) {
+    const text = seg.text.trim();
+    if (getFirstWord(text) !== "tmux" || getTmuxSubcommand(text) !== "send-keys") continue;
+    const payload = normalizeTmuxPayload(extractTmuxSendKeys(text));
+    if (!payload) continue; // bare Enter keystroke — harmless
+    const r = await analyzeTmuxSendKeysPayload(payload, cwd, 1);
+    tmuxPayloadSimple &&= r.simple;
+    tmuxPayloadUnsafe ||= r.unsafe;
+  }
 
   // Merge per-segment risks with whole-command risk
   const segmentRisks = segmentAnalyses.map(a => a.risk);
@@ -130,9 +202,9 @@ export async function analyzeCommand(
     paths,
     hasParseError,
     safety: {
-      canBeAutoAllowed: !hasUnsafe,
-      isSimple: allSimple,
-      hasUnsafePattern: hasUnsafe,
+      canBeAutoAllowed: !hasUnsafe && !tmuxPayloadUnsafe,
+      isSimple: allSimple && tmuxPayloadSimple,
+      hasUnsafePattern: hasUnsafe || tmuxPayloadUnsafe,
     },
     risk: wholeRisk,
     relativePathSegmentIndices,

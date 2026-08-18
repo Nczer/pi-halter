@@ -218,10 +218,18 @@ describe("HIGH: sed combined flag bypass", () => {
 		expect(d.kind).not.toBe("auto-allow");
 	});
 
-	it("sed -in → auto-allows (next-line, NOT in-place)", async () => {
+	it("sed -in → prompts (-i with 'n' backup suffix = in-place, GNU sed verified)", async () => {
 		const store = createStore();
 		const d = await decide({ type: "bash", command: "sed -in 's/foo/bar/' file.txt", cwd }, store);
-		expect(d.kind).toBe("auto-allow");
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("sed -in == sed -ni (same flags, different order → same decision)", async () => {
+		const store = createStore();
+		const dNi = await decide({ type: "bash", command: "sed -ni 's/a/b/' file.txt", cwd }, store);
+		const dIn = await decide({ type: "bash", command: "sed -in 's/a/b/' file.txt", cwd }, store);
+		expect(dNi.kind).toBe(dIn.kind);
+		expect(dIn.kind).toBe("prompt");
 	});
 
 	it("sed -i → prompts (in-place)", async () => {

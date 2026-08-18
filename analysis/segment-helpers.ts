@@ -390,6 +390,36 @@ function hasDangerousInlineConfig(arg: string, next: string | undefined): boolea
 
 // ── Git subcommand danger handlers ──
 
+/** `git config` flags that modify a config file (write, or run an editor). */
+const GIT_CONFIG_WRITE_FLAGS = new Set(["--add", "--unset", "--replace-all", "--remove-section", "--rename-section", "--edit", "-e"]);
+
+/** Read-only trailing flags that may follow the key name. */
+const GIT_CONFIG_READ_TAIL_FLAGS = new Set(["--name-only", "--show-origin", "--null", "-z"]);
+
+/**
+ * True if `git config` writes a config file (vs. a read like `--list` or
+ * `--get name`). Persistent config is a code-execution vector (alias.*=!cmd,
+ * core.fsmonitor, core.pager, templateDir hooks) and lives OUTSIDE cwd
+ * (~/.gitconfig), so path checks can never catch it — every set form must
+ * prompt.
+ */
+function isGitConfigWrite(subArgs: string[]): boolean {
+  if (subArgs.some(a => GIT_CONFIG_WRITE_FLAGS.has(a))) return true;
+  // Find the first non-flag token (the key name). Any inline `name=value`
+  // token is a set; anything after the key (beyond read-only tail flags) is
+  // the value.
+  let keyIdx = -1;
+  for (let i = 0; i < subArgs.length; i++) {
+    const a = subArgs[i];
+    if (a.startsWith("-")) continue;
+    if (a.includes("=")) return true;
+    keyIdx = i;
+    break;
+  }
+  if (keyIdx < 0) return false; // pure read: --list, --get, scoped list, bare flags
+  return subArgs.slice(keyIdx + 1).some(a => !GIT_CONFIG_READ_TAIL_FLAGS.has(a));
+}
+
 const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => boolean }> = [
   { match: (sub) => sub === "rm" },
   { match: (sub, a) => sub === "clean" && a.some(x => GIT_CLEAN_FLAGS_RE.test(x)) },
@@ -397,6 +427,7 @@ const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => bo
   { match: (sub, a) => sub === "push" && a.some(x => x === "--force" || x === "--force-with-lease" || x === "-f") },
   { match: (sub, a) => sub === "reflog" && a.includes("expire") },
   { match: (sub, a) => sub === "gc" && a.some(x => x.startsWith("--prune")) },
+  { match: (sub, a) => sub === "config" && isGitConfigWrite(a) },
 ];
 
 /** Git global flags that appear before the subcommand. */

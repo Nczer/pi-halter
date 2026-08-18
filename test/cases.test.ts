@@ -42,8 +42,8 @@ const cases: TestCase[] = [
 	{ cmd: "sed -i.backup 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "sed -i.backup (long backup)" },
 	{ cmd: "sed --in-place 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "sed --in-place (long form)" },
 	{ cmd: "sed --in-place=.bak 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "sed --in-place=.bak" },
-	{ cmd: "sed -in 's/foo/bar/' file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "sed -in (next-line, NOT in-place)" },
-	{ cmd: "sed -i/s/foo/bar/ file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "sed -i/... (insert command, NOT in-place)" },
+	{ cmd: "sed -in 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "sed -in (-i with 'n' backup suffix = in-place)" },
+	{ cmd: "sed -i/s/foo/bar/ file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "sed -i/... (not a valid -i form; GNU sed errors on unterminated s)" },
 
 	// ═══════════════════════════════════════════════════════════
 	// perl

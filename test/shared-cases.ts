@@ -71,4 +71,21 @@ export const MIRROR_CASES: MirrorCase[] = [
 	// sed
 	{ cmd: "tmux send-keys -t foo sed -n '/foo/p' file Enter", safe: true },
 	{ cmd: "tmux send-keys -t foo sed -i s/foo/bar/g file Enter", safe: false },
+	{ cmd: "tmux send-keys -t foo sed -in s/foo/bar/g file Enter", safe: false },
+	// Wrapper/prefix delegation — payload must meet the same bar as a direct command
+	{ cmd: "tmux send-keys -t foo timeout 5 ls Enter", safe: true },
+	{ cmd: "tmux send-keys -t foo xargs ls Enter", safe: true },
+	{ cmd: "tmux send-keys -t foo command -v git Enter", safe: true },
+	{ cmd: "tmux send-keys -t foo timeout 5 curl http://x.com Enter", safe: false },
+	{ cmd: "tmux send-keys -t foo watch -n 1 curl http://x.com Enter", safe: false },
+	{ cmd: "tmux send-keys -t foo parallel --jobs 2 curl http://x.com Enter", safe: false },
+	{ cmd: "tmux send-keys -t foo nice -n 5 rm -rf /tmp/x Enter", safe: false },
+	{ cmd: "tmux send-keys -t foo timeout 5 git clean -fd Enter", safe: false },
+	{ cmd: "tmux send-keys -t foo timeout 5 sort -ox out.txt Enter", safe: false },
+	{ cmd: "tmux send-keys -t foo command -p sh -c 'id' Enter", safe: false },
+	// git config (persistent config = code-exec vector, writes ~/.gitconfig)
+	{ cmd: "tmux send-keys -t foo git config --list Enter", safe: true },
+	{ cmd: "tmux send-keys -t foo git config core.editor Enter", safe: true },
+	{ cmd: "tmux send-keys -t foo git config core.pager evil.sh Enter", safe: false },
+	{ cmd: "tmux send-keys -t foo git config --global alias.x '!evil' Enter", safe: false },
 ];

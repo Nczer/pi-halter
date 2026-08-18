@@ -197,6 +197,48 @@ export function isPathWarned(filePath: string, cwd: string): { warned: boolean; 
 export const CREDENTIAL_SCAN_RE = /\.(?:ssh|gnupg|gpg|vault|secret|secrets|env|envrc|aws|gcloud|azure|git-credentials|hg|netrc|npmrc|pypirc|docker|pem)\b|\bid_(?:rsa|ed25519|ecdsa|dsa)\b/;
 
 /**
+ * Strip heredoc BODIES from a command so credential scanning doesn't flag
+ * credential-looking tokens that are merely DATA fed to stdin (the body of
+ * `cat > x <<'EOF' … .ssh/id_rsa … EOF`). A real credential READ is always in
+ * the command line (operand, redirect target), never in the body.
+ *
+ * Conservative by design: only the common form is stripped — the heredoc
+ * operator ends the logical line (optionally followed by a comment or a
+ * pipeline/background operator). Quoted pseudo-heredocs mid-line, here-strings
+ * (`<<<`), and UNTERMINATED heredocs are left untouched (fail-closed: the
+ * text is still scanned; an unterminated heredoc also fails the tree-sitter
+ * parse and prompts anyway).
+ */
+export function stripHeredocBodies(cmd: string): string {
+  const HEREDOC_START_RE = /<<(?!<)(-?)\s*(['"]?)([A-Za-z0-9_][A-Za-z0-9_.-]*)\2\s*(?:[#|&;].*)?$/;
+  const lines = cmd.split("\n");
+  const drop = new Set<number>();
+  const pending: string[] = [];
+  const bodyStart = new Map<string, number>();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (pending.length > 0) {
+      const first = pending[0];
+      if (line.trim() === first) {
+        pending.shift();
+        const start = bodyStart.get(first) ?? i;
+        bodyStart.delete(first);
+        for (let j = start; j < i; j++) drop.add(j);
+      }
+      continue;
+    }
+    const m = line.match(HEREDOC_START_RE);
+    if (m) {
+      const delim = m[3];
+      if (!pending.includes(delim)) bodyStart.set(delim, i + 1);
+      pending.push(delim);
+    }
+  }
+  if (drop.size === 0) return cmd;
+  return lines.filter((_, i) => !drop.has(i)).join("\n");
+}
+
+/**
  * Check a bash command string for credential path references.
  * Returns the first denied and/or warned pattern found.
  * Uses a fast regex pre-scan to skip the common case (no credential patterns).
@@ -205,8 +247,12 @@ export function checkCommandForCredentialPaths(
   command: string,
   cwd: string,
 ): { denied: string | null; warned: string | null } {
+  // Heredoc bodies are stdin DATA, not path operands — strip them before
+  // scanning so credential names in the body don't false-positive.
+  const scanCmd = stripHeredocBodies(command);
+
   // Quote-aware tokenization (strips quotes so '.env' is detected as .env).
-  const tokens = tokenizeSegment(command);
+  const tokens = tokenizeSegment(scanCmd);
 
   // Fast pre-scan: if no credential pattern appears in the command, skip entirely.
   // Also check the dequoted version to prevent quote-splitting bypasses (e.g., .en''v).
@@ -214,8 +260,8 @@ export function checkCommandForCredentialPaths(
   // Glob chars defeat the string regex (.s?sh ≠ .ssh) — run the precise per-token
   // glob check instead of trusting the pre-scan.
   const dequoted = tokens.join(" ");
-  const unstripped = command.replace(/\\/g, "");
-  const hasGlob = /[*?\[\]]/.test(command);
+  const unstripped = scanCmd.replace(/\\/g, "");
+  const hasGlob = /[*?\[\]]/.test(scanCmd);
   if (
     !hasGlob &&
     !CREDENTIAL_SCAN_RE.test(command) &&

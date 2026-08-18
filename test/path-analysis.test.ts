@@ -15,6 +15,7 @@ import {
 	isPathWarned,
 	isPathWarnedResolved,
 	checkCommandForCredentialPaths,
+	stripHeredocBodies,
 } from "../analysis/path-analysis";
 
 const home = os.homedir();
@@ -315,4 +316,68 @@ describe("checkCommandForCredentialPaths", () => {
 			expect(result.warned).toBeNull();
 		});
 	}
+
+	// Heredoc bodies are stdin DATA — credential names in the body are not
+	// path operands and must not false-positive (FP regression: the agent's
+	// own probe commands writing test files got blocked on this).
+	it("heredoc body with denied credential name is data (no match)", () => {
+		const result = checkCommandForCredentialPaths("cat > out.txt <<'EOF'\n.ssh/id_rsa\nEOF", cwd);
+		expect(result.denied).toBeNull();
+		expect(result.warned).toBeNull();
+	});
+
+	it("heredoc body with warned credential name is data (no match)", () => {
+		const result = checkCommandForCredentialPaths("wc -l x <<EOF\n.env\nEOF", cwd);
+		expect(result.denied).toBeNull();
+		expect(result.warned).toBeNull();
+	});
+
+	it("credential in the command line beside a heredoc still matches", () => {
+		const result = checkCommandForCredentialPaths("cat .ssh/id_rsa <<EOF\nbody\nEOF", cwd);
+		expect(result.denied).toBe(".ssh");
+	});
+
+	it("redirect target credential still matches with heredoc present", () => {
+		const result = checkCommandForCredentialPaths("cat <<EOF > .ssh/id_rsa\nbody\nEOF", cwd);
+		expect(result.denied).toBe(".ssh");
+	});
+
+	it("quoted pseudo-heredoc mid-line does not strip following lines", () => {
+		const result = checkCommandForCredentialPaths('echo "fake <<EOF text" && cat .env', cwd);
+		expect(result.warned).toBe(".env");
+	});
+
+	it("unterminated heredoc stays fail-closed (body still scanned)", () => {
+		const result = checkCommandForCredentialPaths("cat <<EOF\n.ssh/id_rsa", cwd);
+		expect(result.denied).toBe(".ssh");
+	});
+
+	it("multiple heredocs on one line: bodies until both terminators", () => {
+		const result = checkCommandForCredentialPaths("cmd <<A <<B\na-body.ssh\nA\nb-body.env\nB", cwd);
+		expect(result.denied).toBeNull();
+		expect(result.warned).toBeNull();
+	});
+});
+
+describe("stripHeredocBodies", () => {
+	it("strips a terminated heredoc body only", () => {
+		expect(stripHeredocBodies("cat > out.txt <<'EOF'\nline1\nline2\nEOF\necho done"))
+			.toBe("cat > out.txt <<'EOF'\nEOF\necho done");
+	});
+
+	it("keeps the command text for non-heredoc commands", () => {
+		expect(stripHeredocBodies("ls -la && cat x")).toBe("ls -la && cat x");
+	});
+
+	it("keeps everything when the heredoc is unterminated", () => {
+		expect(stripHeredocBodies("cat <<EOF\nbody")).toBe("cat <<EOF\nbody");
+	});
+
+	it("does not treat here-strings (<<<) as heredocs", () => {
+		expect(stripHeredocBodies("read x <<< .ssh/id_rsa")).toBe("read x <<< .ssh/id_rsa");
+	});
+
+	it("handles <<-'EOF' (tab-trimmed, quoted) delimiters", () => {
+		expect(stripHeredocBodies("cat <<-\u0027EOF\'\n\tbody\n\tEOF\ndone")).toBe("cat <<-'EOF'\n\tEOF\ndone");
+	});
 });

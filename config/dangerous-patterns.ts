@@ -46,8 +46,8 @@ export const dangerousContextPatterns: { pattern: RegExp; label: string }[] = [
   { pattern: /\bbash\s+-[ic]\b/i, label: "bash interactive/command" },
   { pattern: /\bsource\b.*\.(?:env|bashrc|profile|secret|local)\b/i, label: "source (config loading)" },
   // Retained for risk analysis — already caught by specific checks in isSegmentUnsafe
-  { pattern: /\bperl\s+-[a-z]*i\b/i, label: "perl -i (in-place file modification)" },
-  { pattern: /\bsed\s+-i(?:\s|$|\.)/i, label: "sed -i (in-place file modification)" },
+  { pattern: /\bperl\s+-[a-z]*i[a-z]*(?:\.\S+)?(?:\s|$)/i, label: "perl -i (in-place file modification)" },
+  { pattern: /\bsed\s+-[a-z]*i[a-z]*(?:\.\S+)?(?:\s|$)/i, label: "sed -i (in-place file modification)" },
   { pattern: /\bsed\s+--in-place\b/i, label: "sed --in-place (in-place file modification)" },
   { pattern: /\bgit\s+push\s+.*--force\b/i, label: "git push --force" },
   { pattern: /\bgit\s+reset\s+.*--hard\b/i, label: "git reset --hard" },
