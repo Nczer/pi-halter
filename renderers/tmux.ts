@@ -8,9 +8,6 @@
 
 import { splitOnPipe, splitIntoSegments, tokenize } from "../analysis/tokenizer";
 
-// Re-export tokenizer utilities for backwards compatibility
-export { splitOnPipe, splitIntoSegments };
-
 // ── Flag definitions ──
 
 /** Tmux boilerplate flags to strip (agent infrastructure, not semantic). */
