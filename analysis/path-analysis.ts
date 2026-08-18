@@ -299,7 +299,6 @@ export function checkCommandForCredentialPaths(
 
   // Valid env-var name pattern: starts with letter/underscore, only alphanumeric/underscore.
   // Flags like `--output=path` have a leading dash, so they won't match.
-  // Valid env-var name pattern: starts with letter/underscore, only alphanumeric/underscore.
   const ENV_VAR_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
   /** Check a path string against denied/warned patterns, returning the matched rule. */
@@ -325,11 +324,21 @@ export function checkCommandForCredentialPaths(
       return "skip";
     }
 
-    // Skip env assignments (FOO=bar, FOO=/path)
+    // Env assignments (FOO=bar, FOO=/path): check the value, never skip it.
+    // Pure assignment statements produce no parsed segments, so the value is
+    // invisible to AST-based analysis; a credential path staged in a variable
+    // (`X=~/.ssh && cat $X`) would otherwise auto-allow — the later `$VAR`
+    // use is just a non-path token to the scanner. The assignment is the only
+    // statically visible moment, so it must be blocked (denied) or prompted
+    // (warned) itself.
     const eqIdx = t.indexOf("=");
     if (eqIdx !== -1) {
       const beforeEquals = t.slice(0, eqIdx);
-      if (ENV_VAR_NAME_RE.test(beforeEquals)) return "skip";
+      if (ENV_VAR_NAME_RE.test(beforeEquals)) {
+        const value = t.slice(eqIdx + 1);
+        if (value) return checkPath(value);
+        return "skip"; // FOO= (empty value) — nothing to check
+      }
     }
 
     return checkPath(t);
@@ -376,23 +385,36 @@ export function checkCommandForCredentialPaths(
     return "skip";
   };
 
-  for (const token of tokens) {
-    // Check original token
-    const result = checkToken(token);
-    if (accumulateResult(result)) return { denied, warned };
+  for (const rawToken of tokens) {
+    // Whitespace-only tokenization leaves shell operators stuck to or inside
+    // tokens: `cat ~/.ssh;`, `cat ~/.ssh|grep`, `cat ~/.ssh>/tmp/x`,
+    // `X=~/.ssh&& ls`, `$(cat ~/.ssh)`. Unquoted, a path can never contain
+    // `;`, `&`, `|`, `<`, `>`, or end with `)` — there they are always shell
+    // syntax — so split the token on them and check every part. Without this,
+    // `cat ~/.ssh; ls` evades the scan entirely (token is `~/.ssh;`).
+    const parts = rawToken
+      .split(/[;&|<>]+/)
+      .map(p => p.replace(/\)+$/, ""))
+      .filter(Boolean);
 
-    // Also check token with backslashes stripped to prevent backslash-splitting
-    // bypasses (e.g., .s\sh instead of .ssh). Tokenizer preserves backslashes
-    // outside quotes, so we handle it here.
-    if (token.includes("\\")) {
-      const unescaped = token.replace(/\\/g, "");
-      const unescapedResult = checkToken(unescaped);
-      if (accumulateResult(unescapedResult)) return { denied, warned };
+    for (const token of parts) {
+      // Check original token
+      const result = checkToken(token);
+      if (accumulateResult(result)) return { denied, warned };
+
+      // Also check token with backslashes stripped to prevent backslash-splitting
+      // bypasses (e.g., .s\sh instead of .ssh). Tokenizer preserves backslashes
+      // outside quotes, so we handle it here.
+      if (token.includes("\\")) {
+        const unescaped = token.replace(/\\/g, "");
+        const unescapedResult = checkToken(unescaped);
+        if (accumulateResult(unescapedResult)) return { denied, warned };
+      }
+
+      // Also check glob-expanded variants (~/.s*sh → .ssh, id_rs? → id_rsa).
+      const globResult = checkTokenGlob(token);
+      if (accumulateResult(globResult)) return { denied, warned };
     }
-
-    // Also check glob-expanded variants (~/.s*sh → .ssh, id_rs? → id_rsa).
-    const globResult = checkTokenGlob(token);
-    if (accumulateResult(globResult)) return { denied, warned };
   }
 
   return { denied, warned };
