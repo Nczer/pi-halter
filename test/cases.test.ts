@@ -649,7 +649,7 @@ const cases: TestCase[] = [
 	// ═══════════════════════════════════════════════════════════
 	// exec — replaces shell with the command (not in allowlist → prompts)
 	// ═══════════════════════════════════════════════════════════
-	{ cmd: "exec rm file.txt", simple: false, unsafe: false, decision: "prompt", desc: "exec rm (not in allowlist, prompts on safe default)" },
+	{ cmd: "exec rm file.txt", simple: false, unsafe: true, decision: "prompt", desc: "exec rm (delegated rm flagged dangerous, not in allowlist, prompts)" },
 	{ cmd: "exec cat file.txt", simple: false, unsafe: false, decision: "prompt", desc: "exec cat (not in allowlist, prompts on safe default)" },
 
 	// ═══════════════════════════════════════════════════════════

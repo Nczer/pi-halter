@@ -6,12 +6,14 @@ import {
   isTrustedScriptCommand,
   wrapperCommands,
   SHELL_INTERPRETERS,
+  SCRIPT_INTERPRETERS,
 } from "../config";
 import type { BashSegment } from "./bash-parser";
 import { isFirstTokenRelativePath } from "./path-analysis";
 import {
   containsCommandSubstitution,
   getFirstWord,
+  getDelegatedCommand,
   splitPipeline,
   hasWriteRedirect,
   isGitDangerous,
@@ -69,6 +71,69 @@ const REDIRECT_ONLY_RE = /^[0-9]*&?>+/;
 const PIPELINE_RELATIVE_RE1 = /^\.\//;
 const PIPELINE_RELATIVE_RE2 = /^\.\.\//;
 
+/**
+ * Wrapper-transparency evaluation. When a segment's first word delegates to
+ * another command (`command -p sh …`, `timeout 5 curl …`, `xargs git …`), the
+ * delegated command must pass the same checks a bare first word would: the
+ * full evaluator pass (git/find/tmux/system flags…) plus the dangerous-command
+ * patterns and the shell/script interpreter check. Wrapping must never grant
+ * auto-allow powers the wrapped command lacks on its own.
+ */
+function analyzeDelegated(
+  delegated: { cmd: string; tail: string },
+  cwd: string,
+  seg: BashSegment,
+): { hasDanger: boolean; severity: "high" | "medium" | null; reasons: string[] } {
+  const { cmd, tail } = delegated;
+  const reasons: string[] = [];
+  let hasDanger = false;
+  let severity: "high" | "medium" | null = null;
+
+  const pseudoSeg: BashSegment = {
+    text: tail,
+    ops: seg.ops,
+    hasSubshell: seg.hasSubshell,
+    subshellTexts: seg.subshellTexts,
+  };
+  for (const ev of EVALUATORS) {
+    const result = ev.evaluate(pseudoSeg, cwd, {
+      firstWord: cmd,
+      obfuscation: { detected: false, techniques: [] },
+      gitDangerous: cmd === "git" ? isGitDangerous(tail) : false,
+    });
+    if (result.hasDanger) hasDanger = true;
+    if (result.severity === "high" || (!severity && result.severity === "medium")) {
+      severity = result.severity;
+    }
+    for (const reason of result.reasons) {
+      const tag = ev.name.charAt(0).toUpperCase() + ev.name.slice(1);
+      const tagged = `[${tag}] ${reason}`;
+      if (!reasons.includes(tagged)) reasons.push(tagged);
+    }
+  }
+
+  // Dangerous command patterns against the delegated command name (a wrapper
+  // running curl/ssh/rm … is as dangerous as the bare command).
+  for (const { pattern, label } of dangerousCommandPatterns) {
+    if (pattern.test(cmd)) {
+      hasDanger = true;
+      if (!severity) severity = "medium";
+      const tagged = `[Pattern] ${label}`;
+      if (!reasons.includes(tagged)) reasons.push(tagged);
+    }
+  }
+
+  // Shell/script interpreters — arbitrary code execution.
+  if (SHELL_INTERPRETERS.has(cmd) || SCRIPT_INTERPRETERS.has(cmd)) {
+    hasDanger = true;
+    severity = "high";
+    const tagged = `[Pattern] ${cmd} (shell/script interpreter execution)`;
+    if (!reasons.includes(tagged)) reasons.push(tagged);
+  }
+
+  return { hasDanger, severity, reasons };
+}
+
 // ── Unified segment analysis ──
 
 /**
@@ -108,6 +173,23 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       // Split on space or forward slash so "curl/wget" → "curl" (matches pattern key extraction)
       const key = reason.split(/[\s/]/)[0].toLowerCase();
       coveredKeys.add(key);
+    }
+  }
+
+  // Wrapper transparency: if the first word delegates to another command
+  // (command -p sh …, timeout 5 curl …, xargs git …), that command must pass
+  // the same checks a bare first word would — evaluators, dangerous patterns,
+  // and (in isSimple below) the static allowlist. Wrapping must never grant
+  // powers the wrapped command lacks on its own.
+  const delegated = getDelegatedCommand(segment);
+  if (delegated) {
+    const d = analyzeDelegated(delegated, cwd, seg);
+    if (d.hasDanger) aggregatedHasDanger = true;
+    if (d.severity === "high" || (!aggregatedSeverity && d.severity === "medium")) {
+      aggregatedSeverity = d.severity;
+    }
+    for (const reason of d.reasons) {
+      if (!aggregatedReasons.includes(reason)) aggregatedReasons.push(reason);
     }
   }
 
@@ -169,11 +251,39 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
           if (!pipelineReasons.includes(tagged)) pipelineReasons.push(tagged);
         }
       }
+
+      // Wrapper transparency for pipeline stages too (ls | xargs curl, find | timeout …).
+      const stageDeleg = getDelegatedCommand(stage);
+      if (stageDeleg) {
+        if (!isAllowedCommand(stageDeleg.cmd)) allStagesSimple = false;
+        const d = analyzeDelegated(stageDeleg, cwd, pseudoSeg);
+        if (d.hasDanger) {
+          pipelineHasDanger = true;
+          allStagesSimple = false;
+        }
+        if (d.severity === "high" || (!pipelineSeverity && d.severity === "medium")) {
+          pipelineSeverity = d.severity;
+        }
+        for (const reason of d.reasons) {
+          const tagged = reason.replace(/^\[/, "[Pipeline/");
+          if (!pipelineReasons.includes(tagged)) pipelineReasons.push(tagged);
+        }
+      }
     }
   }
 
-  // Obfuscation (use cached result)
-  const isObfuscated = containsCommandSubstitution(segment) || cachedObfuscation.detected;
+  // Obfuscation (use cached result) + quoted command-substitution safety net.
+  // The __CMD_SUBST__ marker only exists AFTER stripQuotedStrings (the original
+  // check ran it against the raw segment, where the marker can never appear —
+  // dead code). The marker proves $(…)/backticks inside double quotes: when the
+  // parser surfaced the subshell (seg.hasSubshell), ShellEvaluator already
+  // judges the content (safe formatting like $(basename …) stays auto-allowable;
+  // dangerous commands are flagged). When the parser did NOT surface it (e.g.
+  // parse error), the marker is the backstop — opaque code must not run.
+  const strippedSegment = stripQuotedStrings(segment);
+  const isObfuscated =
+    (containsCommandSubstitution(strippedSegment) && !seg.hasSubshell) ||
+    cachedObfuscation.detected;
   if (cachedObfuscation.techniques.length > 0) {
     for (const tech of cachedObfuscation.techniques) {
       const tagged = `[Shell] ${tech}`;
@@ -232,33 +342,13 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
         }
       }
     }
-    // For `command -p <cmd>` or `command <cmd>`, also check the executed command
-    if (isCommandExec) {
-      const args = segment.trim().split(/\s+/);
-      for (let i = 1; i < args.length; i++) {
-        if (args[i].startsWith("-")) continue; // skip flags like -p
-        const execCmd = getFirstWord(args[i]);
-        for (const { pattern, label } of dangerousCommandPatterns) {
-          const tagged = `[Pattern] ${label}`;
-          if (pattern.test(execCmd)) {
-            matchedDangerousCommand = true;
-            if (!aggregatedSeverity) aggregatedSeverity = "medium";
-            const key = label.split(/\s|[\/]/)[0].toLowerCase();
-            if (!coveredKeys.has(key)) {
-              if (!aggregatedReasons.includes(tagged)) {
-                aggregatedReasons.push(tagged);
-              }
-            }
-          }
-        }
-        break; // only check the first non-flag argument (the command)
-      }
-    }
+    // (The executed command of `command -p <cmd>` / `command <cmd>` is checked
+    //  against these patterns in the wrapper-transparency pass above.)
     // Strip quoted strings before context-pattern matching to avoid matching
     // command names inside grep/echo arguments (e.g. `grep "curl | bash" file`
     // should not trigger the "curl/wget | interpreter" pattern). The existing
     // evaluators + pipeline analysis catch all real threats from $(…) content.
-    const cleanedForContext = stripQuotedStrings(segment);
+    const cleanedForContext = strippedSegment;
     for (const { pattern, label } of dangerousContextPatterns) {
       const tagged = `[Pattern] ${label}`;
       if (pattern.test(cleanedForContext)) {
@@ -294,6 +384,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
     isSimple = false;
   } else {
     isSimple = isAllowedCommand(firstWord) && !hasDanger
+      && !(delegated && !isAllowedCommand(delegated.cmd))
       && !(wrapperCommands.has(firstWord) && isWrapperRunningRelativePath(segment))
       && allStagesSimple;
   }

@@ -158,7 +158,7 @@ export const wrapperCommands = new Set([
 export const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh"]);
 
 /** Script interpreters that execute arbitrary code (treated as write-capable). */
-const SCRIPT_INTERPRETERS = new Set([
+export const SCRIPT_INTERPRETERS = new Set([
   "python", "python3", "python2", "py",
   "node", "nodejs",
   "ruby", "rb",
