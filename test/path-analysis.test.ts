@@ -271,6 +271,17 @@ describe("checkCommandForCredentialPaths", () => {
 		["ls .ssh", ".ssh"],
 		["cat '.ssh/id_rsa'", ".ssh"],
 		['cat ".ssh/id_rsa"', ".ssh"],
+		// Shell operators stuck to the token (whitespace-only tokenization):
+		["cat .ssh; ls", ".ssh"],
+		["cat .ssh&& ls", ".ssh"],
+		["cat .ssh|grep id", ".ssh"],
+		["cat .ssh>/tmp/copy", ".ssh"],
+		["echo $(cat .ssh)", ".ssh"],
+		// Env-var indirection: the assignment value is the credential path.
+		["export X=.ssh && ls $X", ".ssh"],
+		["X=.ssh; ls $X", ".ssh"],
+		["declare X=.ssh", ".ssh"],
+		["export X=$HOME/.ssh && ls $X", ".ssh"],
 	];
 	for (const [cmd, rule] of deniedCases) {
 		it(`denies: ${cmd}`, () => {
@@ -290,6 +301,8 @@ describe("checkCommandForCredentialPaths", () => {
 		["grep PASS .env", ".env"],
 		["cat '.env'", ".env"],
 		['cat ".env"', ".env"],
+		["cat .env|grep x", ".env"],
+		["export X=.env && cat $X", ".env"],
 	];
 	for (const [cmd, rule] of warnedCases) {
 		it(`warns: ${cmd}`, () => {
@@ -308,6 +321,10 @@ describe("checkCommandForCredentialPaths", () => {
 		"git status",
 		"cat .gitignore",
 		"cat .git/HEAD",
+		// Harmless env assignments (non-credential values) must not flag:
+		"export FOO=bar && ls",
+		"FOO=/tmp/data; ls",
+		"export PATH=$PATH:/usr/local/bin",
 	];
 	for (const cmd of safeCases) {
 		it(`safe: ${cmd}`, () => {

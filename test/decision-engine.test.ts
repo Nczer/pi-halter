@@ -608,6 +608,44 @@ describe("Bash: credential path guard", () => {
 		});
 	}
 
+	// Regression: env-var indirection. Pure assignment statements produce no
+	// parsed segments, so a credential path staged in a variable
+	// (`X=~/.ssh && cat $X`) was invisible to the whole pipeline — the later
+	// `$VAR` use is just a non-path token. The assignment value is now
+	// checked at the assignment itself (the only statically visible moment).
+	const envIndirectionDenied = [
+		"export X=.ssh && ls $X",
+		"X=.ssh; ls $X",
+		"export X=$HOME/.ssh && ls $X",
+		"X=$HOME/.ssh; cat $X",
+		"declare X=.ssh",
+	];
+	for (const cmd of envIndirectionDenied) {
+		it(`blocks env indirection: ${cmd}`, async () => {
+			const store = createStore();
+			const d = await decide({ type: "bash", command: cmd, cwd }, store);
+			expect(d.kind).toBe("block");
+		});
+	}
+
+	const envIndirectionWarned = [
+		"export X=.env && cat $X",
+		"X=.env; cat $X",
+	];
+	for (const cmd of envIndirectionWarned) {
+		it(`prompts env indirection: ${cmd}`, async () => {
+			const store = createStore();
+			const d = await decide({ type: "bash", command: cmd, cwd }, store);
+			expect(d.kind).toBe("prompt");
+		});
+	}
+
+	it("env assignment with harmless value stays auto-allow", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "export FOO=bar && ls", cwd }, store);
+		expect(d.kind).toBe("auto-allow");
+	});
+
 	it("includes credentialRule in prompt data", async () => {
 		const store = createStore();
 		const d = await decide({ type: "bash", command: "cat .env", cwd }, store);
@@ -715,13 +753,13 @@ describe("Bash: credential path guard", () => {
 		expect(d.kind).toBe("block");
 	});
 
-	it("credential path in subshell pipeline: (cd && cat .env) | grep → auto-allow (known limitation: .env) has paren attached)", async () => {
-		// NOTE: checkCommandForCredentialPaths tokenizes on whitespace, so ".env)" 
-		// (with closing paren) doesn't match ".env". This is a known limitation
-		// of the credential scan for tokens with attached parentheses.
+	it("credential path in subshell pipeline: (cd && cat .env) | grep → prompt (attached paren stripped)", async () => {
+		// Whitespace-only tokenization leaves the closing paren stuck to the token
+		// (".env)"). The credential scan splits/strips shell operators from tokens,
+		// so the attached ")" no longer evades the ".env" match.
 		const store = createStore();
 		const d = await decide({ type: "bash", command: "(cd /tmp && cat .env) | grep SECRET", cwd }, store);
-		expect(d.kind).toBe("auto-allow");
+		expect(d.kind).toBe("prompt");
 	});
 
 	it("credential path overrides 'Always' for compound command", async () => {
