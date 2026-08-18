@@ -101,11 +101,16 @@ export const pathAwareCommands = new Set([
 /** Flags on `find` that make it dangerous (excluding -exec which depends on the subcommand). */
 export const dangerousFindFlags = /-(?:delete|empty|truncate|fprint|fprintf|fls)\b/;
 
-/** Flags that make `sed` dangerous (in-place editing). */
-export const dangerousSedFlags = /-[a-z]*i(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/;
+/**
+ * Flags that make `sed` dangerous (in-place editing). `-i` may carry a backup
+ * suffix (the letters right after `i`): `-in` = in-place with backup suffix
+ * "n" on GNU/BSD sed — there is no "next-line" flag, so any cluster containing
+ * `i` is in-place.
+ */
+export const dangerousSedFlags = /-[a-z]*i[a-z]*(?:\.\S*)?(?:\s|$)|--in-place(?:\b|\s)/;
 
-/** Flags that make `perl` dangerous (in-place editing via -i). */
-export const dangerousPerlFlags = /-[a-z]*i(?:\.\S*)?(?:\s|$)|-[a-z]*pi[a-z]*(?:\s|$)|-[a-z]*ip[a-z]*(?:\s|$)/;
+/** Flags that make `perl` dangerous (in-place editing via -i, optional suffix). */
+export const dangerousPerlFlags = /-[a-z]*i[a-z]*(?:\.\S*)?(?:\s|$)/;
 
 /** Command + subcommand pairs that are always safe (read-only, no side effects). */
 const allowedBashSubcommands = new Set([

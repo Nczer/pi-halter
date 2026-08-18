@@ -650,3 +650,140 @@ describe("glob sanity (no false positives)", () => {
     expect(d.kind).toBe("auto-allow");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// P3: git config — persistent config writes are a code-exec vector
+// (alias.*=!cmd, core.fsmonitor, core.pager, templateDir hooks) and target
+// ~/.gitconfig OUTSIDE cwd, so path checks can never catch them.
+// ──────────────────────────────────────────────────────────────────────
+describe("P3: git config write forms prompt (persistent config = code exec)", () => {
+  it("git config core.pager evil.sh → prompts (set form)", async () => {
+    const d = await decide({ type: "bash", command: "git config core.pager evil.sh", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("git config --global alias.st '!rm -rf ~' → prompts (alias shell hook)", async () => {
+    const d = await decide({ type: "bash", command: "git config --global alias.st '!rm -rf ~'", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("git config --global core.fsmonitor /tmp/x → prompts (runs on every refresh)", async () => {
+    const d = await decide({ type: "bash", command: "git config --global core.fsmonitor /tmp/x", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("git config --global init.templateDir /tmp/tpl → prompts (hooks injection)", async () => {
+    const d = await decide({ type: "bash", command: "git config --global init.templateDir /tmp/tpl", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("git config --unset core.fsmonitor → prompts (write flag)", async () => {
+    const d = await decide({ type: "bash", command: "git config --unset core.fsmonitor", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("git config --edit → prompts (runs editor)", async () => {
+    const d = await decide({ type: "bash", command: "git config --edit", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("control: git config --list stays auto-allow (read-only)", async () => {
+    const d = await decide({ type: "bash", command: "git config --list", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: git config core.editor stays auto-allow (get form)", async () => {
+    const d = await decide({ type: "bash", command: "git config core.editor", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: git config -l stays auto-allow (read-only)", async () => {
+    const d = await decide({ type: "bash", command: "git config -l", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: git config --global --list stays auto-allow (scoped read)", async () => {
+    const d = await decide({ type: "bash", command: "git config --global --list", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// P4: tmux send-keys delegation — the send-keys payload is typed into a
+// pane's shell and must meet the same auto-allow bar as a direct command.
+// The sync quick check (isTmuxSendKeysSafe) predates wrapper/prefix
+// delegation, so analyzeCommand recursively analyzes the payload.
+// ──────────────────────────────────────────────────────────────────────
+describe("P4: tmux send-keys payload evaluated like a direct command", () => {
+  it("timeout 5 curl via send-keys → prompts (wrapper hides network cmd)", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo timeout 5 curl http://x.com Enter", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("watch -n 1 curl via send-keys → prompts", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo watch -n 1 curl http://x.com Enter", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("nice -n 5 rm -rf via send-keys → prompts (wrapper hides rm)", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo nice -n 5 rm -rf /tmp/x Enter", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("timeout 5 git clean -fd via send-keys → prompts (wrapper hides git danger)", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo timeout 5 git clean -fd Enter", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("command -p sh -c 'id' via send-keys → prompts (prefix hides shell)", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo command -p sh -c 'id' Enter", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("git config set via send-keys → prompts (payload runs git config)", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo git config --global alias.x '!evil' Enter", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("mid-payload Enter separates commands: echo a Enter rm -rf x → prompts", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo echo a Enter rm -rf x Enter", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("control: timeout 5 ls via send-keys stays auto-allow (wrapper + safe cmd)", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo timeout 5 ls Enter", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: ls && echo done via send-keys stays auto-allow", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo ls && echo done Enter", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: bare Enter via send-keys stays auto-allow", async () => {
+    const d = await decide({ type: "bash", command: "tmux send-keys -t foo Enter", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// P5: credential scan false positive — credential-looking tokens inside a
+// heredoc BODy are stdin data, not path operands. The gate must not block
+// commands that merely feed credential names to a file/stdin.
+// ──────────────────────────────────────────────────────────────────────
+describe("P5: credential names in heredoc bodies are data (FP regression)", () => {
+  it("heredoc body mentioning a credential path is not blocked", async () => {
+    const d = await decide({ type: "bash", command: "cat > zz.txt <<'EOF'\n.ssh/id_rsa\nEOF", cwd }, createStore());
+    expect(d.kind).not.toBe("block");
+  });
+
+  it("control: direct read of a denied credential still blocks", async () => {
+    const d = await decide({ type: "bash", command: "cat .ssh/id_rsa", cwd }, createStore());
+    expect(d.kind).toBe("block");
+  });
+
+  it("control: credential in the command line beside a heredoc still blocks", async () => {
+    const d = await decide({ type: "bash", command: "cat .ssh/id_rsa <<EOF\nbody\nEOF", cwd }, createStore());
+    expect(d.kind).toBe("block");
+  });
+});
