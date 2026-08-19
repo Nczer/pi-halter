@@ -47,15 +47,17 @@ export async function handleFile(
 
   // Decide BEFORE any file-content read — and through gateDecide's fail-closed
   // guard (an analysis crash must yield a block decision, not an exception).
-  // Pre-validation only runs for paths the gate would auto-allow anyway —
-  // reading a prompted/blocked path first would leak its content through
-  // prompt visibility (e.g. "oldText occurs exactly once" only appearing when
-  // the edit would succeed).
   const decision = await gateDecide(request, store, ctx);
 
-  if (toolName === "edit" && decision.kind === "auto-allow" && edits) {
-    // Defense-in-depth: never read credential paths even if some auto-allow
-    // path (e.g. an allowed dir) overlaps a warned name.
+  if (toolName === "edit" && edits && decision.kind !== "block") {
+    // Pre-validation (also for PROMPT decisions): an edit whose oldText can't
+    // match is guaranteed to fail — prompting the user for it is pure noise.
+    // Pass it through so the agent gets the normal tool error instead.
+    //
+    // Credential paths (denied/warned) are NEVER pre-validated: prompt-vs-
+    // silent-failure would leak whether a guessed oldText occurs exactly once
+    // in the file — a content oracle on a secret. Those always prompt (or
+    // block) without a content read, even when the edit will fail.
     const isCredentialPath =
       isPathDeniedResolved(filePath, resolvedPath).denied ||
       isPathWarnedResolved(filePath, resolvedPath).warned;
