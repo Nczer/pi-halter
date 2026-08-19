@@ -27,6 +27,8 @@ describe("isWriteOperation", () => {
 
   it("does not flag sed without -i as write", () => {
     expect(isWriteOperation("sed", "sed 's/foo/bar/g' file.txt")).toBe(false);
+    // Regression: unanchored -i pattern matched "-session.ts" inside a path
+    expect(isWriteOperation("sed", "sed -n '95,115p' packages/coding-agent/src/core/agent-session.ts")).toBe(false);
   });
 
   it("detects perl as write (script interpreter = arbitrary code execution)", () => {

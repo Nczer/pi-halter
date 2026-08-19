@@ -46,12 +46,14 @@ const cases: TestCase[] = [
 	{ cmd: "sed -i/s/foo/bar/ file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "sed -i/... (not a valid -i form; GNU sed errors on unterminated s)" },
 	{ cmd: "sed -n '/struct foo {/,+120p' file.cpp", simple: true, unsafe: false, decision: "auto-allow", desc: "sed range with line offset (/,+120p) — pattern, not a path (regression: was false-positive prompt)" },
 	{ cmd: "sed '/foo/+5p' file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "sed address line offset (/foo/+5p) — pattern, not a path (regression)" },
+	{ cmd: "sed -n '95,115p' packages/coding-agent/src/core/agent-session.ts", simple: true, unsafe: false, decision: "auto-allow", desc: "sed -n, path with -session token (regression: unanchored -i pattern matched the path)" },
 
 	// ═══════════════════════════════════════════════════════════
 	// perl
 	// ═══════════════════════════════════════════════════════════
 	{ cmd: "perl -p -e 's/foo/bar/' file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "perl -p (print, no -i)" },
 	{ cmd: "perl -ne 'print if /foo/' file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "perl -ne (no -i)" },
+	{ cmd: "perl -ne 'print' foo-session.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "perl -ne, path with -session token (regression: unanchored -i pattern matched the path)" },
 	{ cmd: "perl -pi -e 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "perl -pi (combined)" },
 	{ cmd: "perl -i -p -e 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "perl -i -p (separate)" },
 	{ cmd: "perl -p -i -e 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "perl -p -i (reversed)" },
