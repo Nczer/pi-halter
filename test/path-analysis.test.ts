@@ -1,6 +1,7 @@
 import path from "node:path";
 import os from "node:os";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import {
 	expandTilde,
 	resolvePathReal,
@@ -11,6 +12,7 @@ import {
 	isPathDeniedResolved,
 	isPathWarnedResolved,
 	checkCommandForCredentialPaths,
+	checkBareSymlinkTokens,
 	stripHeredocBodies,
 } from "../analysis/path-analysis";
 
@@ -356,5 +358,83 @@ describe("stripHeredocBodies", () => {
 
 	it("keeps text when <<EOF sits in an unterminated double-quoted string", () => {
 		expect(stripHeredocBodies('x="s <<EOF\nbody\nEOF')).toBe('x="s <<EOF\nbody\nEOF');
+	});
+});
+
+describe("checkCommandForCredentialPaths: quoted glob tokens", () => {
+	// Quoted text is never glob-expanded by bash, so a quoted ".*" is a regex
+	// pattern (or a literal name), not a glob reaching .ssh at runtime.
+	it.each([
+		'grep ".*" file.txt',
+		"sed 's/.*/x/' file.txt",
+		"sed '/.*/d' file.txt",
+		'grep -r "a.*b" .',
+	])("%s → clean (quoted, cannot expand)", (cmd) => {
+		expect(checkCommandForCredentialPaths(cmd, cwd)).toEqual({ denied: null, warned: null });
+	});
+
+	// Unquoted globs keep the full check (runtime-verified: they DO expand).
+	it.each([
+		"cat .*/id_rsa",
+		"grep .* file.txt",
+		"ls .s*sh",
+	])("%s → denied (unquoted glob expands)", (cmd) => {
+		expect(checkCommandForCredentialPaths(cmd, cwd).denied).not.toBeNull();
+	});
+
+	it("a quoted occurrence does not shield an unquoted one", () => {
+		expect(checkCommandForCredentialPaths('echo ".s*sh" && cat .s*sh', cwd).denied).not.toBeNull();
+	});
+
+	it("literal credential names inside quotes are still denied", () => {
+		expect(checkCommandForCredentialPaths('grep "\\.ssh" README.md', cwd).denied).not.toBeNull();
+	});
+});
+
+describe("checkBareSymlinkTokens", () => {
+	const home = os.homedir();
+	let tmp: string;
+	beforeAll(() => {
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-sym-"));
+		fs.writeFileSync(path.join(tmp, "data.txt"), "hi\n");
+		fs.symlinkSync(path.join(home, ".ssh"), path.join(tmp, "ssh-link"));
+		fs.symlinkSync("/etc/hostname", path.join(tmp, "etc-link"));
+		fs.symlinkSync("data.txt", path.join(tmp, "inner-link"));
+	});
+	afterAll(() => {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	});
+
+	it("denies a symlink whose target matches a deny pattern", () => {
+		const r = checkBareSymlinkTokens(["cat", "ssh-link"], tmp);
+		expect(r.denied).not.toBeNull();
+	});
+
+	it("warns on a symlink escaping cwd (non-credential target)", () => {
+		const r = checkBareSymlinkTokens(["cat", "etc-link"], tmp);
+		expect(r.denied).toBeNull();
+		expect(r.warned).toBe("/etc/hostname");
+	});
+
+	it("allows a symlink staying inside cwd", () => {
+		const r = checkBareSymlinkTokens(["cat", "inner-link"], tmp);
+		expect(r).toEqual({ denied: null, warned: null });
+	});
+
+	it("skips regular files, flags, and globs", () => {
+		expect(checkBareSymlinkTokens(["cat", "data.txt"], tmp)).toEqual({ denied: null, warned: null });
+		expect(checkBareSymlinkTokens(["grep", "-r", "foo", "data.txt"], tmp)).toEqual({ denied: null, warned: null });
+		expect(checkBareSymlinkTokens(["cat", ".s*sh"], tmp)).toEqual({ denied: null, warned: null });
+	});
+
+	it("skips non-bare tokens (slashes, env assignments, command name)", () => {
+		expect(checkBareSymlinkTokens(["cat", path.join(home, ".ssh", "id_rsa")], tmp)).toEqual({ denied: null, warned: null });
+		expect(checkBareSymlinkTokens(["X=ssh-link", "cat"], tmp)).toEqual({ denied: null, warned: null });
+		expect(checkBareSymlinkTokens(["ssh-link", "arg"], tmp)).toEqual({ denied: null, warned: null });
+	});
+
+	it("sees tokens glued to shell operators", () => {
+		expect(checkBareSymlinkTokens(["cat", "ssh-link;ls"], tmp).denied).not.toBeNull();
+		expect(checkBareSymlinkTokens(["cat", "ssh-link>x"], tmp).denied).not.toBeNull();
 	});
 });
