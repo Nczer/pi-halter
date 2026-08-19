@@ -44,8 +44,12 @@ const WRAPPER_VALUE_FLAGS: Record<string, Set<string>> = {
   timeout: new Set(["-s", "--signal"]),
   stdbuf: new Set(["-i", "-o", "-e"]),
 };
-/** Find/fd/rg exec detection. */
-const FIND_EXEC_RE = /-(?:exec|execdir)\b\s+(\S+)/;
+/** Find/fd/rg exec detection.
+ * -ok/-okdir execute the same command as -exec/-execdir, but prompt y/n per
+ * match — and read that answer from stdin when there is no tty, so
+ * `echo y | find . -ok rm {} \;` deletes silently. The exec'd command must be
+ * checked identically. */
+const FIND_EXEC_RE = /-(?:execdir|exec|okdir|ok)\b\s+(\S+)/;
 const FD_EXEC_RE = /-(?:x|X)\b\s+(\S+)/;
 const RG_PRE_RE = /--pre(?:=|\s+)(\S+)/;
 
@@ -343,7 +347,9 @@ export function getCommandSignature(segment: string): string {
 function checkExecWrite(segment: string, regex: RegExp): boolean {
   const match = segment.match(regex);
   if (!match) return false;
-  const cmd = match[1].toLowerCase();
+  // The exec'd command may be quoted (`find . -exec 'rm' {} \;` — runtime-
+  // verified to delete); strip surrounding quotes so it matches by name.
+  const cmd = match[1].replace(/^["']+|["']+$/g, "").toLowerCase();
   const after = segment.slice(match.index! + match[0].length);
   return isWriteOperation(cmd, after);
 }

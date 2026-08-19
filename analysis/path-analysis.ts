@@ -240,6 +240,128 @@ export function stripHeredocBodies(cmd: string): string {
 }
 
 /**
+ * Check bare relative tokens for symlinks in cwd that point outside it.
+ * A malicious repo can ship a symlink (often absolute, e.g. `link →
+ * /home/<user>/.ssh/id_rsa` — the username is frequently in git history) so
+ * `cat link` reads a credential although the command line only shows a
+ * benign name. The literal name carries no credential text, so the string
+ * pre-scan in checkCommandForCredentialPaths would early-return without ever
+ * resolving it, and FastAllowRule passes bare relative tokens through.
+ *
+ * Only SYMLINKS are resolved: a regular file in cwd cannot escape cwd, and a
+ * directory symlink used as `cat linkdir/f` contains a "/" so it goes
+ * through the normal path resolution, which already follows the parent chain.
+ * Quoted names are covered too — quoting prevents glob expansion but not
+ * symlink following (`cat "link"` still reads the target).
+ */
+export function checkBareSymlinkTokens(
+  tokens: string[],
+  cwd: string,
+): { denied: string | null; warned: string | null } {
+  let denied: string | null = null;
+  let warned: string | null = null;
+  let cwdReal: string;
+  try { cwdReal = fs.realpathSync(cwd); } catch { cwdReal = path.resolve(cwd); }
+
+  const checkOne = (t: string): boolean => {
+    if (!t || t === "." || t === "..") return false;
+    if (t.startsWith("-")) return false;
+    if (t.includes("/") || t.includes("=")) return false;
+    if (/[*?\[\]]/.test(t)) return false; // glob — covered by the glob check
+    const candidate = path.join(cwdReal, t);
+    let st: fs.Stats;
+    try { st = fs.lstatSync(candidate); } catch { return false; }
+    if (!st.isSymbolicLink()) return false;
+    // Resolve the target two ways:
+    //  - real: follow the chain via realpath (works when the target exists;
+    //    catches credential names anywhere along the chain)
+    //  - lex: one-level textual readlink (works for DANGLING links, where
+    //    realpath cannot follow — a link to a not-yet-existing id_rsa is
+    //    still the attack shape and must be gated)
+    const real = resolvePathReal(candidate, cwd);
+    let lex: string | null = null;
+    try {
+      const tgt = fs.readlinkSync(candidate);
+      lex = path.isAbsolute(tgt) ? path.resolve(tgt) : path.resolve(cwdReal, tgt);
+    } catch { /* target vanished mid-flight — real path already checked */ }
+    const candidates = [real, lex].filter((r): r is string => !!r);
+    for (const resolved of candidates) {
+      const deniedResult = isPathDeniedResolved(candidate, resolved);
+      if (deniedResult.denied) { denied = deniedResult.matchedRule; return true; }
+    }
+    for (const resolved of candidates) {
+      if (isChildOf(resolved, cwdReal)) continue;
+      // Symlink escapes cwd → same approval bar as reading the target path
+      // directly (the file tool resolves symlinks the same way).
+      if (!warned) warned = resolved;
+      return false;
+    }
+    for (const resolved of candidates) {
+      const warnedResult = isPathWarnedResolved(candidate, resolved);
+      if (warnedResult.warned && !warned) warned = warnedResult.matchedRule;
+    }
+    return false;
+  };
+
+  // Skip token 0 (the command name — a bare name is looked up in PATH, not
+  // cwd). Mirror the scanner's operator split so `cat link;ls` and
+  // `cat link>x` still see the bare name.
+  for (let i = 1; i < tokens.length; i++) {
+    const parts = tokens[i]
+      .split(/[;&|<>]+/)
+      .map(p => p.replace(/\)+$/, ""))
+      .filter(Boolean);
+    for (const p of parts) {
+      if (checkOne(p)) return { denied, warned };
+    }
+  }
+  return { denied, warned };
+}
+
+/**
+ * Count quoted spans ('…', "…", $'…') per content string. A quoted token is
+ * never glob-expanded by bash, so its glob characters can never reach a file:
+ * `grep ".*" f` is a regex pattern, `cat ".s*sh"` is a literal name. The
+ * caller compares these counts against token occurrences: the glob check is
+ * skipped only when EVERY occurrence of a part is quoted. Unquoted globs keep
+ * the full check (runtime-verified: an unquoted `.*` glob reaches .ssh).
+ * ($'…' content is matched raw — escape-decoded variants simply stay checked,
+ * which is conservative.)
+ */
+function countQuotedSpans(cmd: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  const bump = (content: string) => counts.set(content, (counts.get(content) ?? 0) + 1);
+  let i = 0;
+  while (i < cmd.length) {
+    const ch = cmd[i];
+    if (ch === "'") {
+      const end = cmd.indexOf("'", i + 1);
+      if (end < 0) break;
+      bump(cmd.slice(i + 1, end));
+      i = end + 1;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < cmd.length && !(cmd[j] === '"' && cmd[j - 1] !== "\\")) j++;
+      if (j >= cmd.length) break;
+      bump(cmd.slice(i + 1, j));
+      i = j + 1;
+      continue;
+    }
+    if (ch === "$" && cmd[i + 1] === "'" && (i === 0 || cmd[i - 1] !== "\\")) {
+      const end = cmd.indexOf("'", i + 2);
+      if (end < 0) break;
+      bump(cmd.slice(i + 2, end));
+      i = end + 1;
+      continue;
+    }
+    i++;
+  }
+  return counts;
+}
+
+/**
  * Check a bash command string for credential path references.
  * Returns the first denied and/or warned pattern found.
  * Uses a fast regex pre-scan to skip the common case (no credential patterns).
@@ -263,16 +385,20 @@ export function checkCommandForCredentialPaths(
   const dequoted = tokens.join(" ");
   const unstripped = scanCmd.replace(/\\/g, "");
   const hasGlob = /[*?\[\]]/.test(scanCmd);
+  // Bare-token symlink check — must run even when the pre-scan below would
+  // early-return (a symlink's literal name carries no credential text).
+  const symlinkCheck = checkBareSymlinkTokens(tokens, cwd);
+  if (symlinkCheck.denied) return { denied: symlinkCheck.denied, warned: null };
   if (
     !hasGlob &&
     !CREDENTIAL_SCAN_RE.test(command) &&
     !CREDENTIAL_SCAN_RE.test(dequoted) &&
     !CREDENTIAL_SCAN_RE.test(unstripped)
   ) {
-    return { denied: null, warned: null };
+    return { denied: null, warned: symlinkCheck.warned };
   }
   let denied: string | null = null;
-  let warned: string | null = null;
+  let warned: string | null = symlinkCheck.warned;
 
   // Valid env-var name pattern: starts with letter/underscore, only alphanumeric/underscore.
   // Flags like `--output=path` have a leading dash, so they won't match.
@@ -362,18 +488,26 @@ export function checkCommandForCredentialPaths(
     return "skip";
   };
 
+  // Pre-split every token on shell operators: whitespace-only tokenization
+  // leaves operators stuck to or inside tokens: `cat ~/.ssh;`,
+  // `cat ~/.ssh|grep`, `cat ~/.ssh>/tmp/x`, `X=~/.ssh&& ls`, `$(cat ~/.ssh)`.
+  // Unquoted, a path can never contain `;`, `&`, `|`, `<`, `>`, or end with
+  // `)` — there they are always shell syntax — so check every part. Without
+  // this, `cat ~/.ssh; ls` evades the scan entirely (token is `~/.ssh;`).
+  const partsList: string[][] = [];
+  const partCount = new Map<string, number>();
   for (const rawToken of tokens) {
-    // Whitespace-only tokenization leaves shell operators stuck to or inside
-    // tokens: `cat ~/.ssh;`, `cat ~/.ssh|grep`, `cat ~/.ssh>/tmp/x`,
-    // `X=~/.ssh&& ls`, `$(cat ~/.ssh)`. Unquoted, a path can never contain
-    // `;`, `&`, `|`, `<`, `>`, or end with `)` — there they are always shell
-    // syntax — so split the token on them and check every part. Without this,
-    // `cat ~/.ssh; ls` evades the scan entirely (token is `~/.ssh;`).
     const parts = rawToken
       .split(/[;&|<>]+/)
       .map(p => p.replace(/\)+$/, ""))
       .filter(Boolean);
+    partsList.push(parts);
+    for (const p of parts) partCount.set(p, (partCount.get(p) ?? 0) + 1);
+  }
+  // Quoted occurrences are never glob-expanded at runtime (see countQuotedSpans).
+  const spanCount = countQuotedSpans(scanCmd);
 
+  for (const parts of partsList) {
     for (const token of parts) {
       // Check original token
       const result = checkToken(token);
@@ -389,8 +523,13 @@ export function checkCommandForCredentialPaths(
       }
 
       // Also check glob-expanded variants (~/.s*sh → .ssh, id_rs? → id_rsa).
-      const globResult = checkTokenGlob(token);
-      if (accumulateResult(globResult)) return { denied, warned };
+      // Skipped when every occurrence of this part is quoted — a quoted glob
+      // cannot expand (grep ".*" is a pattern, cat ".s*sh" a literal name),
+      // while unquoted globs keep the check (cat .*/id_rsa → .ssh/id_rsa).
+      if ((spanCount.get(token) ?? 0) < (partCount.get(token) ?? 0)) {
+        const globResult = checkTokenGlob(token);
+        if (accumulateResult(globResult)) return { denied, warned };
+      }
     }
   }
 

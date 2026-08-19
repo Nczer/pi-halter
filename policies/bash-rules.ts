@@ -1,6 +1,6 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
 import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes } from "../analysis/segment-helpers";
-import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE } from "../analysis/path-analysis";
+import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE, checkBareSymlinkTokens } from "../analysis/path-analysis";
 import { tokenizeSegment } from "../analysis/tokenizer";
 import type { Store, BashRequest, Decision } from "../decision-engine";
 import type { CommandAnalysis } from "../analysis/command-analysis";
@@ -79,6 +79,12 @@ export const FastAllowRule: BashRule = (req) => {
   // Use quote-aware tokenizer so quoted paths (e.g., "/etc/passwd", '/etc/passwd')
   // and flag=value with quotes (e.g., --file="/etc/passwd") are properly detected.
   const tokens = tokenizeSegment(req.command);
+  // A bare token may be a symlink in cwd pointing OUTSIDE it (repo-shipped
+  // `link → ~/.ssh/id_rsa`) — the literal name carries no path text for the
+  // prefix checks below to see. Denied targets are blocked by
+  // CredentialDenyRule (runs first); warned targets (credential name or
+  // outside cwd) must prompt via the analysis's credential check.
+  if (checkBareSymlinkTokens(tokens, req.cwd).warned) return null;
   for (let i = 1; i < tokens.length; i++) {
     const token = tokens[i];
     // FastAllowRule is for unconditionally-safe commands with no outside-cwd paths.
