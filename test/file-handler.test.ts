@@ -55,13 +55,48 @@ describe("handleFile edit pre-validation security", () => {
     expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
   });
 
-  it("does NOT pre-validate inside-cwd edits (they prompt — no read before gate)", async () => {
-    // A normal project file: edit decisions for inside-cwd writes are prompts,
-    // so no file content may be read before the gate. Pre-validation is
-    // restricted to paths that would auto-allow anyway.
-    const result = await handleFile(makeEditEvent("src/index.ts"), makeCtx());
-    expect(readSpy).not.toHaveBeenCalled();
+  it("pre-validates inside-cwd edits (prompt decision): skips prompt when the edit will fail", async () => {
+    // Inside-cwd write decisions are prompts, but a guaranteed-fail edit
+    // (no oldText match) must not prompt — it passes through and the agent
+    // gets the normal tool error.
+    readSpy.mockReturnValue("hello world");
+    const result = await handleFile(
+      makeEditEvent("src/index.ts", "nonexistent", "replacement"),
+      makeCtx(),
+    );
+    expect(readSpy).toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
+  it("still prompts inside-cwd edits when the edit would succeed", async () => {
+    readSpy.mockReturnValue("hello world");
+    const result = await handleFile(
+      makeEditEvent("src/index.ts", "world", "there"),
+      makeCtx(),
+    );
+    expect(readSpy).toHaveBeenCalled();
     // No UI → gate auto-blocks the prompt.
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
+  });
+
+  it("skips prompt for outside-cwd edits that will fail", async () => {
+    // The user-reported case: an edit to an outside-cwd file whose oldText
+    // can't match must not prompt — the tool call just fails with an error.
+    readSpy.mockReturnValue("line one\nline two");
+    const result = await handleFile(
+      makeEditEvent("/some/outside/project/file.ts", "nope", "bar"),
+      makeCtx(),
+    );
+    expect(readSpy).toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
+  it("does NOT pre-validate warned paths (.env) even when the edit will fail", async () => {
+    // A content oracle on a secret must not exist: prompt-vs-silent-failure
+    // would reveal whether the guessed oldText occurs exactly once in the file.
+    const result = await handleFile(makeEditEvent(".env", "nope", "bar"), makeCtx());
+    expect(readSpy).not.toHaveBeenCalled();
+    // No UI → gate auto-blocks the prompt. No read happened first.
     expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
   });
 
