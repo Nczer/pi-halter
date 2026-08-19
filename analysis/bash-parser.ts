@@ -517,8 +517,10 @@ function isSedPatternArg(arg: string): boolean {
 
   if (!arg.startsWith("/")) return false;
 
-  // Range pattern: /pat1/,/pat2/action or /pat1/,/pat2/
-  if (/,\//.test(arg)) return true;
+  // Range pattern: /pat1/,/pat2/action, /pat1/,/pat2/, or /pat1/,+NNN
+  // (GNU sed line-offset range end: /pat/,+120p). A real path containing
+  // ",/" or with a segment starting ",+digit" is unheard of.
+  if (/,,\//.test(arg) || /\/,\+\d/.test(arg)) return true;
 
   // Single address: /pattern/ or /pattern/p
   // Find the last `/` — if what follows is a short letter sequence (sed command)
@@ -530,6 +532,8 @@ function isSedPatternArg(arg: string): boolean {
     if (afterLastSlash.length === 0) return true;
     // 1-3 letters → /pattern/p, /pattern/d, /pattern/gp, etc.
     if (afterLastSlash.length <= 3 && /^[a-zA-Z]+$/.test(afterLastSlash)) return true;
+    // Line offset → /pattern/+5, /pattern/+5p, /pattern/+120p (GNU sed)
+    if (/^\+\d+[a-zA-Z]{0,3}$/.test(afterLastSlash)) return true;
   }
 
   return false;

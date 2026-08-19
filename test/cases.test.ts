@@ -44,6 +44,8 @@ const cases: TestCase[] = [
 	{ cmd: "sed --in-place=.bak 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "sed --in-place=.bak" },
 	{ cmd: "sed -in 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "sed -in (-i with 'n' backup suffix = in-place)" },
 	{ cmd: "sed -i/s/foo/bar/ file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "sed -i/... (not a valid -i form; GNU sed errors on unterminated s)" },
+	{ cmd: "sed -n '/struct foo {/,+120p' file.cpp", simple: true, unsafe: false, decision: "auto-allow", desc: "sed range with line offset (/,+120p) — pattern, not a path (regression: was false-positive prompt)" },
+	{ cmd: "sed '/foo/+5p' file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "sed address line offset (/foo/+5p) — pattern, not a path (regression)" },
 
 	// ═══════════════════════════════════════════════════════════
 	// perl
