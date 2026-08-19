@@ -2,6 +2,7 @@ import { isAllowedCommand, dangerousCommandPatterns, dangerousContextPatterns } 
 import { containsCommandSubstitution, hasWriteRedirect } from "./segment-helpers";
 import { detectObfuscation } from "./obfuscation";
 import { isGitDangerous } from "./segment-helpers";
+import { tokenizeSegment } from "./tokenizer";
 
 // ── Tmux safe subcommands ──
 
@@ -15,11 +16,23 @@ export const TMUX_SAFE_SUBCOMMANDS = new Set([
   "has-session", "show-options", "show-messages", "display-message", "display-panes",
   "wait-for", "save-buffer", "delete-buffer",
   // Session/window/pane management (no code execution)
-  "new-session", "new", "attach", "start-server", "switch-client",
+  // NOTE: new-session/new are safe only when flag-only — a shell-command
+  // argument executes code (see tmuxNewSessionRunsCommand, checked in the
+  // TmuxEvaluator).
+  "new-session", "new", "attach", "attach-session", "start-server", "switch-client",
   "move-window", "rename-window", "rename-session",
   "select-window", "select-pane",
   "resize-pane", "resize-window",
   "break-pane", "swap-pane", "swap-window", "join-pane",
+  // Aliases (tmux 3.7b alias table) of the safe full names above. Dangerous
+  // aliases (run, send, if, set, bind, source, splitw, newp, neww, respawn*,
+  // menu, popup, confirm, detach, lock*) are intentionally NOT listed — they
+  // prompt via the whitelist.
+  "capturep", "ls", "lsw", "lsp", "lsb", "has",
+  "show", "showmsgs", "display", "displayp",
+  "wait", "saveb", "deleteb", "start", "switchc",
+  "movew", "rename", "renamew", "selectw", "selectp",
+  "resizew", "resizep", "breakp", "swapp", "swapw", "joinp",
 ]);
 
 /** Human-readable descriptions for known dangerous tmux subcommands. */
@@ -36,9 +49,70 @@ export const TMUX_DANGEROUS_DESCRIPTIONS: Record<string, string> = {
   "new-window": "spawns a new shell in a window",
   "set-option": "modifies tmux configuration",
   "bind-key": "modifies tmux keybindings",
+  // Only reached when the session carries a shell-command argument or the
+  // global -c option (flag-only new-session/new stays safe — see
+  // tmuxNewSessionRunsCommand).
+  "new-session": "shell-command argument executes code in the new session",
+  "new": "shell-command argument executes code in the new session",
 };
 
 // ── Tmux parsing ──
+
+/**
+ * Short flags of new-session/new that consume the NEXT token as their value.
+ * (from `man tmux`: new-session [-AdDEPXg] [-c start-directory] [-e environment]
+ * [-f flags] [-F format] [-n window-name] [-s session-name] [-t control[.pane]]
+ * [-x width] [-y height] [shell-command [argument ...]])
+ */
+const TMUX_NEW_SESSION_VALUE_FLAGS = new Set(["c", "e", "f", "F", "g", "n", "s", "t", "x", "y"]);
+
+/** Long forms of new-session/new flags that take a value in space form. */
+const TMUX_NEW_SESSION_LONG_VALUE_FLAGS = new Set([
+  "--start-directory", "--environment", "--flags", "--format", "--group",
+  "--window-name", "--session-name", "--target-pane", "--width", "--height",
+]);
+
+/**
+ * True if a `new-session`/`new` invocation carries a shell command tmux will
+ * execute: the optional [shell-command] argument after the flags, or the
+ * global `-c shell-command` option before the subcommand. Flag-only
+ * invocations (`tmux new-session -d -s name`) return false.
+ */
+export function tmuxNewSessionRunsCommand(segment: string): boolean {
+  const args = tokenizeSegment(segment);
+  let i = 1;
+  // Global options before the subcommand
+  while (i < args.length) {
+    const a = args[i];
+    if ((a === "-S" || a === "-L" || a === "-f") && i + 1 < args.length) { i += 2; continue; }
+    if (a === "-c") return true; // global -c shell-command (no value needed to be suspicious)
+    if (a.startsWith("-")) { i++; continue; } // other global options are boolean
+    break; // subcommand
+  }
+  if (i >= args.length) return false;
+  const sub = args[i].toLowerCase();
+  if (sub !== "new-session" && sub !== "new") return false;
+  // Options after the subcommand; the first non-flag token is the shell command.
+  i++;
+  while (i < args.length) {
+    const a = args[i];
+    if (a.startsWith("--")) {
+      i++;
+      // Space form `--flag value` consumes the next token; `--flag=value` doesn't.
+      if (!a.includes("=") && TMUX_NEW_SESSION_LONG_VALUE_FLAGS.has(a)) i++;
+      continue;
+    }
+    if (a.startsWith("-")) {
+      // Short flag cluster: only the LAST letter may take a value.
+      const last = a[a.length - 1];
+      i++;
+      if (TMUX_NEW_SESSION_VALUE_FLAGS.has(last)) i++;
+      continue;
+    }
+    return true; // non-flag token → shell command
+  }
+  return false;
+}
 
 /**
  * Extract the tmux subcommand from a segment, skipping -S/-L socket flags and other options.

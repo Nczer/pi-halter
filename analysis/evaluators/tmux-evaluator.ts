@@ -5,6 +5,7 @@ import {
   getTmuxSubcommand,
   extractTmuxSendKeys,
   isTmuxSendKeysSafe,
+  tmuxNewSessionRunsCommand,
   TMUX_SAFE_SUBCOMMANDS,
   TMUX_DANGEROUS_DESCRIPTIONS,
 } from "../tmux-helpers";
@@ -22,7 +23,18 @@ export const TmuxEvaluator: RiskEvaluator = {
     if (firstWord !== "tmux") return b.build();
 
     const tmuxSub = getTmuxSubcommand(segment);
-    const isDangerous = !tmuxSub || !TMUX_SAFE_SUBCOMMANDS.has(tmuxSub);
+    let isDangerous = !tmuxSub || !TMUX_SAFE_SUBCOMMANDS.has(tmuxSub);
+
+    // new-session/new are safe only when flag-only: an optional [shell-command]
+    // argument (or the global -c option) executes code in the new session.
+    if (!isDangerous && (tmuxSub === "new-session" || tmuxSub === "new")) {
+      if (tmuxNewSessionRunsCommand(segment)) {
+        isDangerous = true;
+        b.setHigh();
+        b.markDanger();
+      }
+    }
+
     if (isDangerous) {
       // send-keys inherits session auto-allow: safe keys → auto-allow, unsafe keys → prompt
       if (tmuxSub === "send-keys") {
