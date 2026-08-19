@@ -294,6 +294,12 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
 
   // Regex-based safety net — single pass, results reused for isUnsafe
   const isLookupOrEcho = LOOKUP_COMMANDS.has(firstWord) || ECHO_COMMANDS.has(firstWord) || PROCESS_INSPECTION_COMMANDS.has(firstWord);
+  // `python3 --version` / `node --help` / `uv --version`: sole argument is a
+  // read-only flag — no -c, no script file, nothing executes. These commands
+  // are NOT in the allowlist, so isSimple below must grant the exemption too.
+  const versionOnlyRest = trimmed.split(/\s+/).slice(1);
+  const isVersionOnlyInvocation = /^(?:python[\d.]*|node|uv)$/.test(firstWord)
+    && versionOnlyRest.length === 1 && (versionOnlyRest[0] === "--version" || versionOnlyRest[0] === "--help");
   const isTrusted = isTrustedScriptCommand(segment, cwd);
 
   // Trusted scripts: evaluators flag python/node/uv etc., but the user has explicitly
@@ -327,7 +333,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
 
   let matchedDangerousCommand = false;
   let matchedDangerousContext = false;
-  if (!isTrusted && (!isLookupOrEcho || isCommandExec || isEchoWithSubshell)) {
+  if (!isTrusted && !isVersionOnlyInvocation && (!isLookupOrEcho || isCommandExec || isEchoWithSubshell)) {
     // Check firstWord against dangerousCommandPatterns (normal path)
     for (const { pattern, label } of dangerousCommandPatterns) {
       const tagged = `[Pattern] ${label}`;
@@ -383,7 +389,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   } else if (isFirstTokenRelativePath(segment)) {
     isSimple = false;
   } else {
-    isSimple = isAllowedCommand(firstWord) && !hasDanger
+    isSimple = (isAllowedCommand(firstWord) || isVersionOnlyInvocation) && !hasDanger
       && !(delegated && !isAllowedCommand(delegated.cmd))
       && !(wrapperCommands.has(firstWord) && isWrapperRunningRelativePath(segment))
       && allStagesSimple;
