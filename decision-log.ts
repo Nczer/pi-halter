@@ -159,7 +159,13 @@ function summarizePrompt(decision: Extract<Decision, { kind: "prompt" }>): strin
     // (unlisted): command approval is required but no segment carries a
     // namable signature (e.g. a relative-path binary whose basename is
     // allowlisted — the prompt still fires on the unallowlisted first word).
-    if (p.needsCommandApproval) parts.push(`cmd ${p.signatures.length ? p.signatures.slice(0, 3).join(",") : "(unlisted)"}`);
+    // Relative-path tools are named via their cwd-bound grant identity.
+    if (p.needsCommandApproval) {
+      const named = p.signatures.length > 0
+        ? p.signatures.slice(0, 3).join(",")
+        : (p.relativeToolIds?.length ? `${p.relativeToolIds.slice(0, 3).join(",")} (unlisted)` : "(unlisted)");
+      parts.push(`cmd ${named}`);
+    }
     if (p.needsPathApproval) parts.push(`outside ${p.outsideDirs.slice(0, 3).join(",")}`);
     return parts.join("; ") || "unclassified";
   }

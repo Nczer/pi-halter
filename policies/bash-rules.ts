@@ -113,7 +113,7 @@ export const FastAllowRule: BashRule = (req) => {
 /**
  * Core safety and auto-allow logic based on command analysis.
  */
-export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) => {
+export const SafetyRule: BashRule = (req, store, analysis?: CommandAnalysis) => {
   if (!analysis) return null;
 
   // Any tree-sitter parse error means bash may not see what we see — parser
@@ -151,9 +151,11 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   const isSigApproved = (sig: string, segIdx: number) => {
     // Relative-path segments (./node_modules/.bin/npm test) must never inherit
     // grants for the bare command name — a repo-shipped executable named npm/pip
-    // would otherwise inherit session-wide `npm *` grants. Check BEFORE the
-    // store grants.
-    if (relPathIdxSet.has(segIdx)) return false;
+    // would otherwise inherit session-wide `npm *` grants. The ONLY approval
+    // that applies is an exact signature grant recorded from a prompt in this
+    // very cwd (bashSigCwds) — prefix grants and grants from other cwds are
+    // all refused.
+    if (relPathIdxSet.has(segIdx)) return store.hasAllowedBashCwd(sig, req.cwd);
     const deleg = delegatedBySeg[segIdx];
     if (deleg) {
       // No static allowlist fallback: the delegating word (env/command/exec/…)
@@ -194,6 +196,13 @@ export const PromptFallbackRule: BashRule = (req, _store, analysis?: CommandAnal
       outsideDirs: prompt.outsideDirs ?? [],
       segments: analysis.segments,
       signatures: prompt.promptSignatures,
+      // Relative-tool segment signatures (the promptSignatures filter drops
+      // them when their basename is allowlisted — the grant needs them).
+      relativeToolIds: [...new Set(
+        analysis.relativePathSegmentIndices
+          .map(i => analysis.signatures[i])
+          .filter(s => /(^|\s)(\.\/|\.\.\/)/.test(s)),
+      )],
       nonAllowedSegmentIndices: prompt.nonAllowlistedSegmentIndices,
       riskDangerous: analysis.risk.dangerous,
       riskSeverity: analysis.risk.severity,

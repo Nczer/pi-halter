@@ -73,7 +73,7 @@ function buildBashPrompt(
   const { command, cwd, outsideDirs, segments, signatures,
           riskDangerous, riskSeverity, riskReasons, hasUnsafePattern,
           needsCommandApproval, needsPathApproval, nonAllowedSegmentIndices,
-          credentialRule } = data;
+          credentialRule, relativeToolIds } = data;
   const nonAllowedSet = new Set(nonAllowedSegmentIndices);
 
   // Pre-compute aligned risk reasons (reused in body and tier2)
@@ -88,6 +88,10 @@ function buildBashPrompt(
 
   const hasBoth = needsCommandApproval && needsPathApproval;
   const uniqueSigs = [...new Set(signatures)];
+  // Relative-path tool identities (../node_modules/.bin/tsc …). Deduped
+  // against uniqueSigs — a relative tool whose basename is NOT allowlisted
+  // appears in both lists. Granted cwd-bound (exact sig + this cwd only).
+  const relToolIds = (relativeToolIds ?? []).filter(s => !uniqueSigs.includes(s));
 
   // Compute prompt options from data (previously on PromptDecision)
   const includePathsOption = hasBoth;
@@ -95,7 +99,11 @@ function buildBashPrompt(
   const pmSigs = uniqueSigs.filter(sig => PACKAGE_MANAGERS.has(sig.split(/\s+/)[0]));
   const broaderSigs = [...new Set(pmSigs.map(sig => sig.split(/\s+/)[0]))];
   const includeBroaderOption = broaderSigs.some(s => !uniqueSigs.includes(s));
-  const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (uniqueSigs.length > 0 || outsideDirs.length > 0);
+  const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (uniqueSigs.length > 0 || outsideDirs.length > 0 || relToolIds.length > 0);
+  const cmdBullets = [
+    ...uniqueSigs.map(s => `  \u2022 ${s} *`),
+    ...relToolIds.map(s => `  \u2022 ${s} (this cwd)`),
+  ].join("\n");
 
   // Title — reflect what triggered the prompt
   const titlePrefix = needsCommandApproval && needsPathApproval
@@ -162,7 +170,7 @@ function buildBashPrompt(
   const tier2Everything = hasBoth
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow:\n\nCommands:\n${uniqueSigs.map(s => `  \u2022 ${s} *`).join("\n")}\n\nPaths:\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}${dangerWarning}`,
+        body: `"Always Yes" will auto-allow:\n\nCommands:\n${cmdBullets}\n\nPaths:\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}${dangerWarning}`,
       }
     : needsPathApproval
     ? {
@@ -171,7 +179,7 @@ function buildBashPrompt(
       }
     : {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow these command signatures this session:\n\n${uniqueSigs.map(s => `  \u2022 ${s} *`).join("\n")}${dangerWarning}`,
+        body: `"Always Yes" will auto-allow these command signatures this session:\n\n${cmdBullets}${dangerWarning}`,
       };
 
   // Tier 2 — "always (paths only)" confirmation
@@ -182,8 +190,8 @@ function buildBashPrompt(
       }
     : undefined;
 
-  const alwaysLabel = (needsCommandApproval && uniqueSigs.length > 0)
-    ? uniqueSigs.map(s => s + " *").join(", ")
+  const alwaysLabel = (needsCommandApproval && (uniqueSigs.length > 0 || relToolIds.length > 0))
+    ? [...uniqueSigs.map(s => s + " *"), ...relToolIds.map(s => s + " (this cwd)")].join(", ")
     : (needsPathApproval ? outsideDirs.map(d => `Read ${d}/*`).join(", ") : "");
   const alwaysBroaderLabel = includeBroaderOption
     ? uniqueSigs.map(s => s.split(" ")[0] + " *").join(", ")

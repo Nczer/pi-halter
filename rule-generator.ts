@@ -71,6 +71,13 @@ export class RuleGenerator {
     if (data.signatures.length > 0) {
       rules.bashSigs = data.signatures;
     }
+    // Relative-path tools: store the exact signature bound to this cwd —
+    // "Always" must actually work for ../node_modules/.bin/*, and the cwd
+    // binding is what keeps a repo-shipped executable from inheriting
+    // session-wide bare-name grants elsewhere.
+    if (data.relativeToolIds.length > 0) {
+      rules.bashSigCwds = data.relativeToolIds.map(sig => ({ sig, cwd: data.cwd }));
+    }
     return rules;
   }
 

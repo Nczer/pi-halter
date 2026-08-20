@@ -203,3 +203,37 @@ describe("Store: isInsideAllowedDir", () => {
 		expect(store.isInsideAllowedDir("/opt-foo", "read")).toBe(false);
 	});
 });
+
+describe("cwd-bound bash signatures (bashSigCwds)", () => {
+	it("exact sig + exact cwd only", () => {
+		const store = createStore();
+		store.addAllowed({ bashSigCwds: [{ sig: "./node_modules/.bin/tsc --noEmit", cwd: "/a" }] });
+		expect(store.hasAllowedBashCwd("./node_modules/.bin/tsc --noEmit", "/a")).toBe(true);
+		expect(store.hasAllowedBashCwd("./node_modules/.bin/tsc --noEmit", "/b")).toBe(false);
+		expect(store.hasAllowedBashCwd("./node_modules/.bin/tsc", "/a")).toBe(false);
+		// unbound API must not see cwd-bound sigs
+		expect(store.hasAllowedBash("./node_modules/.bin/tsc --noEmit")).toBe(false);
+		expect(store.hasAllowedBashPrefix("./node_modules/.bin/tsc --noEmit x")).toBe(false);
+	});
+
+	it("the same sig can be bound to multiple cwds", () => {
+		const store = createStore();
+		store.addAllowed({ bashSigCwds: [{ sig: "s", cwd: "/a" }] });
+		store.addAllowed({ bashSigCwds: [{ sig: "s", cwd: "/b" }] });
+		expect(store.hasAllowedBashCwd("s", "/a")).toBe(true);
+		expect(store.hasAllowedBashCwd("s", "/b")).toBe(true);
+		expect(store.hasAllowedBashCwd("s", "/c")).toBe(false);
+		expect(store.listAllowedBashCwds()).toEqual([
+			{ sig: "s", cwd: "/a" },
+			{ sig: "s", cwd: "/b" },
+		]);
+	});
+
+	it("reset clears cwd-bound sigs", () => {
+		const store = createStore();
+		store.addAllowed({ bashSigCwds: [{ sig: "s", cwd: "/a" }] });
+		store.reset();
+		expect(store.hasAllowedBashCwd("s", "/a")).toBe(false);
+		expect(store.listAllowedBashCwds()).toEqual([]);
+	});
+});
