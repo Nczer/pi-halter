@@ -210,12 +210,12 @@ Config is split across focused modules in `config/`:
 
 ### Decision log
 
-Every decision the gate makes is appended to a JSONL log — one line per tool call, `auto-allow`, `prompt` (with a one-line why), and `block` (with the reason), plus the command/path and cwd. It exists to measure blast radius: after changing gate code, diff what now prompts vs. what used to auto-allow; or mine repeatedly-prompting commands into contract rows. The log records what the *gate* decided — user approvals/rejections of prompts are not logged.
+**Off by default.** When enabled, every decision the gate makes is appended to a JSONL log — one line per tool call, `auto-allow`, `prompt` (with a one-line why), and `block` (with the reason), plus the command/path and cwd. It exists to measure blast radius: after changing gate code, diff what now prompts vs. what used to auto-allow; or mine repeatedly-prompting commands into contract rows. The log records what the *gate* decided — user approvals/rejections of prompts are not logged.
 
-- Path: `<extension dir>/.log/decisions.jsonl` (gitignored); rotates to `decisions.jsonl.1` at 5 MiB
-- `HALTER_DECISION_LOG=<path>` redirects it; `HALTER_DECISION_LOG=off` disables it
+- Enable: `/halter-decision-log [on|off]` (bare = toggle) — persisted in `~/.pi/agent/halter.json` (halter's own settings file, like gallop's `gallop.json`; pi owns `settings.json`). Compile-time default: `DECISION_LOG_ENABLED` in `config/logging.ts` (false)
+- Transient override: `HALTER_DECISION_LOG=<path>` (enables at that path); `HALTER_DECISION_LOG=off` forces off
+- Path: `<extension dir>/.log/decisions.jsonl` (gitignored); rotates to `decisions.jsonl.1` at 5 MiB — a few KB per day, SSD wear negligible (writes coalesce into 16 KiB pages)
 - Logging is fire-and-forget: disk problems never affect a decision (and a throw here would surface as a fail-closed block)
-- Disabled by default under vitest (tests opt in via the env override)
 
 ## Testing
 
