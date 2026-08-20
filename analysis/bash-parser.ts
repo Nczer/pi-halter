@@ -1,7 +1,8 @@
 import { createRequire } from "node:module";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathAwareCommands } from "../config";
+import { allowedReadPaths, allowedWritePaths, pathAwareCommands } from "../config";
 import { expandTilde, resolvePathReal } from "./path-analysis";
 import { decodeAnsiCEscapes } from "./tokenizer";
 
@@ -227,19 +228,18 @@ function flagValue(arg: string): string {
     : arg;
 }
 
+/** `$` introduces an expansion only when followed by a name char, `{`, `(`,
+ *  or a special parameter (@ * # ? ! $ - %). A trailing `$` or a `$` before
+ *  punctuation is a bash literal (the `grep 'foo$'` idiom) and carries no
+ *  runtime path dependency. */
+const DOLLAR_EXPANSION_RE = /\$[\w({@*#?!$%-]/;
+
 /** True when the value is an expansion not resolvable at gate time.
  *  Closed-set $HOME/${HOME} is NOT opaque (it is resolved statically). */
 function isOpaqueValue(val: string): boolean {
-  if (!val.includes("$") && !val.includes("`")) return false;
+  if (val.includes("`")) return true; // command substitution — runtime value
   if (HOME_TOKEN_RE.test(val)) return false;
-  return true;
-}
-
-/** A bare reference to a single variable — `$f` or `${f}` with no other content. */
-function simpleVarRef(arg: string): string | null {
-  const v = flagValue(arg);
-  const m = v.match(/^\$(\w+)$/) || v.match(/^\$\{(\w+)\}$/);
-  return m ? m[1] : null;
+  return DOLLAR_EXPANSION_RE.test(val);
 }
 
 /** A cwd-local bare name: no path separator, ~, expansion, or backtick, and not
@@ -250,13 +250,75 @@ function isBareName(w: string): boolean {
 }
 
 /**
- * True if `varName` is bound by an enclosing for/select loop to an in-list of
- * cwd-local bare names (`for f in a b *.txt`). Such a reference is statically
- * cwd-local — the same trust class as a literal bare token — so it is exempt
- * from the opaque marker. An in-list token with a path or expansion, or a loop
- * without a bare in-list, keeps the marker (fail closed).
+ * True when an absolute in-list token can only expand inside the cwd or a
+ * static allowed path root. Glob chars (*, ?, [) never cross `/`, so the
+ * static (non-glob) prefix pins the root every expansion value lives under.
+ * Trust is then verified against the REAL filesystem, not just the spelling:
+ * a value under a trusted prefix can still escape through a symlink
+ * (e.g. /tmp/evil -> /etc), so literal tokens are realpath'ed and glob tokens
+ * are expanded (fs.globSync) with every match realpath'ed; anything resolving
+ * outside the roots keeps the marker (fail closed).
+ * Quoted tokens are unquoted first; a double-quoted expansion, any `..`
+ * segment, or a prefix that is neither lexically nor (via realpath) under a
+ * root keeps the marker.
  */
-function isLoopBoundBareName(node: TSNode, varName: string): boolean {
+function isAllowedRootToken(w: string, cwd: string): boolean {
+  let t = w;
+  const q = w.match(/^(['"])(.*)\1$/);
+  if (q) {
+    if (q[1] === '"' && /[$`]/.test(q[2])) return false; // expansion inside double quotes
+    t = q[2];
+  } else if (/[$`]/.test(t)) {
+    return false;
+  }
+  if (!t.startsWith("/") || t === "/" || /(^|\/)\.\.(\/|$)/.test(t)) return false;
+  const globIdx = t.search(/[*?[[]/);
+  const prefix = globIdx === -1 ? t : t.slice(0, globIdx);
+  const base = prefix.endsWith("/") ? prefix.slice(0, -1) : path.dirname(prefix);
+  if (base === "/" || base === "") return false; // the root itself would allow everything
+  const roots = [...allowedReadPaths, ...allowedWritePaths, path.resolve(cwd)];
+  const underRoot = (p: string) => roots.some(r => p === r || p.startsWith(r + "/"));
+  // Prefix under a root — lexically, or through realpath (symlinked roots).
+  if (!underRoot(base)) {
+    try {
+      if (!underRoot(fs.realpathSync(base))) return false;
+    } catch {
+      return false; // prefix doesn't exist — fail closed
+    }
+  }
+  if (globIdx === -1) {
+    // Literal path: verify where it really points.
+    try {
+      return underRoot(fs.realpathSync(t));
+    } catch {
+      return true; // doesn't exist yet — the literal stays under the root by construction
+    }
+  }
+  // Glob: expand now and verify every match. (An unmatched pattern passes its
+  // literal text through at runtime, which stays under the pinned prefix.)
+  try {
+    const pattern = t.endsWith("/") ? t.slice(0, -1) : t;
+    const matches = fs.globSync(pattern);
+    if (matches.length > 4096) return false; // too many to verify — fail closed
+    for (const m of matches) {
+      if (!underRoot(fs.realpathSync(m))) return false; // symlink escape
+    }
+  } catch {
+    return false; // can't verify (bad pattern, unreadable dir) — fail closed
+  }
+  return true;
+}
+
+/**
+ * True if `varName` is bound by an enclosing for/select loop to an in-list
+ * where every token is statically safe: a cwd-local bare name (`for f in a b
+ * *.txt`) or an absolute token under the cwd / an allowed path root
+ * (`for d in /tmp/jobs/*`). Such references can only reach locations that
+ * need no path approval, so they are exempt from the opaque marker. Any
+ * other in-list (paths outside allowed roots, expansions) keeps the marker
+ * (fail closed).
+ */
+function isLoopBoundSafe(node: TSNode, varName: string, cwd: string): boolean {
   let cur = node.parent;
   while (cur) {
     if (cur.type === "for_statement") {
@@ -271,7 +333,9 @@ function isLoopBoundBareName(node: TSNode, varName: string): boolean {
         if (c.type === ";" || c.type === "do_group") break;
         inList.push(c.text);
       }
-      if (loopVar === varName) return inList.length > 0 && inList.every(isBareName);
+      if (loopVar === varName) {
+        return inList.length > 0 && inList.every(w => isBareName(w) || isAllowedRootToken(w, cwd));
+      }
       // a different (outer/nested) loop variable — keep walking up
     }
     cur = cur.parent;
@@ -280,18 +344,34 @@ function isLoopBoundBareName(node: TSNode, varName: string): boolean {
 }
 
 /**
+ * A loop-variable reference whose expansions are statically safe paths:
+ * `$d` (bare) or `$d/rest` / `${d}/rest` where `rest` is bare — no
+ * expansion, ~, backslash, `..` segment, or absolute form — so the value
+ * stays where the loop's in-list pins it (cwd-local or an allowed root).
+ */
+function loopBoundRef(val: string): { name: string; rest: string | null } | null {
+  let m = val.match(/^\$(\w+)$/) || val.match(/^\$\{(\w+)\}$/);
+  if (m) return { name: m[1], rest: null };
+  m = val.match(/^\$(\w+)\/(.+)$/) || val.match(/^\$\{(\w+)\}\/(.+)$/);
+  if (m && !/[$`~\\]/.test(m[2]) && !/(^|\/)\.\.(\/|$)/.test(m[2])) {
+    return { name: m[1], rest: m[2] };
+  }
+  return null;
+}
+
+/**
  * Marker for an opaque expansion in path position, or null when the token is
- * not opaque (or is an exempt loop-bound bare name). The marker sits outside
+ * not opaque (or is an exempt loop-bound reference). The marker sits outside
  * every allowed dir, forcing path approval — the only safe outcome when the
  * runtime location is knowable only by running the shell.
  * Note: single-quoted literal arguments (`cat '$X'`) lose their literalness at
  * the text level and are over-flagged — the safe direction.
  */
-function opaqueVarMarker(node: TSNode, arg: string): string | null {
+function opaqueVarMarker(node: TSNode, arg: string, cwd: string): string | null {
   const val = flagValue(arg);
   if (!isOpaqueValue(val)) return null;
-  const varName = simpleVarRef(arg);
-  if (varName !== null && isLoopBoundBareName(node, varName)) return null;
+  const ref = loopBoundRef(val);
+  if (ref !== null && isLoopBoundSafe(node, ref.name, cwd)) return null;
   return path.join(OPAQUE_VAR_DIR, val);
 }
 
@@ -720,6 +800,13 @@ function sedScriptArgIndices(args: string[]): Set<number> {
  * spaces, braces { }, $NF, $0, print, etc. — characters never found in bare paths.
  */
 function isAwkScriptArg(arg: string): boolean {
+  // Rule blocks or function definitions anchored at the start of the arg —
+  // `BEGIN {…}`, `END {…}`, `function f(…) {…}` — are program text, not paths
+  // (the log case: `awk 'BEGIN{t=""} /re/{…} END{print t}' f`).
+  if (/^(?:BEGIN|END)\s*[{(]/.test(arg) || /^function\s+\w+\s*\(/.test(arg)) return true;
+  // Non-path tokens with an action block: paths never contain unquoted
+  // braces here, and a token without a path-like prefix is not a candidate.
+  if (!arg.startsWith("/") && arg.includes("{") && arg.includes("}")) return true;
   if (!arg.startsWith("/")) return false;
   // Awk scripts contain awk-specific syntax that never appears in file paths
   return /[\s{}\(\)\$\^\*\+\?\|\\!=;]/.test(arg) || /,\//.test(arg);
@@ -800,7 +887,7 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
 
           // Opaque expansion in path position (cat $X, -f=$X, cat ./$Y) →
           // marker path, so the read/write target is path-approved.
-          const marker = opaqueVarMarker(cmdNode, arg);
+          const marker = opaqueVarMarker(cmdNode, arg, cwd);
           if (marker) allPaths.push(marker);
 
           if (isPathCandidate(arg)) {
@@ -834,7 +921,7 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
           }
           // `-` means stdout; skip it and bare flags (e.g. `sort -o -k 1`).
           if (target && target !== "-" && !target.startsWith("-")) {
-            const marker = opaqueVarMarker(cmdNode, target);
+            const marker = opaqueVarMarker(cmdNode, target, cwd);
             if (marker) allPaths.push(marker);
             else allPaths.push(resolvePathReal(expandHomeToken(expandTilde(target)), cwd));
           }
@@ -852,7 +939,7 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
             redirectPaths.push(resolvePathReal(expandHomeToken(expandTilde(p)), cwd));
           } else {
             // `> $X` — write destination only knowable at runtime → marker.
-            const marker = opaqueVarMarker(node, p);
+            const marker = opaqueVarMarker(node, p, cwd);
             if (marker) redirectPaths.push(marker);
           }
         }

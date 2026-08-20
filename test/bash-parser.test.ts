@@ -1,8 +1,8 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
-import { parseCommand } from "../analysis/bash-parser";
+import { afterEach, describe, expect, it } from "vitest";
+import { parseCommand, OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 
 // Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /etc → /private/etc)
 const realPath = (p: string) => {
@@ -187,6 +187,78 @@ describe("parseCommand: paths", () => {
 			expect(p).toContain("/tmp/normal_path.txt");
 			expect(p).not.toContain("\\");
 		});
+	});
+});
+
+describe("parseCommand: opaque var markers (log FPs)", () => {
+	it("trailing $ in a pattern is a bash literal — no opaque marker", async () => {
+		const r = await parseCommand('grep -v "^$" file.txt', cwd);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
+	});
+
+	it("awk BEGIN/END program text is not a path — no opaque marker", async () => {
+		const r = await parseCommand(`awk 'BEGIN{t=""} /^[A-Z]+$/{getline; t=$0} END{print t}' f.txt`, cwd);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
+	});
+
+	it("loop-bound var as a path prefix is exempt from the marker", async () => {
+		const r = await parseCommand("for d in a b; do ls $d/test; done", cwd);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
+	});
+
+	it("loop in-list under an allowed root (/tmp) is exempt from the marker", async () => {
+		const r = await parseCommand('for d in /tmp/*/; do ls "$d"; done', cwd);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
+	});
+
+	it("non-loop var in path position still gets the marker (control)", async () => {
+		const r = await parseCommand("cat $X", cwd);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(true);
+	});
+});
+
+describe("parseCommand: loop in-list roots (symlink verification)", () => {
+	const dirs: string[] = [];
+
+	function makeRoot(withSymlink: boolean): string {
+		const base = fs.mkdtempSync(path.join(os.tmpdir(), "halter-loop-"));
+		dirs.push(base);
+		fs.mkdirSync(path.join(base, "real"));
+		if (withSymlink) {
+			fs.symlinkSync("/etc", path.join(base, "esc"));
+		}
+		return base;
+	}
+
+	afterEach(() => {
+		while (dirs.length) {
+			const d = dirs.pop()!;
+			try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
+		}
+	});
+
+	it("glob in-list with an escaping symlink keeps the opaque marker", async () => {
+		const base = makeRoot(true);
+		const r = await parseCommand(`for d in ${base}/*/; do ls "$d"; done`, cwd);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(true);
+	});
+
+	it("literal in-list token that is an escaping symlink keeps the opaque marker", async () => {
+		const base = makeRoot(true);
+		const r = await parseCommand(`for d in ${base}/esc; do cat "$d/passwd"; done`, cwd);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(true);
+	});
+
+	it("glob in-list of real dirs under an allowed root is exempt", async () => {
+		const base = makeRoot(false);
+		const r = await parseCommand(`for d in ${base}/*/; do ls "$d"; done`, cwd);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
+	});
+
+	it("literal in-list token inside an allowed root is exempt", async () => {
+		const base = makeRoot(false);
+		const r = await parseCommand(`for d in ${base}/real; do ls "$d"; done`, cwd);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
 	});
 });
 

@@ -58,9 +58,22 @@ describe("analyzeRisk", () => {
 
   it("detects git push --force", async () => {
     const risk = await analyze("git push --force origin main");
-    expect(risk.dangerous).toBe(true);
     expect(risk.severity).toBe("high");
-    expect(risk.reasons.some(r => r.includes("force"))).toBe(true);
+    expect(risk.reasons.some(r => r.includes("git push --force"))).toBe(true);
+  });
+
+  it("git -C <dir> push: subcommand resolved past the -C flag (medium, not high)", async () => {
+    const risk = await analyze("git -C /tmp/repo push");
+    expect(risk.dangerous).toBe(true);
+    expect(risk.severity).toBe("medium");
+    expect(risk.reasons.some(r => r.includes("git push (writes to remote)"))).toBe(true);
+    expect(risk.reasons.some(r => r.includes("git -C"))).toBe(false);
+  });
+
+  it("git -C <dir> push --force: force detected past the -C flag", async () => {
+    const risk = await analyze("git -C /tmp/repo push --force");
+    expect(risk.severity).toBe("high");
+    expect(risk.reasons.some(r => r.includes("git push --force"))).toBe(true);
   });
 
   it("non-dangerous git commands produce no [Git] reasons", async () => {
@@ -160,6 +173,17 @@ describe("analyzeRisk", () => {
   it("does not flag pipe when all stages are allowed", async () => {
     const risk = await analyze("cat file.txt | grep foo | wc -l");
     expect(risk.reasons.some(r => r.includes("pipe"))).toBe(false);
+  });
+
+  it("does not flag pipe inside compound stages (inner commands are own segments)", async () => {
+    for (const cmd of [
+      'for d in a b; do ls "$d" | head -5; done',
+      "echo hi | while read l; do echo $l; done",
+      "for d in /tmp/*/; do echo \"== $d\"; ls \"$d\" | head -5; done; df -T /tmp | tail -1",
+    ]) {
+      const risk = await analyze(cmd);
+      expect(risk.reasons.some(r => r.includes("pipe"))).toBe(false);
+    }
   });
 
   it("flags pipe to tee (write operation, not in allowlist)", async () => {
