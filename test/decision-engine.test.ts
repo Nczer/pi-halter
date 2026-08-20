@@ -1501,3 +1501,80 @@ describe("Bash: root filesystem search (find /) must not auto-allow", () => {
 		expect(d.kind).toBe("auto-allow");
 	});
 });
+
+describe("Bash: cwd-bound exact-sig grants for relative-path tools (log FP cluster)", () => {
+	// `./node_modules/.bin/mytool` — a relative tool inside cwd whose basename
+	// is NOT allowlisted (an allowlisted basename like tsc auto-allows via
+	// basename transparency and never reaches the grant check). The signature
+	// is the tool path + sorted flags; the grant is stored bound to the cwd.
+	const tool = "./node_modules/.bin/mytool --do index.ts";
+	const otherCwd = path.join(home, "OtherProject");
+
+	beforeEach(() => {
+		fs.mkdirSync(otherCwd, { recursive: true });
+	});
+	afterEach(() => {
+		fs.rmSync(otherCwd, { recursive: true, force: true });
+	});
+
+	it("prompts first and names the cwd-bound grant identity", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: tool, cwd }, store);
+		expect(d.kind).toBe("prompt");
+		if (d.kind === "prompt" && d.promptData.type === "bash") {
+			expect(d.promptData.relativeToolIds.length).toBeGreaterThan(0);
+			expect(d.promptData.relativeToolIds[0]).toContain("./node_modules/.bin/mytool");
+			expect(d.promptData.cwd).toBe(cwd);
+		}
+	});
+
+	it("round-trip: Always Yes stores a cwd-bound grant; same tool+flags in the same cwd auto-allows", async () => {
+		const store = createStore();
+		const d1 = await decide({ type: "bash", command: tool, cwd }, store);
+		expect(d1.kind).toBe("prompt");
+		if (d1.kind !== "prompt" || d1.promptData.type !== "bash") return;
+		const rules = RuleGenerator.generatePrimaryRules(d1.promptData);
+		expect(rules.bashSigCwds?.length).toBeGreaterThan(0);
+		expect(rules.bashSigCwds?.[0].cwd).toBe(cwd);
+		store.addAllowed(rules);
+		// same tool, same flags, different FILE argument — the signature
+		// (tool path + flags) is unchanged
+		const d2 = await decide({ type: "bash", command: "./node_modules/.bin/mytool --do other.ts", cwd }, store);
+		expect(d2.kind).toBe("auto-allow");
+	});
+
+	it("grant is cwd-bound: the same command from a different cwd still prompts", async () => {
+		const store = createStore();
+		const d1 = await decide({ type: "bash", command: tool, cwd }, store);
+		if (d1.kind === "prompt" && d1.promptData.type === "bash") {
+			store.addAllowed(RuleGenerator.generatePrimaryRules(d1.promptData));
+		}
+		const d2 = await decide({ type: "bash", command: tool, cwd: otherCwd }, store);
+		expect(d2.kind).toBe("prompt");
+	});
+
+	it("a different flag set is a different signature (still prompts)", async () => {
+		const store = createStore();
+		const d1 = await decide({ type: "bash", command: tool, cwd }, store);
+		if (d1.kind === "prompt" && d1.promptData.type === "bash") {
+			store.addAllowed(RuleGenerator.generatePrimaryRules(d1.promptData));
+		}
+		const d2 = await decide({ type: "bash", command: "./node_modules/.bin/mytool --other index.ts", cwd }, store);
+		expect(d2.kind).toBe("prompt");
+	});
+
+	it("invariant: an unbound stored signature never covers a relative segment", async () => {
+		const store = createStore();
+		// The same string the round-trip stores — but WITHOUT the cwd binding
+		store.addAllowed({ bashSigs: ["./node_modules/.bin/mytool --do"] });
+		const d = await decide({ type: "bash", command: tool, cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("invariant: an unbound bare-name grant never covers a relative tool", async () => {
+		const store = createStore();
+		store.addAllowed({ bashSigs: ["mytool"] });
+		const d = await decide({ type: "bash", command: tool, cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+});

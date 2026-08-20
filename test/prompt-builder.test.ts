@@ -583,3 +583,34 @@ describe("edge cases", () => {
     expect(prompt.body).toContain("Command:");
   });
 });
+
+describe("cwd-bound relative tool grants in the prompt", () => {
+  it("offers Always when only a relative-tool identity exists (empty signatures)", () => {
+    const prompt = buildPrompt(bashDecision({
+      signatures: [],
+      relativeToolIds: ["./node_modules/.bin/tsc --noEmit"],
+      needsCommandApproval: true,
+    }));
+    expect(prompt.includeAlwaysOption).toBe(true);
+    expect(prompt.alwaysLabel).toContain("./node_modules/.bin/tsc --noEmit");
+    expect(prompt.alwaysLabel).toContain("(this cwd)");
+  });
+
+  it("lists relative tools in the tier-2 body, deduped against signatures", () => {
+    const prompt = buildPrompt(bashDecision({
+      signatures: ["./node_modules/.bin/unknown-tool", "rm"],
+      relativeToolIds: ["./node_modules/.bin/unknown-tool", "./node_modules/.bin/tsc --noEmit"],
+      needsCommandApproval: true,
+    }));
+    const tier2 = prompt.tier2Everything;
+    expect(tier2).toBeDefined();
+    if (tier2) {
+      expect(tier2.body).toContain("rm *");
+      expect(tier2.body).toContain("./node_modules/.bin/unknown-tool *");
+      expect(tier2.body).toContain("./node_modules/.bin/tsc --noEmit (this cwd)");
+      // deduped: unknown-tool is already a sig bullet — not repeated cwd-bound
+      expect(tier2.body.match(/unknown-tool/g)?.length).toBe(1);
+      expect(tier2.body.match(/tsc --noEmit/g)?.length).toBe(1);
+    }
+  });
+});

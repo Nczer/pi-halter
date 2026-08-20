@@ -5,6 +5,12 @@ import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "./config";
 /** Structured rules for what to auto-allow on "always" confirmation. */
 export interface AllowRules {
   bashSigs?: string[];
+  /**
+   * Exact bash signatures bound to the cwd they were granted from. Only a
+   * signature granted in cwd X applies in cwd X — relative-path tools
+   * (../node_modules/.bin/tsc) may never inherit unbound grants.
+   */
+  bashSigCwds?: Array<{ sig: string; cwd: string }>;
   readDirs?: string[];
   writeDirs?: string[];
   readPaths?: string[];
@@ -21,6 +27,8 @@ export interface AllowRules {
 export interface Store {
   hasAllowedBash(signature: string): boolean;
   hasAllowedBashPrefix(signature: string): boolean;
+  /** Exact signature granted FROM this cwd (cwd-bound, see AllowRules.bashSigCwds). */
+  hasAllowedBashCwd(signature: string, cwd: string): boolean;
   hasAllowedReadPath(path: string): boolean;
   hasAllowedWritePath(path: string): boolean;
   hasAllowedMcpServer(server: string): boolean;
@@ -31,6 +39,7 @@ export interface Store {
   getLastAbort(command: string): number | null;
   incrementPromptCount(): { over: boolean; count: number };
   listAllowedBash(): Set<string>;
+  listAllowedBashCwds(): Array<{ sig: string; cwd: string }>;
   listAllowedReadDirs(): Set<string>;
   listAllowedWriteDirs(): Set<string>;
   listAllowedReadPaths(): Set<string>;
@@ -50,6 +59,8 @@ export interface Store {
  */
 export function createStore(nowFn = Date.now): Store {
   const bashSigs = new Set<string>();
+  // sig -> set of cwds it was granted from (exact match, cwd-bound)
+  const bashSigCwds = new Map<string, Set<string>>();
   const readDirs = new Set<string>();
   const writeDirs = new Set<string>();
   const readPaths = new Set<string>();
@@ -74,6 +85,9 @@ export function createStore(nowFn = Date.now): Store {
   return {
     now() { return nowFn(); },
     hasAllowedBash(s) { return bashSigs.has(s); },
+    hasAllowedBashCwd(s, cwd) {
+      return bashSigCwds.get(s)?.has(cwd) === true;
+    },
     hasAllowedBashPrefix(s) {
       for (const allowed of bashSigs) {
         if (s.startsWith(allowed + " ")) return true;
@@ -97,6 +111,10 @@ export function createStore(nowFn = Date.now): Store {
 
     addAllowed(rules) {
       rules.bashSigs?.forEach(s => bashSigs.add(s));
+      rules.bashSigCwds?.forEach(({ sig, cwd }) => {
+        const set = bashSigCwds.get(sig);
+        if (set) set.add(cwd); else bashSigCwds.set(sig, new Set([cwd]));
+      });
       rules.readDirs?.forEach(d => readDirs.add(d));
       rules.writeDirs?.forEach(d => writeDirs.add(d));
       rules.readPaths?.forEach(p => readPaths.add(p));
@@ -114,6 +132,11 @@ export function createStore(nowFn = Date.now): Store {
     },
 
     listAllowedBash() { return new Set(bashSigs); },
+    listAllowedBashCwds() {
+      const out: Array<{ sig: string; cwd: string }> = [];
+      for (const [sig, cwds] of bashSigCwds) for (const cwd of cwds) out.push({ sig, cwd });
+      return out;
+    },
     listAllowedReadDirs() { return new Set(readDirs); },
     listAllowedWriteDirs() { return new Set(writeDirs); },
     listAllowedReadPaths() { return new Set(readPaths); },
@@ -127,6 +150,7 @@ export function createStore(nowFn = Date.now): Store {
 
     reset() {
       bashSigs.clear();
+      bashSigCwds.clear();
       readDirs.clear();
       writeDirs.clear();
       readPaths.clear();

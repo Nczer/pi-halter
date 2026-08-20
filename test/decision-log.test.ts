@@ -95,6 +95,17 @@ describe("decision log", () => {
 		expect(entry.reason?.length).toBeGreaterThan(0);
 	});
 
+	it("names the cwd-bound identity for relative tools with empty signatures", async () => {
+		// Real log shape: a relative tool whose basename IS allowlisted (tsc —
+		// so no prompt signature) + a pipe (needsCmd) + outside base (the
+		// prompt actually fires on the path, command approval has no sig).
+		await gate({ type: "bash", command: "cd /etc && ./node_modules/.bin/tsc --noEmit index.ts | head", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
+		const [entry] = lines(logFile);
+		expect(entry.kind).toBe("prompt");
+		expect(entry.reason).toContain("./node_modules/.bin/tsc");
+		expect(entry.reason).toContain("(unlisted)");
+	});
+
 	it("logs file and mcp decisions with their target shapes", async () => {
 		await gate({ type: "file", toolName: "read", filePath: "/etc/passwd", cwd: tmp } as FileRequest, noUiCtx, createStore(), noReject);
 		const req: McpRequest = { type: "mcp", server: "exa", tool: "search" };
