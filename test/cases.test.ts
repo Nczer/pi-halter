@@ -11,7 +11,8 @@
 
 import path from "node:path";
 import os from "node:os";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { decide } from "../decision-engine";
 import { createStore } from "../store";
@@ -975,7 +976,39 @@ const cases: TestCase[] = [
 	{ cmd: "echo a#b > /etc/x", simple: false, unsafe: true, decision: "prompt", desc: "mid-word # must not hide a write redirect" },
 	{ cmd: "ls # list files", simple: true, unsafe: false, decision: "auto-allow", desc: "real comment after whitespace is stripped (safe)" },
 	{ cmd: "ls # comment && rm -rf .", simple: true, unsafe: false, decision: "auto-allow", desc: "comment swallows rest of line (real bash semantics)" },
+
+	// ── Regression: credential scan must ignore shell comments (data, not operands) ──
+	{ cmd: "# check the .ssh directory\nls", simple: true, unsafe: false, decision: "auto-allow", desc: "comment naming .ssh does not block (was BLOCK — comment text is not an operand)" },
+	{ cmd: "ls # todo: rotate .env", simple: true, unsafe: false, decision: "auto-allow", desc: "trailing comment naming .env does not prompt (was PROMPT)" },
+	{ cmd: "# rotate .env && rm -rf .\nls", simple: true, unsafe: false, decision: "auto-allow", desc: "comment swallows chained write/credential text to end of line" },
+	{ cmd: "cat .ssh/id_rsa # see docs", simple: true, unsafe: false, decision: "block", desc: "real credential operand still blocks with a trailing comment" },
+	{ cmd: "# see docs\ncat .ssh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "comment line does not hide a live credential on the next line" },
 ];
+
+// Bare-name symlink escaping cwd → prompt (the checkBareSymlinkTokens `warned`
+// path — pinned end-to-end; perm #645 class). Uses a real tmpdir fixture so
+// the lstat probe in the gate sees the actual link.
+describe("bare-token symlink escape (end-to-end decision)", () => {
+	let tmp: string;
+	beforeAll(() => {
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-e2e-sym-"));
+		fs.symlinkSync("/etc/hostname", path.join(tmp, "etc-link"));
+	});
+	afterAll(() => {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	});
+
+	it("cat <bare symlink → outside cwd> prompts (never silently allows)", async () => {
+		const decision = await decide({ type: "bash", command: "cat etc-link", cwd: tmp }, createStore());
+		expect(decision.kind).toBe("prompt");
+	});
+
+	it("regular bare file inside cwd still auto-allows", async () => {
+		fs.writeFileSync(path.join(tmp, "plain.txt"), "x");
+		const decision = await decide({ type: "bash", command: "cat plain.txt", cwd: tmp }, createStore());
+		expect(decision.kind).toBe("auto-allow");
+	});
+});
 
 // ─── Run tests ───
 

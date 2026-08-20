@@ -14,6 +14,7 @@ import {
 	checkCommandForCredentialPaths,
 	checkBareSymlinkTokens,
 	stripHeredocBodies,
+	stripShellComments,
 } from "../analysis/path-analysis";
 
 const home = os.homedir();
@@ -317,6 +318,90 @@ describe("checkCommandForCredentialPaths", () => {
 		const result = checkCommandForCredentialPaths("cat <<EOF # c\n.ssh/id_rsa\nEOF", cwd);
 		expect(result.denied).toBeNull();
 		expect(result.warned).toBeNull();
+	});
+
+	// ── Shell comments are data, not path operands (2026-08) ──
+	it("line comment naming a denied path does not block", () => {
+		const result = checkCommandForCredentialPaths("# check the .ssh directory\nls", cwd);
+		expect(result.denied).toBeNull();
+		expect(result.warned).toBeNull();
+	});
+
+	it("inline trailing comment naming a warned path does not prompt", () => {
+		const result = checkCommandForCredentialPaths("ls # todo: rotate .env", cwd);
+		expect(result.denied).toBeNull();
+		expect(result.warned).toBeNull();
+	});
+
+	it("comment swallows chained credential text to end of line", () => {
+		const result = checkCommandForCredentialPaths("ls # .ssh && rm -rf .", cwd);
+		expect(result.denied).toBeNull();
+		expect(result.warned).toBeNull();
+	});
+
+	it("a comment does not hide a LIVE credential on the next line", () => {
+		const result = checkCommandForCredentialPaths("# see docs\ncat .ssh/id_rsa", cwd);
+		expect(result.denied).toBe(".ssh");
+	});
+
+	it("a real credential operand is still denied with a trailing comment", () => {
+		const result = checkCommandForCredentialPaths("cat .ssh/id_rsa # see docs", cwd);
+		expect(result.denied).toBe(".ssh");
+	});
+
+	it("mid-word # is literal — foo#.ssh is a benign filename, live text after operators is still checked", () => {
+		expect(checkCommandForCredentialPaths("cat foo#.ssh", cwd).denied).toBeNull();
+		const result = checkCommandForCredentialPaths("cat foo#.ssh; cat .env", cwd);
+		expect(result.denied).toBeNull();
+		expect(result.warned).toBe(".env");
+	});
+});
+
+describe("stripShellComments", () => {
+	it("masks a whole-line comment, preserving length and newlines", () => {
+		expect(stripShellComments("# c\nls")).toBe("   \nls");
+	});
+
+	it("masks an inline trailing comment only", () => {
+		expect(stripShellComments("ls # .env note")).toBe("ls            ");
+		expect(stripShellComments("ls # .env note\necho ok")).toBe("ls            \necho ok");
+	});
+
+	it("keeps mid-word # (word content, not a comment)", () => {
+		expect(stripShellComments("cat foo#.ssh")).toBe("cat foo#.ssh");
+		expect(stripShellComments("${v#pat}")).toBe("${v#pat}");
+		expect(stripShellComments("VAR=#x")).toBe("VAR=#x");
+		expect(stripShellComments('echo "a"# b')).toBe('echo "a"# b');
+	});
+
+	it("keeps # inside quotes (including multi-line strings)", () => {
+		expect(stripShellComments(`echo 'a # .env b' x`)).toBe(`echo 'a # .env b' x`);
+		const q = 'echo "a # .env b" # real comment';
+		const qMasked = stripShellComments(q);
+		expect(qMasked).toBe(q.slice(0, q.length - 14) + " ".repeat(14));
+		expect(qMasked).toContain('"a # .env b"');
+		expect(qMasked).not.toContain("real comment");
+		expect(stripShellComments("x='a\n# .ssh'\nls")).toBe("x='a\n# .ssh'\nls");
+	});
+
+	it("keeps a backslash-escaped #", () => {
+		expect(stripShellComments("echo \\# .ssh")).toBe("echo \\# .ssh");
+	});
+
+	it("line splice joins for the word-start check", () => {
+		// `foo \\<nl># x` splices to `foo # x` → comment (backslash+newline kept)
+		expect(stripShellComments("foo \\\n# .ssh")).toBe("foo \\\n" + " ".repeat(6));
+		// `foo\<nl># x` splices to `foo# x` → literal word content
+		expect(stripShellComments("foo\\# .ssh\nls")).toBe("foo\\# .ssh\nls");
+	});
+
+	it("a comment ends at its physical line even when it ends in backslash", () => {
+		expect(stripShellComments("# c \\\nrm -rf /tmp/x")).toBe("     \nrm -rf /tmp/x");
+	});
+
+	it("comments after shell operators start a comment", () => {
+		expect(stripShellComments("ls;# c .ssh")).toBe("ls;" + " ".repeat(8));
+		expect(stripShellComments("(# c")).toBe("(   ");
 	});
 });
 

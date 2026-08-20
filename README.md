@@ -66,7 +66,7 @@ Rules run in order — `RetryLoop → CredentialDeny → FastAllow → Safety �
 *First time — "Always" grants and later runs auto-allow:*
 - a path resolves **outside** cwd/allowed dirs — the prompt lists the outside dirs; "Always" grants that dir for the session
 - a safe command not in the allowlist (`npm run …`, `docker …`, …) — "Always" grants the command signature for the session
-- `warnPaths` matches (e.g. `.env.*`) — prompt with a warning
+- `warnPaths` matches (e.g. `.env.*`) — prompt with a warning; a **bare-name symlink in cwd resolving outside it** (`cat link` → `/etc/…`) prompts the same way — the literal name carries no path text, so the gate lstats bare tokens (symlinks only; a regular file in cwd cannot escape it)
 
 *Every time — the prompt builder suppresses "Always" for these (principle 5; only Yes/No):*
 - **write redirects** — `>`, `>>` — anywhere, including inside cwd (`ls > out.txt`)
@@ -80,7 +80,7 @@ Rules run in order — `RetryLoop → CredentialDeny → FastAllow → Safety �
 - **base access**: `cd` is navigation, not access — a path-aware segment with no target of its own (`cd /outside && ls`, `cd $D && find .`, `cd /outside && cat main.txt`, bare-name redirects like `cd /outside && echo x > out.txt`) operates on the base the cd left; that base is what gets approved
 
 **Block** — never promptable, rejected with a reason:
-- credential patterns anywhere in the raw command text (glob- and quote-aware): `.ssh`, `.gnupg`, `.env`, `.aws`, `id_rsa`, `*.pem`, … — plus a symlink-name check for bare tokens pointing at credentials
+- credential patterns anywhere in the raw command text (glob- and quote-aware): `.ssh`, `.gnupg`, `.env`, `.aws`, `id_rsa`, `*.pem`, … — plus a symlink-name check for bare tokens pointing at credentials. Shell comments and heredoc bodies are data, not operands: the scan is comment-aware (word-boundary `#`, quote/continuation-aware, 2026-08) so `# check the .ssh dir\nls` no longer blocks `ls` — a live credential operand on any line is still blocked
 - paths matching `deniedPaths` (`config/path-rules.ts`)
 - retry-loop guard: a command the user aborted within 60s is blocked instead of re-prompting
 
