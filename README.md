@@ -217,6 +217,22 @@ Config is split across focused modules in `config/`:
 - Path: `<extension dir>/.log/decisions.jsonl` (gitignored); rotates to `decisions.jsonl.1` at 5 MiB — a few KB per day, SSD wear negligible (writes coalesce into 16 KiB pages)
 - Logging is fire-and-forget: disk problems never affect a decision (and a throw here would surface as a fail-closed block)
 
+### Iterating policy from the log (debug/fix cycle)
+
+The log is the *input* to a log-driven fix loop, not just a measurement: the suite proves correctness, the log aims the next test.
+
+1. **Enable** — `/halter-decision-log on`, then use pi normally for a while (growth is a few KB/day).
+2. **Aggregate** — top prompt reasons, and the full auto-allow set:
+   ```
+   jq -r 'select(.kind=="prompt") | .reason' .log/decisions.jsonl | sort | uniq -c | sort -rn | head
+   jq -r 'select(.kind=="auto-allow") | .target' .log/decisions.jsonl | sort -u
+   ```
+3. **Triage** — prompt lines split into by-design (outside-cwd paths, first-encounter commands, genuinely risky operators), false positives (analysis misreading safe syntax), and noise (risk reasons, not gates). For bypass hunting read the *auto-allow* set instead: entries with operators, quotes, wrappers, or globs that auto-allowed are the ones worth a second look — that is the direction that matters.
+4. **Reproduce** — `npx tsx tools/probe.mts '<cmd>'` shows the first-encounter decision with its why; drop to `analyzeCommand` / `parseCommand` to see extracted paths and markers.
+5. **Fix** — every fix is a code change *plus* a contract row: `test/cases-data.ts` for pass/prompt/block decisions, `test/cwd-threading.test.ts` for cd/var/path threading. The row encodes the observed command with its expected decision, so the same input can never silently regress.
+6. **Prove** — `npx vitest run` (full suite) plus strict tsc (`cd ~/.pi/agent/extensions && npx tsc --noEmit --strict --target es2022 --module esnext --moduleResolution bundler --skipLibCheck <changed files>`), then confirm the flip with the probe: a fixed false positive now `ALLOW`s, a plugged bypass now `PROMPT`s or `BLOCK`s — and the new contract row keeps it there.
+7. **Reload** — `/reload` in pi (or restart). Never exercise changed extension code in a running pi session before reloading.
+
 ## Testing
 
 - **Decision engine** — async, no UI dependency. Inject `Store` for testability
