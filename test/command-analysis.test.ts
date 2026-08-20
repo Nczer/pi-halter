@@ -184,8 +184,9 @@ describe("allSimple: unsafe commands", () => {
 });
 
 describe("hasUnsafePattern: unsafe", () => {
-	it("subshell is unsafe", async () => {
-		expect((await analyzeCommand("$(cat /etc/passwd)", cwd)).safety.hasUnsafePattern).toBe(true);
+	it("read-only subshell is not an unsafe pattern; dirty inner still is", async () => {
+		expect((await analyzeCommand("$(cat /etc/passwd)", cwd)).safety.hasUnsafePattern).toBe(false);
+		expect((await analyzeCommand("$(rm -rf /tmp/xyz)", cwd)).safety.hasUnsafePattern).toBe(true);
 	});
 
 	it("sed -i is unsafe", async () => {

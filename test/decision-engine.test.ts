@@ -1370,10 +1370,16 @@ describe("Bash: backtick substitution in compound", () => {
 		expect(d.kind).toBe("auto-allow");
 	});
 
-	it("backtick in double quotes executes command substitution → prompts", async () => {
+	it("backtick in double quotes with dangerous inner executes → prompts", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "echo \"hello `rm -rf /tmp/xyz` world\"", cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("backtick in double quotes with read-only inner → auto-allow", async () => {
 		const store = createStore();
 		const d = await decide({ type: "bash", command: "echo \"hello `whoami` world\"", cwd }, store);
-		expect(d.kind).toBe("prompt");
+		expect(d.kind).toBe("auto-allow");
 	});
 });
 
