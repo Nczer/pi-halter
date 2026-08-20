@@ -42,20 +42,38 @@ When the user selects "Always", a second prompt requires explicit confirmation b
 
 ### Decisions: pass, prompt, block
 
-Before any session grants exist, every bash command resolves to exactly one outcome. Fail-closed is the default: anything unresolvable prompts. Rules run in order — `RetryLoop → CredentialDeny → FastAllow → Safety → PromptFallback` (`policies/bash-rules.ts`).
+Before any session grants exist, every bash command resolves to exactly one outcome. Fail-closed is the default: anything unresolvable prompts. The agreed principles (`test/cases.test.ts` header — that file is the contract suite):
+
+1. **Write → prompt** (carve-out: "safe creation" — `mkdir`/`touch`/`mktemp` — auto-allows)
+2. **Read inside cwd → auto-allow**
+3. **Code execution → prompt** (unless trusted script)
+4. **Outside cwd → prompt (first time), remembered → auto-allow**
+5. **Unsafe patterns → always prompt** — no session grant can override them
+
+Rules run in order — `RetryLoop → CredentialDeny → FastAllow → Safety → PromptFallback` (`policies/bash-rules.ts`).
 
 **Pass (auto-allow)** — all of these hold:
-- every segment's command is allowlisted (`config/bash-patterns.ts`: read-only inspection, system info, safe file ops, wrappers with safe payloads, `sleep`) or is a trusted-script invocation (see *Trusted Scripts*)
+- every segment's command is allowlisted (`config/bash-patterns.ts`) or is a trusted-script invocation (see *Trusted Scripts*). The allowlist is mostly read-only inspection, but deliberately includes a few first-time writes: safe creation (`touch`, `mkdir`, `mktemp`) and non-destructive git (`add`, `commit`, `checkout`, `branch`, `merge`, `stash`)
 - every resolved path stays inside the session cwd, `allowedReadPaths`, `allowedWritePaths`, or the trusted skills dir
-- no dangerous flag/pattern (evaluators: `git push --force`, `find -exec`, in-place `sed` outside cwd, curl-pipe-bash, …)
+- no write operation or dangerous flag/pattern (write redirects, `tee`/`cp`/`mv`/`rm`/`truncate`, `sed -i`, `sort -o`, `find -delete`/`-exec`, **any** `git push`, destructive git, `npm install`, script execution, wrappers running writes, …)
 
-**Prompt** — the command might touch something outside the trusted dirs:
+**Prompt** — three flavors:
+
+*First time — "Always" grants and later runs auto-allow:*
 - a path resolves **outside** cwd/allowed dirs — the prompt lists the outside dirs; "Always" grants that dir for the session
-- **opaque targets**: `$VAR`, `${VAR}`, `$(…)`, backticks in path position — the location is only knowable at runtime, so they are flagged with an `<unresolved-var>` marker and can never fast-allow
+- a safe command not in the allowlist (`npm run …`, `docker …`, …) — "Always" grants the command signature for the session
+- `warnPaths` matches (e.g. `.env.*`) — prompt with a warning
+
+*Every time — the prompt builder suppresses "Always" for these (principle 5; only Yes/No):*
+- **write redirects** — `>`, `>>` — anywhere, including inside cwd (`ls > out.txt`)
+- **write commands not in the allowlist** — `tee`, `cp`, `mv`, `rm`, `truncate`, `sed -i`, `find -delete`/`-exec`, `sort -o`, wrappers running writes (`xargs rm`, `timeout rm`)
+- **code execution** — `python`, `curl`, `npm install`, … (unless trusted)
+- **destructive / remote git** — any `git push` (writes to remote; force variants are high severity), `git rm`, `git clean -f`, `git reset --hard`, `git reflog expire`, `git gc --prune`
+
+*Unresolvable targets — the location can't be determined at parse time:*
+- **opaque targets**: `$VAR`, `${VAR}`, `$(…)`, backticks in path position — flagged with an `<unresolved-var>` marker, never fast-allowed
 - **unknown base**: a `cd` whose target can't be resolved (`cd $D`, globs, `cd -`) makes later relative paths unresolvable → `<unresolved-cwd>` marker
 - **base access**: `cd` is navigation, not access — a path-aware segment with no target of its own (`cd /outside && ls`, `cd $D && find .`, `cd /outside && cat main.txt`, bare-name redirects like `cd /outside && echo x > out.txt`) operates on the base the cd left; that base is what gets approved
-- a command not in the allowlist (`python`, `curl`, `make`, …) — "Always" grants the command signature
-- `warnPaths` matches (e.g. `.env.*`) — prompt with a warning
 
 **Block** — never promptable, rejected with a reason:
 - credential patterns anywhere in the raw command text (glob- and quote-aware): `.ssh`, `.gnupg`, `.env`, `.aws`, `id_rsa`, `*.pem`, … — plus a symlink-name check for bare tokens pointing at credentials
