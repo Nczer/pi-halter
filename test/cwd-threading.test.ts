@@ -23,6 +23,24 @@ function seg(text: string, ops: string[] = [], hasSubshell = false): BashSegment
   return { text, ops, hasSubshell };
 }
 
+describe("sleep allowlist", () => {
+  const d = (cmd: string) => decide({ type: "bash", command: cmd, cwd: CWD }, createStore());
+
+  it("sleep is allowlisted (no fs/net/exec) — including as a backgrounded chain head", async () => {
+    expect((await d("sleep 1")).kind).toBe("auto-allow");
+    expect((await d("sleep 1 & cd /tmp && ls")).kind).toBe("auto-allow");
+  }, 15000);
+
+  it.runIf(fs.existsSync(DOC_EXTRACT))(
+    "the original regression: sleep 1 & cd <skill> && python3 scripts/extract.py auto-allows",
+    async () => {
+      const cmd = `sleep 1 & cd ${DOC_EXTRACT} && python3 scripts/extract.py`;
+      expect((await d(cmd)).kind).toBe("auto-allow");
+    },
+    15000,
+  );
+});
+
 describe("trackEffectiveCwd", () => {
   it("threads absolute cd to subsequent segments", () => {
     expect(trackEffectiveCwd([seg("cd /tmp"), seg("ls")], BASE)).toEqual([BASE, "/tmp"]);

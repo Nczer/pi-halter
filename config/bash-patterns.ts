@@ -34,6 +34,8 @@ const allowedBashPatternStrings: string[] = [
   "mkdir", "touch", "mktemp",
   // Calculator
   "bc", "expr", "factor", "yes",
+  // Process control (no fs/net/exec — a pure wait)
+  "sleep",
   // Wrapper commands (guarded by isWrapperRunningWrite check)
   "xargs", "watch", "timeout", "parallel", "nice",
 ];
