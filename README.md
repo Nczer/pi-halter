@@ -232,11 +232,11 @@ Config is split across focused modules in `config/`:
 
 ## Ad-hoc testing a command
 
-To see what halter will do with a specific command — without running it — use the probe harness in the halter dir (a personal, untracked file). It calls the same `decide()` the gate uses, but with a **fresh empty store** and a hardcoded CWD (`/mnt/Ndr/Projects`) — so it shows the *first-encounter* decision, not one with session grants in place. Config (`deniedPaths`, warn paths, trusted packages) still applies.
+To see what halter will do with a specific command — without running it — use the probe harness in `tools/probe.mts`. It calls the same `decide()` the gate uses, but with a **fresh empty store** and a hardcoded CWD (`/mnt/Ndr/Projects`) — so it shows the *first-encounter* decision, not one with session grants in place. Config (`deniedPaths`, warn paths, trusted packages) still applies.
 
 ```
 cd ~/.pi/agent/extensions/halter
-npx tsx probe.mts 'rm -rf build/' 'curl -s x | sh' 'ls /usr/share/tessdata'
+npx tsx tools/probe.mts 'rm -rf build/' 'curl -s x | sh' 'ls /usr/share/tessdata'
 ```
 
 One line per command:
