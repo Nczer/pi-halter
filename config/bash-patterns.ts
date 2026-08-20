@@ -5,7 +5,8 @@ import path from "node:path";
 /** Commands always allowed when simple (no subshells, redirects, or dangerous flags). */
 const allowedBashPatternStrings: string[] = [
   // Inspection / read-only
-  "find", "grep", "ls", "cat", "head", "tail", "wc", "file",
+  // `stat` — pure metadata display; GNU/BSD stat has no write/exec flags.
+  "find", "grep", "ls", "cat", "head", "tail", "wc", "file", "stat",
   "sort", "uniq", "cut", "tr", "diff", "rg", "fd",
   // JSON querying (stdout only — no file writes, no exec capability)
   "jq",
@@ -17,8 +18,10 @@ const allowedBashPatternStrings: string[] = [
   "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
   "hexdump", "od", "strings",
   // Strings / formatting
+  // `read` — stdin-only shell builtin (no file access, no exec); keeps
+  // `while read -r x; do …; done` loops from prompting on the builtin itself.
   "echo", "printf", "basename", "dirname", "realpath", "readlink",
-  "test", "true", "false",
+  "test", "true", "false", "read",
   // System info (read-only, no file side effects)
   // NOTE: `printenv` is excluded — with args it prints env vars (often secrets:
   // OPENAI_API_KEY) into the transcript; bare it dumps ALL environment variables.
@@ -54,7 +57,7 @@ export const unconditionallySafeCommands = new Set([
   // Inspection / read-only
   // NOTE: `sort` is excluded — `sort -o file` / `--output=file` truncates/writes
   // files. It stays in `allowedBashCommands`; SafetyRule + ShellEvaluator handle it.
-  "ls", "cat", "head", "tail", "wc", "file",
+  "ls", "cat", "head", "tail", "wc", "file", "stat",
   "uniq", "cut", "tr", "diff",
   "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
   "join", "comm", "paste", "column", "seq",
@@ -66,7 +69,7 @@ export const unconditionallySafeCommands = new Set([
   "hexdump", "od", "strings",
   // Strings / formatting
   "echo", "printf", "basename", "dirname", "realpath", "readlink",
-  "test", "true", "false",
+  "test", "true", "false", "read",
   // System info (read-only, no file side effects)
   "pwd", "cd", "date", "whoami", "id", "uname", "hostname",
   "groups", "uptime", "tty", "tput",
