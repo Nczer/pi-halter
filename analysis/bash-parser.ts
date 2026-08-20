@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
 import { pathAwareCommands } from "../config";
 import { expandTilde, resolvePathReal } from "./path-analysis";
 import { decodeAnsiCEscapes } from "./tokenizer";
@@ -9,6 +11,7 @@ interface TSNode {
   readonly type: string;
   readonly text: string;
   readonly childCount: number;
+  readonly parent: TSNode | null;
   child(index: number): TSNode | null;
 }
 
@@ -43,8 +46,20 @@ function getParser(): Promise<TSParser> {
 
 /** Node types whose subtrees are not command arguments. */
 const SKIP_TYPES = new Set(["heredoc_body", "heredoc_end", "comment"]);
-/** Node types that represent a shell word (for command name/argument detection). */
-const WORD_TYPES = new Set(["word", "concatenation", "string", "raw_string", "ansi_c_string"]);
+/** Node types that represent a shell word (for command name/argument detection).
+ *  Expansion types (simple_expansion $X, expansion ${X:-y}, array_expansion $@)
+ *  are words too: their text reaches the path/opaque checks (a bare `cat $X`
+ *  must not silently vanish from the argument list). */
+const WORD_TYPES = new Set([
+  "word",
+  "concatenation",
+  "string",
+  "raw_string",
+  "ansi_c_string",
+  "simple_expansion",
+  "expansion",
+  "array_expansion",
+]);
 
 /** Strip backslash escapes from a shell word (\X → X for any character). */
 function stripBackslashEscapes(text: string): string {
@@ -180,9 +195,110 @@ const SAFE_SYSTEM_PATHS = new Set([
 const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 const BARE_SLASH_RE = /^\/\/+$/;
 
+/**
+ * Statically resolvable variable-path tokens — a closed set. `$HOME`/`${HOME}`
+ * expand to os.homedir() independent of any cd; any other variable or
+ * expansion (`$D/x`, `${HOME:-/tmp}`) is a computed path and stays opaque
+ * (its value is only knowable by running the shell).
+ */
+const HOME_TOKEN_RE = /^\$(?:\{HOME\}|HOME)(?:\/|(?![a-zA-Z0-9_]))/;
+
+/** Expand a leading $HOME / ${HOME} to the home directory (no-op otherwise). */
+function expandHomeToken(p: string): string {
+  const m = p.match(/^\$(?:\{HOME\}|HOME)(?:\/(.*))?$/);
+  if (!m) return p;
+  return m[1] !== undefined ? path.join(os.homedir(), m[1]) : os.homedir();
+}
+
+/**
+ * Opaque expansions in path position: $VAR / ${VAR…} / $(…) / backticks.
+ * The runtime location is only knowable by executing the shell — fail closed
+ * with a marker path outside every allowed dir (→ path approval).
+ * Closed-set $HOME/${HOME} is excluded (resolved statically below).
+ * Note: single-quoted literal arguments (`cat '$X'`) lose their literalness
+ * at the text level and are over-flagged — the safe direction.
+ */
+export const OPAQUE_VAR_DIR = "<unresolved-var>";
+
+/** Strip a leading flag (-f=, --file=) so the VALUE is inspected, not the flag. */
+function flagValue(arg: string): string {
+  return arg.startsWith("-") && arg.includes("=")
+    ? arg.slice(arg.indexOf("=") + 1)
+    : arg;
+}
+
+/** True when the value is an expansion not resolvable at gate time.
+ *  Closed-set $HOME/${HOME} is NOT opaque (it is resolved statically). */
+function isOpaqueValue(val: string): boolean {
+  if (!val.includes("$") && !val.includes("`")) return false;
+  if (HOME_TOKEN_RE.test(val)) return false;
+  return true;
+}
+
+/** A bare reference to a single variable — `$f` or `${f}` with no other content. */
+function simpleVarRef(arg: string): string | null {
+  const v = flagValue(arg);
+  const m = v.match(/^\$(\w+)$/) || v.match(/^\$\{(\w+)\}$/);
+  return m ? m[1] : null;
+}
+
+/** A cwd-local bare name: no path separator, ~, expansion, or backtick, and not
+ *  a lone `.`/`..` (`..` can escape the cwd). Globs of bare names (*.txt) count. */
+function isBareName(w: string): boolean {
+  if (w === "." || w === "..") return false;
+  return !/[\/$`~]/.test(w);
+}
+
+/**
+ * True if `varName` is bound by an enclosing for/select loop to an in-list of
+ * cwd-local bare names (`for f in a b *.txt`). Such a reference is statically
+ * cwd-local — the same trust class as a literal bare token — so it is exempt
+ * from the opaque marker. An in-list token with a path or expansion, or a loop
+ * without a bare in-list, keeps the marker (fail closed).
+ */
+function isLoopBoundBareName(node: TSNode, varName: string): boolean {
+  let cur = node.parent;
+  while (cur) {
+    if (cur.type === "for_statement") {
+      let loopVar: string | null = null;
+      const inList: string[] = [];
+      let afterIn = false;
+      for (let i = 0; i < cur.childCount; i++) {
+        const c = cur.child(i);
+        if (!c) continue;
+        if (c.type === "in") { afterIn = true; continue; }
+        if (!afterIn) { if (c.type === "variable_name") loopVar = c.text; continue; }
+        if (c.type === ";" || c.type === "do_group") break;
+        inList.push(c.text);
+      }
+      if (loopVar === varName) return inList.length > 0 && inList.every(isBareName);
+      // a different (outer/nested) loop variable — keep walking up
+    }
+    cur = cur.parent;
+  }
+  return false;
+}
+
+/**
+ * Marker for an opaque expansion in path position, or null when the token is
+ * not opaque (or is an exempt loop-bound bare name). The marker sits outside
+ * every allowed dir, forcing path approval — the only safe outcome when the
+ * runtime location is knowable only by running the shell.
+ * Note: single-quoted literal arguments (`cat '$X'`) lose their literalness at
+ * the text level and are over-flagged — the safe direction.
+ */
+function opaqueVarMarker(node: TSNode, arg: string): string | null {
+  const val = flagValue(arg);
+  if (!isOpaqueValue(val)) return null;
+  const varName = simpleVarRef(arg);
+  if (varName !== null && isLoopBoundBareName(node, varName)) return null;
+  return path.join(OPAQUE_VAR_DIR, val);
+}
+
 /** Check if a token looks like a filesystem path worth resolving. */
 function isPathCandidate(token: string): boolean {
   if (!token) return false;
+  if (HOME_TOKEN_RE.test(token)) return true; // $HOME/… / ${HOME}/… — expanded below
   if (URL_PATTERN.test(token)) return false; // URL
 
   // For flag values like --file=/etc/passwd or -f=/etc/passwd,
@@ -270,6 +386,10 @@ export interface BashSegment {
   hasSubshell: boolean;
   /** Inner command texts of subshell $() and process >() substitutions (empty if none). */
   subshellTexts?: string[];
+  /** Operator preceding this segment in the flat list ("&&", "||", ";", "&"). */
+  precedingOp?: string;
+  /** Segment runs in a background subshell (its cd does not persist into later segments). */
+  backgrounded?: boolean;
 }
 
 /** Node types that are shell operators (split points or internal ops). */
@@ -286,6 +406,16 @@ const OPERATOR_TYPES = new Set(["&&", "||", ";", "|", "|&", "&"]);
 function extractSegmentsFromNode(node: TSNode): BashSegment[] {
   const segments: BashSegment[] = [];
 
+  // Document-order slot: the operator seen so far belongs to the NEXT segment
+  // pushed (operators and segments strictly interleave in walk order; a
+  // segment push always consumes the slot, an operator always sets it).
+  let pendingOp: string | null = null;
+  const pushSeg = (seg: BashSegment): void => {
+    if (pendingOp) seg.precedingOp = pendingOp;
+    pendingOp = null;
+    segments.push(seg);
+  };
+
   // ── Type handlers ──
 
   type Handler = (n: TSNode) => void;
@@ -298,13 +428,26 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
     }
   };
 
-  /** Split on operator nodes (binary_expression, command_list, backgrounding). */
+  /**
+   * Split on operator nodes (program, list).
+   * tree-sitter-bash 0.25 shapes: `a && b` → list[a, &&, b]; `a; b` / `a & b`
+   * → program-level sibling operators. An `&` backgrounds its PRECEDING
+   * sibling (which runs in a subshell) — mark those segments retroactively.
+   */
   const splitOnOp: Handler = (n) => {
+    let prevStart = 0; // index where the previous sibling's segments begin
     for (let i = 0; i < n.childCount; i++) {
       const child = n.child(i);
-      if (child && !OPERATOR_TYPES.has(child.type)) {
-        walk(child);
+      if (!child) continue;
+      if (OPERATOR_TYPES.has(child.type)) {
+        if (child.type === "&" && segments.length > prevStart) {
+          for (let j = prevStart; j < segments.length; j++) segments[j].backgrounded = true;
+        }
+        pendingOp = child.type; // "&&" | "||" | ";" | "&" — precedes the next segment
+        prevStart = segments.length;
+        continue;
       }
+      walk(child);
     }
   };
 
@@ -343,7 +486,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       }
     }
     if (cmdTexts.length > 0) {
-      segments.push({ text: cmdTexts.join(" | "), ops: [...ops], hasSubshell: segHasSubshell, subshellTexts: extractSubshellInnerTexts(n) });
+      pushSeg({ text: cmdTexts.join(" | "), ops: [...ops], hasSubshell: segHasSubshell, subshellTexts: extractSubshellInnerTexts(n) });
     }
   };
 
@@ -393,7 +536,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       }
     }
     if (!hasCompoundChild && cmdTexts.length > 0) {
-      segments.push({ text: cmdTexts.join(" "), ops: [...ops], hasSubshell: segHasSubshell, subshellTexts: extractSubshellInnerTexts(n) });
+      pushSeg({ text: cmdTexts.join(" "), ops: [...ops], hasSubshell: segHasSubshell, subshellTexts: extractSubshellInnerTexts(n) });
     } else if (hasCompoundChild && redirectTexts.length > 0) {
       if (segments.length > 0) {
         // Propagate redirects to the last segment so hasWriteRedirect can detect them
@@ -402,7 +545,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       } else {
         // Compound child walk produced no segments (e.g. empty subshell "() > out").
         // Create a redirect-only segment so write-redirect detection isn't silently lost.
-        segments.push({ text: redirectTexts.join(" "), ops: [...ops], hasSubshell: false, subshellTexts: extractSubshellInnerTexts(n) });
+        pushSeg({ text: redirectTexts.join(" "), ops: [...ops], hasSubshell: false, subshellTexts: extractSubshellInnerTexts(n) });
       }
     }
   };
@@ -410,15 +553,16 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
   /** Leaf: single command or redirect. */
   const handleLeaf: Handler = (n) => {
     const ops = detectOpsInNode(n);
-    segments.push({ text: n.text.trim(), ops, hasSubshell: nodeHasSubshell(n), subshellTexts: extractSubshellInnerTexts(n) });
+    pushSeg({ text: n.text.trim(), ops, hasSubshell: nodeHasSubshell(n), subshellTexts: extractSubshellInnerTexts(n) });
   };
+
+
 
   // ── Handler map ──
 
   const handlers: Map<string, Handler> = new Map([
-    ["binary_expression", splitOnOp],
-    ["command_list", splitOnOp],
-    ["backgrounding", splitOnOp],
+    ["program", splitOnOp],
+    ["list", splitOnOp],
     ["pipeline", handlePipeline],
     ["redirected_statement", handleRedirectedStatement],
     ["command", handleLeaf],
@@ -620,13 +764,23 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
             continue;
           }
 
+          // Opaque expansion in path position (cat $X, -f=$X, cat ./$Y) →
+          // marker path, so the read/write target is path-approved.
+          // `cd` is exempt: navigation performs no file access — the
+          // effective-cwd state machine already makes the base unknown, which
+          // forces approval for every later relative path.
+          if (cmdName !== "cd") {
+            const marker = opaqueVarMarker(cmdNode, arg);
+            if (marker) allPaths.push(marker);
+          }
+
           if (isPathCandidate(arg)) {
             // For flag values (--file=/path), resolve the value, not the flag itself.
             // isPathCandidate already accepts these; match its extraction logic.
             const resolveArg = arg.startsWith("-") && arg.includes("=")
               ? arg.slice(arg.indexOf("=") + 1)
               : arg;
-            allPaths.push(resolvePathReal(expandTilde(resolveArg), cwd));
+            allPaths.push(resolvePathReal(expandHomeToken(expandTilde(resolveArg)), cwd));
           }
         }
       }
@@ -651,7 +805,9 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
           }
           // `-` means stdout; skip it and bare flags (e.g. `sort -o -k 1`).
           if (target && target !== "-" && !target.startsWith("-")) {
-            allPaths.push(resolvePathReal(expandTilde(target), cwd));
+            const marker = opaqueVarMarker(cmdNode, target);
+            if (marker) allPaths.push(marker);
+            else allPaths.push(resolvePathReal(expandHomeToken(expandTilde(target)), cwd));
           }
         }
       }
@@ -664,7 +820,11 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
       if (node.type === "file_redirect") {
         for (const p of extractRedirectPaths(node)) {
           if (isPathCandidate(p)) {
-            redirectPaths.push(resolvePathReal(expandTilde(p), cwd));
+            redirectPaths.push(resolvePathReal(expandHomeToken(expandTilde(p)), cwd));
+          } else {
+            // `> $X` — write destination only knowable at runtime → marker.
+            const marker = opaqueVarMarker(node, p);
+            if (marker) redirectPaths.push(marker);
           }
         }
       }

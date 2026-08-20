@@ -87,6 +87,10 @@ export const FastAllowRule: BashRule = (req) => {
   if (checkBareSymlinkTokens(tokens, req.cwd).warned) return null;
   for (let i = 1; i < tokens.length; i++) {
     const token = tokens[i];
+    // $VAR / $(…) / backtick arguments are computed values — the runtime
+    // location is unknown. Only the analysis (closed-set $HOME/$PWD expansion
+    // + opaque-var markers) can judge them; never fast-allow.
+    if (token.includes("$") || token.includes("`")) return null;
     // FastAllowRule is for unconditionally-safe commands with no outside-cwd paths.
     // ANY path-like token (quoted, escaped, or flag-embedded) must fall through.
     if (token.startsWith("/") || token.startsWith("~/") || token.startsWith("./") || token.startsWith("../")) {
