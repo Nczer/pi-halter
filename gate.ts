@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PermissionRequest, Decision } from "./decision-engine";
 import { decide } from "./decision-engine";
+import { logDecision } from "./decision-log";
 import { showPrompt } from "./prompt-flow";
 import type { Store } from "./store";
 
@@ -66,6 +67,10 @@ export async function gate(
   precomputedDecision?: Decision,
 ): Promise<undefined | { block: true; reason: string }> {
   const decision = precomputedDecision ?? await gateDecide(request, store, ctx);
+
+  // Decision log (JSONL): one line per tool call, including fail-closed
+  // synthetic blocks. Fire-and-forget — logDecision never throws.
+  logDecision(request, decision);
 
   if (decision.kind === "auto-allow") return;
 
