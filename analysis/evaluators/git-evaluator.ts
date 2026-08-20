@@ -21,11 +21,14 @@ export const GitEvaluator: RiskEvaluator = {
     // Use cached result or compute inline
     const dangerous = cache?.gitDangerous ?? isGitDangerous(segment);
     if (dangerous) {
-      b.setHigh();
+      const forcePush = sub === "push" && (subArgs.includes("--force") || subArgs.includes("--force-with-lease") || subArgs.includes("-f"));
+      // Destructive git ops are high; a plain (non-force) push is a normal
+      // remote write — medium.
+      if (sub === "push" && !forcePush) b.setMedium(); else b.setHigh();
       b.markDanger();
       // Include specific flag context so prompts show why it's dangerous
       if (sub === "reset")      b.addReason(`git reset --hard (discards uncommitted changes)`);
-      else if (sub === "push")  b.addReason(`git push --force (rewrites remote history)`);
+      else if (sub === "push")  b.addReason(forcePush ? `git push --force (rewrites remote history)` : `git push (writes to remote)`);
       else if (sub === "clean") b.addReason(`git clean -fdx (deletes untracked files)`);
       else if (sub === "rm")    b.addReason(`git rm (removes files from working tree)`);
       else if (sub === "reflog") b.addReason(`git reflog expire (removes recovery history)`);
