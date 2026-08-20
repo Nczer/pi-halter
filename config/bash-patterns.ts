@@ -81,6 +81,7 @@ export const pathAwareCommands = new Set([
   "ls", "cat", "head", "tail", "wc", "file", "stat", "touch",
   "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
   "join", "comm", "paste", "column", "split", "shuf",
+  "du", "df",
   "rg", "fd",
   // Hashing / binary
   "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
@@ -88,9 +89,11 @@ export const pathAwareCommands = new Set([
   // File/dir ops
   "mkdir", "rm", "cp", "mv", "chmod", "chown", "mktemp",
   "find", "grep", "diff", "patch",
-  // `cd` is path-aware: `cd ~/.s?sh && cat id_rsa` must resolve the target so
-  // outside-cwd and credential checks see it (glob-encoded dir names included).
-  "cd", "pushd", "popd",
+  // `cd` is NOT path-aware: a cd performs no file access — it is navigation,
+  // modeled by the effective-cwd state machine (analysis/cwd-tracking.ts).
+  // Credential checks see `cd ~/.s?sh` via the raw-text scan regardless; the
+  // base a cd leaves for later segments is flagged by baseAccessPath.
+  "pushd", "popd",
   "tar", "zip", "unzip", "gzip", "gunzip",
   "python", "python3", "node", "ruby", "perl", "php",
   "sed", "awk", "sort", "uniq", "cut", "tr", "tee",

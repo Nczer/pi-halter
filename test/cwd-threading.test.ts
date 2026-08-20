@@ -362,10 +362,79 @@ describe("unknown-base integration (P1)", () => {
     15000,
   );
 
-  it("cd $D && cat main.ts (bare token) stays an accepted residual — no marker for bare names", async () => {
+  it("cd $D && cat main.ts (bare name under unknown base) flags the base — the read lands where the cd chain left us", async () => {
     const a = await analyzeCommand("cd $D && cat main.ts", CWD);
-    expect(a.paths.filter(p => p.startsWith(UNKNOWN_CWD_MARKER))).toEqual([]);
+    expect(a.paths).toContain(UNKNOWN_CWD_MARKER);
+    const d = await decide({ type: "bash", command: "cd $D && cat main.ts", cwd: CWD }, createStore());
+    expect(d.kind).toBe("prompt");
   }, 15000);
+});
+
+describe("base-access flagging (cd is navigation, not access)", () => {
+  const d = (cmd: string) => decide({ type: "bash", command: cmd, cwd: CWD }, createStore());
+
+  it("cd targets are no longer paths — bare cds to outside/nonexistent dirs auto-allow (state discarded on exit)", async () => {
+    expect((await d("cd /var/tmp")).kind).toBe("auto-allow");
+    expect((await d("cd /nonexistent-dir-xyz")).kind).toBe("auto-allow");
+    expect((await d("cd /nonexistent-dir-xyz && cat ./secret.txt")).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("path-aware segments with no resolvable target flag the outside base", async () => {
+    expect((await d("cd /var/tmp && ls")).kind).toBe("prompt");
+    expect((await d("cd /var/tmp && find .")).kind).toBe("prompt");
+    expect((await d("cd /var/tmp && cat main.txt")).kind).toBe("prompt");
+  }, 15000);
+
+  it("unknown-base base access prompts (marker)", async () => {
+    expect((await d("D=/var/tmp && cd $D && ls")).kind).toBe("prompt");
+    expect((await d("D=/var/tmp && cd $D && find .")).kind).toBe("prompt");
+  }, 15000);
+
+  it("allowed bases and cwd-base segments stay auto-allow", async () => {
+    expect((await d("cd /tmp && ls")).kind).toBe("auto-allow");
+    expect((await d("cd /tmp && find .")).kind).toBe("auto-allow");
+    expect((await d("ls")).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("no-arg stream readers and non path-aware commands under an outside base touch no directory", async () => {
+    expect((await d("cd /var/tmp && echo hi")).kind).toBe("auto-allow");
+    expect((await d("cd /var/tmp && wc -l")).kind).toBe("auto-allow");
+    expect((await d("cd /var/tmp && pwd")).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("bare-name redirects under an outside base flag the base (writes it)", async () => {
+    expect((await d("cd /var/tmp && echo hi > out.txt")).kind).toBe("prompt");
+  }, 15000);
+
+  it("du (cwd-defaulting) flags the base; df (system view) does not", async () => {
+    expect((await d("cd /var/tmp && du -sh")).kind).toBe("prompt");
+    expect((await d("cd /var/tmp && df")).kind).toBe("auto-allow");
+    expect((await d("cd /var/tmp && df /var/tmp")).kind).toBe("prompt");
+  }, 15000);
+
+  it("resolvable targets keep their own verdict (no base flag)", async () => {
+    const d1 = await d("cd /var/tmp && cat /etc/hostname");
+    expect(d1.kind).toBe("prompt");
+  }, 15000);
+
+  it("cd into a credential dir still blocks (raw-text scan is path-set independent)", async () => {
+    expect((await d("cd $HOME/.ssh && ls")).kind).toBe("block");
+    expect((await d("cd $HOME/.ssh")).kind).toBe("block");
+  }, 15000);
+
+  it("inner cd in a subshell lists the inner dir (previously flagged only via the cd target path)", async () => {
+    expect((await d("(cd /var/tmp && ls)")).kind).toBe("prompt");
+    expect((await d("(cd $D && ls)")).kind).toBe("prompt");
+    expect((await d("(cd /tmp && ls)")).kind).toBe("auto-allow");
+    expect((await d("(cd /nonexistent-dir-xyz && ls)")).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("|| without a cd on the left keeps the tracked base (no over-flag of in-cwd bare names)", async () => {
+    expect((await d("ls a || ls b 2>/dev/null")).kind).toBe("auto-allow");
+    expect((await d("ls && cat a || echo ok && wc -l")).kind).toBe("auto-allow");
+    expect((await d("cd /nonexistent-dir-xyz || cd /var/tmp && cat ./secret.txt")).kind).toBe("prompt");
+  }, 15000);
+
 });
 
 describe("$HOME expansion integration (P2)", () => {

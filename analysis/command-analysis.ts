@@ -1,7 +1,7 @@
 import path from "node:path";
 import { parseCommand } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
-import { trackEffectiveCwd, reResolveCwdDependentPaths } from "./cwd-tracking";
+import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath } from "./cwd-tracking";
 import { expandTilde } from "./path-util";
 import { getTmuxSubcommand, extractTmuxSendKeys } from "./tmux-helpers";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
@@ -155,13 +155,20 @@ export async function analyzeCommand(
   // effective cwd so outside-cwd approval sees the real runtime location
   // (cd /tmp && cat ./secret). Under an unknown base they resolve to a marker
   // path outside every allowed dir, forcing path approval.
+  //
+  // Base access: a cd is navigation, not access — its target is not a path.
+  // What must be approved is what later segments DO under the base the cd
+  // left: a path-aware segment (or bare-name redirect) with no resolvable
+  // target of its own operates on the base itself (`cd /var/tmp && ls`,
+  // `cd $D && find .`) → the base (or the unknown-cwd marker) joins the path
+  // set. Inside-cwd/allowed bases are filtered out by getOutsideCwdPaths.
   const normBase = path.resolve(expandTilde(cwd));
   for (let i = 0; i < segments.length; i++) {
     const base = effectiveCwds[i];
-    if (base === null) {
+    if (base !== normBase) {
       paths.push(...reResolveCwdDependentPaths(segments[i], base));
-    } else if (base !== normBase) {
-      paths.push(...reResolveCwdDependentPaths(segments[i], base));
+      const basePath = baseAccessPath(segments[i], base);
+      if (basePath) paths.push(basePath);
     } else {
       // Base === session cwd: parseCommand already resolved ./../ tokens
       // against it — collect only the $PWD tokens it never saw.
