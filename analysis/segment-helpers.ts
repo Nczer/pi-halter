@@ -487,22 +487,17 @@ const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => bo
 const GIT_GLOBAL_FLAGS = new Set(["-c", "-C", "--git-dir", "--work-tree", "--no-pager", "-p", "--paginate", "--no-replace-objects", "--literal-pathspec", "--no-optional-locks", "--bare", "--help"]);
 
 /**
- * Check if a git command is dangerous.
- * Used by segment-analysis.ts (pipeline loop) and GitEvaluator.
- * Skips global flags to find the actual subcommand.
+ * Resolve the git subcommand, skipping the global flags that may precede it
+ * (-c value, -C value, --git-dir value, --work-tree value, --flag=value, and
+ * bare global flags like --no-pager). `git -C dir push` → { sub: "push" } —
+ * the -C dir is a location, not the subcommand.
  */
-export function isGitDangerous(segment: string): boolean {
-  // Quote-aware tokenization: `git -c "alias.st=!rm /tmp/x" st` must be seen
-  // as -c + one value token, not split on the space inside the quotes.
+export function parseGitSubcommand(segment: string): { sub: string; subArgs: string[] } | null {
   const args = tokenizeSegment(segment);
-  if (args.length < 2) return false;
-
-  // Skip global flags to find the actual subcommand
+  if (args.length < 2) return null;
   let subIdx = 1;
   while (subIdx < args.length) {
     const arg = args[subIdx];
-    // Inline config that executes code is dangerous regardless of subcommand.
-    if (hasDangerousInlineConfig(arg, args[subIdx + 1])) return true;
     if (GIT_GLOBAL_FLAGS.has(arg)) {
       // -c and -C take a value argument
       if (arg === "-c" || arg === "-C") subIdx++;
@@ -518,11 +513,31 @@ export function isGitDangerous(segment: string): boolean {
     }
     break;
   }
+  if (subIdx >= args.length) return null;
+  return { sub: args[subIdx].toLowerCase(), subArgs: args.slice(subIdx + 1) };
+}
 
-  if (subIdx >= args.length) return false;
-  const sub = args[subIdx].toLowerCase();
-  const subArgs = args.slice(subIdx + 1);
-  return GIT_DANGER_HANDLERS.some(h => h.match(sub, subArgs));
+/**
+ * Check if a git command is dangerous.
+ * Used by segment-analysis.ts (pipeline loop) and GitEvaluator.
+ * Skips global flags to find the actual subcommand.
+ */
+export function isGitDangerous(segment: string): boolean {
+  // Quote-aware tokenization: `git -c "alias.st=!rm /tmp/x" st` must be seen
+  // as -c + one value token, not split on the space inside the quotes.
+  const args = tokenizeSegment(segment);
+  if (args.length < 2) return false;
+
+  // Inline config that executes code is dangerous regardless of subcommand —
+  // scanned across all args (a -c after the subcommand is invalid git, but
+  // flagging it is the safe direction).
+  for (let i = 1; i < args.length; i++) {
+    if (hasDangerousInlineConfig(args[i], args[i + 1])) return true;
+  }
+
+  const parsed = parseGitSubcommand(segment);
+  if (!parsed) return false;
+  return GIT_DANGER_HANDLERS.some(h => h.match(parsed.sub, parsed.subArgs));
 }
 
 

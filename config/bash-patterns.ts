@@ -7,6 +7,8 @@ const allowedBashPatternStrings: string[] = [
   // Inspection / read-only
   "find", "grep", "ls", "cat", "head", "tail", "wc", "file",
   "sort", "uniq", "cut", "tr", "diff", "rg", "fd",
+  // JSON querying (stdout only — no file writes, no exec capability)
+  "jq",
   "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
   "join", "comm", "paste", "column", "seq",
   // Text transform (safe stdout — guarded by dangerous flag checks)
@@ -56,6 +58,9 @@ export const unconditionallySafeCommands = new Set([
   "uniq", "cut", "tr", "diff",
   "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
   "join", "comm", "paste", "column", "seq",
+  // JSON querying (stdout only — no file writes, no exec capability;
+  // output redirection is shell-level and flagged by the redirect checks)
+  "jq",
   // Hashing / binary inspection
   "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
   "hexdump", "od", "strings",
@@ -82,7 +87,7 @@ export const pathAwareCommands = new Set([
   "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
   "join", "comm", "paste", "column", "split", "shuf",
   "du", "df",
-  "rg", "fd",
+  "rg", "fd", "jq",
   // Hashing / binary
   "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
   "xxd", "hexdump", "od", "strings",

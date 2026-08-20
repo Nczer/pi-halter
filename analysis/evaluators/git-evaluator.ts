@@ -1,6 +1,6 @@
 import { EvaluationBuilder } from "./builder";
 import { EvalCache, RiskEvaluator } from "./types";
-import { getFirstWord, isGitDangerous } from "../segment-helpers";
+import { getFirstWord, isGitDangerous, parseGitSubcommand } from "../segment-helpers";
 
 /**
  * Evaluates git commands for dangerous operations.
@@ -10,10 +10,6 @@ export const GitEvaluator: RiskEvaluator = {
   evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
-    const args = segment.trim().split(/\s+/);
-    const rest = args.slice(1);
-    const sub = rest[0];
-    const subArgs = rest.slice(1);
     const b = new EvaluationBuilder();
 
     if (firstWord !== "git") return b.build();
@@ -21,6 +17,11 @@ export const GitEvaluator: RiskEvaluator = {
     // Use cached result or compute inline
     const dangerous = cache?.gitDangerous ?? isGitDangerous(segment);
     if (dangerous) {
+      // Subcommand resolved past global flags (git -C dir push → push) so the
+      // reason and severity describe what isGitDangerous actually flagged.
+      const parsed = parseGitSubcommand(segment);
+      const sub = parsed?.sub ?? "?";
+      const subArgs = parsed?.subArgs ?? [];
       const forcePush = sub === "push" && (subArgs.includes("--force") || subArgs.includes("--force-with-lease") || subArgs.includes("-f"));
       // Destructive git ops are high; a plain (non-force) push is a normal
       // remote write — medium.

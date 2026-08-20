@@ -56,6 +56,9 @@ export const cases: TestCase[] = [
 	{ cmd: "grep -rn --include='*.ts' pattern .", simple: true, unsafe: false, decision: "auto-allow", desc: "grep -rn --include" },
 	{ cmd: 'grep -n "setTimeout(() => {" index.ts', simple: true, unsafe: false, decision: "auto-allow", desc: "grep pattern with arrow => is not a write redirect (quote-aware)" },
 	{ cmd: 'cd /tmp && grep -n "setTimeout(() =>" index.ts', simple: true, unsafe: false, decision: "auto-allow", desc: "cd && grep with => in quoted pattern (no false redirect)" },
+	{ cmd: 'grep -v "^$" file.txt', simple: true, unsafe: false, decision: "auto-allow", desc: "trailing $ in pattern is a bash literal — no <unresolved-var> (log FP)" },
+	{ cmd: "grep -n 'foo$' a.txt b.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "end-of-line anchor in pattern is not an expansion (log FP)" },
+	{ cmd: 'grep -v "a$" /etc/hostname', simple: true, unsafe: false, decision: "prompt", desc: "pattern literal, but outside-cwd file arg still prompts" },
 
 	// ═══════════════════════════════════════════════════════════
 	// rg (ripgrep)
@@ -73,6 +76,13 @@ export const cases: TestCase[] = [
 	{ cmd: "fd -x cat", simple: true, unsafe: false, decision: "auto-allow", desc: "fd -x with read-only cmd" },
 	{ cmd: "fd -x rm", simple: false, unsafe: true, decision: "prompt", desc: "fd -x with write cmd" },
 	{ cmd: "fd -X rm", simple: false, unsafe: true, decision: "prompt", desc: "fd -X with write cmd" },
+
+	// ═══════════════════════════════════════════════════════════
+	// jq (pure JSON query — stdout only, no exec capability)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "jq . data.jsonl", simple: true, unsafe: false, decision: "auto-allow", desc: "jq is allowlisted (log: first-encounter prompt)" },
+	{ cmd: "jq -r .kind f.jsonl | sort | uniq -c", simple: true, unsafe: false, decision: "auto-allow", desc: "jq pipeline of read-only tools (no pipe risk, no cmd approval)" },
+	{ cmd: "jq . /etc/shadow", simple: true, unsafe: false, decision: "prompt", desc: "jq is path-aware — outside-cwd file arg still prompts" },
 
 	// ═══════════════════════════════════════════════════════════
 	// find
@@ -393,6 +403,8 @@ export const cases: TestCase[] = [
 	{ cmd: "git push --force", simple: false, unsafe: true, decision: "prompt", desc: "git push --force" },
 	{ cmd: "git push --force-with-lease", simple: false, unsafe: true, decision: "prompt", desc: "git push --force-with-lease" },
 	{ cmd: "git push -f", simple: false, unsafe: true, decision: "prompt", desc: "git push -f" },
+	{ cmd: "git -C /tmp/repo push", simple: false, unsafe: true, decision: "prompt", desc: "git -C <dir> push — -C is a location, push is the flagged subcommand (medium, not high)" },
+	{ cmd: "git -C /tmp/repo push --force", simple: false, unsafe: true, decision: "prompt", desc: "git -C <dir> push --force — force detected past the -C flag" },
 	{ cmd: "git reflog expire --all", simple: false, unsafe: true, decision: "prompt", desc: "git reflog expire" },
 	{ cmd: "git gc --prune=now", simple: false, unsafe: true, decision: "prompt", desc: "git gc --prune" },
 
@@ -445,6 +457,10 @@ export const cases: TestCase[] = [
 	{ cmd: "for f in a b; do rm $f; echo $f; done 2>/dev/null", simple: false, unsafe: true, decision: "prompt", desc: "for loop: unsafe cmd then safe (mixed body not auto-allowed)" },
 	{ cmd: "for f in a b c; do echo start; cat $f; rm $f; echo done; done", simple: false, unsafe: true, decision: "prompt", desc: "for loop: multiple safe + one unsafe (any unsafe kills auto-allow)" },
 	{ cmd: "for f in a b; do cat $f; done", simple: true, unsafe: false, decision: "auto-allow", desc: "for loop: all safe commands auto-allow" },
+	{ cmd: "for d in a b; do ls $d/test 2>/dev/null; done", simple: true, unsafe: false, decision: "auto-allow", desc: "loop-bound var as path prefix — expansions stay cwd-local (log FP)" },
+	{ cmd: "for d in a b; do ls $d/../etc; done", simple: true, unsafe: false, decision: "prompt", desc: "loop-bound var prefix with .. segment keeps the opaque marker" },
+	{ cmd: "for d in /tmp/*/; do echo \"== $d\"; ls \"$d\" | head -5; done", simple: true, unsafe: false, decision: "auto-allow", desc: "loop in-list under allowed root (/tmp) — values statically inside (log FP)" },
+	{ cmd: "for d in /var/log/*/; do ls \"$d\"; done", simple: true, unsafe: false, decision: "prompt", desc: "loop in-list outside allowed roots keeps the opaque marker" },
 	{ cmd: "while true; do ls; done 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "while loop with redirect (segments: true, ls — both simple)" },
 	{ cmd: "while true; do rm a; done", simple: false, unsafe: true, decision: "prompt", desc: "while loop with rm (unsafe in body)" },
 	{ cmd: "while true; do echo a; rm b; done", simple: false, unsafe: true, decision: "prompt", desc: "while loop: safe then unsafe (mixed body)" },

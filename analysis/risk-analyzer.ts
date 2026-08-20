@@ -55,12 +55,21 @@ export async function analyzeWholeCommandRisk(
     reasons.push("[Risk] shell input redirection");
   }
 
+  // Shell compound keywords that can lead a pipeline stage. Their bodies are
+  // analyzed as their own segments, so the stage needs no first-word check —
+  // flagging them (e.g. `for …; do a | b; done`) was pure reason noise.
+  const COMPOUND_STAGE_KEYWORDS = new Set([
+    "for", "while", "until", "if", "case", "select", "function", "coproc", "time", "!", "{", "(",
+  ]);
+
   // Pipe operator — only flag if at least one stage is NOT an allowed command
   if (cmd.includes("|") && !reasons.some(r => r.includes("pipe operator"))) {
     const allStagesSafe = splitPipeline(cmd).every(part => {
       const stage = stripNullRedirects(part).trim();
       if (!stage) return true;
-      return isAllowedCommand(getFirstWord(stage));
+      const first = getFirstWord(stage);
+      if (COMPOUND_STAGE_KEYWORDS.has(first)) return true;
+      return isAllowedCommand(first);
     });
     if (!allStagesSafe) {
       reasons.push("[Risk] pipe operator (chained commands)");
