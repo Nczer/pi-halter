@@ -5,6 +5,7 @@ import { promises as fsPromises } from "node:fs";
 import { allowedReadPaths, allowedWritePaths, deniedPaths, warnPaths, isTrustedScriptPath } from "../config";
 import { expandTilde } from "./path-util";
 import { tokenizeSegment } from "./tokenizer";
+import { UNKNOWN_CWD_MARKER } from "./cwd-tracking";
 export { expandTilde }; // Re-export for existing importers
 
 // ── Relative path detection ──
@@ -614,6 +615,10 @@ export function checkCommandForCredentialPaths(
 export async function resolvePathsToDirs(paths: string[]): Promise<string[]> {
   if (!paths.length) return [];
   const results = await Promise.all(paths.map(async p => {
+    // Unknown-cwd marker paths don't exist on disk — stat fails and
+    // path.dirname would degrade them to `.` (or the literal prefix). Keep
+    // the marker so the prompt reads `outside <unresolved-cwd>`.
+    if (p.includes(UNKNOWN_CWD_MARKER)) return UNKNOWN_CWD_MARKER;
     try {
       const stat = await fsPromises.stat(p);
       return stat.isDirectory() ? p : path.dirname(p);
