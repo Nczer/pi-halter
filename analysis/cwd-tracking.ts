@@ -101,6 +101,19 @@ function resolveCdTarget(seg: BashSegment, cwd: CwdBase): CdResolution {
   if (target === null) return { kind: "thread", dir: os.homedir() };
   // `cd -` → OLDPWD — not trackable.
   if (target === "-") return { kind: "unknown" };
+  // Loop-bound variable (`cd $d` with `d` bound by an enclosing for loop):
+  // thread a known local base when the in-list resolves to exactly ONE real
+  // directory — the runtime base is then that directory exactly. Zero
+  // candidates → the cd always fails at runtime (unchanged). Multiple distinct
+  // directories → keep the conservative unknown: a set-valued base would need
+  // per-value path checks, which the current path pipeline doesn't do.
+  if (seg.loopCdInList) {
+    const cands = resolveLoopCdCandidates(seg.loopCdInList, cwd);
+    if (cands === null) return { kind: "unknown" };
+    if (cands.length === 0) return { kind: "unchanged" };
+    if (cands.length === 1) return { kind: "thread", dir: cands[0] };
+    return { kind: "unknown" };
+  }
   // Globs, $VAR / $(…) / backtick expansions can't be resolved at gate time.
   if (/[?*[\]$`]/.test(target)) return { kind: "unknown" };
 
@@ -120,11 +133,18 @@ function resolveCdTarget(seg: BashSegment, cwd: CwdBase): CdResolution {
 }
 
 /**
- * Effective cwd for each top-level segment (before that segment's own cd
- * takes effect). null = unknown base (a non-literal cd or a `||` branch made
- * the runtime directory statically unresolvable).
+ * Effective cwd for each segment (before that segment's own cd takes effect).
+ * null = unknown base (a non-literal cd or a `||` branch made the runtime
+ * directory statically unresolvable).
  *
- * Transitions (per segment):
+ * Scoping: `( )` subshells run in a child process — a cd inside sets only the
+ * subshell's local base and must NEVER persist into the outer scope (runtime:
+ * `(cd /x && ls); pwd` still prints the outer cwd). Bases are kept in a
+ * per-depth stack indexed by BashSegment.subshellDepth: entering a subshell
+ * pushes a copy of the enclosing base (fork inherits cwd), leaving pops back.
+ * Top-level behavior is unchanged.
+ *
+ * Transitions (per segment, at its depth):
  *   • precedingOp `||`     → unknown BEFORE recording — the branch segment's
  *     own runtime cwd is unresolvable (the left side may or may not have run,
  *     and a left cd may or may not have succeeded)
@@ -134,27 +154,85 @@ function resolveCdTarget(seg: BashSegment, cwd: CwdBase): CdResolution {
  */
 export function trackEffectiveCwd(segments: BashSegment[], baseCwd: string): CwdBase[] {
   const result: CwdBase[] = [];
-  let cwd: CwdBase = path.resolve(expandTilde(baseCwd));
-  // Base at the start of the current (;) statement — the || freeze anchor.
-  let stmtStart: CwdBase = cwd;
+  const bases: CwdBase[] = [path.resolve(expandTilde(baseCwd))];
+  // Base at the start of the current (;) statement, per depth — the || freeze anchor.
+  const stmtStarts: CwdBase[] = [bases[0]];
+  let depth = 0;
   for (const seg of segments) {
-    if (seg.precedingOp === ";") stmtStart = cwd;
+    const d = seg.subshellDepth ?? 0;
+    // Subshells open/close in document (DFS) order and a segment only exists
+    // if every enclosing node produced it, so depth changes are well-formed.
+    while (depth < d) { bases.push(bases[depth]); stmtStarts.push(bases[depth]); depth++; }
+    while (depth > d) { bases.pop(); stmtStarts.pop(); depth--; }
+    if (seg.precedingOp === ";") stmtStarts[depth] = bases[depth];
     // The branch segment's runtime cwd is wherever the statement left it —
     // branch-dependent (unknown) only if a cd earlier in the statement could
     // have changed the base. No cd / provably-failed cd → the tracked base
     // holds (the statement's runtime cwd is exactly the tracked one).
-    if (seg.precedingOp === "||" && cwd !== stmtStart) cwd = null;
-    result.push(cwd);
+    if (seg.precedingOp === "||" && bases[depth] !== stmtStarts[depth]) bases[depth] = null;
+    result.push(bases[depth]);
     if (seg.backgrounded) continue;
-    const r = resolveCdTarget(seg, cwd);
-    if (r.kind === "thread") cwd = r.dir;
-    else if (r.kind === "unknown") cwd = null;
+    const r = resolveCdTarget(seg, bases[depth]);
+    if (r.kind === "thread") bases[depth] = r.dir;
+    else if (r.kind === "unknown") bases[depth] = null;
   }
   return result;
 }
 
 /** Display marker for paths that resolve against an unknown effective cwd. */
 export const UNKNOWN_CWD_MARKER = "<unresolved-cwd>";
+
+/**
+ * Resolve a for-loop in-list to the set of REAL directories a `cd $var` can
+ * land in (realpath — symlinked in-list entries resolve to their target).
+ * Returns null (fail closed) when a token makes the set statically
+ * unknowable: runtime expansion ($, backtick), expansion inside double
+ * quotes, a relative token under an unknown base, an unexpandable glob, or
+ * a glob with too many matches. A token whose values are missing or not
+ * directories is dropped — the cd fails at runtime for those values.
+ */
+function resolveLoopCdCandidates(inList: string[], base: CwdBase): string[] | null {
+  const dirs = new Set<string>();
+  for (const raw of inList) {
+    let t = raw;
+    const q = t.match(/^(['"])(.*)\1$/);
+    if (q) {
+      if (q[1] === '"' && /[$`]/.test(q[2])) return null; // expansion inside double quotes
+      t = q[2];
+    }
+    if (/[`$]/.test(t)) return null; // runtime expansion — target not knowable
+    if (t.startsWith("~")) t = expandTilde(t);
+    let resolved: string;
+    if (path.isAbsolute(t)) {
+      resolved = t;
+    } else {
+      if (base === null) return null; // relative token under unknown base
+      resolved = path.resolve(base, t);
+    }
+    if (resolved.search(/[*?[[]/) !== -1) {
+      const pattern = resolved.endsWith("/") ? resolved.slice(0, -1) : resolved;
+      let matches: string[];
+      try {
+        matches = fs.globSync(pattern);
+      } catch {
+        return null; // bad pattern — fail closed
+      }
+      if (matches.length > 4096) return null; // too many to verify — fail closed
+      for (const m of matches) {
+        try {
+          const r = fs.realpathSync(m);
+          if (fs.statSync(r).isDirectory()) dirs.add(r);
+        } catch { /* missing / not a dir — the cd fails for that value */ }
+      }
+    } else {
+      try {
+        const r = fs.realpathSync(resolved);
+        if (fs.statSync(r).isDirectory()) dirs.add(r);
+      } catch { /* missing / not a dir — the cd fails for that value */ }
+    }
+  }
+  return [...dirs];
+}
 
 /** Leading env-assignment prefix (VAR=x / _VAR=x) — not the command itself. */
 const ENV_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -282,9 +360,13 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
     const tok = stage[i];
     let target: string | null = null;
     const m = tok.match(OUT_REDIRECT_RE) ?? tok.match(IN_REDIRECT_RE);
-    if (m) target = m[2] !== "" ? m[2] : (stage[i + 1] ?? null);
-    else if (BARE_REDIRECT_RE.test(tok)) target = stage[i + 1] ?? null;
-    if (target === null) continue;
+    if (m) {
+      // `2>&1` parses as target "&1" — an fd reference, not a file. The
+      // startsWith("&") check below skips it (log FP: counted as a bare
+      // redirect target, adding a spurious base access / `.` outside-dir).
+      target = m[2] !== "" ? m[2] : (stage[i + 1] ?? null);
+    } else if (BARE_REDIRECT_RE.test(tok)) target = stage[i + 1] ?? null;
+    if (target === null || target.startsWith("&")) continue; // fd duplication (2>&1, > &1)
     if (!isResolvableTarget(target)) bareRedirectTarget = true;
   }
 
@@ -297,7 +379,8 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
       let t = token;
       const m = t.match(OUT_REDIRECT_RE) ?? t.match(IN_REDIRECT_RE);
       if (m) {
-        if (m[2] === "") continue;
+        // Empty target (`> file`) or fd reference (2>&1): no file argument.
+        if (m[2] === "" || m[2].startsWith("&")) continue;
         t = m[2]; // glued target (2>/dev/null)
       }
       // Flag with an embedded value: the VALUE is the target (--file=/x).
@@ -374,8 +457,12 @@ export function reResolveCwdDependentPaths(
   const out: string[] = [];
   for (const { isPwd, rel } of cwdDependentTokens(seg)) {
     if (opts?.skipDotPaths && !isPwd) continue;
+    // String join, NOT path.join: join normalizes `..` so the marker escapes
+    // (`<unresolved-cwd>/../x` → `../x`) and a bare relative token lands in
+    // the outside set — displayed as its dirname (`.`, `node_modules/.bin`).
+    // Keeping the marker prefix intact makes the prompt read `outside <unresolved-cwd>`.
     out.push(base === null
-      ? (rel ? path.join(UNKNOWN_CWD_MARKER, rel) : UNKNOWN_CWD_MARKER)
+      ? (rel ? `${UNKNOWN_CWD_MARKER}/${rel.replace(/^\.\//, "")}` : UNKNOWN_CWD_MARKER)
       : path.resolve(base, rel));
   }
   return out;
