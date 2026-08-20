@@ -402,6 +402,8 @@ const cases: TestCase[] = [
 	{ cmd: "git clean -x", simple: false, unsafe: true, decision: "prompt", desc: "git clean -x" },
 	{ cmd: "git clean -fd", simple: false, unsafe: true, decision: "prompt", desc: "git clean -fd" },
 	{ cmd: "git reset --hard HEAD", simple: false, unsafe: true, decision: "prompt", desc: "git reset --hard" },
+	{ cmd: "git push", simple: false, unsafe: true, decision: "prompt", desc: "git push (remote write — prompts even inside cwd)" },
+	{ cmd: "git push origin main", simple: false, unsafe: true, decision: "prompt", desc: "git push to remote" },
 	{ cmd: "git push --force", simple: false, unsafe: true, decision: "prompt", desc: "git push --force" },
 	{ cmd: "git push --force-with-lease", simple: false, unsafe: true, decision: "prompt", desc: "git push --force-with-lease" },
 	{ cmd: "git push -f", simple: false, unsafe: true, decision: "prompt", desc: "git push -f" },

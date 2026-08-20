@@ -430,7 +430,9 @@ const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => bo
   { match: (sub) => sub === "rm" },
   { match: (sub, a) => sub === "clean" && a.some(x => GIT_CLEAN_FLAGS_RE.test(x)) },
   { match: (sub, a) => sub === "reset" && a.includes("--hard") },
-  { match: (sub, a) => sub === "push" && a.some(x => x === "--force" || x === "--force-with-lease" || x === "-f") },
+  // ANY push writes to the remote ("any write = prompt"). Force variants
+  // additionally rewrite history — GitEvaluator reports those as high.
+  { match: (sub) => sub === "push" },
   { match: (sub, a) => sub === "reflog" && a.includes("expire") },
   { match: (sub, a) => sub === "gc" && a.some(x => x.startsWith("--prune")) },
   { match: (sub, a) => sub === "config" && isGitConfigWrite(a) },
