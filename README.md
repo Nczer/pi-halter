@@ -40,6 +40,30 @@ When the user selects "Always", a second prompt requires explicit confirmation b
 | Paths (R/W) | Read+write access to dirs/files | "Always" on write prompt (implies read) |
 | MCP servers | All tools from a server (e.g. `exa:*`) | "Always" on MCP prompt |
 
+### Decisions: pass, prompt, block
+
+Before any session grants exist, every bash command resolves to exactly one outcome. Fail-closed is the default: anything unresolvable prompts. Rules run in order — `RetryLoop → CredentialDeny → FastAllow → Safety → PromptFallback` (`policies/bash-rules.ts`).
+
+**Pass (auto-allow)** — all of these hold:
+- every segment's command is allowlisted (`config/bash-patterns.ts`: read-only inspection, system info, safe file ops, wrappers with safe payloads, `sleep`) or is a trusted-script invocation (see *Trusted Scripts*)
+- every resolved path stays inside the session cwd, `allowedReadPaths`, `allowedWritePaths`, or the trusted skills dir
+- no dangerous flag/pattern (evaluators: `git push --force`, `find -exec`, in-place `sed` outside cwd, curl-pipe-bash, …)
+
+**Prompt** — the command might touch something outside the trusted dirs:
+- a path resolves **outside** cwd/allowed dirs — the prompt lists the outside dirs; "Always" grants that dir for the session
+- **opaque targets**: `$VAR`, `${VAR}`, `$(…)`, backticks in path position — the location is only knowable at runtime, so they are flagged with an `<unresolved-var>` marker and can never fast-allow
+- **unknown base**: a `cd` whose target can't be resolved (`cd $D`, globs, `cd -`) makes later relative paths unresolvable → `<unresolved-cwd>` marker
+- **base access**: `cd` is navigation, not access — a path-aware segment with no target of its own (`cd /outside && ls`, `cd $D && find .`, `cd /outside && cat main.txt`, bare-name redirects like `cd /outside && echo x > out.txt`) operates on the base the cd left; that base is what gets approved
+- a command not in the allowlist (`python`, `curl`, `make`, …) — "Always" grants the command signature
+- `warnPaths` matches (e.g. `.env.*`) — prompt with a warning
+
+**Block** — never promptable, rejected with a reason:
+- credential patterns anywhere in the raw command text (glob- and quote-aware): `.ssh`, `.gnupg`, `.env`, `.aws`, `id_rsa`, `*.pem`, … — plus a symlink-name check for bare tokens pointing at credentials
+- paths matching `deniedPaths` (`config/path-rules.ts`)
+- retry-loop guard: a command the user aborted within 60s is blocked instead of re-prompting
+
+**The cd model (one rule to remember)**: `cd` performs no file access, so its target is never itself a path. What matters is (a) where later segments run — their relative paths re-resolve against the effective base (`cd /tmp && cat ./secret` approves `/tmp/secret`) — and (b) what they do with no resolvable target, which flags the base. Consequences: standalone `cd /outside` auto-allows (state dies with the process); `cd /nonexistent && …` auto-allows when the rest never runs; `cd $HOME/.ssh && ls` still **blocks** (the credential scan is raw-text, independent of the path set).
+
 ## Architecture
 
 ```
@@ -54,6 +78,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── analysis/                     Command analysis and risk assessment
 │   ├── bash-parser.ts            tree-sitter-bash wrapper — lazy WASM load, parseCommand() API
 │   ├── tokenizer.ts              Command tokenization
+│   ├── cwd-tracking.ts           Effective cwd per segment across cd (threading / unknown base) + base-access flagging
 │   ├── segment-analysis.ts       Unified segment analysis — runs evaluators, pipeline checks, safety verdicts
 │   ├── segment-helpers.ts        Shared helpers: wrapper commands, git danger, stage danger, pipeline splitting
 │   ├── command-analysis.ts       Orchestrates analysis → CommandAnalysis (with SafetyVerdict + PromptHints)
@@ -172,6 +197,33 @@ Config is split across focused modules in `config/`:
 - **Obfuscation detection** — pure function. Verify each technique regex
 - **MCP renderer** — pure functions. Verify formatting, truncation, edge cases
 - **Round-trip tests** — verify prompt → rules → auto-allow cycle works end-to-end
+
+## Ad-hoc testing a command
+
+To see what halter will do with a specific command — without running it — call the decision engine directly: the same function the gate uses, with the real store and config.
+
+```ts
+// probe.mts — in the halter dir
+import { decide } from "./decision-engine";
+import { createStore } from "./store";
+
+const d = await decide(
+  { type: "bash", command: "cd /var/tmp && ls", cwd: "/mnt/Ndr/Projects" },
+  createStore(),
+);
+console.log(d.kind, d.kind === "prompt" ? d.promptData : d.kind === "block" ? d.reason : "");
+```
+
+```
+npx tsx probe.mts
+```
+
+Reading the result:
+- `d.kind` — `"auto-allow" | "block" | "prompt"`
+- `d.promptData.outsideDirs` — which dirs the prompt would ask for; `d.promptData.segments` / `signatures` — what the prompt shows
+- `d.reason` (block) — the matched rule
+
+For analysis-level debugging (paths, markers, safety verdicts) use `analyzeCommand(cmd, cwd)` from `analysis/command-analysis` instead. `test/cwd-threading.test.ts` is the contract file for cd/var behavior; `test/cases.test.ts` is the curated pass/prompt/block suite.
 
 ## Trusted Packages (`uv run --with`)
 
