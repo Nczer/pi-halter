@@ -156,7 +156,10 @@ function summarizePrompt(decision: Extract<Decision, { kind: "prompt" }>): strin
     if (p.credentialRule) parts.push(`credential ${p.credentialRule}`);
     if (p.riskSeverity) parts.push(`risk:${p.riskSeverity} ${p.riskReasons.join("; ")}`);
     if (p.hasUnsafePattern) parts.push("unsafe pattern");
-    if (p.needsCommandApproval) parts.push(`cmd ${p.signatures.slice(0, 3).join(",")}`);
+    // (unlisted): command approval is required but no segment carries a
+    // namable signature (e.g. a relative-path binary whose basename is
+    // allowlisted — the prompt still fires on the unallowlisted first word).
+    if (p.needsCommandApproval) parts.push(`cmd ${p.signatures.length ? p.signatures.slice(0, 3).join(",") : "(unlisted)"}`);
     if (p.needsPathApproval) parts.push(`outside ${p.outsideDirs.slice(0, 3).join(",")}`);
     return parts.join("; ") || "unclassified";
   }
