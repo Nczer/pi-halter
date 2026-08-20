@@ -207,6 +207,16 @@ Config is split across focused modules in `config/`:
 | `config/path-rules.ts` | `deniedPaths`, `warnPaths`, `allowedReadPaths`, `allowedWritePaths` |
 | `config/dangerous-patterns.ts` | `dangerousCommandPatterns`, `dangerousContextPatterns` (regex patterns) |
 | `config/trusted-scripts.ts` | `TRUSTED_PACKAGES` allowlist for `uv run --with`, `isTrustedScriptPath()`, `isTrustedScriptCommand()` |
+
+### Decision log
+
+Every decision the gate makes is appended to a JSONL log — one line per tool call, `auto-allow`, `prompt` (with a one-line why), and `block` (with the reason), plus the command/path and cwd. It exists to measure blast radius: after changing gate code, diff what now prompts vs. what used to auto-allow; or mine repeatedly-prompting commands into contract rows. The log records what the *gate* decided — user approvals/rejections of prompts are not logged.
+
+- Path: `<extension dir>/.log/decisions.jsonl` (gitignored); rotates to `decisions.jsonl.1` at 5 MiB
+- `HALTER_DECISION_LOG=<path>` redirects it; `HALTER_DECISION_LOG=off` disables it
+- Logging is fire-and-forget: disk problems never affect a decision (and a throw here would surface as a fail-closed block)
+- Disabled by default under vitest (tests opt in via the env override)
+
 ## Testing
 
 - **Decision engine** — async, no UI dependency. Inject `Store` for testability

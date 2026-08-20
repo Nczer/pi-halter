@@ -1,0 +1,135 @@
+/**
+ * JSONL decision log (decision-log.ts, wired into gate()).
+ *
+ * The log is the blast-radius measurement: one line per gated tool call.
+ * Tests run against an env-redirected path (the default is disabled under
+ * vitest); the off-switch, the vitest guard, rotation, and the never-throw
+ * guarantee are pinned here.
+ */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { gate } from "../gate";
+import { createStore } from "../store";
+import {
+	logDecision,
+	resolveLogPath,
+	MAX_LOG_BYTES,
+	DEFAULT_LOG_FILE,
+	type DecisionLogEntry,
+} from "../decision-log";
+import type { BashRequest, FileRequest, McpRequest } from "../decision-engine";
+
+const noUiCtx = { hasUI: false } as never;
+const noReject = (() => {
+	throw new Error("onReject should not be called with hasUI=false");
+}) as never;
+
+function lines(file: string): DecisionLogEntry[] {
+	return fs
+		.readFileSync(file, "utf8")
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((l) => JSON.parse(l));
+}
+
+describe("decision log", () => {
+	let tmp: string;
+	let logFile: string;
+	const savedEnv = process.env.HALTER_DECISION_LOG;
+
+	beforeAll(() => {
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-log-"));
+		logFile = path.join(tmp, "decisions.jsonl");
+	});
+	afterAll(() => {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	});
+	beforeEach(() => {
+		process.env.HALTER_DECISION_LOG = logFile;
+	});
+	afterEach(() => {
+		if (savedEnv === undefined) delete process.env.HALTER_DECISION_LOG;
+		else process.env.HALTER_DECISION_LOG = savedEnv;
+		for (const f of [logFile, logFile + ".1"]) {
+			try {
+				fs.unlinkSync(f);
+			} catch {
+				/* not created */
+			}
+		}
+	});
+
+	it("logs an auto-allow bash decision", async () => {
+		const result = await gate({ type: "bash", command: "ls", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
+		expect(result).toBeUndefined();
+		const [entry] = lines(logFile);
+		expect(entry).toMatchObject({ tool: "bash", kind: "auto-allow", reason: null, target: "ls", cwd: tmp });
+		expect(new Date(entry.ts).toString()).not.toBe("Invalid Date");
+	});
+
+	it("logs a block decision with the reason", async () => {
+		await gate({ type: "bash", command: "cat .ssh/id_rsa", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
+		const [entry] = lines(logFile);
+		expect(entry.kind).toBe("block");
+		expect(entry.reason).toContain(".ssh");
+	});
+
+	it("logs a prompt decision with a one-line why (and gate blocks without UI)", async () => {
+		const result = await gate({ type: "bash", command: "cat /etc/passwd", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
+		expect(result).toMatchObject({ block: true });
+		const [entry] = lines(logFile);
+		expect(entry.kind).toBe("prompt");
+		expect(typeof entry.reason).toBe("string");
+		expect(entry.reason?.length).toBeGreaterThan(0);
+	});
+
+	it("logs file and mcp decisions with their target shapes", async () => {
+		await gate({ type: "file", toolName: "read", filePath: "/etc/passwd", cwd: tmp } as FileRequest, noUiCtx, createStore(), noReject);
+		const req: McpRequest = { type: "mcp", server: "exa", tool: "search" };
+		await gate(req, noUiCtx, createStore(), noReject);
+		const [fileEntry, mcpEntry] = lines(logFile);
+		expect(fileEntry).toMatchObject({ tool: "file", target: "/etc/passwd", cwd: tmp });
+		expect(mcpEntry).toMatchObject({ tool: "mcp", target: "exa/search", kind: "prompt", reason: "mcp call" });
+		expect(mcpEntry.cwd).toBeUndefined();
+	});
+
+	it("truncates long bash commands", async () => {
+		const cmd = "echo " + "x".repeat(2000);
+		await gate({ type: "bash", command: cmd, cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
+		const [entry] = lines(logFile);
+		expect(entry.target.length).toBeLessThanOrEqual(1000);
+	});
+
+	it("HALTER_DECISION_LOG=off writes nothing", async () => {
+		process.env.HALTER_DECISION_LOG = "off";
+		await gate({ type: "bash", command: "ls", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
+		expect(fs.existsSync(logFile)).toBe(false);
+	});
+
+	it("is disabled by default under vitest (no env override)", () => {
+		delete process.env.HALTER_DECISION_LOG;
+		expect(resolveLogPath()).toBeNull();
+		expect(DEFAULT_LOG_FILE).toContain(path.join("halter", ".log"));
+	});
+
+	it("never throws when the log path is impossible", () => {
+		const blocker = path.join(tmp, "blocker");
+		fs.writeFileSync(blocker, "i am a file");
+		process.env.HALTER_DECISION_LOG = path.join(blocker, "sub", "decisions.jsonl");
+		expect(() =>
+			logDecision({ type: "bash", command: "ls", cwd: tmp } as BashRequest, { kind: "auto-allow" }),
+		).not.toThrow();
+	});
+
+	it("rotates to .1 when the size limit is exceeded", async () => {
+		fs.writeFileSync(logFile, "y".repeat(MAX_LOG_BYTES));
+		await gate({ type: "bash", command: "ls", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
+		expect(fs.existsSync(logFile + ".1")).toBe(true);
+		expect(fs.statSync(logFile + ".1").size).toBe(MAX_LOG_BYTES);
+		const [entry] = lines(logFile);
+		expect(entry.kind).toBe("auto-allow");
+	});
+});
