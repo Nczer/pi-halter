@@ -622,11 +622,14 @@ function extractSubshellInnerTexts(node: TSNode): string[] {
   const texts: string[] = [];
   function walk(n: TSNode): void {
     if (n.type === "command_substitution" || n.type === "process_substitution") {
-      // The inner content could be a command, pipeline, or list node.
-      // Walk children to find the executable content and extract its text.
+      // The inner content could be a command, pipeline, list, or a
+      // redirected_statement (tree-sitter wraps bodies containing redirects:
+      // `$(wc -c < file)` → redirected_statement > command + file_redirect).
+      // Without this the body is invisible → fail-closed HIGH on every
+      // read-only substitution that feeds its command from a file.
       for (let i = 0; i < n.childCount; i++) {
         const child = n.child(i);
-        if (child && (child.type === "command" || child.type === "pipeline" || child.type === "list")) {
+        if (child && (child.type === "command" || child.type === "pipeline" || child.type === "list" || child.type === "redirected_statement")) {
           const inner = child.text.trim();
           if (inner) texts.push(inner);
           break;
@@ -681,6 +684,29 @@ function isSedPatternArg(arg: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * Indices of `sed` script arguments: the first non-flag argument (sed's
+ * grammar is `sed [flags] script [files…]`) and the value consumed by
+ * -e / --expression. Flag tokens start with `-` and carry any value inline
+ * (-i, -i.bak, --in-place=suffix). A bare literal path in script position
+ * is still returned — the caller keeps it path-checked (fail closed).
+ */
+function sedScriptArgIndices(args: string[]): Set<number> {
+  const idxs = new Set<number>();
+  let scriptSeen = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-e" || a === "--expression") {
+      if (i + 1 < args.length) idxs.add(i + 1);
+      continue;
+    }
+    if (a.startsWith("--expression=")) continue; // self-contained flag
+    if (a.startsWith("-")) continue; // flag (value inline, if any)
+    if (!scriptSeen) { scriptSeen = true; idxs.add(i); }
+  }
+  return idxs;
 }
 
 /**
@@ -755,11 +781,19 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
       const args = extractCommandArgs(cmdNode);
 
       if (cmdName && pathAwareCommands.has(cmdName)) {
-        for (const arg of args) {
+        // Sed: the script argument is not a file (sed [flags] script [files…])
+        // — the `sed -n "$(grep … | cut …),+12p" f` line-range idiom must not
+        // produce <unresolved-var>. File-position args keep the opaque marker.
+        const sedScripts = cmdName === "sed" ? sedScriptArgIndices(args) : null;
+        for (let ai = 0; ai < args.length; ai++) {
+          const arg = args[ai];
           // Skip inline script/pattern expressions that look like paths but aren't:
-          //   sed: /pattern/p, /describe(...)/,/^});/p, s/foo/bar/
+          //   sed: script position, /pattern/p, /describe(...)/,/^});/p, s/foo/bar/
           //   awk: /pattern/ {print}, /foo/ {action}
-          if ((cmdName === "sed" && isSedPatternArg(arg)) ||
+          if ((cmdName === "sed" && (
+              (sedScripts !== null && sedScripts.has(ai) && !/^(?:\/|\.\/|~\/)/.test(arg)) ||
+              isSedPatternArg(arg)
+            )) ||
               (cmdName === "awk" && isAwkScriptArg(arg))) {
             continue;
           }

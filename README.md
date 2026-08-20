@@ -50,6 +50,10 @@ Before any session grants exist, every bash command resolves to exactly one outc
 4. **Outside cwd → prompt (first time), remembered → auto-allow**
 5. **Unsafe patterns → always prompt** — no session grant can override them
 
+**Command substitution: a read-only body is data, not code (2026-08).** A `$(…)`/backtick body made of read-only commands (the unconditionally-safe set + `grep`/`rg`/`fd`/`ag`) with no write redirect, backgrounding, or multi-line list is pure data production — it no longer counts as code execution, so `sed -n "$(grep -n x f | cut -d: -f1),+5p" f` auto-allows. Guards: the body's own paths get the same path checks (a `$(cat /etc/shadow)` inside a read-only body still prompts the outside path), nested substitutions are classified individually, and any other body keeps the always-prompt flag (principle 5). `find` is excluded from the body set (`-exec`/`-delete`), and so are wrappers — the delegated command isn't visible at this level. Quote-aware throughout (`grep "a\|b" f` inside a body does not mis-split).
+
+**Sed's script argument is not a file (2026-08).** Sed's grammar is `sed [flags] script [files…]`, so the first non-flag arg (and `-e`'s value) is skipped by path analysis — the line-range idiom above no longer produces `<unresolved-var>`. File-position args keep the opaque marker (`sed -n 'p' $(echo /etc/shadow)` still prompts), and a bare literal path in script position stays path-checked (fail closed).
+
 Rules run in order — `RetryLoop → CredentialDeny → FastAllow → Safety → PromptFallback` (`policies/bash-rules.ts`).
 
 **Pass (auto-allow)** — all of these hold:
@@ -71,7 +75,7 @@ Rules run in order — `RetryLoop → CredentialDeny → FastAllow → Safety �
 - **destructive / remote git** — any `git push` (writes to remote; force variants are high severity), `git rm`, `git clean -f`, `git reset --hard`, `git reflog expire`, `git gc --prune`
 
 *Unresolvable targets — the location can't be determined at parse time:*
-- **opaque targets**: `$VAR`, `${VAR}`, `$(…)`, backticks in path position — flagged with an `<unresolved-var>` marker, never fast-allowed
+- **opaque targets**: `$VAR`, `${VAR}`, `$(…)`, backticks in path position — flagged with an `<unresolved-var>` marker, never fast-allowed. (Exception: sed's script argument — see above; a read-only substitution body doesn't flag the segment itself, but its unbound vars in path position still do: `cat $(wc -c < $f)` prompts until `$f` is loop-bound to bare names)
 - **unknown base**: a `cd` whose target can't be resolved (`cd $D`, globs, `cd -`) makes later relative paths unresolvable → `<unresolved-cwd>` marker
 - **base access**: `cd` is navigation, not access — a path-aware segment with no target of its own (`cd /outside && ls`, `cd $D && find .`, `cd /outside && cat main.txt`, bare-name redirects like `cd /outside && echo x > out.txt`) operates on the base the cd left; that base is what gets approved
 
