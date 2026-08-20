@@ -45,9 +45,19 @@ export default async function halterExtension(pi: ExtensionAPI) {
     // DSP mode: bypass all permission checks
     if (isDspActive()) return;
 
-    return await handleMcp(event, ctx)
-      ?? await handleMcpDirectTool(event, ctx)
-      ?? await handleBash(event, ctx)
-      ?? await handleFile(event, ctx);
+    try {
+      return await handleMcp(event, ctx)
+        ?? await handleMcpDirectTool(event, ctx)
+        ?? await handleBash(event, ctx)
+        ?? await handleFile(event, ctx);
+    } catch (err) {
+      // Fail closed (defense in depth): an internal gate error must never
+      // leave a command un-gated. The pi harness currently catches handler
+      // throws (agent-loop prepareToolCall → error tool result), but
+      // emitToolCall itself has no try/catch (perm #452-A1) — halter must
+      // not depend on harness behavior for its fail-closed guarantee.
+      const message = err instanceof Error ? err.message : String(err);
+      return { block: true, reason: `halter gate error: ${message}` };
+    }
   });
 }
