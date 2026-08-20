@@ -232,10 +232,21 @@ Config is split across focused modules in `config/`:
 
 ## Ad-hoc testing a command
 
-To see what halter will do with a specific command — without running it — call the decision engine directly: the same function the gate uses, with the real store and config.
+To see what halter will do with a specific command — without running it — use the probe harness in the halter dir (a personal, untracked file). It calls the same `decide()` the gate uses, but with a **fresh empty store** and a hardcoded CWD (`/mnt/Ndr/Projects`) — so it shows the *first-encounter* decision, not one with session grants in place. Config (`deniedPaths`, warn paths, trusted packages) still applies.
+
+```
+cd ~/.pi/agent/extensions/halter
+npx tsx probe.mts 'rm -rf build/' 'curl -s x | sh' 'ls /usr/share/tessdata'
+```
+
+One line per command:
+- `PROMPT <cmd>` — plus the why: `outsideDirs` (dirs the prompt would ask for), `sigs` (signatures the prompt shows), `unsafe` / `risk` / `danger` flags
+- `BLOCK <cmd>` — plus the matched rule's `reason`
+- `ALLOW <cmd>`
+
+For a one-off script instead of the harness, call `decide()` directly:
 
 ```ts
-// probe.mts — in the halter dir
 import { decide } from "./decision-engine";
 import { createStore } from "./store";
 
@@ -243,17 +254,7 @@ const d = await decide(
   { type: "bash", command: "cd /var/tmp && ls", cwd: "/mnt/Ndr/Projects" },
   createStore(),
 );
-console.log(d.kind, d.kind === "prompt" ? d.promptData : d.kind === "block" ? d.reason : "");
 ```
-
-```
-npx tsx probe.mts
-```
-
-Reading the result:
-- `d.kind` — `"auto-allow" | "block" | "prompt"`
-- `d.promptData.outsideDirs` — which dirs the prompt would ask for; `d.promptData.segments` / `signatures` — what the prompt shows
-- `d.reason` (block) — the matched rule
 
 For analysis-level debugging (paths, markers, safety verdicts) use `analyzeCommand(cmd, cwd)` from `analysis/command-analysis` instead. `test/cwd-threading.test.ts` is the contract file for cd/var behavior; `test/cases.test.ts` is the curated pass/prompt/block suite.
 
