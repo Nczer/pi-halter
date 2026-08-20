@@ -766,13 +766,8 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
 
           // Opaque expansion in path position (cat $X, -f=$X, cat ./$Y) →
           // marker path, so the read/write target is path-approved.
-          // `cd` is exempt: navigation performs no file access — the
-          // effective-cwd state machine already makes the base unknown, which
-          // forces approval for every later relative path.
-          if (cmdName !== "cd") {
-            const marker = opaqueVarMarker(cmdNode, arg);
-            if (marker) allPaths.push(marker);
-          }
+          const marker = opaqueVarMarker(cmdNode, arg);
+          if (marker) allPaths.push(marker);
 
           if (isPathCandidate(arg)) {
             // For flag values (--file=/path), resolve the value, not the flag itself.
