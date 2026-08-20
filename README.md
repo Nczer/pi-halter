@@ -215,6 +215,7 @@ Config is split across focused modules in `config/`:
 - Enable: `/halter-decision-log [on|off]` (bare = toggle) — persisted in `~/.pi/agent/halter.json` (halter's own settings file, like gallop's `gallop.json`; pi owns `settings.json`). Compile-time default: `DECISION_LOG_ENABLED` in `config/logging.ts` (false)
 - Transient override: `HALTER_DECISION_LOG=<path>` (enables at that path); `HALTER_DECISION_LOG=off` forces off
 - Path: `<extension dir>/.log/decisions.jsonl` (gitignored); rotates to `decisions.jsonl.1` at 5 MiB — a few KB per day, SSD wear negligible (writes coalesce into 16 KiB pages)
+- The log reflects the gate code that was *running* when each line was written. After a `/reload` of changed gate code (or a crash/reload loop), delete `.log/decisions.jsonl` before aggregating — decisions made by the old code would pollute top-N prompt reasons and auto-allow diffs
 - Logging is fire-and-forget: disk problems never affect a decision (and a throw here would surface as a fail-closed block)
 
 ### Iterating policy from the log (debug/fix cycle)
@@ -231,7 +232,7 @@ The log is the *input* to a log-driven fix loop, not just a measurement: the sui
 4. **Reproduce** — `npx tsx tools/probe.mts '<cmd>'` shows the first-encounter decision with its why; drop to `analyzeCommand` / `parseCommand` to see extracted paths and markers.
 5. **Fix** — every fix is a code change *plus* a contract row: `test/cases-data.ts` for pass/prompt/block decisions, `test/cwd-threading.test.ts` for cd/var/path threading. The row encodes the observed command with its expected decision, so the same input can never silently regress.
 6. **Prove** — `npx vitest run` (full suite) plus strict tsc (`cd ~/.pi/agent/extensions && npx tsc --noEmit --strict --target es2022 --module esnext --moduleResolution bundler --skipLibCheck <changed files>`), then confirm the flip with the probe: a fixed false positive now `ALLOW`s, a plugged bypass now `PROMPT`s or `BLOCK`s — and the new contract row keeps it there.
-7. **Reload** — `/reload` in pi (or restart). Never exercise changed extension code in a running pi session before reloading.
+7. **Reload** — `/reload` in pi (or restart). Never exercise changed extension code in a running pi session before reloading. Once new gate code is loaded, delete `.log/decisions.jsonl` so the next cycle only measures the new behavior.
 
 ## Testing
 
