@@ -2,8 +2,10 @@
  * JSONL decision log (decision-log.ts, wired into gate()).
  *
  * The log is the blast-radius measurement: one line per gated tool call.
- * Tests run against an env-redirected path (the default is disabled under
- * vitest); the off-switch, the vitest guard, rotation, and the never-throw
+ * Tests run against an env-redirected path (logging is off by default via
+ * ~/.pi/agent/halter.json, which the tests never touch — the toggle state is
+ * driven through setDecisionLogEnabled with a tmp settings file); the
+ * off-by-default toggle, settings round-trip, rotation, and the never-throw
  * guarantee are pinned here.
  */
 import fs from "node:fs";
@@ -15,10 +17,15 @@ import { createStore } from "../store";
 import {
 	logDecision,
 	resolveLogPath,
+	readToggleSetting,
+	writeToggleSetting,
+	setDecisionLogEnabled,
+	isDecisionLogEnabled,
 	MAX_LOG_BYTES,
 	DEFAULT_LOG_FILE,
 	type DecisionLogEntry,
 } from "../decision-log";
+import { DECISION_LOG_ENABLED } from "../config/logging";
 import type { BashRequest, FileRequest, McpRequest } from "../decision-engine";
 
 const noUiCtx = { hasUI: false } as never;
@@ -38,11 +45,13 @@ function lines(file: string): DecisionLogEntry[] {
 describe("decision log", () => {
 	let tmp: string;
 	let logFile: string;
+	let settingsFile: string;
 	const savedEnv = process.env.HALTER_DECISION_LOG;
 
 	beforeAll(() => {
 		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-log-"));
 		logFile = path.join(tmp, "decisions.jsonl");
+		settingsFile = path.join(tmp, "halter.json");
 	});
 	afterAll(() => {
 		fs.rmSync(tmp, { recursive: true, force: true });
@@ -109,10 +118,32 @@ describe("decision log", () => {
 		expect(fs.existsSync(logFile)).toBe(false);
 	});
 
-	it("is disabled by default under vitest (no env override)", () => {
+	it("no env override: resolution follows the persisted toggle state", () => {
 		delete process.env.HALTER_DECISION_LOG;
-		expect(resolveLogPath()).toBeNull();
 		expect(DEFAULT_LOG_FILE).toContain(path.join("halter", ".log"));
+		const orig = isDecisionLogEnabled();
+		try {
+			setDecisionLogEnabled(false, settingsFile);
+			expect(resolveLogPath()).toBeNull();
+			setDecisionLogEnabled(true, settingsFile);
+			expect(resolveLogPath()).toBe(DEFAULT_LOG_FILE);
+		} finally {
+			setDecisionLogEnabled(orig, settingsFile);
+		}
+	});
+
+	it("env path override enables logging even with the toggle off", () => {
+		process.env.HALTER_DECISION_LOG = logFile;
+		expect(resolveLogPath()).toBe(logFile);
+	});
+
+	it("settings round-trip: write → read, merge with other keys, missing file → default", () => {
+		fs.writeFileSync(settingsFile, JSON.stringify({ otherHalterKey: 1 }) + "\n");
+		writeToggleSetting(true, settingsFile);
+		expect(readToggleSetting(settingsFile)).toBe(true);
+		const saved = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+		expect(saved).toEqual({ otherHalterKey: 1, decisionLogEnabled: true });
+		expect(readToggleSetting(path.join(tmp, "missing.json"))).toBe(DECISION_LOG_ENABLED);
 	});
 
 	it("never throws when the log path is impossible", () => {

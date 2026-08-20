@@ -10,3 +10,4 @@ export { unconditionallySafeCommands, isAllowedCommand, isSafeSubcommand, pathAw
 export { allowedReadPaths, allowedWritePaths, deniedPaths, warnPaths } from "./path-rules";
 export { dangerousCommandPatterns, dangerousContextPatterns } from "./dangerous-patterns";
 export { isTrustedScriptPath, isTrustedScriptCommand } from "./trusted-scripts";
+export { DECISION_LOG_ENABLED } from "./logging";
