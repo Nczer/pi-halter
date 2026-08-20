@@ -1,5 +1,8 @@
+import path from "node:path";
 import { parseCommand } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
+import { trackEffectiveCwd, reResolveCwdDependentPaths } from "./cwd-tracking";
+import { expandTilde } from "./path-util";
 import { getTmuxSubcommand, extractTmuxSendKeys } from "./tmux-helpers";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs, checkCommandForCredentialPaths } from "./path-analysis";
@@ -140,9 +143,42 @@ export async function analyzeCommand(
   const segmentTexts = segments.map(s => s.text);
   const signatures = segmentTexts.map(getCommandSignature);
 
+  // Effective cwd per segment: a resolvable `cd` in an earlier top-level
+  // segment changes the working directory for later segments — relative script
+  // paths must be analyzed against it for the trusted-script bypass to work
+  // (`cd <skill-dir> && uv run … scripts/x.py`). null = unknown base (a
+  // non-literal cd or a `||` branch made the runtime cwd unresolvable).
+  const effectiveCwds = trackEffectiveCwd(segments, cwd);
+
+  // Cwd-dependent tokens (./x, ../x, $PWD/x) in post-cd segments were resolved
+  // by parseCommand against the session cwd — re-resolve them against the
+  // effective cwd so outside-cwd approval sees the real runtime location
+  // (cd /tmp && cat ./secret). Under an unknown base they resolve to a marker
+  // path outside every allowed dir, forcing path approval.
+  const normBase = path.resolve(expandTilde(cwd));
+  for (let i = 0; i < segments.length; i++) {
+    const base = effectiveCwds[i];
+    if (base === null) {
+      paths.push(...reResolveCwdDependentPaths(segments[i], base));
+    } else if (base !== normBase) {
+      paths.push(...reResolveCwdDependentPaths(segments[i], base));
+    } else {
+      // Base === session cwd: parseCommand already resolved ./../ tokens
+      // against it — collect only the $PWD tokens it never saw.
+      paths.push(...reResolveCwdDependentPaths(segments[i], base, { skipDotPaths: true }));
+    }
+  }
+
   // Unified segment analysis: one call per segment replaces
-  // hasKnownDanger + isSimpleAllowedCommand + isSegmentUnsafe + analyzeSegmentRisk
-  const segmentAnalyses = await Promise.all(segments.map(seg => analyzeSegment(seg, cwd)));
+  // hasKnownDanger + isSimpleAllowedCommand + isSegmentUnsafe + analyzeSegmentRisk.
+  // Unknown-base segments are analyzed against "/": relative tokens then
+  // resolve to /x — outside every allowed dir and the trusted skills dir — so
+  // script trust fails and path checks force approval, while absolute-path
+  // tokens (base-independent) keep their normal verdict.
+  const UNKNOWN_BASE_CWD = "/";
+  const segmentAnalyses = await Promise.all(
+    segments.map((seg, i) => analyzeSegment(seg, effectiveCwds[i] ?? UNKNOWN_BASE_CWD)),
+  );
 
   const allSimple = segmentAnalyses.every(a => a.isSimple);
   const hasUnsafe = segmentAnalyses.some(a => a.isUnsafe);
