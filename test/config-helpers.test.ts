@@ -123,6 +123,10 @@ describe("isTrustedScriptCommand", () => {
     expect(isTrustedScriptCommand("uv run --with pypdf,reportlab python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
   });
 
+  it("allows uv run with doc-extract packages (pandas,openpyxl,xlrd)", () => {
+    expect(isTrustedScriptCommand("uv run --with pandas,openpyxl,xlrd python3 ~/.pi/agent/skills/doc-extract/scripts/extract.py", "/tmp")).toBe(true);
+  });
+
   it("allows uv run with package extras syntax", () => {
     expect(isTrustedScriptCommand('uv run --with "markitdown[pptx]" python ~/.pi/agent/skills/my-script.py', "/tmp")).toBe(true);
   });
