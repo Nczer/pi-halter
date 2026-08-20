@@ -240,6 +240,73 @@ export function stripHeredocBodies(cmd: string): string {
 }
 
 /**
+ * Mask shell comments (word-boundary `#` to end of physical line) so the
+ * credential scan doesn't flag credential-looking text that is merely a
+ * comment (`# rotate the .env tomorrow\nls` must not block `ls`). Comments
+ * never execute, so masking them can only remove false positives — a real
+ * credential operand stays on a live line and is still scanned.
+ *
+ * Quote- and continuation-aware, mirroring bash:
+ *  - `#` starts a comment only at a WORD START: line start, or after
+ *    whitespace / `;|&(`. `x#y`, `${v#pat}`, `VAR=#x`, `echo "a"# b` keep
+ *    their `#` (literal word content).
+ *  - Inside '…' or "…" a `#` is literal; quotes may span lines.
+ *  - A backslash-escaped `#` (`\#`) is literal.
+ *  - Backslash+newline outside quotes splices the logical line: a `#` on the
+ *    continuation line is judged against the character BEFORE the splice
+ *    (`foo \<nl># x` → `foo # x` → comment; `foo\<nl># x` → `foo# x` →
+ *    literal). A comment ends at its physical line even when it ends in `\\`
+ *    (comments do not continue).
+ *
+ * Comment characters are replaced with spaces (offsets and newlines
+ * preserved) so downstream line-based preprocessing sees the same shape.
+ */
+export function stripShellComments(cmd: string): string {
+  const out = cmd.split("");
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let comment = false;
+  let prev = "\n"; // last significant char of the LOGICAL line (word-start check)
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (comment) {
+      if (c === "\n") { comment = false; prev = "\n"; }
+      else { out[i] = " "; }
+      continue;
+    }
+    if (escaped) { escaped = false; continue; }
+    if (inSingle) {
+      if (c === "'") { inSingle = false; prev = c; }
+      continue;
+    }
+    if (inDouble) {
+      if (c === "\\") { escaped = true; continue; } // escapes next (incl. newline splice)
+      if (c === '"') { inDouble = false; prev = c; }
+      continue;
+    }
+    if (c === "'") { inSingle = true; prev = c; continue; }
+    if (c === '"') { inDouble = true; prev = c; continue; }
+    if (c === "\\") {
+      if (cmd[i + 1] === "\n") {
+        i++; // line splice: the logical line continues; `prev` keeps the
+        // character before the backslash (word-start judged against it)
+      } else {
+        escaped = true;
+      }
+      continue;
+    }
+    if (c === "#" && (/[ \t\n;|&(]/.test(prev))) {
+      comment = true;
+      out[i] = " ";
+      continue;
+    }
+    prev = c;
+  }
+  return out.join("");
+}
+
+/**
  * Check bare relative tokens for symlinks in cwd that point outside it.
  * A malicious repo can ship a symlink (often absolute, e.g. `link →
  * /home/<user>/.ssh/id_rsa` — the username is frequently in git history) so
@@ -370,9 +437,10 @@ export function checkCommandForCredentialPaths(
   command: string,
   cwd: string,
 ): { denied: string | null; warned: string | null } {
-  // Heredoc bodies are stdin DATA, not path operands — strip them before
-  // scanning so credential names in the body don't false-positive.
-  const scanCmd = stripHeredocBodies(command);
+  // Heredoc bodies and shell comments are DATA, not path operands — strip
+  // them before scanning so credential names in the body / a comment don't
+  // false-positive (`# check the .ssh dir\nls` must not block `ls`).
+  const scanCmd = stripHeredocBodies(stripShellComments(command));
 
   // Quote-aware tokenization (strips quotes so '.env' is detected as .env).
   const tokens = tokenizeSegment(scanCmd);
@@ -391,7 +459,7 @@ export function checkCommandForCredentialPaths(
   if (symlinkCheck.denied) return { denied: symlinkCheck.denied, warned: null };
   if (
     !hasGlob &&
-    !CREDENTIAL_SCAN_RE.test(command) &&
+    !CREDENTIAL_SCAN_RE.test(scanCmd) &&
     !CREDENTIAL_SCAN_RE.test(dequoted) &&
     !CREDENTIAL_SCAN_RE.test(unstripped)
   ) {
