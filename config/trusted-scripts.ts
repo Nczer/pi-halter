@@ -12,7 +12,7 @@ const trustedScriptDirs: string[] = [
 /** Packages allowed in `uv run --with` for trusted scripts (supply chain defense). */
 const TRUSTED_PACKAGES = new Set([
   "anthropic", "defusedxml", "lxml", "markitdown", "mcp",
-  "openpyxl", "pandas", "pillow", "pymupdf", "pypdf", "reportlab",
+  "openpyxl", "pandas", "pillow", "pymupdf", "pypdf", "reportlab", "xlrd",
 ]);
 
 /** Pre-compiled regexes for interpreter detection and file extension check. */
