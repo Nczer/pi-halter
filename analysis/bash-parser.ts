@@ -318,7 +318,12 @@ function isAllowedRootToken(w: string, cwd: string): boolean {
  * other in-list (paths outside allowed roots, expansions) keeps the marker
  * (fail closed).
  */
-function isLoopBoundSafe(node: TSNode, varName: string, cwd: string): boolean {
+/**
+ * The in-list words of the NEAREST enclosing for loop that binds `varName`,
+ * or null when no such loop exists (a loop binding a different variable is
+ * skipped — the reference may bind an outer loop).
+ */
+function enclosingLoopInList(node: TSNode, varName: string): string[] | null {
   let cur = node.parent;
   while (cur) {
     if (cur.type === "for_statement") {
@@ -333,14 +338,53 @@ function isLoopBoundSafe(node: TSNode, varName: string, cwd: string): boolean {
         if (c.type === ";" || c.type === "do_group") break;
         inList.push(c.text);
       }
-      if (loopVar === varName) {
-        return inList.length > 0 && inList.every(w => isBareName(w) || isAllowedRootToken(w, cwd));
-      }
+      if (loopVar === varName) return inList.length > 0 ? inList : null;
       // a different (outer/nested) loop variable — keep walking up
     }
     cur = cur.parent;
   }
-  return false;
+  return null;
+}
+
+function isLoopBoundSafe(node: TSNode, varName: string, cwd: string): boolean {
+  const inList = enclosingLoopInList(node, varName);
+  return inList !== null && inList.every(w => isBareName(w) || isAllowedRootToken(w, cwd));
+}
+
+/**
+ * For a `cd` command whose single target is a loop-bound variable reference
+ * (`cd $d` / `cd ${d}` where `d` is bound by an enclosing for loop), return
+ * the loop's in-list words so resolveCdTarget can thread a known local base.
+ * Null in every other case: not a cd, extra/rejected args (bash would error —
+ * no cd runs), `cd -` (OLDPWD), non-variable or substitution targets (the
+ * tokenizer may split those anyway), or no binding loop.
+ */
+function extractLoopCdBinding(n: TSNode): string[] | null {
+  if (n.type !== "command") return null;
+  // The first child is a command_name node (wrapping the word); arguments
+  // are WORD_TYPES — `cd $d` parses $d as simple_expansion, not word.
+  const words: string[] = [];
+  for (let i = 0; i < n.childCount; i++) {
+    const c = n.child(i);
+    if (!c) continue;
+    if (c.type === "command_name" || WORD_TYPES.has(c.type)) words.push(c.text);
+  }
+  let ti = 0;
+  while (ti < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[ti])) ti++; // env-assign prefix
+  if (words[ti] !== "cd") return null;
+  let target: string | null = null;
+  let targetCount = 0;
+  for (const w of words.slice(ti + 1)) {
+    if (w === "--" || w === "-L" || w === "-P") continue;
+    if (w !== "-" && w.startsWith("-")) return null; // unexpected flag → cd errors
+    target = w;
+    targetCount++;
+  }
+  if (targetCount !== 1 || !target) return null;
+  if (target === "-") return null; // OLDPWD — not trackable
+  const m = target.match(/^\$(\w+)$/) ?? target.match(/^\$\{(\w+)\}$/);
+  if (!m) return null;
+  return enclosingLoopInList(n, m[1]);
 }
 
 /**
@@ -470,6 +514,19 @@ export interface BashSegment {
   precedingOp?: string;
   /** Segment runs in a background subshell (its cd does not persist into later segments). */
   backgrounded?: boolean;
+  /**
+   * Depth of enclosing `( )` subshell nodes (0 = top level). A subshell runs
+   * in a child process: a cd inside it sets only the subshell's local base,
+   * never the outer one. trackEffectiveCwd scopes its base stack by this
+   * depth so inner cds don't leak into (or poison) the outer base.
+   */
+  subshellDepth?: number;
+  /**
+   * For a `cd $var` whose target is the variable of an enclosing for loop:
+   * the loop's in-list words. resolveCdTarget uses them to thread a known
+   * local base (single-candidate) instead of freezing to unknown.
+   */
+  loopCdInList?: string[];
 }
 
 /** Node types that are shell operators (split points or internal ops). */
@@ -490,9 +547,12 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
   // pushed (operators and segments strictly interleave in walk order; a
   // segment push always consumes the slot, an operator always sets it).
   let pendingOp: string | null = null;
+  // Depth of enclosing `( )` subshells during the walk (see BashSegment.subshellDepth).
+  let subshellDepth = 0;
   const pushSeg = (seg: BashSegment): void => {
     if (pendingOp) seg.precedingOp = pendingOp;
     pendingOp = null;
+    if (subshellDepth > 0) seg.subshellDepth = subshellDepth;
     segments.push(seg);
   };
 
@@ -633,7 +693,12 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
   /** Leaf: single command or redirect. */
   const handleLeaf: Handler = (n) => {
     const ops = detectOpsInNode(n);
-    pushSeg({ text: n.text.trim(), ops, hasSubshell: nodeHasSubshell(n), subshellTexts: extractSubshellInnerTexts(n) });
+    const seg: BashSegment = { text: n.text.trim(), ops, hasSubshell: nodeHasSubshell(n), subshellTexts: extractSubshellInnerTexts(n) };
+    if (n.type === "command") {
+      const inList = extractLoopCdBinding(n);
+      if (inList) seg.loopCdInList = inList;
+    }
+    pushSeg(seg);
   };
 
 
@@ -653,6 +718,15 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
 
   function walk(n: TSNode): void {
     if (SKIP_TYPES.has(n.type)) return;
+
+    // `( )` subshell: runs in a child process — every segment inside carries
+    // the extra depth so cd threading stays scoped to the subshell.
+    if (n.type === "subshell") {
+      subshellDepth++;
+      recurseAll(n);
+      subshellDepth--;
+      return;
+    }
 
     const handler = handlers.get(n.type);
     if (handler) {

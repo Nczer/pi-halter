@@ -84,6 +84,13 @@ export const cases: TestCase[] = [
 	{ cmd: "jq -r .kind f.jsonl | sort | uniq -c", simple: true, unsafe: false, decision: "auto-allow", desc: "jq pipeline of read-only tools (no pipe risk, no cmd approval)" },
 	{ cmd: "jq . /etc/shadow", simple: true, unsafe: false, decision: "prompt", desc: "jq is path-aware — outside-cwd file arg still prompts" },
 
+	// stat / read (log-review FPs: read-only inspection commands missing from the allowlists)
+	{ cmd: "stat -c '%y' file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "stat is pure metadata display, no write/exec flags (log FP: was not allowlisted)" },
+	{ cmd: "stat file.txt another.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "stat multiple files (read-only)" },
+	{ cmd: "stat /etc/hostname", simple: true, unsafe: false, decision: "prompt", desc: "stat is path-aware — outside-cwd file arg still prompts" },
+	{ cmd: "while read -r line; do echo \"$line\"; done", simple: true, unsafe: false, decision: "auto-allow", desc: "read builtin is stdin-only (no file/exec) — while-read loop auto-allow (log FP)" },
+	{ cmd: "cat list.txt | while read -r l; do echo $l; done", simple: true, unsafe: false, decision: "auto-allow", desc: "piped while-read — compound stage + read builtin (no pipe risk, no cmd approval)" },
+
 	// ═══════════════════════════════════════════════════════════
 	// find
 	// ═══════════════════════════════════════════════════════════
@@ -458,6 +465,7 @@ export const cases: TestCase[] = [
 	{ cmd: "for f in a b c; do echo start; cat $f; rm $f; echo done; done", simple: false, unsafe: true, decision: "prompt", desc: "for loop: multiple safe + one unsafe (any unsafe kills auto-allow)" },
 	{ cmd: "for f in a b; do cat $f; done", simple: true, unsafe: false, decision: "auto-allow", desc: "for loop: all safe commands auto-allow" },
 	{ cmd: "for d in a b; do ls $d/test 2>/dev/null; done", simple: true, unsafe: false, decision: "auto-allow", desc: "loop-bound var as path prefix — expansions stay cwd-local (log FP)" },
+	{ cmd: "for d in one; do (cd $d && cat file.txt); done", simple: true, unsafe: false, decision: "auto-allow", desc: "single-candidate loop cd $d threads a known local base; inner cd must not leak the outer one (log FP)" },
 	{ cmd: "for d in a b; do ls $d/../etc; done", simple: true, unsafe: false, decision: "prompt", desc: "loop-bound var prefix with .. segment keeps the opaque marker" },
 	{ cmd: "for d in /tmp/*/; do echo \"== $d\"; ls \"$d\" | head -5; done", simple: true, unsafe: false, decision: "auto-allow", desc: "loop in-list under allowed root (/tmp) — values statically inside (log FP)" },
 	{ cmd: "for d in /var/log/*/; do ls \"$d\"; done", simple: true, unsafe: false, decision: "prompt", desc: "loop in-list outside allowed roots keeps the opaque marker" },
@@ -811,7 +819,7 @@ export const cases: TestCase[] = [
 	// heredoc body is data for cat, but executable code for interpreters
 	{ cmd: "if true; then cat << 'EOF'\nline1\nEOF; fi", simple: true, unsafe: false, decision: "auto-allow", desc: "if + cat heredoc (data, safe)" },
 	{ cmd: "if true; then python3 << 'PYEOF'\nimport os\nPYEOF; fi", simple: false, unsafe: true, decision: "prompt", desc: "if + python3 heredoc (code exec)" },
-	{ cmd: "while read line; do cat << 'EOF'\n$line\nEOF; done", simple: false, unsafe: false, decision: "prompt", desc: "while + cat heredoc (loop prompts)" },
+	{ cmd: "while read line; do cat << 'EOF'\n$line\nEOF; done", simple: true, unsafe: false, decision: "auto-allow", desc: "while-read + heredoc loop — read is a stdin-only builtin, heredoc is data (log FP: used to prompt on the read builtin)" },
 	{ cmd: "while read line; do node << 'EOF'\nconsole.log()\nEOF; done", simple: false, unsafe: true, decision: "prompt", desc: "while + node heredoc (code exec)" },
 	{ cmd: "for f in a b; do cat << EOF\n$f\nEOF; done", simple: true, unsafe: false, decision: "auto-allow", desc: "for + cat heredoc (data, safe)" },
 	{ cmd: "for f in a b; do bash << EOF\nrm $f\nEOF; done", simple: false, unsafe: true, decision: "prompt", desc: "for + bash heredoc (code exec)" },

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -9,7 +9,7 @@ import {
 } from "../analysis/cwd-tracking";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { analyzeCommand } from "../analysis/command-analysis";
-import { decide } from "../decision-engine";
+import { decide, type BashPromptData } from "../decision-engine";
 import { createStore } from "../store";
 import type { BashSegment } from "../analysis/bash-parser";
 
@@ -486,4 +486,123 @@ describe("opaque variable expansions in path position", () => {
     expect(a.paths).toContain(path.join(HOME, "x.txt"));
     expect(a.paths).toContain(path.join(HOME, "y.txt"));
   }, 15000);
+});
+
+// ── Subshell cd scoping + loop cd $d threading (log-review findings) ──────
+//
+// A `( )` subshell runs in a child process: a cd inside it sets only the
+// subshell's local base and must never persist into the outer scope. Inner
+// segments are flat top-level segments (the parser recurses into the
+// subshell), so the fix is a per-depth base stack keyed by
+// BashSegment.subshellDepth. `cd $d` with d bound by a for loop threads the
+// exact local base when the in-list resolves to ONE real directory.
+
+describe("subshell cd scoping (inner cds never leak the outer base)", () => {
+	let tmp: string;
+	beforeAll(() => {
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-subshell-"));
+		fs.mkdirSync(path.join(tmp, "one"));
+		fs.mkdirSync(path.join(tmp, "two"));
+		fs.writeFileSync(path.join(tmp, "top.txt"), "x");
+	});
+	afterAll(() => {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	});
+	const d = (cmd: string) => decide({ type: "bash", command: cmd, cwd: tmp }, createStore());
+
+	it("unit: depth stack scopes bases per subshell", () => {
+		const sub = (text: string, depth = 1, precedingOp?: string): BashSegment =>
+			({ text, ops: [], hasSubshell: false, subshellDepth: depth, precedingOp });
+		// `(cd /var && ls); pwd` — the inner cd must not change the outer base
+		expect(trackEffectiveCwd([sub("cd /var"), sub("ls", 1, "&&"), sub("pwd", 0, ";")], BASE))
+			.toEqual([BASE, "/var", BASE]);
+		// nested: `( (cd /var && true); true ); ls` — two levels, both restore
+		expect(trackEffectiveCwd([sub("cd /var", 2), sub("true", 2, "&&"), sub("true", 1), sub("ls", 0, ";")], BASE))
+			.toEqual([BASE, "/var", BASE, BASE]);
+		// an inner cd $VAR freezes only the inner depth
+		// an inner (subshell) cd $VAR freezes only the inner depth
+		expect(trackEffectiveCwd([sub("cd $D", 1), sub("ls", 1, "&&"), sub("pwd", 0, ";")], BASE)).toEqual([BASE, null, BASE]);
+	});
+
+	it("literal cd in a subshell does not leak into the outer base", async () => {
+		expect((await d("(cd one && true); cat top.txt")).kind).toBe("auto-allow");
+	}, 15000);
+
+	it("loop subshell cd $d (variable) does not poison the outer base", async () => {
+		expect((await d("for d in one; do (cd $d && true); done; cat top.txt")).kind).toBe("auto-allow");
+	}, 15000);
+
+	it("nested subshells: outer base intact after both", async () => {
+		expect((await d("( (cd one && true); true ); cat top.txt")).kind).toBe("auto-allow");
+	}, 15000);
+
+	it("inner cd to an outside dir is still flagged via the local base", async () => {
+		const r = await d("(cd /etc && ls)");
+		expect(r.kind).toBe("prompt");
+		if (r.kind === "prompt") expect((r.promptData as BashPromptData).outsideDirs).toContain("/etc");
+	}, 15000);
+});
+
+describe("loop cd $d base threading (single-candidate only, fail-closed otherwise)", () => {
+	let tmp: string;
+	beforeAll(() => {
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-loopcd-"));
+		fs.mkdirSync(path.join(tmp, "one"));
+		fs.mkdirSync(path.join(tmp, "two"));
+		fs.writeFileSync(path.join(tmp, "top.txt"), "x");
+	});
+	afterAll(() => {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	});
+	const d = (cmd: string) => decide({ type: "bash", command: cmd, cwd: tmp }, createStore());
+
+	it("single-candidate in-list threads the exact local base (inner read auto-allow)", async () => {
+		expect((await d("for d in one; do (cd $d && cat top.txt); done")).kind).toBe("auto-allow");
+		expect((await d("for d in one one; do (cd $d && cat top.txt); done")).kind).toBe("auto-allow"); // dupes dedupe to one
+	}, 15000);
+
+	it("mixed existing/missing in-list: missing values drop, single survivor threads", async () => {
+		expect((await d("for d in one no-such-dir-xyz; do (cd $d && cat top.txt); done")).kind).toBe("auto-allow");
+	}, 15000);
+
+	it("multi-candidate in-list stays fail-closed (unknown local base)", async () => {
+		expect((await d("for d in one two; do (cd $d && cat top.txt); done")).kind).toBe("prompt");
+	}, 15000);
+
+	it("all-missing in-list: cd always fails → inner runs under the outer base", async () => {
+		expect((await d("for d in no-such-a no-such-b; do (cd $d && cat top.txt); done")).kind).toBe("auto-allow");
+	}, 15000);
+
+	it("non-literal in-list (expansion) stays fail-closed", async () => {
+		expect((await d("for d in $(echo one); do (cd $d && cat top.txt); done")).kind).toBe("prompt");
+	}, 15000);
+
+	it("single outside in-list dir: known local base → outside prompt (not unknown)", async () => {
+		const r = await d("for d in /etc; do (cd $d && ls); done");
+		expect(r.kind).toBe("prompt");
+		if (r.kind === "prompt") expect((r.promptData as BashPromptData).outsideDirs).toContain("/etc");
+	}, 15000);
+
+	it("cd $d outside a loop (no binding) is unchanged: unknown base", async () => {
+		const r = await d("cd $one && cat top.txt");
+		expect(r.kind).toBe("prompt");
+	}, 15000);
+});
+
+describe("unknown-cwd marker hygiene (log-review display FPs)", () => {
+	it("marker keeps its prefix for ..-relative tokens (no path.join normalization)", () => {
+		expect(reResolveCwdDependentPaths(seg("cat ../node_modules/x"), null))
+			.toEqual([`${UNKNOWN_CWD_MARKER}/../node_modules/x`]);
+	});
+
+	it("fd-dup (2>&1) is not misread as a bare-name redirect target", async () => {
+		const a = await analyzeCommand("cd $D && cat 2>&1", CWD);
+		expect(a.paths).not.toContain(UNKNOWN_CWD_MARKER);
+	}, 15000);
+
+	it("marker paths display as the marker, not their dirname (e.g. '.')", async () => {
+		const { resolvePathsToDirs } = await import("../analysis/path-analysis");
+		expect(await resolvePathsToDirs([`${UNKNOWN_CWD_MARKER}/../node_modules/x`, UNKNOWN_CWD_MARKER]))
+			.toEqual([UNKNOWN_CWD_MARKER]);
+	}, 15000);
 });
