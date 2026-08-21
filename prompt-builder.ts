@@ -88,10 +88,11 @@ function buildBashPrompt(
 
   const hasBoth = needsCommandApproval && needsPathApproval;
   const uniqueSigs = [...new Set(signatures)];
-  // Relative-path tool identities (../node_modules/.bin/tsc …). Deduped
-  // against uniqueSigs — a relative tool whose basename is NOT allowlisted
-  // appears in both lists. Granted cwd-bound (exact sig + this cwd only).
-  const relToolIds = (relativeToolIds ?? []).filter(s => !uniqueSigs.includes(s));
+  // Relative-path tool identities (../node_modules/.bin/tsc …) with the base
+  // they resolve against. Deduped against uniqueSigs — a relative tool whose
+  // basename is NOT allowlisted appears in both lists. Granted base-bound
+  // (exact sig + this effective working dir only).
+  const relToolIds = (relativeToolIds ?? []).filter(r => !uniqueSigs.includes(r.sig));
 
   // Compute prompt options from data (previously on PromptDecision)
   const includePathsOption = hasBoth;
@@ -102,7 +103,7 @@ function buildBashPrompt(
   const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (uniqueSigs.length > 0 || outsideDirs.length > 0 || relToolIds.length > 0);
   const cmdBullets = [
     ...uniqueSigs.map(s => `  \u2022 ${s} *`),
-    ...relToolIds.map(s => `  \u2022 ${s} (this cwd)`),
+    ...relToolIds.map(r => `  \u2022 ${r.sig} (this cwd)`),
   ].join("\n");
 
   // Title — reflect what triggered the prompt
@@ -191,7 +192,7 @@ function buildBashPrompt(
     : undefined;
 
   const alwaysLabel = (needsCommandApproval && (uniqueSigs.length > 0 || relToolIds.length > 0))
-    ? [...uniqueSigs.map(s => s + " *"), ...relToolIds.map(s => s + " (this cwd)")].join(", ")
+    ? [...uniqueSigs.map(s => s + " *"), ...relToolIds.map(r => r.sig + " (this cwd)")].join(", ")
     : (needsPathApproval ? outsideDirs.map(d => `Read ${d}/*`).join(", ") : "");
   const alwaysBroaderLabel = includeBroaderOption
     ? uniqueSigs.map(s => s.split(" ")[0] + " *").join(", ")

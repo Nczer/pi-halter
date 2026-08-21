@@ -1523,7 +1523,8 @@ describe("Bash: cwd-bound exact-sig grants for relative-path tools (log FP clust
 		expect(d.kind).toBe("prompt");
 		if (d.kind === "prompt" && d.promptData.type === "bash") {
 			expect(d.promptData.relativeToolIds.length).toBeGreaterThan(0);
-			expect(d.promptData.relativeToolIds[0]).toContain("./node_modules/.bin/mytool");
+			expect(d.promptData.relativeToolIds[0].sig).toContain("./node_modules/.bin/mytool");
+			expect(d.promptData.relativeToolIds[0].base).toBe(cwd);
 			expect(d.promptData.cwd).toBe(cwd);
 		}
 	});
@@ -1543,13 +1544,26 @@ describe("Bash: cwd-bound exact-sig grants for relative-path tools (log FP clust
 		expect(d2.kind).toBe("auto-allow");
 	});
 
-	it("grant is cwd-bound: the same command from a different cwd still prompts", async () => {
+	it("grant is base-bound: the same command from a different cwd still prompts", async () => {
 		const store = createStore();
 		const d1 = await decide({ type: "bash", command: tool, cwd }, store);
 		if (d1.kind === "prompt" && d1.promptData.type === "bash") {
 			store.addAllowed(RuleGenerator.generatePrimaryRules(d1.promptData));
 		}
 		const d2 = await decide({ type: "bash", command: tool, cwd: otherCwd }, store);
+		expect(d2.kind).toBe("prompt");
+	});
+
+	it("grant is base-bound: cd to another dir changes the base — still prompts (bypass check)", async () => {
+		const store = createStore();
+		const d1 = await decide({ type: "bash", command: tool, cwd }, store);
+		if (d1.kind === "prompt" && d1.promptData.type === "bash") {
+			store.addAllowed(RuleGenerator.generatePrimaryRules(d1.promptData));
+		}
+		// SAME session cwd, SAME signature — but the relative tool now
+		// resolves under /tmp (a different binary of the same name). The
+		// grant was bound to the original effective base, so it must not apply.
+		const d2 = await decide({ type: "bash", command: "cd /tmp && ./node_modules/.bin/mytool --do index.ts", cwd }, store);
 		expect(d2.kind).toBe("prompt");
 	});
 

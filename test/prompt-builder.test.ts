@@ -588,7 +588,7 @@ describe("cwd-bound relative tool grants in the prompt", () => {
   it("offers Always when only a relative-tool identity exists (empty signatures)", () => {
     const prompt = buildPrompt(bashDecision({
       signatures: [],
-      relativeToolIds: ["./node_modules/.bin/tsc --noEmit"],
+      relativeToolIds: [{ sig: "./node_modules/.bin/tsc --noEmit", base: "/home/user/project" }],
       needsCommandApproval: true,
     }));
     expect(prompt.includeAlwaysOption).toBe(true);
@@ -599,7 +599,10 @@ describe("cwd-bound relative tool grants in the prompt", () => {
   it("lists relative tools in the tier-2 body, deduped against signatures", () => {
     const prompt = buildPrompt(bashDecision({
       signatures: ["./node_modules/.bin/unknown-tool", "rm"],
-      relativeToolIds: ["./node_modules/.bin/unknown-tool", "./node_modules/.bin/tsc --noEmit"],
+      relativeToolIds: [
+        { sig: "./node_modules/.bin/unknown-tool", base: "/home/user/project" },
+        { sig: "./node_modules/.bin/tsc --noEmit", base: "/home/user/project" },
+      ],
       needsCommandApproval: true,
     }));
     const tier2 = prompt.tier2Everything;

@@ -76,7 +76,10 @@ export class RuleGenerator {
     // binding is what keeps a repo-shipped executable from inheriting
     // session-wide bare-name grants elsewhere.
     if (data.relativeToolIds.length > 0) {
-      rules.bashSigCwds = data.relativeToolIds.map(sig => ({ sig, cwd: data.cwd }));
+      // Bound to the segment's EFFECTIVE base (the working dir the relative
+      // token resolves against) — not data.cwd: a grant for ./x must not
+      // cover `cd /elsewhere && ./x`.
+      rules.bashSigCwds = data.relativeToolIds.map(({ sig, base }) => ({ sig, cwd: base }));
     }
     return rules;
   }
