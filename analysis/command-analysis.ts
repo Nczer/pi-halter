@@ -183,10 +183,15 @@ export async function analyzeCommand(
   // Unknown-base segments are analyzed against "/": relative tokens then
   // resolve to /x — outside every allowed dir and the trusted skills dir — so
   // script trust fails and path checks force approval, while absolute-path
-  // tokens (base-independent) keep their normal verdict.
+  // tokens (base-independent) keep their normal verdict. cwdKnown flags the
+  // marker as non-real, so evaluators (rm mass-deletion) skip relative-token
+  // resolution instead of resolving against "/".
   const UNKNOWN_BASE_CWD = "/";
   const segmentAnalyses = await Promise.all(
-    segments.map((seg, i) => analyzeSegment(seg, effectiveCwds[i] ?? UNKNOWN_BASE_CWD)),
+    segments.map((seg, i) => {
+      const base = effectiveCwds[i];
+      return analyzeSegment(seg, base ?? UNKNOWN_BASE_CWD, base !== null && base !== undefined);
+    }),
   );
 
   const allSimple = segmentAnalyses.every(a => a.isSimple);
