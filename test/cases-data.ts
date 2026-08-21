@@ -543,6 +543,10 @@ export const cases: TestCase[] = [
 	{ cmd: "rm -fr dir", simple: false, unsafe: true, decision: "prompt", desc: "rm -fr (force recursive)" },
 	{ cmd: "rm -r -f dir", simple: false, unsafe: true, decision: "prompt", desc: "rm -r -f (separate flags)" },
 	{ cmd: "rm --recursive dir", simple: false, unsafe: true, decision: "prompt", desc: "rm --recursive (long form)" },
+	{ cmd: "rm -rf ~", simple: false, unsafe: true, decision: "prompt", desc: "rm -rf ~ (home dir mass-deletion flag)" },
+	{ cmd: "rm -rf $HOME", simple: false, unsafe: true, decision: "prompt", desc: "rm -rf $HOME (home dir mass-deletion flag)" },
+	{ cmd: "rm -rf /", simple: false, unsafe: true, decision: "prompt", desc: "rm -rf / (system dir mass-deletion flag)" },
+	{ cmd: "rm -rf .", simple: false, unsafe: true, decision: "prompt", desc: "rm -rf . (cwd-based mass-deletion check)" },
 	// Trusted script compound bypass (Bug #1)
 	{ cmd: "python3 ~/.pi/agent/skills/test.py && rm -rf /tmp/data", simple: false, unsafe: true, decision: "prompt", desc: "trusted script && rm -rf (compound must NOT auto-allow)" },
 	{ cmd: "python3 ~/.pi/agent/skills/test.py ; rm -r /tmp/data", simple: false, unsafe: true, decision: "prompt", desc: "trusted script ; rm -r (compound must NOT auto-allow)" },

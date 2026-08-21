@@ -116,7 +116,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 │       ├── disk-evaluator.ts     Disk/volume management commands (mount, mkfs, fdisk, etc.)
 │       ├── git-evaluator.ts      git dangerous operations (reset --hard, push --force, etc.)
 │       ├── shell-evaluator.ts    Subshells, heredocs, redirects, sed/perl, wrappers
-│       ├── system-evaluator.ts   sudo, rm, chmod, chown, mv, cp, kill, shutdown, systemctl, dd
+│       ├── system-evaluator.ts   sudo, rm (incl. mass-deletion flags: home/system dirs, 100+ entries), chmod, chown, mv, cp, kill, shutdown, systemctl, dd
 │       ├── tmux-evaluator.ts     tmux dangerous subcommands (send-keys, run-shell, etc.)
 │       └── tool-evaluator.ts     find/fd/rg exec, kubectl, terraform, aws, gcloud, curl/wget pipe
 ├── decision-engine.ts            Pure policy dispatcher — async decide(request, store) → Decision

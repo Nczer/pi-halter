@@ -83,6 +83,7 @@ function analyzeDelegated(
   delegated: { cmd: string; tail: string },
   cwd: string,
   seg: BashSegment,
+  cwdKnown = true,
 ): { hasDanger: boolean; severity: "high" | "medium" | null; reasons: string[] } {
   const { cmd, tail } = delegated;
   const reasons: string[] = [];
@@ -100,6 +101,7 @@ function analyzeDelegated(
       firstWord: cmd,
       obfuscation: { detected: false, techniques: [] },
       gitDangerous: cmd === "git" ? isGitDangerous(tail) : false,
+      cwdKnown,
     });
     if (result.hasDanger) hasDanger = true;
     if (result.severity === "high" || (!severity && result.severity === "medium")) {
@@ -139,8 +141,12 @@ function analyzeDelegated(
 /**
  * Analyze a single command segment. Produces safety booleans and risk assessment
  * in one pass. Replaces hasKnownDanger + isSimpleAllowedCommand + isSegmentUnsafe + analyzeSegmentRisk.
+ *
+ * cwdKnown=false when cwd is the unknown-base marker ("/"): evaluators must
+ * not resolve relative tokens against it (a relative rm target would resolve
+ * to "/x", a real system location that is not the runtime location).
  */
-export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<SegmentAnalysis> {
+export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = true): Promise<SegmentAnalysis> {
   const segment = seg.text;
   const trimmed = segment.trim();
   const firstWord = getFirstWord(segment);
@@ -150,7 +156,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   const cachedGitDangerous = firstWord === "git" ? isGitDangerous(segment) : false;
 
 // Run evaluators with cached results
-  const evaluatorResults = EVALUATORS.map(ev => ({ evaluator: ev.name, result: ev.evaluate(seg, cwd, { firstWord, obfuscation: cachedObfuscation, gitDangerous: cachedGitDangerous }) }));
+  const evaluatorResults = EVALUATORS.map(ev => ({ evaluator: ev.name, result: ev.evaluate(seg, cwd, { firstWord, obfuscation: cachedObfuscation, gitDangerous: cachedGitDangerous, cwdKnown }) }));
 
   // Merge evaluator results
   const aggregatedReasons: string[] = [];
@@ -183,7 +189,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
   // powers the wrapped command lacks on its own.
   const delegated = getDelegatedCommand(segment);
   if (delegated) {
-    const d = analyzeDelegated(delegated, cwd, seg);
+    const d = analyzeDelegated(delegated, cwd, seg, cwdKnown);
     if (d.hasDanger) aggregatedHasDanger = true;
     if (d.severity === "high" || (!aggregatedSeverity && d.severity === "medium")) {
       aggregatedSeverity = d.severity;
@@ -237,7 +243,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       //  in stage 2+ would be invisible without this per-stage pass.)
       const pseudoSeg: BashSegment = { text: stage, ops: [], hasSubshell: false };
       for (const ev of EVALUATORS) {
-        const result = ev.evaluate(pseudoSeg, cwd);
+        const result = ev.evaluate(pseudoSeg, cwd, { cwdKnown });
         if (result.hasDanger) {
           pipelineHasDanger = true;
           allStagesSimple = false;
@@ -256,7 +262,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string): Promise<Seg
       const stageDeleg = getDelegatedCommand(stage);
       if (stageDeleg) {
         if (!isAllowedCommand(stageDeleg.cmd)) allStagesSimple = false;
-        const d = analyzeDelegated(stageDeleg, cwd, pseudoSeg);
+        const d = analyzeDelegated(stageDeleg, cwd, pseudoSeg, cwdKnown);
         if (d.hasDanger) {
           pipelineHasDanger = true;
           allStagesSimple = false;
