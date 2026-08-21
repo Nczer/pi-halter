@@ -63,12 +63,15 @@ export interface BashPromptData {
   segments: string[];
   signatures: string[];
   /**
-   * Signatures of relative-path tool segments (contain a ./ or ../ token —
-   * e.g. "../node_modules/.bin/tsc --noemit"). The regular promptSignatures
-   * filter drops these when their basename is allowlisted, so the rule
-   * generator and the prompt use this list to offer/store cwd-bound grants.
+   * Signatures of relative-path tool segments with the EFFECTIVE base they
+   * resolve against (the working dir the path pipeline checks them under).
+   * The regular promptSignatures filter drops these when their basename is
+   * allowlisted, so the rule generator and the prompt use this list to
+   * offer/store base-bound grants. Segments under an unresolvable base are
+   * omitted (their grants fail closed — the prompt already demands path
+   * approval for them).
    */
-  relativeToolIds: string[];
+  relativeToolIds: Array<{ sig: string; base: string }>;
   /** Indices of segments whose signature is NOT in the static allowlist. */
   nonAllowedSegmentIndices: number[];
   riskDangerous: boolean;

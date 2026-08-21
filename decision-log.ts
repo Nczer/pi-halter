@@ -163,7 +163,7 @@ function summarizePrompt(decision: Extract<Decision, { kind: "prompt" }>): strin
     if (p.needsCommandApproval) {
       const named = p.signatures.length > 0
         ? p.signatures.slice(0, 3).join(",")
-        : (p.relativeToolIds?.length ? `${p.relativeToolIds.slice(0, 3).join(",")} (unlisted)` : "(unlisted)");
+        : (p.relativeToolIds?.length ? `${p.relativeToolIds.slice(0, 3).map(r => r.sig).join(",")} (unlisted)` : "(unlisted)");
       parts.push(`cmd ${named}`);
     }
     if (p.needsPathApproval) parts.push(`outside ${p.outsideDirs.slice(0, 3).join(",")}`);

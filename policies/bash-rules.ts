@@ -113,7 +113,7 @@ export const FastAllowRule: BashRule = (req) => {
 /**
  * Core safety and auto-allow logic based on command analysis.
  */
-export const SafetyRule: BashRule = (req, store, analysis?: CommandAnalysis) => {
+export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) => {
   if (!analysis) return null;
 
   // Any tree-sitter parse error means bash may not see what we see — parser
@@ -152,10 +152,16 @@ export const SafetyRule: BashRule = (req, store, analysis?: CommandAnalysis) => 
     // Relative-path segments (./node_modules/.bin/npm test) must never inherit
     // grants for the bare command name — a repo-shipped executable named npm/pip
     // would otherwise inherit session-wide `npm *` grants. The ONLY approval
-    // that applies is an exact signature grant recorded from a prompt in this
-    // very cwd (bashSigCwds) — prefix grants and grants from other cwds are
-    // all refused.
-    if (relPathIdxSet.has(segIdx)) return store.hasAllowedBashCwd(sig, req.cwd);
+    // that applies is an exact signature grant bound to this segment's EFFECTIVE
+    // base (the working dir the relative token resolves against, per the same
+    // base the path pipeline checks it under). Binding to the base — not the
+    // session cwd — is what keeps a grant for ./x from covering
+    // `cd /elsewhere && ./x` (a different binary of the same name). Prefix
+    // grants, unbound grants, and grants bound to other bases are all refused.
+    if (relPathIdxSet.has(segIdx)) {
+      const base = analysis.effectiveCwds[segIdx];
+      return base !== null && store.hasAllowedBashCwd(sig, base);
+    }
     const deleg = delegatedBySeg[segIdx];
     if (deleg) {
       // No static allowlist fallback: the delegating word (env/command/exec/…)
@@ -198,11 +204,13 @@ export const PromptFallbackRule: BashRule = (req, _store, analysis?: CommandAnal
       signatures: prompt.promptSignatures,
       // Relative-tool segment signatures (the promptSignatures filter drops
       // them when their basename is allowlisted — the grant needs them).
-      relativeToolIds: [...new Set(
+      relativeToolIds: [...new Map(
         analysis.relativePathSegmentIndices
-          .map(i => analysis.signatures[i])
-          .filter(s => /(^|\s)(\.\/|\.\.\/)/.test(s)),
-      )],
+          .map(i => ({ sig: analysis.signatures[i], base: analysis.effectiveCwds[i] }))
+          .filter((r): r is { sig: string; base: string } =>
+            r.base !== null && /(^|\s)(\.\/|\.\.\/)/.test(r.sig))
+          .map(r => [`${r.sig}\u0000${r.base}`, r] as const),
+      ).values()],
       nonAllowedSegmentIndices: prompt.nonAllowlistedSegmentIndices,
       riskDangerous: analysis.risk.dangerous,
       riskSeverity: analysis.risk.severity,

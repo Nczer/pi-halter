@@ -47,6 +47,8 @@ export interface CommandAnalysis {
   risk: CommandRisk;
   /** Indices of segments that contain relative path tokens (./foo, ../foo). */
   relativePathSegmentIndices: number[];
+  /** Effective working directory per segment (null = unresolvable base). */
+  effectiveCwds: (string | null)[];
   /** Credential path detected in the command (denied paths are blocked earlier; this is for warned paths). */
   hasCredentialPath: boolean;
   /** Matched credential pattern name, if any (e.g. ".env", ".aws"). */
@@ -261,6 +263,7 @@ export async function analyzeCommand(
     },
     risk: wholeRisk,
     relativePathSegmentIndices,
+    effectiveCwds,
     hasCredentialPath: credentialCheck.denied !== null || credentialCheck.warned !== null,
     credentialRule: credentialCheck.denied ?? credentialCheck.warned,
     prompt: {
