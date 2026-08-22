@@ -2,86 +2,90 @@ import path from "node:path";
 
 // ── Bash command patterns ──
 
-/** Commands always allowed when simple (no subshells, redirects, or dangerous flags). */
-const allowedBashPatternStrings: string[] = [
+/**
+ * The single source of truth for the bash command allowlist.
+ *
+ * Every entry is allowlisted (`allowedBashCommands` — the full pipeline).
+ * An entry WITHOUT an exclusion reason is additionally unconditionally safe
+ * (`unconditionallySafeCommands` — the WASM-skip fast path in FastAllowRule).
+ * An entry WITH a reason has flag-dependent write/exec behavior or delegates
+ * to another command: the fast path must never decide for it, the full
+ * pipeline does.
+ *
+ * Invariant (test/allow-invariant.test.ts): for every unconditionally-safe
+ * entry the full pipeline auto-allows a bare invocation — the fast path may
+ * never out-run SafetyRule.
+ */
+type AllowEntry = readonly [cmd: string, whyNotUnconditional?: string];
+
+const ALLOW_TABLE: readonly AllowEntry[] = [
   // Inspection / read-only
   // `stat` — pure metadata display; GNU/BSD stat has no write/exec flags.
-  "find", "grep", "ls", "cat", "head", "tail", "wc", "file", "stat",
-  "sort", "uniq", "cut", "tr", "diff", "rg", "fd",
-  // JSON querying (stdout only — no file writes, no exec capability)
-  "jq",
-  "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
-  "join", "comm", "paste", "column", "seq",
+  ["find", "-delete / -exec / -fprint* perform writes and exec"],
+  ["grep", "no known write/exec flag; kept on the full pipeline (conservative)"],
+  ["ls"], ["cat"], ["head"], ["tail"], ["wc"], ["file"], ["stat"],
+  ["sort", "-o / --output truncates or writes files"],
+  ["uniq"], ["cut"], ["tr"], ["diff"],
+  ["rg", "--pre executes a command per file"],
+  ["fd", "-x / --exec executes a command per result"],
+  // JSON querying (stdout only — no file writes, no exec capability;
+  // output redirection is shell-level and flagged by the redirect checks)
+  ["jq"],
+  ["tac"], ["rev"], ["nl"], ["fold"], ["expand"], ["unexpand"], ["fmt"],
+  ["join"], ["comm"], ["paste"], ["column"], ["seq"],
   // Text transform (safe stdout — guarded by dangerous flag checks)
-  "sed", "perl",
+  ["sed", "-i edits files in place"],
+  ["perl", "-i edits files in place"],
   // Hashing / binary inspection
-  "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
-  "hexdump", "od", "strings",
+  ["md5sum"], ["sha1sum"], ["sha256sum"], ["sha512sum"], ["cksum"],
+  ["hexdump"], ["od"], ["strings"],
   // Strings / formatting
   // `read` — stdin-only shell builtin (no file access, no exec); keeps
   // `while read -r x; do …; done` loops from prompting on the builtin itself.
-  "echo", "printf", "basename", "dirname", "realpath", "readlink",
-  "test", "true", "false", "read",
+  ["echo"], ["printf"], ["basename"], ["dirname"], ["realpath"], ["readlink"],
+  ["test"], ["true"], ["false"], ["read"],
   // System info (read-only, no file side effects)
-  // NOTE: `printenv` is excluded — with args it prints env vars (often secrets:
-  // OPENAI_API_KEY) into the transcript; bare it dumps ALL environment variables.
-  "pwd", "cd", "date", "whoami", "id", "uname", "hostname",
-  "groups", "uptime", "tty", "tput",
+  // NOTE: `printenv` is not in the table at all — with args it prints env
+  // vars (often secrets: OPENAI_API_KEY) into the transcript; bare it dumps
+  // ALL environment variables.
+  ["pwd"], ["cd"], ["date"], ["whoami"], ["id"], ["uname"], ["hostname"],
+  ["groups"], ["uptime"], ["tty"], ["tput"],
   // Disk / process inspection (read-only)
-  "df", "du", "free", "ps", "pgrep", "pidof",
+  ["df"], ["du"], ["free"], ["ps"], ["pgrep"], ["pidof"],
   // Command lookup
-  "which", "command", "type", "hash", "whence",
-  // Git (guarded by dangerous flag checks)
-  "git",
+  ["which"],
+  ["command", "-p runs the named command (command -p rm)"],
+  ["type"], ["hash"], ["whence"],
+  // Git (guarded by dangerous subcommand checks)
+  ["git", "subcommands write/execute (push --force, reset --hard, clean -fd, …)"],
   // Tmux (guarded by dangerous subcommand checks)
-  "tmux",
-  // Safe file/dir creation (no overwriting — guarded by no-redirect check)
-  "mkdir", "touch", "mktemp",
+  ["tmux", "send-keys / new-session can inject keystrokes or run shells"],
+  // File/dir creation (writes — guarded by the no-redirect check)
+  ["mkdir", "creates directories (write)"],
+  ["touch", "creates files / updates mtimes (write)"],
+  ["mktemp", "creates files (write)"],
   // Calculator
-  "bc", "expr", "factor", "yes",
+  ["bc"], ["expr"], ["factor"], ["yes"],
   // Process control (no fs/net/exec — a pure wait)
-  "sleep",
+  ["sleep", "kept on the full pipeline (conservative)"],
   // Wrapper commands (guarded by isWrapperRunningWrite check)
-  "xargs", "watch", "timeout", "parallel", "nice",
+  ["xargs", "delegates to an inner command (xargs rm)"],
+  ["watch", "delegates to an inner command"],
+  ["timeout", "delegates to an inner command (timeout rm)"],
+  ["parallel", "delegates to an inner command"],
+  ["nice", "delegates to an inner command"],
 ];
 
-/** O(1) first-word allowlist — pre-built from pattern strings. */
-const allowedBashCommands = new Set(allowedBashPatternStrings);
+/** O(1) first-word allowlist — pre-built from the table. */
+const allowedBashCommands = new Set(ALLOW_TABLE.map(([cmd]) => cmd));
 
 /**
- * Subset of allowed commands that are unconditionally safe — no flag-dependent
- * danger behavior. Used for the fast pre-check that skips tree-sitter parsing.
- * Commands like sed (-i), git (push --force), find (-delete), etc. are excluded.
+ * Unconditionally-safe subset: table entries without an exclusion reason.
+ * Used for the fast pre-check that skips tree-sitter parsing (FastAllowRule).
  */
-export const unconditionallySafeCommands = new Set([
-  // Inspection / read-only
-  // NOTE: `sort` is excluded — `sort -o file` / `--output=file` truncates/writes
-  // files. It stays in `allowedBashCommands`; SafetyRule + ShellEvaluator handle it.
-  "ls", "cat", "head", "tail", "wc", "file", "stat",
-  "uniq", "cut", "tr", "diff",
-  "tac", "rev", "nl", "fold", "expand", "unexpand", "fmt",
-  "join", "comm", "paste", "column", "seq",
-  // JSON querying (stdout only — no file writes, no exec capability;
-  // output redirection is shell-level and flagged by the redirect checks)
-  "jq",
-  // Hashing / binary inspection
-  "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
-  "hexdump", "od", "strings",
-  // Strings / formatting
-  "echo", "printf", "basename", "dirname", "realpath", "readlink",
-  "test", "true", "false", "read",
-  // System info (read-only, no file side effects)
-  "pwd", "cd", "date", "whoami", "id", "uname", "hostname",
-  "groups", "uptime", "tty", "tput",
-  // Disk / process inspection (read-only)
-  "df", "du", "free", "ps", "pgrep", "pidof",
-  // Command lookup
-  // NOTE: `command` is excluded — `command -p rm` executes rm (not a pure lookup).
-  // It stays in `allowedBashCommands` for the isSimple check; SafetyRule handles it.
-  "which", "type", "hash", "whence",
-  // Calculator
-  "bc", "expr", "factor", "yes",
-]);
+export const unconditionallySafeCommands = new Set(
+  ALLOW_TABLE.filter((entry) => entry[1] === undefined).map(([cmd]) => cmd),
+);
 
 /** Commands whose arguments include file/dir paths. */
 export const pathAwareCommands = new Set([
