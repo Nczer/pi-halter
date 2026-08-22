@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { PromptDecision, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
+import type { PromptDecision, PromptData, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
 import { PACKAGE_MANAGERS } from "./config";
 import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./renderers/tmux";
 
@@ -25,6 +25,53 @@ export interface BuiltPrompt {
   broaderPaths?: { label: string; dir: string }[];
   /** Whether the operation is a write (vs read) — used for accurate prompt text. */
   isWriteOp?: boolean;
+}
+
+/**
+ * Short target label for PromptData — one shape, used by the /dspa and
+ * /dspat widgets, their audit lines, and the /dspat disagreement stats.
+ * (The decision log has its own request-shaped targetOf, which also covers
+ * blocks; this is the prompt-shaped one.)
+ */
+export function pdTargetLabel(pd: PromptData): string {
+  return pd.type === "bash"
+    ? pd.command
+    : pd.type === "file"
+      ? `${pd.action} ${pd.resolved}`
+      : `${pd.server}/${pd.tool}`;
+}
+
+/**
+ * One-line "why did this prompt" summary (the useful half of PromptData).
+ * Used by the decision log (decision-log.ts).
+ */
+export function summarizePrompt(decision: PromptDecision): string {
+  const p = decision.promptData;
+  if (p.type === "bash") {
+    const parts: string[] = [];
+    if (p.credentialRule) parts.push(`credential ${p.credentialRule}`);
+    if (p.riskSeverity) parts.push(`risk:${p.riskSeverity} ${p.riskReasons.join("; ")}`);
+    if (p.hasUnsafePattern) parts.push("unsafe pattern");
+    // (unlisted): command approval is required but no segment carries a
+    // namable signature (e.g. a relative-path binary whose basename is
+    // allowlisted — the prompt still fires on the unallowlisted first word).
+    // Relative-path tools are named via their cwd-bound grant identity.
+    if (p.needsCommandApproval) {
+      const named = p.signatures.length > 0
+        ? p.signatures.slice(0, 3).join(",")
+        : (p.relativeToolIds?.length ? `${p.relativeToolIds.slice(0, 3).map(r => r.sig).join(",")} (unlisted)` : "(unlisted)");
+      parts.push(`cmd ${named}`);
+    }
+    if (p.needsPathApproval) parts.push(`outside ${p.outsideDirs.slice(0, 3).join(",")}`);
+    return parts.join("; ") || "unclassified";
+  }
+  if (p.type === "file") {
+    let s = p.isWriteOp ? "file write" : "file read";
+    if (p.outsideDir) s += ` outside ${p.outsideDir}`;
+    if (p.warnedRule) s += ` warn ${p.warnedRule}`;
+    return s;
+  }
+  return `mcp ${p.op}`;
 }
 
 /**

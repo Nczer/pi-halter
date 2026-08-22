@@ -25,6 +25,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DECISION_LOG_ENABLED } from "./config/logging";
 import { SETTINGS_PATH, readSettingsFile, writeSettings } from "./halter-settings";
+import { summarizePrompt } from "./prompt-builder";
 import type { Decision, PermissionRequest } from "./decision-engine";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -134,38 +135,10 @@ export function logDecision(request: PermissionRequest, decision: Decision): voi
   }
 }
 
+// The one-line prompt summary lives in prompt-builder (summarizePrompt);
+// targetOf stays here — it covers the REQUEST shape, including blocks.
 function targetOf(request: PermissionRequest): string {
   if (request.type === "bash") return request.command;
   if (request.type === "file") return request.filePath;
   return `${request.server}/${request.tool}`;
-}
-
-/** One-line "why did this prompt" summary (the useful half of PromptData). */
-function summarizePrompt(decision: Extract<Decision, { kind: "prompt" }>): string {
-  const p = decision.promptData;
-  if (p.type === "bash") {
-    const parts: string[] = [];
-    if (p.credentialRule) parts.push(`credential ${p.credentialRule}`);
-    if (p.riskSeverity) parts.push(`risk:${p.riskSeverity} ${p.riskReasons.join("; ")}`);
-    if (p.hasUnsafePattern) parts.push("unsafe pattern");
-    // (unlisted): command approval is required but no segment carries a
-    // namable signature (e.g. a relative-path binary whose basename is
-    // allowlisted — the prompt still fires on the unallowlisted first word).
-    // Relative-path tools are named via their cwd-bound grant identity.
-    if (p.needsCommandApproval) {
-      const named = p.signatures.length > 0
-        ? p.signatures.slice(0, 3).join(",")
-        : (p.relativeToolIds?.length ? `${p.relativeToolIds.slice(0, 3).map(r => r.sig).join(",")} (unlisted)` : "(unlisted)");
-      parts.push(`cmd ${named}`);
-    }
-    if (p.needsPathApproval) parts.push(`outside ${p.outsideDirs.slice(0, 3).join(",")}`);
-    return parts.join("; ") || "unclassified";
-  }
-  if (p.type === "file") {
-    let s = p.isWriteOp ? "file write" : "file read";
-    if (p.outsideDir) s += ` outside ${p.outsideDir}`;
-    if (p.warnedRule) s += ` warn ${p.warnedRule}`;
-    return s;
-  }
-  return `mcp ${p.op}`;
 }

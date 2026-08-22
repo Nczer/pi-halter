@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Decision } from "./decision-engine";
 import type { Store } from "./store";
-import { buildPrompt } from "./prompt-builder";
+import { buildPrompt, pdTargetLabel } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
 import { updateWidget } from "./widget";
 import { RuleGenerator } from "./rule-generator";
@@ -161,13 +161,7 @@ export async function showPrompt(
   if (dspatVerdict) {
     const approved =
       result === "yes" || result === "always" || result === "alwaysPaths" || result === "alwaysFile";
-    const target =
-      pd.type === "bash"
-        ? pd.command
-        : pd.type === "file"
-          ? `${pd.action} ${pd.resolved}`
-          : `${pd.server}/${pd.tool}`;
-    recordDspatOutcome(dspatVerdict.model, dspatVerdict.approve === "approve", approved, target);
+    recordDspatOutcome(dspatVerdict.model, dspatVerdict.approve === "approve", approved, pdTargetLabel(pd));
     updateDspatWidget(ctx);
   }
 

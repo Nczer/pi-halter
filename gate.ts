@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { PermissionRequest, Decision, PromptData } from "./decision-engine";
+import type { PermissionRequest, Decision } from "./decision-engine";
 import { decide } from "./decision-engine";
+import { pdTargetLabel } from "./prompt-builder";
 import { logDecision } from "./decision-log";
 import { showPrompt, type DspaFallthrough } from "./prompt-flow";
 import type { Store } from "./store";
@@ -63,15 +64,6 @@ type RejectHandler = (
  *   (avoids a second decide() call when the handler needed the decision anyway,
  *   e.g. to gate pre-validation reads on the outcome).
  */
-/** Short target label for /dspa widgets and audit lines. */
-function dspaTarget(pd: PromptData): string {
-  return pd.type === "bash"
-    ? pd.command
-    : pd.type === "file"
-      ? `${pd.action} ${pd.resolved}`
-      : `${pd.server}/${pd.tool}`;
-}
-
 /**
  * /dspa attempt: hard gate → live judge → auto-allow (approve + low risk).
  * Returns the verdict when it was not auto-allowed (for the fall-through
@@ -97,7 +89,7 @@ async function tryDspaAutoAllow(
     } catch {
       /* toast must never break the allow */
     }
-    recordDspaAutoAllowed(verdict.model, dspaTarget(pd));
+    recordDspaAutoAllowed(verdict.model, pdTargetLabel(pd));
     updateDspaWidget(ctx);
     return { autoAllowed: true, fallthrough: { gate: gateResult, verdict } };
   }
