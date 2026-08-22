@@ -5,7 +5,6 @@ import { createStore } from "../store";
 import {
   getTmuxSubcommand,
   extractTmuxSendKeys,
-  isTmuxSendKeysSafe,
   tmuxNewSessionRunsCommand,
   TMUX_SAFE_SUBCOMMANDS,
 } from "../analysis/tmux-helpers";
@@ -93,9 +92,11 @@ describe("tmux: safe subcommands with socket/alias flags (auto-allow)", () => {
 });
 
 describe("tmux: dangerous subcommands (prompt)", () => {
+  // send-keys is NOT in this table — it is not a danger pattern anymore.
+  // Its PAYLOAD is analyzed by the full pipeline (see the send-keys payload
+  // describes below): non-allowlisted payloads prompt via the simple bar,
+  // dangerous payloads prompt with [TmuxPayload] risk reasons.
   const dangerous = [
-    { cmd: "tmux send-keys -t foo hello Enter", reason: "keystroke injection" },
-    { cmd: "tmux -S /tmp/x.sock send-keys C-c", reason: "keystroke injection (socket)" },
     { cmd: "tmux run-shell 'echo hello'", reason: "code exec on server" },
     { cmd: "tmux pipe-pane -t foo 'tee /tmp/out'", reason: "shell command" },
     { cmd: "tmux respawn-pane -t foo -c 'bash'", reason: "arbitrary command" },
@@ -198,9 +199,6 @@ describe("tmux: send-keys prompts for dangerous keys", () => {
     "tmux send-keys -t foo git clean -fd Enter",
     "tmux send-keys -t foo git reset --hard Enter",
     "tmux send-keys -t foo git push --force Enter",
-    // Unknown command (not in allowlist)
-    "tmux send-keys -t foo hello world Enter",
-    "tmux send-keys -t foo ./script.sh Enter",
     // Dangerous context patterns
     "tmux send-keys -t foo sed -i s/foo/bar/g file Enter",
     "tmux send-keys -t foo perl -pi -e script file Enter",
@@ -211,6 +209,26 @@ describe("tmux: send-keys prompts for dangerous keys", () => {
     const { analysis, decision: dec } = await decision(cmd);
     expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(false);
     expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
+    expect(isPrompt(dec), `${cmd}: prompt`).toBe(true);
+  });
+});
+
+describe("tmux: send-keys prompts for non-allowlisted payloads", () => {
+  // The payload's first word isn't in the allowlist: it prompts via the
+  // simple bar (isSimple = false), NOT via a danger pattern — same as the
+  // identical command run directly.
+  const nonAllowlisted = [
+    "tmux send-keys -t foo hello world Enter",
+    "tmux send-keys -t foo ./script.sh Enter",
+    "tmux send-keys -t foo htop Enter",
+    "tmux -S /tmp/x.sock send-keys C-c",
+    "tmux send-keys -t foo C-c",
+  ];
+
+  it.each(nonAllowlisted)("%s", async (cmd) => {
+    const { analysis, decision: dec } = await decision(cmd);
+    expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(false);
+    expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(false);
     expect(isPrompt(dec), `${cmd}: prompt`).toBe(true);
   });
 });
@@ -229,7 +247,10 @@ describe("tmux: send-keys with write redirect in keys (prompt)", () => {
   });
 });
 
-describe("tmux: send-keys with subshell in keys (prompt)", () => {
+describe("tmux: send-keys payloads with command substitution (prompt)", () => {
+  // A payload chunk with $(…) / `…` isn't simple → prompt via the simple
+  // bar — exactly like the same chunk run directly (which also prompts with
+  // hasUnsafePattern = false).
   const subshellKeys = [
     "tmux send-keys -t foo $(whoami) Enter",
     "tmux send-keys -t foo `pwd` Enter",
@@ -238,7 +259,6 @@ describe("tmux: send-keys with subshell in keys (prompt)", () => {
   it.each(subshellKeys)("%s", async (cmd) => {
     const { analysis, decision: dec } = await decision(cmd);
     expect(analysis.safety.isSimple, `${cmd}: allSimple`).toBe(false);
-    expect(analysis.safety.hasUnsafePattern, `${cmd}: hasUnsafePattern`).toBe(true);
     expect(isPrompt(dec), `${cmd}: prompt`).toBe(true);
   });
 });
@@ -285,10 +305,11 @@ describe("tmux: edge cases", () => {
     expect(isPrompt(dec)).toBe(true);
   });
 
-  it("send-keys with no keys prompts", async () => {
+  it("send-keys with no payload auto-allows (harmless no-op)", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo");
-    expect(analysis.safety.isSimple).toBe(false);
-    expect(isPrompt(dec)).toBe(true);
+    // No keys → no payload to judge (tmux itself rejects the call).
+    expect(analysis.safety.isSimple).toBe(true);
+    expect(isAutoAllow(dec)).toBe(true);
   });
 
   it("send-keys with only Enter auto-allows", async () => {
@@ -301,8 +322,8 @@ describe("tmux: edge cases", () => {
 
   it("send-keys with multiple safe commands chained", async () => {
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo ls && echo done Enter");
-    // The keys contain && which is a shell operator; the first command is 'ls'
-    // isTmuxSendKeysSafe checks the first token only
+    // The payload is split on Enter and each chunk (ls / echo done) is
+    // analyzed with the same bar as a direct command — both simple.
     expect(analysis.safety.isSimple).toBe(true);
     expect(isAutoAllow(dec)).toBe(true);
   });
@@ -333,24 +354,25 @@ describe("tmux: edge cases", () => {
 
   it("nested tmux send-keys (send-keys sending send-keys)", async () => {
     // tmux send-keys -t foo 'tmux send-keys -t bar ls' Enter
-    // The outer keys are the string 'tmux send-keys -t bar ls'
-    // First token after quote strip: tmux → isAllowedCommand("tmux") = true
-    // Then checks isTmuxDangerous on the inner command
+    // The outer payload is 'tmux send-keys -t bar ls' — a chunk that is
+    // itself a send-keys, so the inner payload (ls) is analyzed recursively
+    // (depth-capped at 3 in analyzeTmuxSendKeysPayload).
     const { analysis, decision: dec } = await decision("tmux send-keys -t foo 'tmux send-keys -t bar ls' Enter");
-    // Inner: tmux send-keys with safe keys (ls) → safe
+    // Inner payload ls is simple → auto-allow
     expect(analysis.safety.isSimple).toBe(true);
     expect(isAutoAllow(dec)).toBe(true);
   });
 });
 
 describe("tmux: risk reason content", () => {
-  it("send-keys with dangerous keys shows keys in reason", async () => {
+  it("send-keys with dangerous payload shows the tagged payload reason", async () => {
     const { decision: dec } = await decision("tmux send-keys -t foo rm -rf / Enter");
     expect(dec.kind).toBe("prompt");
     if (dec.kind === "prompt" && dec.promptData.type === "bash") {
       const reasons = dec.promptData.riskReasons;
-      expect(reasons.some(r => r.includes("send-keys"))).toBe(true);
-      expect(reasons.some(r => r.includes("→"))).toBe(true);
+      // The payload chunk (rm -rf /) is analyzed like a direct command and its
+      // reason is folded in tagged [TmuxPayload].
+      expect(reasons.some(r => r.includes("[TmuxPayload]") && r.includes("rm"))).toBe(true);
     }
   });
 
@@ -488,60 +510,6 @@ describe("extractTmuxSendKeys", () => {
 
   it("handles quoted keys", () => {
     expect(extractTmuxSendKeys("tmux send-keys -t foo 'hello world' Enter")).toBe("'hello world' Enter");
-  });
-});
-
-describe("isTmuxSendKeysSafe", () => {
-  it("empty keys (Enter only) is safe", () => {
-    expect(isTmuxSendKeysSafe("Enter")).toBe(true);
-  });
-
-  it("whitespace + Enter is safe", () => {
-    expect(isTmuxSendKeysSafe("   Enter")).toBe(true);
-  });
-
-  it("safe command is safe", () => {
-    expect(isTmuxSendKeysSafe("ls Enter")).toBe(true);
-  });
-
-  it("dangerous command is unsafe", () => {
-    expect(isTmuxSendKeysSafe("rm -rf / Enter")).toBe(false);
-  });
-
-  it("dangerous git subcommand is unsafe", () => {
-    expect(isTmuxSendKeysSafe("git clean -fd Enter")).toBe(false);
-  });
-
-  it("safe git subcommand is safe", () => {
-    expect(isTmuxSendKeysSafe("git status Enter")).toBe(true);
-  });
-
-  it("quoted command strips quotes before checking", () => {
-    expect(isTmuxSendKeysSafe("'ls' Enter")).toBe(true);
-  });
-
-  it("nested tmux send-keys with safe keys is safe", () => {
-    expect(isTmuxSendKeysSafe("tmux send-keys -t bar ls Enter")).toBe(true);
-  });
-
-  it("nested tmux send-keys with dangerous keys is unsafe", () => {
-    expect(isTmuxSendKeysSafe("tmux send-keys -t bar rm -rf / Enter")).toBe(false);
-  });
-
-  it("control character C-c is unsafe", () => {
-    expect(isTmuxSendKeysSafe("C-c")).toBe(false);
-  });
-
-  it("control character C-d is unsafe", () => {
-    expect(isTmuxSendKeysSafe("C-d")).toBe(false);
-  });
-
-  it("write redirect in keys is unsafe", () => {
-    expect(isTmuxSendKeysSafe("ls > out.txt Enter")).toBe(false);
-  });
-
-  it("subshell in keys is unsafe", () => {
-    expect(isTmuxSendKeysSafe("$(whoami) Enter")).toBe(false);
   });
 });
 

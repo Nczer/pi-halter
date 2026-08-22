@@ -711,8 +711,8 @@ describe("P3: git config write forms prompt (persistent config = code exec)", ()
 // ──────────────────────────────────────────────────────────────────────
 // P4: tmux send-keys delegation — the send-keys payload is typed into a
 // pane's shell and must meet the same auto-allow bar as a direct command.
-// The sync quick check (isTmuxSendKeysSafe) predates wrapper/prefix
-// delegation, so analyzeCommand recursively analyzes the payload.
+// analyzeCommand recursively analyzes each Enter-terminated chunk with the
+// full pipeline (wrapper/prefix delegation included).
 // ──────────────────────────────────────────────────────────────────────
 describe("P4: tmux send-keys payload evaluated like a direct command", () => {
   it("timeout 5 curl via send-keys → prompts (wrapper hides network cmd)", async () => {

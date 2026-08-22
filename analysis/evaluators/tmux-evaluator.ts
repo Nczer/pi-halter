@@ -3,8 +3,6 @@ import { EvalCache, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
 import {
   getTmuxSubcommand,
-  extractTmuxSendKeys,
-  isTmuxSendKeysSafe,
   tmuxNewSessionRunsCommand,
   TMUX_SAFE_SUBCOMMANDS,
   TMUX_DANGEROUS_DESCRIPTIONS,
@@ -23,6 +21,15 @@ export const TmuxEvaluator: RiskEvaluator = {
     if (firstWord !== "tmux") return b.build();
 
     const tmuxSub = getTmuxSubcommand(segment);
+
+    // send-keys: the evaluator does NOT judge payload content. The payload is
+    // analyzed by the full pipeline (analyzeTmuxSendKeysPayload in
+    // command-analysis.ts) — each Enter-terminated chunk meets the same
+    // auto-allow bar as a direct command, with per-chunk reasons folded into
+    // the command risk tagged [TmuxPayload]. A send-keys with no payload is a
+    // harmless no-op (tmux itself rejects it).
+    if (tmuxSub === "send-keys") return b.build();
+
     let isDangerous = !tmuxSub || !TMUX_SAFE_SUBCOMMANDS.has(tmuxSub);
 
     // new-session/new are safe only when flag-only: an optional [shell-command]
@@ -36,26 +43,12 @@ export const TmuxEvaluator: RiskEvaluator = {
     }
 
     if (isDangerous) {
-      // send-keys inherits session auto-allow: safe keys → auto-allow, unsafe keys → prompt
-      if (tmuxSub === "send-keys") {
-        const keys = extractTmuxSendKeys(segment);
-        if (!keys || !isTmuxSendKeysSafe(keys)) {
-          b.setHigh();
-          b.markDanger();
-        }
-      } else {
-        b.setHigh();
-        b.markDanger();
-      }
+      b.setHigh();
+      b.markDanger();
       if (tmuxSub) {
         const desc = TMUX_DANGEROUS_DESCRIPTIONS[tmuxSub]
           || "not in safe allowlist — may execute code or modify sessions";
-        let reason = `tmux ${tmuxSub} (${desc})`;
-        if (tmuxSub === "send-keys") {
-          const keys = extractTmuxSendKeys(segment);
-          if (keys) reason += `\n  → ${keys}`;
-        }
-        b.addReason(reason);
+        b.addReason(`tmux ${tmuxSub} (${desc})`);
       }
     }
 
