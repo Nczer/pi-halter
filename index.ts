@@ -5,7 +5,8 @@ import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
 import { isDspatActive, resetDspat, setDspatActive, updateDspatWidget } from "./dspat-mode";
 import { isDspaActive, resetDspa, setDspaActive, updateDspaWidget } from "./dspa-mode";
 import { isDecisionLogEnabled, setDecisionLogEnabled } from "./decision-log";
-import { resetJudgeCache } from "./judge";
+import { readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, type JudgeSettings } from "./judge";
+import { judgeStatus } from "./judge-prompt";
 import { store } from "./store";
 
 // ── Main extension ──
@@ -80,6 +81,75 @@ export default async function halterExtension(pi: ExtensionAPI) {
           : "dspa OFF — all prompts restored",
         "info",
       );
+    },
+  });
+
+  // ── /judge command ──
+  pi.registerCommand("judge", {
+    description:
+      "Judge settings: bare = show; 'on|off', 'model <provider/id|session>', 'thinking <off|minimal|low|medium|high|xhigh|max>', 'timeout <ms>'",
+    handler: async (args, ctx) => {
+      const arg = (args ?? "").trim();
+      const show = (s = readJudgeSettings()): void => {
+        const js = judgeStatus(ctx);
+        ctx.ui.notify(
+          `Judge: ${s.enabled ? "on" : "off"} — model: ${js.modelLabel ?? "(unresolvable)"} — thinking: ${s.thinking} — timeout: ${s.timeoutMs}ms (${js.state === "invalid" ? `⚠ ${js.reason}` : "~/.pi/agent/halter.json"})`,
+          js.state === "invalid" ? "warning" : "info",
+        );
+      };
+      if (!arg) {
+        show();
+        return;
+      }
+      const [cmd, ...rest] = arg.split(/\s+/);
+      const value = rest.join(" ").trim();
+      switch (cmd) {
+        case "on":
+        case "enable":
+          writeJudgeSettings({ enabled: true });
+          show();
+          return;
+        case "off":
+        case "disable":
+          writeJudgeSettings({ enabled: false });
+          show();
+          return;
+        case "model":
+          if (!value) { show(); return; }
+          if (value.toLowerCase() === "session") {
+            writeJudgeSettings({ provider: null, model: null });
+          } else {
+            const slash = value.indexOf("/");
+            if (slash <= 0) {
+              ctx.ui.notify("Judge: model must be '<provider>/<id>' or 'session'", "warning");
+              return;
+            }
+            writeJudgeSettings({ provider: value.slice(0, slash), model: value.slice(slash + 1) });
+          }
+          show();
+          return;
+        case "thinking": {
+          if (!value || !THINKING_VALUES.has(value.toLowerCase())) {
+            ctx.ui.notify(`Judge: thinking must be one of ${[...THINKING_VALUES].join(" | ")}`, "warning");
+            return;
+          }
+          writeJudgeSettings({ thinking: value.toLowerCase() as JudgeSettings["thinking"] });
+          show();
+          return;
+        }
+        case "timeout": {
+          const ms = Number(value);
+          if (!Number.isFinite(ms) || ms <= 0) {
+            ctx.ui.notify("Judge: timeout must be a positive number of ms", "warning");
+            return;
+          }
+          writeJudgeSettings({ timeoutMs: Math.round(ms) });
+          show();
+          return;
+        }
+        default:
+          show();
+      }
     },
   });
 
