@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { filterSubPaths, groupCommandVariants } from "../widget";
+import { describe, it, expect, beforeEach } from "vitest";
+import { filterSubPaths, groupCommandVariants, updateWidget } from "../widget";
+import { store } from "../store";
 
 describe("filterSubPaths", () => {
   it("removes sub-paths of parent directories", () => {
@@ -59,5 +60,59 @@ describe("groupCommandVariants", () => {
 
   it("returns empty array for empty input", () => {
     expect(groupCommandVariants([])).toEqual([]);
+  });
+});
+
+describe("updateWidget", () => {
+  // The widget reads the module singleton store; tests in this file own it.
+  let widgetFn: ((tui: unknown, theme: unknown) => { render: (w: number) => string[]; invalidate: () => void }) | null;
+  let setWidgetCalled = false;
+  const theme = { fg: (_style: string, text?: string) => text ?? "" };
+  const ctx = {
+    ui: {
+      setWidget: (_id: string, fn: unknown) => {
+        setWidgetCalled = true;
+        widgetFn = (fn ?? null) as typeof widgetFn;
+      },
+    },
+  } as never;
+
+  beforeEach(() => {
+    store.reset();
+    widgetFn = null;
+    setWidgetCalled = false;
+  });
+
+  it("cwd-bound grants render on their own Cwd line with the bound cwd", () => {
+    store.addAllowed({ bashSigCwds: [{ sig: "./node_modules/.bin/mytool --do", cwd: "/home/u/proj1" }] });
+    updateWidget(ctx);
+    expect(widgetFn).not.toBeNull();
+    const lines = widgetFn!(null, theme).render(200);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe("Cwd: ./node_modules/.bin/mytool --do @ /home/u/proj1");
+  });
+
+  it("keeps unbound Bash sigs and cwd-bound grants on separate lines", () => {
+    store.addAllowed({
+      bashSigs: ["du"],
+      bashSigCwds: [{ sig: "./node_modules/.bin/mytool --do", cwd: "/home/u/proj1" }],
+    });
+    updateWidget(ctx);
+    const lines = widgetFn!(null, theme).render(200);
+    expect(lines).toContain("Bash: du");
+    expect(lines).toContain("Cwd: ./node_modules/.bin/mytool --do @ /home/u/proj1");
+  });
+
+  it("cwd-bound grants alone keep the widget visible", () => {
+    store.addAllowed({ bashSigCwds: [{ sig: "./tool", cwd: "/a" }] });
+    updateWidget(ctx);
+    expect(widgetFn).not.toBeNull();
+    expect(widgetFn!(null, theme).render(200)).toHaveLength(1);
+  });
+
+  it("hides the widget with no rules at all", () => {
+    updateWidget(ctx);
+    expect(setWidgetCalled).toBe(true);
+    expect(widgetFn).toBeNull();
   });
 });

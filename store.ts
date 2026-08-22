@@ -39,6 +39,8 @@ export interface Store {
   getLastAbort(command: string): number | null;
   incrementPromptCount(): { over: boolean; count: number };
   listAllowedBash(): Set<string>;
+  /** Cwd-bound bash grants (widget renders these — the only bash entries
+   *  with no unbound twin in the store; see rule-generator). */
   listAllowedBashCwds(): Array<{ sig: string; cwd: string }>;
   listAllowedReadDirs(): Set<string>;
   listAllowedWriteDirs(): Set<string>;

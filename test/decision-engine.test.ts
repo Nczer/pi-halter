@@ -1556,6 +1556,25 @@ describe("Bash: cwd-bound exact-sig grants for relative-path tools (log FP clust
 		expect(d2.kind).toBe("auto-allow");
 	});
 
+	it("honest store: the relative sig is stored cwd-bound only, no inert unbound twin", async () => {
+		const store = createStore();
+		const d1 = await decide({ type: "bash", command: tool, cwd }, store);
+		expect(d1.kind).toBe("prompt");
+		if (d1.kind !== "prompt" || d1.promptData.type !== "bash") throw new Error("expected prompt");
+		const sig = d1.promptData.relativeToolIds[0].sig;
+		const rules = RuleGenerator.generatePrimaryRules(d1.promptData);
+		// The grant exists ONLY as a cwd-bound entry. (An unbound twin would
+		// never match — SafetyRule refuses unbound grants on commands with
+		// relative-path segments — and would misrepresent the rule.)
+		expect(rules.bashSigCwds?.some((r) => r.sig === sig && r.cwd === cwd)).toBe(true);
+		expect(rules.bashSigs ?? []).not.toContain(sig);
+		store.addAllowed(rules);
+		expect(store.listAllowedBashCwds().some((r) => r.sig === sig && r.cwd === cwd)).toBe(true);
+		expect(store.listAllowedBash()).not.toContain(sig);
+		// And the round trip still works — the cwd-bound grant is what approves.
+		expect((await decide({ type: "bash", command: tool, cwd }, store)).kind).toBe("auto-allow");
+	});
+
 	it("grant is base-bound: the same command from a different cwd still prompts", async () => {
 		const store = createStore();
 		const d1 = await decide({ type: "bash", command: tool, cwd }, store);

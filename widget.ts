@@ -61,13 +61,21 @@ export function updateWidget(ctx: ExtensionContext): void {
   const readDirItems = filterSubPaths([...store.listAllowedReadDirs()]);
   const writeDirItems = filterSubPaths([...store.listAllowedWriteDirs()]);
   const mcpServerItems = [...store.listAllowedMcpServers()];
+  const cwdItems = store
+    .listAllowedBashCwds()
+    .map(({ sig, cwd }) => `${sig} @ ${cwd}`);
 
   // Merge dirs + paths; since write implies read, R/W paths don't also appear in R
   const allReadPaths = filterSubPaths([...readDirItems, ...readPathItems]);
   const allWritePaths = filterSubPaths([...writeDirItems, ...writePathItems]);
   const readOnlyPaths = allReadPaths.filter(p => !allWritePaths.some(wp => p === wp || p.startsWith(wp + "/")));
 
-  const hasSessionRules = bashItems.length > 0 || readOnlyPaths.length > 0 || allWritePaths.length > 0 || mcpServerItems.length > 0;
+  const hasSessionRules =
+    bashItems.length > 0 ||
+    readOnlyPaths.length > 0 ||
+    allWritePaths.length > 0 ||
+    mcpServerItems.length > 0 ||
+    cwdItems.length > 0;
 
   if (!hasSessionRules) {
     ctx.ui.setWidget("halter", undefined);
@@ -90,6 +98,11 @@ export function updateWidget(ctx: ExtensionContext): void {
       }
       if (mcpServerItems.length > 0) {
         baseLines.push(theme.fg("muted", "MCP:") + " " + theme.fg("dim", mcpServerItems.map(s => `${s}:*`).join(", ")));
+      }
+      if (cwdItems.length > 0) {
+        // Cwd-bound bash grants (relative-path tools): shown with the cwd
+        // they bind to, since the same sig is a different grant elsewhere.
+        baseLines.push(theme.fg("muted", "Cwd:") + " " + theme.fg("dim", cwdItems.join(" ")));
       }
     }
 
