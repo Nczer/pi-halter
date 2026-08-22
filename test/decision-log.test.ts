@@ -79,6 +79,20 @@ describe("decision log", () => {
 		expect(new Date(entry.ts).toString()).not.toBe("Invalid Date");
 	});
 
+	it("writes the dsp mode tag when passed; untagged lines carry no mode key", () => {
+		// The dspa judge auto-allow line shape (gate.ts): auto-allow + audit reason + tag.
+		logDecision(
+			{ type: "bash", command: "make test", cwd: tmp } as BashRequest,
+			{ kind: "auto-allow", reason: "dspa: judge approved (m-test)" },
+			"dspa",
+		);
+		logDecision({ type: "bash", command: "pwd", cwd: tmp } as BashRequest, { kind: "auto-allow" });
+		const [tagged, plain] = lines(logFile);
+		expect(tagged).toMatchObject({ kind: "auto-allow", mode: "dspa", reason: "dspa: judge approved (m-test)" });
+		expect(plain.mode).toBeUndefined();
+		expect("mode" in plain).toBe(false);
+	});
+
 	it("logs a block decision with the reason", async () => {
 		await gate({ type: "bash", command: "cat .ssh/id_rsa", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
 		const [entry] = lines(logFile);

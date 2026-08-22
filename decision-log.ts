@@ -62,11 +62,26 @@ export const DEFAULT_LOG_FILE = path.join(here, ".log", "decisions.jsonl");
 export const MAX_LOG_BYTES = 5 * 1024 * 1024;
 const MAX_TARGET_LEN = 1000;
 
+/**
+ * The dsp regime a decision was made under — present only where a judge
+ * mode actually participated: a prompt shown while /dspa or /dspat was
+ * active (the modes are exclusive), or the synthetic dspa judge
+ * auto-allow line. Absent = the manual regime. The dsp bypass regime
+ * never reaches the log — the gate (and thus the log) is skipped.
+ */
+export type DspModeTag = "dspa" | "dspat";
+
 export interface DecisionLogEntry {
   /** ISO timestamp. */
   ts: string;
   tool: "bash" | "file" | "mcp";
   kind: Decision["kind"];
+  /**
+   * The dsp regime this decision was made under; absent = manual regime.
+   * A regime marker, not verdict content (see the NOTE below).
+   */
+  mode?: DspModeTag;
+
   /** Block reason, or a one-line summary of why a prompt was needed; null for auto-allow. */
   reason: string | null;
   /** Bash command (truncated), file path, or "server/tool". */
@@ -81,6 +96,8 @@ export interface DecisionLogEntry {
  * change between sessions — so verdict + human-decision stats stay
  * session-scoped (dspat-mode.ts) and never accumulate cross-session.
  * This log measures the GATE's decisions, which are model-independent.
+ * The `mode` tag (DspModeTag) marks which judge mode a prompt was shown
+ * under — it is a regime marker, not verdict content.
  */
 
 /** Resolve the active log file. null = logging disabled. */
@@ -94,8 +111,16 @@ export function resolveLogPath(): string | null {
 /**
  * Append one decision to the JSONL log. Never throws — logging problems are
  * silently dropped; the gate's behavior must not depend on disk state.
+ *
+ * @param mode - dsp regime tag (see DspModeTag); omit for the manual regime.
+ *   undefined is dropped by JSON.stringify, so untagged lines carry no
+ *   `mode` key at all.
  */
-export function logDecision(request: PermissionRequest, decision: Decision): void {
+export function logDecision(
+  request: PermissionRequest,
+  decision: Decision,
+  mode?: DspModeTag,
+): void {
   try {
     const file = resolveLogPath();
     if (!file) return;
@@ -104,6 +129,7 @@ export function logDecision(request: PermissionRequest, decision: Decision): voi
       ts: new Date().toISOString(),
       tool: request.type,
       kind: decision.kind,
+      mode,
       reason:
         decision.kind === "block"
           ? decision.reason
