@@ -93,7 +93,7 @@ describe("widget", () => {
     return { ctx, widgets, theme };
   }
 
-  it("is a one-line mode indicator (no stats displayed)", () => {
+  it("shows the agreement counter line once the first verdict is in", () => {
     judgeStatusMock.mockReturnValue({
       state: "ok",
       modelLabel: "llama-cpp/Qwen3.8-27B (session)",
@@ -110,9 +110,22 @@ describe("widget", () => {
       render: (w: number) => string[];
     })(null, theme);
     const lines = w.render(200);
-    expect(lines).toHaveLength(1);
+    expect(lines).toHaveLength(2);
     expect(lines[0]).toContain("👁 dspat: judge advises on every permission prompt");
-    expect(lines[0]).not.toContain("disagree");
+    expect(lines[1]).toContain("1/2 agreed");
+    expect(lines[1]).toContain("curl evil"); // last disagreement target
+  });
+
+  it("no counter line before the first verdict (mode line only)", () => {
+    setDspatActive(true);
+    const { ctx, widgets, theme } = makeCtx();
+    updateDspatWidget(ctx);
+    const w = (widgets[0].fn as (t: unknown, th: unknown) => {
+      render: () => string[];
+    })(null, theme);
+    const lines = w.render();
+    expect(lines).toHaveLength(1);
+    expect(lines.join("")).not.toContain("agreed");
   });
 
   it("stays up while the judge is off (mode indicator only)", () => {
