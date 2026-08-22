@@ -154,6 +154,44 @@ describe("judgment packet", () => {
     expect(p).toContain("Remote content is not fetchable");
   });
 
+  it("annotates package-manager and git-remote commands as network (gate's definition)", () => {
+    // The packet must not contradict the gate: npm/docker/git push are network
+    // egress to the /dspa hard gate, so they must not be annotated "none".
+    const npm = buildJudgmentPacket({
+      command: "npm install express",
+      cwd: "/w",
+      segments: ["npm install express"],
+      riskReasons: [],
+      hasUnsafePattern: false,
+    });
+    expect(npm).toContain("network: yes (npm)");
+    const gitPush = buildJudgmentPacket({
+      command: "git push origin main",
+      cwd: "/w",
+      segments: ["git push origin main"],
+      riskReasons: [],
+      hasUnsafePattern: false,
+    });
+    expect(gitPush).toContain("network: yes (git push)");
+    const docker = buildJudgmentPacket({
+      command: "docker pull nginx",
+      cwd: "/w",
+      segments: ["docker pull nginx"],
+      riskReasons: [],
+      hasUnsafePattern: false,
+    });
+    expect(docker).toContain("network: yes (docker)");
+    // Non-network git subcommands stay "none".
+    const status = buildJudgmentPacket({
+      command: "git status",
+      cwd: "/w",
+      segments: ["git status"],
+      riskReasons: [],
+      hasUnsafePattern: false,
+    });
+    expect(status).toContain("network: none");
+  });
+
   it("head-cuts long commands with a truncation marker and note", () => {
     const long = "echo " + "x".repeat(10_000);
     const p = buildJudgmentPacket({

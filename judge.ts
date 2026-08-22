@@ -31,6 +31,7 @@ import type {
   TextContent,
 } from "@earendil-works/pi-ai";
 import { SETTINGS_PATH } from "./decision-log";
+import { NETWORK_COMMANDS, GIT_NETWORK_SUBCOMMANDS, NETWORK_URL_RE } from "./config";
 
 // ── Settings ──
 
@@ -219,10 +220,8 @@ const REASONS_MAX = 10;
 const SEGMENTS_MAX = 24;
 const SEGMENT_MAX_CHARS = 120;
 
-const NETWORK_COMMANDS = new Set([
-  "curl", "wget", "nc", "ncat", "ssh", "scp", "rsync", "sftp", "ftp",
-]);
-const URL_RE = /https?:\/\/[^\s"'`)\]]+/g;
+/** Global variant of the shared network-URL pattern (match needs /g). */
+const URL_RE = new RegExp(NETWORK_URL_RE.source, "g");
 
 function headCut(text: string, max: number): { text: string; cut: boolean } {
   return text.length <= max
@@ -230,11 +229,20 @@ function headCut(text: string, max: number): { text: string; cut: boolean } {
     : { text: text.slice(0, max), cut: true };
 }
 
+/**
+ * Network annotation for the packet — the gate's own network definition
+ * (shared NETWORK_COMMANDS), so `npm install` is never annotated "none".
+ */
 function detectNetwork(input: JudgmentBashInput): string {
   const hits = new Set<string>();
   for (const seg of input.segments) {
-    const first = seg.trim().split(/\s+/)[0]?.toLowerCase();
-    if (first && NETWORK_COMMANDS.has(first)) hits.add(first);
+    const words = seg.trim().split(/\s+/);
+    const first = words[0]?.toLowerCase();
+    if (!first) continue;
+    if (NETWORK_COMMANDS.has(first)) hits.add(first);
+    if (first === "git" && GIT_NETWORK_SUBCOMMANDS.has(words[1]?.toLowerCase() ?? "")) {
+      hits.add(`git ${words[1]}`);
+    }
   }
   const urls = input.command.match(URL_RE);
   if (urls) for (const u of [...new Set(urls)].slice(0, 3)) hits.add(u);

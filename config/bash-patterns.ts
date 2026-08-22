@@ -194,6 +194,28 @@ export const SCRIPT_INTERPRETERS = new Set([
 /** Package manager commands that use subcommands (npm install, cargo check, etc.). */
 export const PACKAGE_MANAGERS = new Set(["npm", "yarn", "pnpm", "npx", "cargo", "pip", "pip3", "uv", "go", "bun"]);
 
+/**
+ * First words that open a network connection — or fetch remote content that
+ * can execute (package managers), or deploy (container/cloud CLIs). ONE
+ * definition: the /dspa hard gate uses it to keep auto-allow offline, and the
+ * judge packet uses it for the network line. They must not drift — a command
+ * the gate calls network egress must not be annotated "network: none" in the
+ * packet the judge sees.
+ */
+export const NETWORK_COMMANDS = new Set([
+  "curl", "wget", "nc", "ncat", "ssh", "scp", "sftp", "ftp", "rsync",
+  // package managers: install = fetch + execute (postinstall/build scripts)
+  "npm", "npx", "pnpm", "yarn", "bun", "pip", "pip3", "uv",
+  // container + cloud CLIs: pull/deploy surface
+  "docker", "podman", "kubectl", "aws", "gcloud", "az",
+]);
+
+/** git subcommands that talk to a remote. */
+export const GIT_NETWORK_SUBCOMMANDS = new Set(["push", "fetch", "pull", "clone"]);
+
+/** http(s) URL in command text (non-global; gate matches first, packet iterates). */
+export const NETWORK_URL_RE = /https?:\/\/[^\s"'`)\]]+/;
+
 /** Pre-compiled regex for tee write check. */
 const TEE_WRITE_RE = /\btee\b.*\S/;
 

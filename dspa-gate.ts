@@ -31,22 +31,9 @@ import type { Store } from "./store";
 import { analyzeCommand } from "./analysis/command-analysis";
 import { expandTilde } from "./analysis/path-util";
 import { resolvePathReal } from "./analysis/path-analysis";
+import { NETWORK_COMMANDS, GIT_NETWORK_SUBCOMMANDS, NETWORK_URL_RE } from "./config";
 
 export type DspaGateResult = { ok: true } | { ok: false; reason: string };
-
-/** First words that open a network connection (auto-allow stays offline). */
-const NETWORK_COMMANDS = new Set([
-  "curl", "wget", "nc", "ncat", "ssh", "scp", "sftp", "ftp", "rsync",
-  // package managers: install = fetch + execute (postinstall/build scripts)
-  "npm", "npx", "pnpm", "yarn", "bun", "pip", "pip3", "uv",
-  // container + cloud CLIs: pull/deploy surface
-  "docker", "podman", "kubectl", "aws", "gcloud", "az",
-]);
-
-/** git subcommands that talk to a remote. */
-const GIT_NETWORK_SUBCOMMANDS = new Set(["push", "fetch", "pull", "clone"]);
-
-const URL_RE = /https?:\/\/[^\s"'`)\]]+/;
 
 /**
  * Command position obscured by variable indirection, subshell, or backtick
@@ -74,7 +61,7 @@ function networkHit(command: string, segments: string[]): string | null {
       return `git ${words[1]}`;
     }
   }
-  const url = command.match(URL_RE);
+  const url = command.match(NETWORK_URL_RE);
   if (url) return url[0].slice(0, 60);
   return null;
 }
