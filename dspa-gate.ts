@@ -80,10 +80,13 @@ export async function checkDspaGate(
     return { ok: true };
   }
 
-  // bash
-  const analysis = await analyzeCommand(pd.command, pd.cwd, {
-    isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
-  });
+  // bash — trust the analysis the decision was made from (single analysis
+  // per decision); re-analyze only for hand-constructed prompt data.
+  const analysis =
+    pd.analysis ??
+    (await analyzeCommand(pd.command, pd.cwd, {
+      isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+    }));
   if (analysis.hasParseError) return { ok: false, reason: "unparseable command" };
 
   const isInsideBase = (p: string) =>

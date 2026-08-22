@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { checkDspaGate } from "../dspa-gate";
+import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../store";
 import type {
   BashPromptData,
@@ -83,6 +84,20 @@ describe("file", () => {
 
   it("passes clean in-base writes", async () => {
     expect((await checkDspaGate(filePd(), store)).ok).toBe(true);
+  });
+});
+
+describe("carried analysis (single analysis per decision)", () => {
+  it("trusts the analysis the decision was made from instead of re-parsing", async () => {
+    const carried = await analyzeCommand("ls", BASE);
+    // Without it: the same prompt data re-parses the raw command and blocks.
+    const bare = await checkDspaGate(bashPd("rm -rf /"), store);
+    expect(bare.ok).toBe(false);
+    // With it: the gate judges the carried analysis. Production decisions
+    // always carry it, so this is the live path — the re-parse only exists
+    // for hand-constructed prompt data.
+    const withCarried = await checkDspaGate(bashPd("rm -rf /", { analysis: carried }), store);
+    expect(withCarried).toEqual({ ok: true });
   });
 });
 

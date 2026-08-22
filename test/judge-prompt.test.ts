@@ -257,6 +257,22 @@ describe("getJudgeExplanation", () => {
     expect(packet).not.toContain("## Script:");
   });
 
+  it("the packet uses the carried analysis instead of re-parsing (single analysis per decision)", async () => {
+    const calls: CapturedCall[] = [];
+    const { ctx } = makeCtx(fakeModel());
+    const carried = await analyzeCommand("ls -la carried-marker", tmp);
+    const pd = { ...makePd("f=rm; $f -rf ./build", tmp), analysis: carried };
+    await getJudgeExplanation(pd, ctx, createStore(), {
+      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    const packet = String(calls[0].context.messages[0].content);
+    // The static-analysis digest reflects the carried analysis (the one the
+    // decision was made from), not a re-parse of the raw command.
+    expect(packet).toContain("1. ls -la carried-marker");
+    expect(packet).toContain("network: none");
+  });
+
   it("an internal throw still resolves to '' (fail-safe)", async () => {
     const { ctx } = makeCtx(fakeModel());
     const r = await getJudgeExplanation(makePd("ls", tmp), ctx, createStore(), {
