@@ -2,10 +2,11 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PermissionRequest, Decision } from "./decision-engine";
 import { decide } from "./decision-engine";
 import { pdTargetLabel } from "./prompt-builder";
-import { logDecision } from "./decision-log";
+import { logDecision, type DspModeTag } from "./decision-log";
 import { showPrompt, type DspaFallthrough } from "./prompt-flow";
 import type { Store } from "./store";
 import { isDspaActive, recordDspaAutoAllowed, updateDspaWidget } from "./dspa-mode";
+import { isDspatActive } from "./dspat-mode";
 import { checkDspaGate } from "./dspa-gate";
 import { getJudgeVerdict, judgeStatus } from "./judge-prompt";
 import type { JudgeResult } from "./judge";
@@ -83,7 +84,7 @@ async function tryDspaAutoAllow(
   }
   const verdict = await getJudgeVerdict(pd, ctx, store);
   if (verdict && verdict.approve === "approve" && verdict.risk === "low") {
-    logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (${verdict.model})` });
+    logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (${verdict.model})` }, "dspa");
     try {
       ctx.ui.notify(`✓ Judge auto-allowed: ${verdict.explanation}`, "info");
     } catch {
@@ -131,7 +132,7 @@ export async function gate(
 
   // Decision log (JSONL): one line per tool call, including fail-closed
   // synthetic blocks. Fire-and-forget — logDecision never throws.
-  logDecision(request, decision);
+  logDecision(request, decision, dspModeTag(decision, ctx));
 
   if (decision.kind === "auto-allow") return;
 
@@ -156,6 +157,21 @@ export async function gate(
   }
 
   return;
+}
+
+/**
+ * The dsp regime tag for the decision log (see DspModeTag): a prompt shown
+ * while /dspa or /dspat was active is tagged with that mode (under /dspa it
+ * is a judge fall-through; under /dspat the prompt carried the verdict).
+ * Gate-only decisions — auto-allow, block, a prompt in manual mode, or any
+ * decision without a UI (where the judge modes never run) — stay untagged.
+ * The modes are exclusive (index.ts), so at most one applies.
+ */
+function dspModeTag(decision: Decision, ctx: ExtensionContext): DspModeTag | undefined {
+  if (decision.kind !== "prompt" || !ctx.hasUI) return undefined;
+  if (isDspaActive()) return "dspa";
+  if (isDspatActive()) return "dspat";
+  return undefined;
 }
 
 /**

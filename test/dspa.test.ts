@@ -16,6 +16,7 @@ import * as decisionEngine from "../decision-engine";
 import * as judgePrompt from "../judge-prompt";
 import * as promptFlow from "../prompt-flow";
 import { setDspaActive, resetDspa, getDspaStats } from "../dspa-mode";
+import { setDspatActive, resetDspat } from "../dspat-mode";
 import type { JudgeResult } from "../judge";
 
 vi.mock("../judge-prompt", () => ({
@@ -114,6 +115,7 @@ async function runGate(decision: Decision) {
 beforeEach(() => {
   vi.clearAllMocks();
   resetDspa();
+  resetDspat();
   fs.rmSync(tmpLog, { force: true });
   process.env.HALTER_DECISION_LOG = tmpLog;
 });
@@ -122,6 +124,7 @@ afterEach(() => {
   delete process.env.HALTER_DECISION_LOG;
   fs.rmSync(tmpLog, { force: true });
   resetDspa();
+  resetDspat();
   vi.restoreAllMocks();
 });
 
@@ -150,6 +153,7 @@ describe("auto-allow path", () => {
       const lines = logLines();
       expect(lines).toHaveLength(1);
       expect(lines[0].kind).toBe("auto-allow");
+      expect(lines[0].mode).toBe("dspa");
       expect(String(lines[0].reason)).toContain("dspa: judge approved (m-test)");
     } finally {
       spy.mockRestore();
@@ -182,6 +186,7 @@ describe("fall-through", () => {
     expect(fallthrough?.verdict?.approve).toBe("reject");
     expect(getDspaStats().autoAllowed).toBe(0);
     expect(logLines()[0].kind).toBe("prompt");
+    expect(logLines()[0].mode).toBe("dspa");
   });
 
   it("judge unavailable (null) → plain prompt, no verdict", async () => {
@@ -222,5 +227,50 @@ describe("fall-through", () => {
     expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
     expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
     expect(vi.mocked(promptFlow.showPrompt).mock.calls[0][3]).toBeUndefined();
+    expect(logLines()[0].mode).toBeUndefined();
+  });
+});
+
+describe("decision-log mode tag", () => {
+  it("dspat ON (dspa off) → prompt line tagged dspat", async () => {
+    setDspatActive(true);
+    await runGate(bashDecision("make test"));
+    expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+    const line = logLines()[0];
+    expect(line.kind).toBe("prompt");
+    expect(line.mode).toBe("dspat");
+  });
+
+  it("gate auto-allow under dspa is the gate's decision — untagged", async () => {
+    setDspaActive(true);
+    await runGate({ kind: "auto-allow" });
+    const line = logLines()[0];
+    expect(line.kind).toBe("auto-allow");
+    expect(line.mode).toBeUndefined();
+  });
+
+  it("no UI → judge modes never run → prompt line untagged", async () => {
+    setDspaActive(true);
+    const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(bashDecision("make test"));
+    try {
+      await gate(
+        { type: "bash", command: "make test", cwd: "/home/u/project" },
+        { hasUI: false } as any,
+        createStore(),
+        () => ({ block: true, reason: "no ui" }),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    const line = logLines()[0];
+    expect(line.kind).toBe("prompt");
+    expect(line.mode).toBeUndefined();
+  });
+
+  it("manual regime (no dsp mode) → prompt line untagged", async () => {
+    await runGate(bashDecision("make test"));
+    const line = logLines()[0];
+    expect(line.kind).toBe("prompt");
+    expect(line.mode).toBeUndefined();
   });
 });

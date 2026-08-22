@@ -83,8 +83,9 @@ export async function showPrompt(
   // /dspat (advisory): the judge runs automatically on every prompt type
   // (bash / file / mcp) and the prompt shows the full verdict (explanation
   // + suggestion). The human always takes the call; the verdict + decision
-  // feed the session stats (model-scoped, never persisted). Skipped when
-  // /dspa already supplied a verdict (same verdict, via the LRU cache).
+  // feed the session stats (model-scoped, never persisted). The
+  // `!dspa?.verdict` guard is defensive — the modes are exclusive
+  // (index.ts), so a dspa fall-through never coexists with dspat.
   let dspatVerdict: JudgeResult | null = null;
   if (isDspatActive() && !dspa?.verdict) {
     if (jstatus.state === "invalid") {

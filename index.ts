@@ -11,6 +11,36 @@ import { store } from "./store";
 
 // ── Main extension ──
 
+/**
+ * The dsp modes are one machine with four states: manual (none active — the
+ * default), dsp, dspa, dspat. Enabling one leaves the others off; leaving a
+ * judge mode resets its session stats (as toggling it off does). The command
+ * handlers below are the only writers of mode state, so the booleans can
+ * never be simultaneously true.
+ *
+ * @returns the mode that was active before the switch (null when manual),
+ *   for the "(X off)" note in the toast.
+ */
+function applyMode(ctx: ExtensionContext, next: "manual" | "dsp" | "dspa" | "dspat"): string | null {
+  const displaced = isDspActive() ? "dsp" : isDspaActive() ? "dspa" : isDspatActive() ? "dspat" : null;
+  const wasDsp = isDspActive();
+  setDspActive(false);
+  resetDspa();
+  resetDspat();
+  if (next === "dsp") setDspActive(true);
+  else if (next === "dspa") setDspaActive(true);
+  else if (next === "dspat") setDspatActive(true);
+  // Each update fn syncs its own widget (render when active, clear when not).
+  updateDspWidget(ctx);
+  updateDspaWidget(ctx);
+  updateDspatWidget(ctx);
+  // The normal halter widget is hidden while DSP bypasses the gate —
+  // restored only when LEAVING dsp (matching the pre-switch behavior).
+  if (isDspActive()) ctx.ui.setWidget("halter", undefined);
+  else if (wasDsp) updateWidget(ctx);
+  return displaced;
+}
+
 export default async function halterExtension(pi: ExtensionAPI) {
   // ── Session shutdown ──
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -26,58 +56,49 @@ export default async function halterExtension(pi: ExtensionAPI) {
     ctx.ui.setWidget("judge", undefined);
   });
 
-  // ── /dsp command ──
+  // ── /dsp command (exclusive with /dspa and /dspat) ──
   pi.registerCommand("dsp", {
-    description: "Toggle Dangerous Skip Permissions mode (bypass all permission checks)",
+    description: "Toggle Dangerous Skip Permissions mode (bypass all permission checks); exclusive with /dspa and /dspat",
     handler: async (_args, ctx) => {
       // Show confirm prompt before enabling; disabling toggles instantly
       if (!isDspActive() && ctx.hasUI) {
         const ok = await ctx.ui.confirm("Enable DSP (Dangerously Skip Permissions)?", "This bypasses ALL permission checks.");
-        if (!ok) return; // cancelled or No
+        if (!ok) return; // cancelled or No — the current mode stays
       }
-
-      setDspActive(!isDspActive());
-      updateDspWidget(ctx);
-      // Hide the normal halter widget when DSP is active; restore it when DSP is off
-      if (isDspActive()) {
-        ctx.ui.setWidget("halter", undefined);
-      } else {
-        updateWidget(ctx);
-      }
+      const displaced = applyMode(ctx, isDspActive() ? "manual" : "dsp");
       ctx.ui.notify(
-        isDspActive() ? "DSP MODE ON — all permissions bypassed" : "DSP MODE OFF — permissions restored",
+        isDspActive()
+          ? `DSP MODE ON — all permissions bypassed${displaced ? ` (${displaced} off)` : ""}`
+          : "DSP MODE OFF — permissions restored",
         isDspActive() ? "warning" : "info",
       );
     },
   });
 
-  // ── /dspat command ──
+  // ── /dspat command (exclusive with /dspa and /dsp) ──
   pi.registerCommand("dspat", {
     description:
-      "Toggle judge advisory mode: the judge explains every bash prompt and suggests approve/reject; you still decide (verdicts are logged)",
+      "Toggle judge advisory mode: the judge explains every bash prompt and suggests approve/reject; you still decide (verdicts are logged). Exclusive with /dspa and /dsp",
     handler: async (_args, ctx) => {
-      setDspatActive(!isDspatActive());
-      if (!isDspatActive()) resetDspat(); // fresh stats when re-enabling
-      updateDspatWidget(ctx);
+      const displaced = applyMode(ctx, isDspatActive() ? "manual" : "dspat");
       ctx.ui.notify(
         isDspatActive()
-          ? "dspat ON — judge advises on every bash prompt (you decide)"
+          ? `dspat ON — judge advises on every bash prompt (you decide)${displaced ? ` (${displaced} off)` : ""}`
           : "dspat OFF — judge suggestions disabled",
         "info",
       );
     },
   });
 
-  // ── /dspa command ──
+  // ── /dspa command (exclusive with /dspat and /dsp) ──
   pi.registerCommand("dspa", {
     description:
-      "Toggle judge auto-allow mode: operations passing the hard gate AND an approving low-risk judge verdict run without a prompt (visible toast); everything else prompts as usual",
+      "Toggle judge auto-allow mode: operations passing the hard gate AND an approving low-risk judge verdict run without a prompt (visible toast); everything else prompts as usual. Exclusive with /dspat and /dsp",
     handler: async (_args, ctx) => {
-      setDspaActive(!isDspaActive());
-      updateDspaWidget(ctx);
+      const displaced = applyMode(ctx, isDspaActive() ? "manual" : "dspa");
       ctx.ui.notify(
         isDspaActive()
-          ? "dspa ON — gate+judge-approved operations auto-allow (toast per allow)"
+          ? `dspa ON — gate+judge-approved operations auto-allow (toast per allow)${displaced ? ` (${displaced} off)` : ""}`
           : "dspa OFF — all prompts restored",
         "info",
       );
