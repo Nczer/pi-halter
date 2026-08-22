@@ -1529,6 +1529,18 @@ describe("Bash: cwd-bound exact-sig grants for relative-path tools (log FP clust
 		}
 	});
 
+	it("the prompt decision carries the analysis it was made from (single analysis per decision)", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: tool, cwd }, store);
+		expect(d.kind).toBe("prompt");
+		if (d.kind !== "prompt" || d.promptData.type !== "bash") return;
+		// The /dspa gate and the judge packet consume this instance instead
+		// of re-parsing — it must be the real analysis of this command.
+		expect(d.promptData.analysis).toBeDefined();
+		expect(d.promptData.analysis!.segments).toHaveLength(1);
+		expect(d.promptData.analysis!.segments[0]).toContain("mytool");
+	});
+
 	it("round-trip: Always Yes stores a cwd-bound grant; same tool+flags in the same cwd auto-allows", async () => {
 		const store = createStore();
 		const d1 = await decide({ type: "bash", command: tool, cwd }, store);

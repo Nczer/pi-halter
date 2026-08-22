@@ -103,19 +103,24 @@ function readScriptFile(resolved: string): JudgmentScript | null {
 // ── Judgment input from any prompt ──
 
 /**
- * Build the judgment input for a prompt, per type. Bash re-runs the
- * analysis (correct outside-path classification + script extraction);
- * file and MCP map straight from the prompt data (no content is carried —
- * the judge weighs the path/args that halter already resolved).
+ * Build the judgment input for a prompt, per type. Bash uses the analysis
+ * carried on the prompt (single analysis per decision — re-run only for
+ * hand-constructed prompt data) so the packet shows exactly what the gate
+ * decided on; file and MCP map straight from the prompt data (no content is
+ * carried — the judge weighs the path/args that halter already resolved).
  */
 async function buildJudgmentInput(
   pd: PromptData,
   store: Store,
 ): Promise<JudgmentInput> {
   if (pd.type === "bash") {
-    const analysis = await analyzeCommand(pd.command, pd.cwd, {
-      isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
-    });
+    // The packet must show the analysis the decision was made from (single
+    // analysis per decision); re-analyze only for hand-constructed prompt data.
+    const analysis =
+      pd.analysis ??
+      (await analyzeCommand(pd.command, pd.cwd, {
+        isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+      }));
     const script = extractScriptPayload(analysis, pd.cwd);
     const input: JudgmentBashInput = {
       command: pd.command,

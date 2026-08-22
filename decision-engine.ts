@@ -1,6 +1,7 @@
 import { decideBash } from "./policies/bash";
 import { decideFile } from "./policies/file";
 import { decideMcp } from "./policies/mcp";
+import type { CommandAnalysis } from "./analysis/command-analysis";
 import type { Store, AllowRules } from "./store";
 export type { Store, AllowRules };
 
@@ -91,6 +92,15 @@ export interface BashPromptData {
   credentialRule: string | null;
   needsCommandApproval: boolean;
   needsPathApproval: boolean;
+  /**
+   * The single analysis this decision was made from. Downstream consumers
+   * (the /dspa hard gate, the judge packet) use it instead of re-parsing,
+   * so they see exactly the analysis the decision was based on — one
+   * tree-sitter parse per tool call, no divergence from store mutations
+   * between passes. Absent only for hand-constructed PromptData (tests,
+   * future synthetic sources); consumers fall back to re-analyzing.
+   */
+  analysis?: CommandAnalysis;
 }
 
 export interface FilePromptData {
