@@ -20,8 +20,6 @@ import type { JudgeResult } from "../judge";
 
 vi.mock("../judge-prompt", () => ({
   getJudgeVerdict: vi.fn(),
-  getJudgeExplanation: vi.fn(),
-  judgeAvailable: vi.fn(() => true),
   judgeStatus: vi.fn(() => ({ state: "ok", modelLabel: "test/model (session)", reason: null })),
 }));
 vi.mock("../prompt-flow", () => ({

@@ -723,9 +723,10 @@ describe("twoTierAlwaysPrompt: Explain option", () => {
 		};
 	}
 
-	it("offers 'Explain' after the Always options; explaining re-shows with the line and drops the option", async () => {
-		const explanations = ["Runs a local build script."];
-		const explain = vi.fn(async () => explanations.shift() ?? "");
+	it("offers 'Explain' after the Always options; explaining re-shows with the verdict block and drops the option", async () => {
+		// On-demand dspat: the block carries the explanation AND the suggests line.
+		const blocks = ["💭 Judge: Runs a local build script.\n   → suggests: APPROVE (low)"];
+		const explain = vi.fn(async () => blocks.shift() ?? null);
 		const { ctx, calls } = makeRecordingCtx([2, 0]); // click Explain, then Yes
 
 		const result = await twoTierAlwaysPrompt(
@@ -736,16 +737,17 @@ describe("twoTierAlwaysPrompt: Explain option", () => {
 
 		expect(result).toBe("yes");
 		expect(explain).toHaveBeenCalledTimes(1);
-		// first tier-1: option in the choices, no judge line in the body yet
+		// first tier-1: option in the choices, no judge block in the body yet
 		expect(calls[0].options).toEqual(["Yes", "Always: test *", "Explain", "No (with reason)", "No"]);
 		expect(calls[0].title).not.toContain("💭 Judge:");
-		// second tier-1: explanation in the body, option removed
+		// second tier-1: full verdict block in the body (explanation + suggests), option removed
 		expect(calls[1].title).toContain("💭 Judge: Runs a local build script.");
+		expect(calls[1].title).toContain("→ suggests: APPROVE (low)");
 		expect(calls[1].options).not.toContain("Explain");
 	});
 
 	it("failed call → ⚠️ line in body, option consumed", async () => {
-		const explain = vi.fn(async () => "");
+		const explain = vi.fn(async () => null);
 		const { ctx, calls } = makeRecordingCtx([2, 0]); // Explain (fails), then Yes
 
 		await twoTierAlwaysPrompt(

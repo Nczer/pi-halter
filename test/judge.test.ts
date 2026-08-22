@@ -281,7 +281,7 @@ describe("judge call", () => {
       { ...baseInput, command: "pwd" },
       { ...baseOpts, complete: fixedComplete(() => toolCallReply({ ...VERDICT, explanation: long }), []) },
     );
-    expect(r.explanation.length).toBeLessThanOrEqual(221);
+    expect(r.explanation.length).toBeLessThanOrEqual(441);
     expect(r.explanation).toMatch(/…$/);
   });
 
