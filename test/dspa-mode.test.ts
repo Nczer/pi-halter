@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   isDspaActive,
   setDspaActive,
@@ -98,12 +99,29 @@ describe("widget", () => {
     expect(widgets).toHaveLength(1);
     expect(widgets[0].id).toBe("dspa");
     const w = (widgets[0].fn as (tui: unknown, theme: unknown) => {
-      render: () => string[];
+      render: (width: number) => string[];
     })(null, theme);
-    const lines = w.render();
+    const lines = w.render(200);
     expect(lines[0]).toContain("auto-allowed 1");
     expect(lines[0]).toContain("llama-cpp/Qwen3.8-27B");
     expect(lines[1]).toContain("last: cargo build");
+  });
+
+  it("fits narrow terminals (render width = live terminal width)", () => {
+    // Regression: the lines were truncated to a hardcoded 160, so a long
+    // target rendered over-width lines and crashed pi (doRender width check).
+    setDspaActive(true);
+    recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", "x".repeat(120));
+    const { ctx, widgets, theme } = makeCtx();
+    updateDspaWidget(ctx);
+    const w = (widgets[0].fn as (t: unknown, th: unknown) => {
+      render: (width: number) => string[];
+    })(null, theme);
+    for (const width of [95, 80, 40]) {
+      for (const line of w.render(width)) {
+        expect(visibleWidth(line), `line exceeds width ${width}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(width);
+      }
+    }
   });
 
   it("hides while the judge is not ok, reappears when it is ok again", () => {
@@ -116,15 +134,15 @@ describe("widget", () => {
     const { ctx, widgets, theme } = makeCtx();
     updateDspaWidget(ctx);
     const w = (widgets[0].fn as (t: unknown, th: unknown) => {
-      render: () => string[];
+      render: (width: number) => string[];
     })(null, theme);
-    expect(w.render()).toEqual([]);
+    expect(w.render(200)).toEqual([]);
     judgeStatusMock.mockReturnValue({
       state: "ok",
       modelLabel: "llama-cpp/Qwen3.8-27B (session)",
       reason: null,
     });
-    expect(w.render().length).toBeGreaterThan(0);
+    expect(w.render(200).length).toBeGreaterThan(0);
   });
 
   it("clears when inactive", () => {
