@@ -27,7 +27,7 @@ import { GitEvaluator } from "./evaluators/git-evaluator";
 import { TmuxEvaluator } from "./evaluators/tmux-evaluator";
 import { DiskEvaluator } from "./evaluators/disk-evaluator";
 import { ToolEvaluator } from "./evaluators/tool-evaluator";
-import type { RiskEvaluator } from "./evaluators/types";
+import type { RiskEvaluator, EvaluatorResult } from "./evaluators/types";
 
 // ── Constants ──
 
@@ -71,6 +71,55 @@ const REDIRECT_ONLY_RE = /^[0-9]*&?>+/;
 const PIPELINE_RELATIVE_RE1 = /^\.\//;
 const PIPELINE_RELATIVE_RE2 = /^\.\.\//;
 
+// ── Risk merge helper ──
+//
+// The "run evaluators → tag reasons → dedupe → merge severity" loop appears
+// in four shapes in this file (core analysis, delegated command, pipeline
+// stages, and the post-trust-clear re-merge). One accumulator + one merge
+// keeps the severity ordering (high beats medium; first medium sticks) and
+// the first-seen dedupe identical at every site.
+
+interface DangerAccum {
+  hasDanger: boolean;
+  severity: "high" | "medium" | null;
+  reasons: string[];
+}
+
+function newDangerAccum(): DangerAccum {
+  return { hasDanger: false, severity: null, reasons: [] };
+}
+
+function capFirst(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Add an already-tagged reason (dedupe, first-seen order). */
+function addReason(acc: DangerAccum, tagged: string): void {
+  if (!acc.reasons.includes(tagged)) acc.reasons.push(tagged);
+}
+
+/** Tag a raw evaluator reason as `[${prefix}${Cap(evName)}] reason`. */
+const tagEvaluator =
+  (evName: string, prefix = ""): ((reason: string) => string) =>
+  (reason) => `[${prefix}${capFirst(evName)}] ${reason}`;
+
+/**
+ * Merge a risk source (a raw evaluator result, or a pre-tagged delegated
+ * analysis) into the accumulator: danger is OR'd, severity max'd, reasons
+ * tagged via `tag` and deduped.
+ */
+function mergeRisk(
+  acc: DangerAccum,
+  source: EvaluatorResult,
+  tag: (reason: string) => string,
+): void {
+  if (source.hasDanger) acc.hasDanger = true;
+  if (source.severity === "high" || (acc.severity === null && source.severity === "medium")) {
+    acc.severity = source.severity;
+  }
+  for (const reason of source.reasons) addReason(acc, tag(reason));
+}
+
 /**
  * Wrapper-transparency evaluation. When a segment's first word delegates to
  * another command (`command -p sh …`, `timeout 5 curl …`, `xargs git …`), the
@@ -84,11 +133,9 @@ function analyzeDelegated(
   cwd: string,
   seg: BashSegment,
   cwdKnown = true,
-): { hasDanger: boolean; severity: "high" | "medium" | null; reasons: string[] } {
+): DangerAccum {
   const { cmd, tail } = delegated;
-  const reasons: string[] = [];
-  let hasDanger = false;
-  let severity: "high" | "medium" | null = null;
+  const acc = newDangerAccum();
 
   const pseudoSeg: BashSegment = {
     text: tail,
@@ -103,37 +150,27 @@ function analyzeDelegated(
       gitDangerous: cmd === "git" ? isGitDangerous(tail) : false,
       cwdKnown,
     });
-    if (result.hasDanger) hasDanger = true;
-    if (result.severity === "high" || (!severity && result.severity === "medium")) {
-      severity = result.severity;
-    }
-    for (const reason of result.reasons) {
-      const tag = ev.name.charAt(0).toUpperCase() + ev.name.slice(1);
-      const tagged = `[${tag}] ${reason}`;
-      if (!reasons.includes(tagged)) reasons.push(tagged);
-    }
+    mergeRisk(acc, result, tagEvaluator(ev.name));
   }
 
   // Dangerous command patterns against the delegated command name (a wrapper
   // running curl/ssh/rm … is as dangerous as the bare command).
   for (const { pattern, label } of dangerousCommandPatterns) {
     if (pattern.test(cmd)) {
-      hasDanger = true;
-      if (!severity) severity = "medium";
-      const tagged = `[Pattern] ${label}`;
-      if (!reasons.includes(tagged)) reasons.push(tagged);
+      acc.hasDanger = true;
+      if (!acc.severity) acc.severity = "medium";
+      addReason(acc, `[Pattern] ${label}`);
     }
   }
 
   // Shell/script interpreters — arbitrary code execution.
   if (SHELL_INTERPRETERS.has(cmd) || SCRIPT_INTERPRETERS.has(cmd)) {
-    hasDanger = true;
-    severity = "high";
-    const tagged = `[Pattern] ${cmd} (shell/script interpreter execution)`;
-    if (!reasons.includes(tagged)) reasons.push(tagged);
+    acc.hasDanger = true;
+    acc.severity = "high";
+    addReason(acc, `[Pattern] ${cmd} (shell/script interpreter execution)`);
   }
 
-  return { hasDanger, severity, reasons };
+  return acc;
 }
 
 // ── Unified segment analysis ──
@@ -159,24 +196,16 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
   const evaluatorResults = EVALUATORS.map(ev => ({ evaluator: ev.name, result: ev.evaluate(seg, cwd, { firstWord, obfuscation: cachedObfuscation, gitDangerous: cachedGitDangerous, cwdKnown }) }));
 
   // Merge evaluator results
-  const aggregatedReasons: string[] = [];
-  let aggregatedSeverity: "high" | "medium" | null = null;
-  let aggregatedHasDanger = false;
+  const acc = newDangerAccum();
   let allStagesSimple = true;
   // Track command keys already covered by evaluators to avoid duplicate pattern reasons
   const coveredKeys = new Set<string>();
 
   for (const { evaluator, result } of evaluatorResults) {
-    if (result.hasDanger) aggregatedHasDanger = true;
-    if (result.severity === "high" || (!aggregatedSeverity && result.severity === "medium")) {
-      aggregatedSeverity = result.severity;
-    }
+    mergeRisk(acc, result, tagEvaluator(evaluator));
+    // Extract first word of reason as coverage key (e.g. "rm" from "rm -rf (recursive deletion)")
+    // Split on space or forward slash so "curl/wget" → "curl" (matches pattern key extraction)
     for (const reason of result.reasons) {
-      const tag = evaluator.charAt(0).toUpperCase() + evaluator.slice(1);
-      const tagged = `[${tag}] ${reason}`;
-      if (!aggregatedReasons.includes(tagged)) aggregatedReasons.push(tagged);
-      // Extract first word of reason as coverage key (e.g. "rm" from "rm -rf (recursive deletion)")
-      // Split on space or forward slash so "curl/wget" → "curl" (matches pattern key extraction)
       const key = reason.split(/[\s/]/)[0].toLowerCase();
       coveredKeys.add(key);
     }
@@ -189,14 +218,8 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
   // powers the wrapped command lacks on its own.
   const delegated = getDelegatedCommand(segment);
   if (delegated) {
-    const d = analyzeDelegated(delegated, cwd, seg, cwdKnown);
-    if (d.hasDanger) aggregatedHasDanger = true;
-    if (d.severity === "high" || (!aggregatedSeverity && d.severity === "medium")) {
-      aggregatedSeverity = d.severity;
-    }
-    for (const reason of d.reasons) {
-      if (!aggregatedReasons.includes(reason)) aggregatedReasons.push(reason);
-    }
+    // d.reasons are already tagged — pass through.
+    mergeRisk(acc, analyzeDelegated(delegated, cwd, seg, cwdKnown), (r) => r);
   }
 
   // Pipeline analysis: route secondary stages through evaluators
@@ -208,9 +231,7 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
   // interpreter+script invocation — it does NOT cover other commands joined by
   // `|`. Keeping them apart lets the trust clear wipe the core "arbitrary code
   // execution" flag while leaving pipeline danger (e.g. `trusted.sh | bash`) intact.
-  let pipelineHasDanger = false;
-  let pipelineSeverity: "high" | "medium" | null = null;
-  const pipelineReasons: string[] = [];
+  const pipeAcc = newDangerAccum();
 
   const stages = splitPipeline(segment);
   if (stages.length > 1) {
@@ -229,11 +250,8 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
         allStagesSimple = false;
         // Pipe-to-interpreter is a unique pipeline concern — not caught by evaluators
         if (SHELL_INTERPRETERS.has(stageCmd)) {
-          const reason = "[Pipeline] pipe to a shell (possible remote code execution)";
-          if (!pipelineReasons.includes(reason)) {
-            pipelineReasons.push(reason);
-            pipelineSeverity = "high";
-          }
+          addReason(pipeAcc, "[Pipeline] pipe to a shell (possible remote code execution)");
+          pipeAcc.severity = "high";
         }
       }
 
@@ -244,18 +262,8 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
       const pseudoSeg: BashSegment = { text: stage, ops: [], hasSubshell: false };
       for (const ev of EVALUATORS) {
         const result = ev.evaluate(pseudoSeg, cwd, { cwdKnown });
-        if (result.hasDanger) {
-          pipelineHasDanger = true;
-          allStagesSimple = false;
-        }
-        if (result.severity === "high" || (!pipelineSeverity && result.severity === "medium")) {
-          pipelineSeverity = result.severity;
-        }
-        for (const reason of result.reasons) {
-          const tag = ev.name.charAt(0).toUpperCase() + ev.name.slice(1);
-          const tagged = `[Pipeline/${tag}] ${reason}`;
-          if (!pipelineReasons.includes(tagged)) pipelineReasons.push(tagged);
-        }
+        if (result.hasDanger) allStagesSimple = false;
+        mergeRisk(pipeAcc, result, tagEvaluator(ev.name, "Pipeline/"));
       }
 
       // Wrapper transparency for pipeline stages too (ls | xargs curl, find | timeout …).
@@ -263,17 +271,9 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
       if (stageDeleg) {
         if (!isAllowedCommand(stageDeleg.cmd)) allStagesSimple = false;
         const d = analyzeDelegated(stageDeleg, cwd, pseudoSeg, cwdKnown);
-        if (d.hasDanger) {
-          pipelineHasDanger = true;
-          allStagesSimple = false;
-        }
-        if (d.severity === "high" || (!pipelineSeverity && d.severity === "medium")) {
-          pipelineSeverity = d.severity;
-        }
-        for (const reason of d.reasons) {
-          const tagged = reason.replace(/^\[/, "[Pipeline/");
-          if (!pipelineReasons.includes(tagged)) pipelineReasons.push(tagged);
-        }
+        if (d.hasDanger) allStagesSimple = false;
+        // d.reasons are already tagged — prefix them with Pipeline/.
+        mergeRisk(pipeAcc, d, (r) => r.replace(/^\[/, "[Pipeline/"));
       }
     }
   }
@@ -292,10 +292,9 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
     cachedObfuscation.detected;
   if (cachedObfuscation.techniques.length > 0) {
     for (const tech of cachedObfuscation.techniques) {
-      const tagged = `[Shell] ${tech}`;
-      if (!aggregatedReasons.includes(tagged)) aggregatedReasons.push(tagged);
+      addReason(acc, `[Shell] ${tech}`);
     }
-    aggregatedSeverity = "high";
+    acc.severity = "high";
   }
 
   // Regex-based safety net — single pass, results reused for isUnsafe
@@ -312,21 +311,16 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
   // opted into running from these paths via the trusted-scripts config.
   // Clear evaluator danger so the pattern safety net's `!isTrusted` alone governs.
   if (isTrusted) {
-    aggregatedHasDanger = false;
-    aggregatedSeverity = null;
-    aggregatedReasons.length = 0;
+    acc.hasDanger = false;
+    acc.severity = null;
+    acc.reasons.length = 0;
   }
 
   // Re-merge pipeline-stage danger AFTER the trust clear. Script trust must not
   // extend to other commands joined by `|`, so `trusted.sh | bash` / `trusted.sh | rm -rf`
   // keep their danger and prompt even though the leading script is trusted.
-  if (pipelineHasDanger) aggregatedHasDanger = true;
-  if (pipelineSeverity === "high" || (!aggregatedSeverity && pipelineSeverity === "medium")) {
-    aggregatedSeverity = pipelineSeverity;
-  }
-  for (const r of pipelineReasons) {
-    if (!aggregatedReasons.includes(r)) aggregatedReasons.push(r);
-  }
+  // (pipeAcc reasons are already tagged — pass through.)
+  mergeRisk(acc, pipeAcc, (r) => r);
 
   // `command` is in LOOKUP_COMMANDS, but only `-v`/`-V` are pure lookups.
   // `command -p rm` and `command rm` execute the command — must not skip pattern checks.
@@ -342,16 +336,11 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
   if (!isTrusted && !isVersionOnlyInvocation && (!isLookupOrEcho || isCommandExec || isEchoWithSubshell)) {
     // Check firstWord against dangerousCommandPatterns (normal path)
     for (const { pattern, label } of dangerousCommandPatterns) {
-      const tagged = `[Pattern] ${label}`;
       if (pattern.test(firstWord)) {
         matchedDangerousCommand = true;
-        if (!aggregatedSeverity) aggregatedSeverity = "medium";
+        if (!acc.severity) acc.severity = "medium";
         const key = label.split(/\s|[\/]/)[0].toLowerCase();
-        if (!coveredKeys.has(key)) {
-          if (!aggregatedReasons.includes(tagged)) {
-            aggregatedReasons.push(tagged);
-          }
-        }
+        if (!coveredKeys.has(key)) addReason(acc, `[Pattern] ${label}`);
       }
     }
     // (The executed command of `command -p <cmd>` / `command <cmd>` is checked
@@ -362,22 +351,17 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
     // evaluators + pipeline analysis catch all real threats from $(…) content.
     const cleanedForContext = strippedSegment;
     for (const { pattern, label } of dangerousContextPatterns) {
-      const tagged = `[Pattern] ${label}`;
       if (pattern.test(cleanedForContext)) {
         matchedDangerousContext = true;
-        if (!aggregatedSeverity) aggregatedSeverity = "medium";
+        if (!acc.severity) acc.severity = "medium";
         const key = label.split(/\s/)[0].toLowerCase();
-        if (!coveredKeys.has(key)) {
-          if (!aggregatedReasons.includes(tagged)) {
-            aggregatedReasons.push(tagged);
-          }
-        }
+        if (!coveredKeys.has(key)) addReason(acc, `[Pattern] ${label}`);
       }
     }
   }
 
   // Derive booleans — merge evaluator danger with pattern-matched danger
-  const hasDanger = aggregatedHasDanger || matchedDangerousCommand || matchedDangerousContext;
+  const hasDanger = acc.hasDanger || matchedDangerousCommand || matchedDangerousContext;
   const writeRedirect = hasWriteRedirect(segment);
   const isRedirectOnly = REDIRECT_ONLY_RE.test(trimmed);
 
@@ -409,5 +393,5 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
     isUnsafe = hasDanger || isObfuscated || matchedDangerousCommand || matchedDangerousContext;
   }
 
-  return { isSimple, isUnsafe, hasDanger, risk: { severity: aggregatedSeverity, reasons: aggregatedReasons } };
+  return { isSimple, isUnsafe, hasDanger, risk: { severity: acc.severity, reasons: acc.reasons } };
 }
