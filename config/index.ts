@@ -6,7 +6,7 @@ export const ABORT_REMEMBER_MS = 60_000;
 /** Number of prompts before showing high-frequency warning. */
 export const PROMPT_WARNING_THRESHOLD = 20;
 
-export { unconditionallySafeCommands, isAllowedCommand, isSafeSubcommand, pathAwareCommands, wrapperCommands, isWriteOperation, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, PACKAGE_MANAGERS, NETWORK_COMMANDS, GIT_NETWORK_SUBCOMMANDS, NETWORK_URL_RE } from "./bash-patterns";
+export { unconditionallySafeCommands, isAllowedCommand, isSafeSubcommand, pathAwareCommands, wrapperCommands, isWriteOperation, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, PACKAGE_MANAGERS, NETWORK_COMMANDS, GIT_NETWORK_SUBCOMMANDS, NETWORK_URL_RE, findNetworkEgress } from "./bash-patterns";
 export { allowedReadPaths, allowedWritePaths, deniedPaths, warnPaths } from "./path-rules";
 export { dangerousCommandPatterns, dangerousContextPatterns } from "./dangerous-patterns";
 export { isTrustedScriptPath, isTrustedScriptCommand } from "./trusted-scripts";

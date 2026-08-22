@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isWriteOperation, isTrustedScriptCommand } from "../config";
+import { findNetworkEgress, isWriteOperation, isTrustedScriptCommand } from "../config";
 import { analyzeCommand } from "../analysis/command-analysis";
 
 // ── isWriteOperation (from config) ──
@@ -223,5 +223,34 @@ describe("heredoc to interpreter detection", () => {
 
   it("does not flag cat heredoc as unsafe (data, not code)", async () => {
     expect(await isUnsafe("cat << 'EOF'\nrm -rf /\nEOF")).toBe(false);
+  });
+});
+
+// ── findNetworkEgress (single collector for gate + judge packet) ──
+
+describe("findNetworkEgress", () => {
+  it("collects per-segment network first words, deduped in order", () => {
+    const { commands } = findNetworkEgress(
+      "curl a && wget b && curl c",
+      ["curl a", "wget b", "curl c"],
+    );
+    expect(commands).toEqual(["curl", "wget"]);
+  });
+
+  it("matches git remote subcommands only", () => {
+    expect(findNetworkEgress("git push origin", ["git push origin"]).commands).toEqual(["git push"]);
+    expect(findNetworkEgress("git status", ["git status"]).commands).toEqual([]);
+  });
+
+  it("collects all URLs in order, deduped", () => {
+    const { urls } = findNetworkEgress(
+      "echo https://a.example and https://b.example and https://a.example",
+      ["echo x"],
+    );
+    expect(urls).toEqual(["https://a.example", "https://b.example"]);
+  });
+
+  it("finds nothing for offline commands", () => {
+    expect(findNetworkEgress("ls -la", ["ls -la"])).toEqual({ commands: [], urls: [] });
   });
 });

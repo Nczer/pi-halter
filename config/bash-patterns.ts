@@ -217,8 +217,46 @@ export const NETWORK_COMMANDS = new Set([
 /** git subcommands that talk to a remote. */
 export const GIT_NETWORK_SUBCOMMANDS = new Set(["push", "fetch", "pull", "clone"]);
 
-/** http(s) URL in command text (non-global; gate matches first, packet iterates). */
+/** http(s) URL in command text (non-global). */
 export const NETWORK_URL_RE = /https?:\/\/[^\s"'`)\]]+/;
+
+const NETWORK_URL_RE_GLOBAL = new RegExp(NETWORK_URL_RE.source, "g");
+
+/**
+ * All network egress in a command: per-segment first words that can open a
+ * network (or fetch/deploy — see NETWORK_COMMANDS), `git` remote
+ * subcommands, and http(s) URLs anywhere in the text (deduped, in order).
+ *
+ * ONE collector for both consumers — the /dspa hard gate (first hit) and
+ * the judge packet (annotated list). What counts as egress lives here so
+ * the two can never drift: a command the gate treats as network egress must
+ * not be annotated "network: none" in the packet the judge sees.
+ */
+export function findNetworkEgress(
+  command: string,
+  segments: string[],
+): { commands: string[]; urls: string[] } {
+  const commands: string[] = [];
+  const add = (hit: string) => {
+    if (!commands.includes(hit)) commands.push(hit);
+  };
+  for (const seg of segments) {
+    const words = seg.trim().split(/\s+/);
+    const first = words[0]?.toLowerCase();
+    if (!first) continue;
+    if (NETWORK_COMMANDS.has(first)) {
+      add(first);
+    } else if (first === "git") {
+      const sub = words[1]?.toLowerCase() ?? "";
+      if (GIT_NETWORK_SUBCOMMANDS.has(sub)) add(`git ${words[1]}`);
+    }
+  }
+  const urls: string[] = [];
+  for (const m of command.matchAll(NETWORK_URL_RE_GLOBAL)) {
+    if (!urls.includes(m[0])) urls.push(m[0]);
+  }
+  return { commands, urls };
+}
 
 /** Pre-compiled regex for tee write check. */
 const TEE_WRITE_RE = /\btee\b.*\S/;
