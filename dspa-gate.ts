@@ -31,7 +31,7 @@ import type { Store } from "./store";
 import { analyzeCommand } from "./analysis/command-analysis";
 import { expandTilde } from "./analysis/path-util";
 import { resolvePathReal } from "./analysis/path-analysis";
-import { NETWORK_COMMANDS, GIT_NETWORK_SUBCOMMANDS, NETWORK_URL_RE } from "./config";
+import { findNetworkEgress } from "./config";
 
 export type DspaGateResult = { ok: true } | { ok: false; reason: string };
 
@@ -51,19 +51,10 @@ function obscuredHit(segments: string[]): string | null {
   return null;
 }
 
+/** First egress hit only (gate reason line); URLs truncated to 60 chars. */
 function networkHit(command: string, segments: string[]): string | null {
-  for (const seg of segments) {
-    const words = seg.trim().split(/\s+/);
-    const first = words[0]?.toLowerCase();
-    if (!first) continue;
-    if (NETWORK_COMMANDS.has(first)) return first;
-    if (first === "git" && GIT_NETWORK_SUBCOMMANDS.has(words[1]?.toLowerCase() ?? "")) {
-      return `git ${words[1]}`;
-    }
-  }
-  const url = command.match(NETWORK_URL_RE);
-  if (url) return url[0].slice(0, 60);
-  return null;
+  const { commands, urls } = findNetworkEgress(command, segments);
+  return commands[0] ?? urls[0]?.slice(0, 60) ?? null;
 }
 
 export async function checkDspaGate(

@@ -29,7 +29,7 @@ import type {
   TextContent,
 } from "@earendil-works/pi-ai";
 import { SETTINGS_PATH, readSettingsFile, writeSettings } from "./halter-settings";
-import { NETWORK_COMMANDS, GIT_NETWORK_SUBCOMMANDS, NETWORK_URL_RE } from "./config";
+import { findNetworkEgress } from "./config";
 
 // ── Settings ──
 
@@ -185,9 +185,6 @@ const REASONS_MAX = 10;
 const SEGMENTS_MAX = 24;
 const SEGMENT_MAX_CHARS = 120;
 
-/** Global variant of the shared network-URL pattern (match needs /g). */
-const URL_RE = new RegExp(NETWORK_URL_RE.source, "g");
-
 function headCut(text: string, max: number): { text: string; cut: boolean } {
   return text.length <= max
     ? { text, cut: false }
@@ -196,22 +193,13 @@ function headCut(text: string, max: number): { text: string; cut: boolean } {
 
 /**
  * Network annotation for the packet — the gate's own network definition
- * (shared NETWORK_COMMANDS), so `npm install` is never annotated "none".
+ * (shared findNetworkEgress), so `npm install` is never annotated "none".
+ * All command hits plus up to 3 URLs.
  */
 function detectNetwork(input: JudgmentBashInput): string {
-  const hits = new Set<string>();
-  for (const seg of input.segments) {
-    const words = seg.trim().split(/\s+/);
-    const first = words[0]?.toLowerCase();
-    if (!first) continue;
-    if (NETWORK_COMMANDS.has(first)) hits.add(first);
-    if (first === "git" && GIT_NETWORK_SUBCOMMANDS.has(words[1]?.toLowerCase() ?? "")) {
-      hits.add(`git ${words[1]}`);
-    }
-  }
-  const urls = input.command.match(URL_RE);
-  if (urls) for (const u of [...new Set(urls)].slice(0, 3)) hits.add(u);
-  return hits.size > 0 ? `yes (${[...hits].join(", ")})` : "none";
+  const { commands, urls } = findNetworkEgress(input.command, input.segments);
+  const hits = [...commands, ...urls.slice(0, 3)];
+  return hits.length > 0 ? `yes (${hits.join(", ")})` : "none";
 }
 
 function classifyPath(p: string, cwd: string, outside: Set<string>): string {
