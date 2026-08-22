@@ -87,7 +87,7 @@ export function updateDspatWidget(ctx: ExtensionContext): void {
   if (dspatActive) {
     const main = `👁 dspat: judge advises on every permission prompt`;
     ctx.ui.setWidget("dspat", (_tui, theme) => {
-      const render = () => {
+      const render = (width: number) => {
         // Live judge state: the widget stays up when the judge is off
         // (the user's own choice, visible in halter.json), but DISAPPEARS
         // when the judge is invalid (e.g. session model switched to
@@ -96,14 +96,17 @@ export function updateDspatWidget(ctx: ExtensionContext): void {
         // picked up on the next repaint.
         const js = judgeStatus(ctx);
         if (js.state === "invalid") return [];
-        const lines = [truncateToWidth(theme.fg("accent", theme.bold(main)), 160)];
+        // width is the live terminal width (terminal.columns) — the same
+        // value the TUI's render check enforces. Never hardcode a width:
+        // an untruncated line crashes pi with an uncaughtException.
+        const lines = [truncateToWidth(theme.fg("accent", theme.bold(main)), width)];
         // Agreement counter (same muted second line as the /dspa widget).
         // updateDspatWidget is re-run after every recorded outcome, so the
         // numbers are live.
         if (stats.total > 0) {
           const stat = `👁 ${stats.agreed}/${stats.total} agreed` +
             (stats.lastDisagreement ? ` — last: ${stats.lastDisagreement}` : "");
-          lines.push(truncateToWidth(theme.fg("muted", stat), 160));
+          lines.push(truncateToWidth(theme.fg("muted", stat), width));
         }
         return lines;
       };

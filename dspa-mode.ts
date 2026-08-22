@@ -74,13 +74,15 @@ export function updateDspaWidget(ctx: ExtensionContext): void {
   ctx.ui.setWidget(
     "dspa",
     (_tui, theme) => {
-      const render = () => {
+      const render = (width: number) => {
         // Hidden only while the judge is invalid (see the dspat widget).
         const js = judgeStatus(ctx);
         if (js.state === "invalid") return [];
-        const lines = [truncateToWidth(theme.fg("accent", theme.bold(main)), 160)];
+        // width is the live terminal width (terminal.columns) — the same
+        // value the TUI's render check enforces.
+        const lines = [truncateToWidth(theme.fg("accent", theme.bold(main)), width)];
         if (last) {
-          lines.push(truncateToWidth(theme.fg("muted", `last: ${last}`), 160));
+          lines.push(truncateToWidth(theme.fg("muted", `last: ${last}`), width));
         }
         return lines;
       };

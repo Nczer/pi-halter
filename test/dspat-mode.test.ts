@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   isDspatActive,
   setDspatActive,
@@ -116,14 +117,33 @@ describe("widget", () => {
     expect(lines[1]).toContain("curl evil"); // last disagreement target
   });
 
+  it("fits narrow terminals (render width = live terminal width)", () => {
+    // Regression: the lines were truncated to a hardcoded 160, so a long
+    // disagreement target rendered a 99-col line in a 95-col terminal and
+    // crashed pi with an uncaughtException (doRender width check).
+    const longTarget = "mkdir -p /tmp/gallop-trace && cat > /tmp/gallop-trace/package.json <<'EOF'";
+    setDspatActive(true);
+    recordDspatOutcome("m1", true, false, longTarget);
+    const { ctx, widgets, theme } = makeCtx();
+    updateDspatWidget(ctx);
+    const w = (widgets[0].fn as (t: unknown, th: unknown) => {
+      render: (width: number) => string[];
+    })(null, theme);
+    for (const width of [95, 80, 40]) {
+      for (const line of w.render(width)) {
+        expect(visibleWidth(line), `line exceeds width ${width}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
   it("no counter line before the first verdict (mode line only)", () => {
     setDspatActive(true);
     const { ctx, widgets, theme } = makeCtx();
     updateDspatWidget(ctx);
     const w = (widgets[0].fn as (t: unknown, th: unknown) => {
-      render: () => string[];
+      render: (width: number) => string[];
     })(null, theme);
-    const lines = w.render();
+    const lines = w.render(200);
     expect(lines).toHaveLength(1);
     expect(lines.join("")).not.toContain("agreed");
   });
@@ -134,9 +154,9 @@ describe("widget", () => {
     const { ctx, widgets, theme } = makeCtx();
     updateDspatWidget(ctx);
     const w = (widgets[0].fn as (t: unknown, th: unknown) => {
-      render: () => string[];
+      render: (width: number) => string[];
     })(null, theme);
-    expect(w.render()).toHaveLength(1);
+    expect(w.render(200)).toHaveLength(1);
   });
 
   it("hides entirely while the judge is not ok (e.g. model switched away)", () => {
@@ -150,12 +170,12 @@ describe("widget", () => {
     const { ctx, widgets, theme } = makeCtx();
     updateDspatWidget(ctx);
     const w = (widgets[0].fn as (t: unknown, th: unknown) => {
-      render: () => string[];
+      render: (width: number) => string[];
     })(null, theme);
-    expect(w.render()).toEqual([]);
+    expect(w.render(200)).toEqual([]);
     // Back to a resolvable model → widget reappears on the next render.
     judgeStatusMock.mockReturnValue({ state: "ok", modelLabel: "llama-cpp/Qwen (session)", reason: null });
-    expect(w.render().length).toBeGreaterThan(0);
+    expect(w.render(200).length).toBeGreaterThan(0);
   });
 
   it("clears when inactive", () => {
