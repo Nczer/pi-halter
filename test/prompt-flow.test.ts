@@ -23,7 +23,8 @@ vi.mock("../judge-prompt", () => ({
   getJudgeExplanation: explainMock,
 }));
 vi.mock("../prompts", () => ({ twoTierAlwaysPrompt: promptSpy }));
-vi.mock("../prompt-builder", () => ({
+vi.mock("../prompt-builder", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../prompt-builder")>()),
   buildPrompt: () => ({ title: "T", body: "B" }),
 }));
 vi.mock("../widget", () => ({ updateWidget: () => {} }));

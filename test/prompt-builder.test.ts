@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPrompt } from "../prompt-builder";
+import { buildPrompt, pdTargetLabel, summarizePrompt } from "../prompt-builder";
 import type { PromptDecision } from "../decision-engine";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -615,5 +615,48 @@ describe("cwd-bound relative tool grants in the prompt", () => {
       expect(tier2.body.match(/unknown-tool/g)?.length).toBe(1);
       expect(tier2.body.match(/tsc --noEmit/g)?.length).toBe(1);
     }
+  });
+});
+
+// ── pdTargetLabel / summarizePrompt (prompt-shaped labels) ──
+
+describe("pdTargetLabel", () => {
+  it("one label shape per prompt type (widgets + audit + dspat stats)", () => {
+    const bash = bashDecision();
+    expect(pdTargetLabel(bash.promptData)).toBe("ls -la");
+    const file = {
+      kind: "prompt" as const,
+      promptData: {
+        type: "file" as const,
+        action: "Write",
+        filePath: "a.md",
+        resolved: "/home/u/p/a.md",
+        cwd: "/home/u/p",
+        outsideDir: null,
+        isWriteOp: true,
+        warnedRule: null,
+        symlinkHint: null,
+        exists: false,
+      },
+    };
+    expect(pdTargetLabel(file.promptData)).toBe("Write /home/u/p/a.md");
+    const mcp = {
+      kind: "prompt" as const,
+      promptData: { type: "mcp" as const, server: "exa", tool: "web_search_exa", op: "search" },
+    };
+    expect(pdTargetLabel(mcp.promptData)).toBe("exa/web_search_exa");
+  });
+});
+
+describe("summarizePrompt", () => {
+  it("names the cwd-bound grant identity for relative tools (unlisted)", () => {
+    // signatures empty + relativeToolIds set = the unlisted case (no segment
+    // carries a namable sig, e.g. relative binary with allowlisted basename).
+    const d = bashDecision({
+      signatures: [],
+      relativeToolIds: [{ sig: "./node_modules/.bin/unknown-tool", base: "/home/user/project" }],
+      needsCommandApproval: true,
+    });
+    expect(summarizePrompt(d)).toBe("cmd ./node_modules/.bin/unknown-tool (unlisted)");
   });
 });
