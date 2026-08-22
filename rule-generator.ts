@@ -68,13 +68,20 @@ export class RuleGenerator {
     if (data.outsideDirs.length > 0) {
       rules.readDirs = data.outsideDirs;
     }
-    if (data.signatures.length > 0) {
-      rules.bashSigs = data.signatures;
-    }
     // Relative-path tools: store the exact signature bound to this cwd —
     // "Always" must actually work for ../node_modules/.bin/*, and the cwd
     // binding is what keeps a repo-shipped executable from inheriting
-    // session-wide bare-name grants elsewhere.
+    // session-wide bare-name grants elsewhere. SafetyRule refuses an UNBOUND
+    // sig grant on any command with a relative-path segment, so a bare
+    // bashSigs twin would never auto-allow — it would only pollute the store
+    // and mislead the widget. The store stays honest: a relative tool's
+    // grant exists only as a cwd-bound entry; non-relative sigs are kept
+    // unbound (a mixed command's other sigs still work).
+    const relativeSigs = new Set(data.relativeToolIds.map((r) => r.sig));
+    const unboundSigs = data.signatures.filter((sig) => !relativeSigs.has(sig));
+    if (unboundSigs.length > 0) {
+      rules.bashSigs = unboundSigs;
+    }
     if (data.relativeToolIds.length > 0) {
       // Bound to the segment's EFFECTIVE base (the working dir the relative
       // token resolves against) — not data.cwd: a grant for ./x must not
