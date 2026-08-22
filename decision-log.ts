@@ -22,42 +22,26 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { DECISION_LOG_ENABLED } from "./config/logging";
+import { SETTINGS_PATH, readSettingsFile, writeSettings } from "./halter-settings";
 import type { Decision, PermissionRequest } from "./decision-engine";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Persisted toggle (~/.pi/agent/halter.json, gallop pattern) ──
 
-export const SETTINGS_PATH = path.join(os.homedir(), ".pi", "agent", "halter.json");
 const SETTING_KEY = "decisionLogEnabled";
-
-function readJsonFile(filePath: string): Record<string, unknown> | null {
-  if (fs.existsSync(filePath)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
-    } catch {
-      /* corrupt settings file → fall through to the default */
-    }
-  }
-  return null;
-}
 
 /** Read the toggle from a settings file (missing file → compile-time default). */
 export function readToggleSetting(filePath: string = SETTINGS_PATH): boolean {
-  const value = readJsonFile(filePath)?.[SETTING_KEY];
+  const value = readSettingsFile(filePath)[SETTING_KEY];
   return value !== undefined ? value !== false : DECISION_LOG_ENABLED;
 }
 
 /** Write the toggle to a settings file (merges with other halter keys). */
 export function writeToggleSetting(enabled: boolean, filePath: string = SETTINGS_PATH): void {
-  const settings = readJsonFile(filePath) ?? {};
-  settings[SETTING_KEY] = enabled;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(settings, null, 2) + "\n");
+  writeSettings({ [SETTING_KEY]: enabled }, filePath);
 }
 
 // Module state — re-read from disk on every (re)load of the extension.

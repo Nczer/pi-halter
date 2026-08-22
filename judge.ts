@@ -17,8 +17,6 @@
  *  • The `approve` verdict is advisory: auto-allow (when that ships) is a
  *    code-enforced hard gate, never the model's word alone.
  */
-import fs from "node:fs";
-import path from "node:path";
 import { createHash } from "node:crypto";
 import type {
   AssistantMessage,
@@ -30,7 +28,7 @@ import type {
   ToolCall,
   TextContent,
 } from "@earendil-works/pi-ai";
-import { SETTINGS_PATH } from "./decision-log";
+import { SETTINGS_PATH, readSettingsFile, writeSettings } from "./halter-settings";
 import { NETWORK_COMMANDS, GIT_NETWORK_SUBCOMMANDS, NETWORK_URL_RE } from "./config";
 
 // ── Settings ──
@@ -63,50 +61,21 @@ export const DEFAULT_JUDGE_SETTINGS: JudgeSettings = {
   timeoutMs: 8000,
 };
 
-const THINKING_VALUES: ReadonlySet<string> = new Set([
+/** Valid thinking levels ("off" or a pi thinking level forwarded as reasoning). */
+export const THINKING_VALUES: ReadonlySet<string> = new Set([
   "off", "minimal", "low", "medium", "high", "xhigh", "max",
 ]);
 
-function readJsonFile(filePath: string): Record<string, unknown> | "corrupt" | null {
-  if (!fs.existsSync(filePath)) return null;
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return null;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : "corrupt";
-  } catch {
-    return "corrupt";
-  }
-}
-
-function backupCorruptSettings(filePath: string): void {
-  try {
-    fs.copyFileSync(filePath, filePath + ".bak");
-  } catch {
-    /* best effort — defaults still apply */
-  }
-}
-
 /**
  * Read the `judge` settings, per-key merged over the defaults.
- * Missing file → defaults. Corrupt file → defaults + `.bak` backup.
- * Wrong-typed keys → that key's default (other keys still honored).
+ * Missing file → defaults. Corrupt file → defaults + `.bak` backup
+ * (handled by the settings module). Wrong-typed keys → that key's default
+ * (other keys still honored).
  */
 export function readJudgeSettings(filePath: string = SETTINGS_PATH): JudgeSettings {
-  const file = readJsonFile(filePath);
-  if (file === "corrupt") {
-    backupCorruptSettings(filePath);
-    return { ...DEFAULT_JUDGE_SETTINGS };
-  }
   const out: JudgeSettings = { ...DEFAULT_JUDGE_SETTINGS };
-  const raw = (file as Record<string, unknown> | null)?.judge;
-  if (!raw || typeof raw !== "object") return out;
+  const raw = readSettingsFile(filePath).judge;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
   const r = raw as Record<string, unknown>;
   if (typeof r.enabled === "boolean") out.enabled = r.enabled;
   out.provider = typeof r.provider === "string" && r.provider !== "" ? r.provider : null;
@@ -124,28 +93,24 @@ export function readJudgeSettings(filePath: string = SETTINGS_PATH): JudgeSettin
 
 /**
  * Write a partial judge settings update (merges with existing keys and with
- * unrelated settings in the same file). Corrupt file → backed up first.
- * Returns the merged settings as persisted.
+ * unrelated settings in the same file; the settings module backs up a
+ * corrupt file first). Returns the merged settings as persisted.
  */
 export function writeJudgeSettings(
   patch: Partial<JudgeSettings>,
   filePath: string = SETTINGS_PATH,
 ): JudgeSettings {
-  const file = readJsonFile(filePath);
-  const settings: Record<string, unknown> = file === null || file === "corrupt" ? {} : file;
-  if (file === "corrupt") backupCorruptSettings(filePath);
+  const currentRaw = readSettingsFile(filePath).judge;
   const current =
-    settings.judge && typeof settings.judge === "object"
-      ? { ...(settings.judge as Record<string, unknown>) }
+    currentRaw && typeof currentRaw === "object" && !Array.isArray(currentRaw)
+      ? { ...(currentRaw as Record<string, unknown>) }
       : {};
   if (patch.enabled !== undefined) current.enabled = patch.enabled;
   if (patch.provider !== undefined) current.provider = patch.provider;
   if (patch.model !== undefined) current.model = patch.model;
   if (patch.thinking !== undefined) current.thinking = patch.thinking;
   if (patch.timeoutMs !== undefined) current.timeoutMs = patch.timeoutMs;
-  settings.judge = current;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(settings, null, 2) + "\n");
+  writeSettings({ judge: current }, filePath);
   return readJudgeSettings(filePath);
 }
 
