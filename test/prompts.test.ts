@@ -699,3 +699,74 @@ describe("twoTierAlwaysPrompt: high prompt frequency warning", () => {
 		expect(result).toBe("no");
 	});
 });
+
+// ── On-demand judge explanation option ─────────────────────────────────
+
+describe("twoTierAlwaysPrompt: Explain option", () => {
+	/** Fake ctx that records every select call (title + choices) and scripts. */
+	function makeRecordingCtx(scripted: (number | string | null)[]) {
+		const calls: Array<{ title: string; options: string[] }> = [];
+		let idx = 0;
+		return {
+			calls,
+			ctx: {
+				ui: {
+					select: async (title: string, options: string[]) => {
+						calls.push({ title, options });
+						const val = scripted[idx++];
+						if (val === null || val === undefined) return undefined;
+						return typeof val === "number" ? options[val] : val;
+					},
+					input: async () => undefined,
+				},
+			} as any,
+		};
+	}
+
+	it("offers 'Explain' after the Always options; explaining re-shows with the line and drops the option", async () => {
+		const explanations = ["Runs a local build script."];
+		const explain = vi.fn(async () => explanations.shift() ?? "");
+		const { ctx, calls } = makeRecordingCtx([2, 0]); // click Explain, then Yes
+
+		const result = await twoTierAlwaysPrompt(
+			makePrompt(), store, ctx,
+			() => "always" as never, () => "alwaysPaths" as never, () => "alwaysFile" as never,
+			undefined, { explain },
+		);
+
+		expect(result).toBe("yes");
+		expect(explain).toHaveBeenCalledTimes(1);
+		// first tier-1: option in the choices, no judge line in the body yet
+		expect(calls[0].options).toEqual(["Yes", "Always: test *", "Explain", "No (with reason)", "No"]);
+		expect(calls[0].title).not.toContain("💭 Judge:");
+		// second tier-1: explanation in the body, option removed
+		expect(calls[1].title).toContain("💭 Judge: Runs a local build script.");
+		expect(calls[1].options).not.toContain("Explain");
+	});
+
+	it("failed call → ⚠️ line in body, option consumed", async () => {
+		const explain = vi.fn(async () => "");
+		const { ctx, calls } = makeRecordingCtx([2, 0]); // Explain (fails), then Yes
+
+		await twoTierAlwaysPrompt(
+			makePrompt(), store, ctx,
+			() => "always" as never, () => "alwaysPaths" as never, () => "alwaysFile" as never,
+			undefined, { explain },
+		);
+
+		expect(explain).toHaveBeenCalledTimes(1);
+		expect(calls).toHaveLength(2);
+		// The failure is surfaced in the body, so the option is consumed.
+		expect(calls[1].options).not.toContain("Explain");
+		expect(calls[1].title).toContain("⚠️ Judge: call failed (model unavailable or timed out)");
+	});
+
+	it("no judge → no Explain option", async () => {
+		const { ctx, calls } = makeRecordingCtx([0]);
+		await twoTierAlwaysPrompt(
+			makePrompt(), store, ctx,
+			() => "always" as never, () => "alwaysPaths" as never, () => "alwaysFile" as never,
+		);
+		expect(calls[0].options).not.toContain("Explain");
+	});
+});

@@ -197,3 +197,64 @@ describe("handleFile edit pre-validation security", () => {
     expect(result).toBeUndefined();
   });
 });
+
+// ── Judge content threading ──
+
+import * as decisionEngine from "../decision-engine";
+import { resetDspa } from "../dspa-mode";
+
+describe("handleFile content threading (judge input)", () => {
+  let decideSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    store.reset();
+    resetDspa(); // never let a judge call fire in these tests
+    decideSpy = vi
+      .spyOn(decisionEngine, "decide")
+      .mockResolvedValue({
+        kind: "prompt",
+        promptData: {
+          type: "file",
+          action: "Write",
+          filePath: "x",
+          resolved: `${cwd}/x`,
+          cwd,
+          outsideDir: null,
+          isWriteOp: true,
+          warnedRule: null,
+          symlinkHint: null,
+          exists: false,
+        },
+      });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("write: request carries the new content", async () => {
+    const event = { toolName: "write", input: { path: `${cwd}/out.txt`, content: "line1\nline2" } } as any;
+    await handleFile(event, makeCtx());
+    expect(decideSpy).toHaveBeenCalled();
+    const req = decideSpy.mock.calls[0][0] as any;
+    expect(req.type).toBe("file");
+    expect(req.content).toBe("line1\nline2");
+  });
+
+  it("edit: request carries the joined newText blocks", async () => {
+    const event = {
+      toolName: "edit",
+      input: { path: `${cwd}/f.ts`, edits: [{ oldText: "a", newText: "b" }, { oldText: "c", newText: "d" }] },
+    } as any;
+    await handleFile(event, makeCtx());
+    const req = decideSpy.mock.calls[0][0] as any;
+    expect(req.content).toBe("b\n…\nd");
+  });
+
+  it("read: request has no content", async () => {
+    const event = { toolName: "read", input: { path: `${cwd}/f.ts` } } as any;
+    await handleFile(event, makeCtx());
+    const req = decideSpy.mock.calls[0][0] as any;
+    expect(req.content).toBeUndefined();
+  });
+});

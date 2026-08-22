@@ -19,6 +19,12 @@ export interface FileRequest {
   cwd: string;
   /** Pre-resolved path to avoid redundant fs.realpathSync calls. */
   resolvedPath?: string;
+  /**
+   * Content being written (write: full new content; edit: newText blocks
+   * joined with "\u2026"). Absent for read. Carried for the judge only —
+   * never shown in the human prompt.
+   */
+  content?: string;
 }
 
 export interface McpRequest {
@@ -36,6 +42,8 @@ export type PermissionRequest = BashRequest | FileRequest | McpRequest;
 /** Command was auto-allowed — proceed without prompting. */
 interface AutoAllowDecision {
   kind: "auto-allow";
+  /** Set when /dspa auto-allowed (audit trail: which model approved). */
+  reason?: string;
 }
 
 /** Command must be blocked — no prompt shown. */
@@ -97,6 +105,8 @@ export interface FilePromptData {
   symlinkHint: string | null; // e.g. "/home/user/data → /mnt/storage"
   /** Whether the target file already exists on disk. */
   exists: boolean;
+  /** Content being written (write/edit) — judge input only, not shown in the human prompt. */
+  content?: string;
 }
 
 export interface McpPromptData {

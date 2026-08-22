@@ -5,6 +5,21 @@ import { buildPrompt } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
 import { updateWidget } from "./widget";
 import { RuleGenerator } from "./rule-generator";
+import { getJudgeExplanation, getJudgeVerdict, judgeStatus } from "./judge-prompt";
+import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "./dspat-mode";
+import type { JudgeResult } from "./judge";
+import type { DspaGateResult } from "./dspa-gate";
+
+/**
+ * Carried into showPrompt when /dspa declined to auto-allow, so the
+ * fall-through prompt explains WHY (gate reason and/or judge verdict).
+ */
+export interface DspaFallthrough {
+  gate: DspaGateResult;
+  verdict: JudgeResult | null;
+  /** Set when the gate passed but the judge produced no verdict — why. */
+  note?: string;
+}
 
 /** Result of showing a permission prompt to the user. */
 interface PromptFlowResult {
@@ -26,12 +41,97 @@ export async function showPrompt(
   decision: Decision,
   ctx: ExtensionContext,
   store: Store,
+  dspa?: DspaFallthrough,
 ): Promise<PromptFlowResult> {
   if (decision.kind !== "prompt") {
     return { allowed: true };
   }
 
-  const prompt = buildPrompt(decision);
+  let prompt = buildPrompt(decision);
+
+  const pd = decision.promptData;
+
+  // /dspa fall-through: explain why the operation was not auto-allowed —
+  // the gate reason, and/or the judge verdict that declined to approve.
+  if (dspa) {
+    if (!dspa.gate.ok) {
+      prompt = {
+        ...prompt,
+        body: prompt.body + `\n🚧 dspa: not auto-allowed — ${dspa.gate.reason}`,
+      };
+    } else if (dspa.verdict) {
+      const suggestion =
+        dspa.verdict.approve === "approve"
+          ? `APPROVE (${dspa.verdict.risk}) — not auto-allowed (risk must be low)`
+          : `REJECT (${dspa.verdict.risk})`;
+      prompt = {
+        ...prompt,
+        body:
+          prompt.body +
+          `\n💭 Judge: ${dspa.verdict.explanation}\n   → suggests: ${suggestion}`,
+      };
+    } else if (dspa.note) {
+      prompt = {
+        ...prompt,
+        body: prompt.body + `\n🚧 dspa: not auto-allowed — ${dspa.note}`,
+      };
+    }
+  }
+
+  // Judge status is computed once per prompt and drives both the judge
+  // behavior and the visible state: an invalid judge (e.g. session model
+  // became unresolvable after a switch) is surfaced in the prompt body
+  // instead of silently vanishing. "off" (disabled in settings) stays
+  // silent — that is the user's choice.
+  const jstatus = judgeStatus(ctx);
+
+  // /dspat (advisory): the judge runs automatically on every prompt type
+  // (bash / file / mcp) and the prompt shows the full verdict (explanation
+  // + suggestion). The human always takes the call; the verdict + decision
+  // feed the session stats (model-scoped, never persisted). Skipped when
+  // /dspa already supplied a verdict (same verdict, via the LRU cache).
+  let dspatVerdict: JudgeResult | null = null;
+  if (isDspatActive() && !dspa?.verdict) {
+    if (jstatus.state === "invalid") {
+      prompt = {
+        ...prompt,
+        body: prompt.body + `\n⚠️ Judge invalid: ${jstatus.reason}`,
+      };
+    } else {
+      const verdict = await getJudgeVerdict(pd, ctx, store);
+      if (verdict) {
+        dspatVerdict = verdict;
+        const suggestion = verdict.approve === "approve" ? "APPROVE" : "REJECT";
+        prompt = {
+          ...prompt,
+          body:
+            prompt.body +
+            `\n💭 Judge: ${verdict.explanation}\n   → suggests: ${suggestion} (${verdict.risk})`,
+        };
+      } else {
+        // The call failed (auth, timeout, bad reply) — surface it instead
+        // of silently showing a bare prompt.
+        prompt = {
+          ...prompt,
+          body: prompt.body + "\n⚠️ Judge: no verdict (call failed or timed out)",
+        };
+      }
+    }
+  } else if (jstatus.state === "invalid" && (!dspa || dspa.gate.ok)) {
+    // Default mode: explains why the 💭 Explain option is missing.
+    prompt = {
+      ...prompt,
+      body: prompt.body + `\n⚠️ Judge invalid: ${jstatus.reason}`,
+    };
+  }
+
+  // On-demand "💭 Explain" (default mode; hidden under /dspat, where the
+  // verdict or its failure state is already shown). Offered only when the
+  // judge can actually run.
+  const judge =
+    !isDspatActive() && jstatus.state === "ok" && !dspa?.verdict
+      ? { explain: () => getJudgeExplanation(pd, ctx, store) }
+      : undefined;
 
   const result = await twoTierAlwaysPrompt(prompt, store, ctx, () => {
     store.addAllowed(RuleGenerator.generatePrimaryRules(decision.promptData));
@@ -54,7 +154,22 @@ export async function showPrompt(
       store.addAllowed(rules);
       updateWidget(ctx);
     }
-  });
+  }, judge);
+
+  // /dspat: record the verdict paired with the human's decision —
+  // session-scoped stats only (judge quality is model-dependent).
+  if (dspatVerdict) {
+    const approved =
+      result === "yes" || result === "always" || result === "alwaysPaths" || result === "alwaysFile";
+    const target =
+      pd.type === "bash"
+        ? pd.command
+        : pd.type === "file"
+          ? `${pd.action} ${pd.resolved}`
+          : `${pd.server}/${pd.tool}`;
+    recordDspatOutcome(dspatVerdict.model, dspatVerdict.approve === "approve", approved, target);
+    updateDspatWidget(ctx);
+  }
 
   if (result === "no") {
     return { allowed: false };
