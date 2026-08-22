@@ -10,7 +10,6 @@ import os from "node:os";
 import { describe, expect, it } from "vitest";
 import { decide } from "../decision-engine";
 import { createStore } from "../store";
-import { isTmuxSendKeysSafe } from "../analysis/tmux-helpers";
 
 const home = os.homedir();
 const cwd = path.join(home, "Projects");
@@ -156,49 +155,56 @@ describe("CRITICAL: wrapper + interpreter bypass", () => {
 // 🔴 CRITICAL: tmux send-keys chained command bypass
 // ──────────────────────────────────────────────────────────────────────
 describe("CRITICAL: tmux send-keys chained command bypass", () => {
-	it("ls ; rm -rf . → unsafe (semicolon chain)", () => {
-		expect(isTmuxSendKeysSafe("ls ; rm -rf . Enter")).toBe(false);
+	// The payload is typed into a pane's shell: analyzeTmuxSendKeysPayload
+	// splits it on Enter and every chunk must meet the SAME auto-allow bar
+	// as a direct command. These tests run the full pipeline end-to-end
+	// (the old raw-text isTmuxSendKeysSafe heuristic is gone).
+	const sendKeys = (payload: string) =>
+		decide({ type: "bash", command: `tmux send-keys -t foo '${payload}' Enter`, cwd }, createStore());
+
+	it("ls ; rm -rf . → prompts (semicolon chain)", async () => {
+		expect((await sendKeys("ls ; rm -rf .")).kind).not.toBe("auto-allow");
 	});
 
-	it("ls && rm -rf . → unsafe (&& chain)", () => {
-		expect(isTmuxSendKeysSafe("ls && rm -rf . Enter")).toBe(false);
+	it("ls && rm -rf . → prompts (&& chain)", async () => {
+		expect((await sendKeys("ls && rm -rf .")).kind).not.toBe("auto-allow");
 	});
 
-	it("cat x | bash → unsafe (pipe to interpreter)", () => {
-		expect(isTmuxSendKeysSafe("cat x | bash Enter")).toBe(false);
+	it("cat x | bash → prompts (pipe to interpreter)", async () => {
+		expect((await sendKeys("cat x | bash")).kind).not.toBe("auto-allow");
 	});
 
-	it("curl url | sh → unsafe (pipe to interpreter)", () => {
-		expect(isTmuxSendKeysSafe("cat x | sh Enter")).toBe(false);
+	it("cat x | sh → prompts (pipe to interpreter)", async () => {
+		expect((await sendKeys("cat x | sh")).kind).not.toBe("auto-allow");
 	});
 
-	it("echo ok > file → unsafe (write redirect)", () => {
-		expect(isTmuxSendKeysSafe("echo ok > file Enter")).toBe(false);
+	it("echo ok > file → prompts (write redirect)", async () => {
+		expect((await sendKeys("echo ok > file")).kind).not.toBe("auto-allow");
 	});
 
-	it("ls || rm -rf . → unsafe (|| chain)", () => {
-		expect(isTmuxSendKeysSafe("ls || rm -rf . Enter")).toBe(false);
+	it("ls || rm -rf . → prompts (|| chain)", async () => {
+		expect((await sendKeys("ls || rm -rf .")).kind).not.toBe("auto-allow");
 	});
 
-	it("ls & → unsafe (background)", () => {
-		expect(isTmuxSendKeysSafe("ls & Enter")).toBe(false);
+	it("ls & → auto-allow (trailing & is a background suffix — direct 'ls &' auto-allows too, so the payload inherits the same verdict)", async () => {
+		expect((await sendKeys("ls &")).kind).toBe("auto-allow");
 	});
 
-	it("ls; cat x → unsafe (semicolon chain even if safe cmds)", () => {
-		expect(isTmuxSendKeysSafe("ls; cat x Enter")).toBe(false);
+	it("ls; cat x → auto-allow (chaining ONLY safe commands inherits the direct-command bar — direct 'ls; cat x' auto-allows too)", async () => {
+		expect((await sendKeys("ls; cat x")).kind).toBe("auto-allow");
 	});
 
 	// Verify existing safe send-keys patterns still work
-	it("ls -la → safe (single allowed command)", () => {
-		expect(isTmuxSendKeysSafe("ls -la Enter")).toBe(true);
+	it("ls -la → auto-allow (single allowed command)", async () => {
+		expect((await sendKeys("ls -la")).kind).toBe("auto-allow");
 	});
 
-	it("cat file.txt → safe (single allowed command)", () => {
-		expect(isTmuxSendKeysSafe("cat file.txt Enter")).toBe(true);
+	it("cat file.txt → auto-allow (single allowed command)", async () => {
+		expect((await sendKeys("cat file.txt")).kind).toBe("auto-allow");
 	});
 
-	it("grep pattern file → safe (single allowed command)", () => {
-		expect(isTmuxSendKeysSafe("grep pattern file Enter")).toBe(true);
+	it("grep pattern file → auto-allow (single allowed command)", async () => {
+		expect((await sendKeys("grep pattern file")).kind).toBe("auto-allow");
 	});
 });
 

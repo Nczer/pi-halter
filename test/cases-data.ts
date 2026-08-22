@@ -995,4 +995,22 @@ export const cases: TestCase[] = [
 	{ cmd: "# rotate .env && rm -rf .\nls", simple: true, unsafe: false, decision: "auto-allow", desc: "comment swallows chained write/credential text to end of line" },
 	{ cmd: "cat .ssh/id_rsa # see docs", simple: true, unsafe: false, decision: "block", desc: "real credential operand still blocks with a trailing comment" },
 	{ cmd: "# see docs\ncat .ssh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "comment line does not hide a live credential on the next line" },
+
+	// ═══════════════════════════════════════════════════════════
+	// tmux send-keys — the payload is typed into a pane's shell; every
+	// Enter-terminated chunk must meet the SAME auto-allow bar as a direct
+	// command (analyzeTmuxSendKeysPayload). The old raw-text quick check is
+	// gone; payload judgment lives in the full pipeline.
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "tmux send-keys -t foo 'ls -la' Enter", simple: true, unsafe: false, decision: "auto-allow", desc: "send-keys: simple payload auto-allows (same bar as direct command)" },
+	{ cmd: 'tmux send-keys -t foo \'grep "a|b" f\' Enter', simple: true, unsafe: false, decision: "auto-allow", desc: "send-keys: | inside QUOTED payload is data, not a pipe (regression: raw-text op scan false-positived)" },
+	{ cmd: "tmux send-keys -t foo 'ls; cat x' Enter", simple: true, unsafe: false, decision: "auto-allow", desc: "send-keys: chaining only safe commands inherits the direct-command bar" },
+	{ cmd: "tmux send-keys -t foo Enter", simple: true, unsafe: false, decision: "auto-allow", desc: "send-keys: bare Enter keystroke is a no-op" },
+	{ cmd: "tmux send-keys -t foo", simple: true, unsafe: false, decision: "auto-allow", desc: "send-keys: no payload is a no-op (tmux itself rejects)" },
+	{ cmd: "tmux send-keys -t foo python3 ~/.pi/agent/skills/test.py Enter", simple: true, unsafe: false, decision: "auto-allow", desc: "send-keys: trusted skill script inherits script trust" },
+	{ cmd: "tmux send-keys -t foo htop Enter", simple: false, unsafe: false, decision: "prompt", desc: "send-keys: htop not allowlisted → payload not simple → prompt" },
+	{ cmd: "tmux send-keys -t foo 'watch -n 1 htop' Enter", simple: false, unsafe: false, decision: "prompt", desc: "send-keys: wrapper delegating to non-allowlisted cmd → prompt" },
+	{ cmd: "tmux send-keys -t foo C-c", simple: false, unsafe: false, decision: "prompt", desc: "send-keys: non-Enter keystroke is not a simple command → prompt" },
+	{ cmd: "tmux send-keys -t foo 'rm -rf /' Enter", simple: false, unsafe: true, decision: "prompt", desc: "send-keys: dangerous payload prompts with [TmuxPayload] risk reason" },
+	{ cmd: "tmux send-keys -t foo 'ls && rm -rf . ' Enter", simple: false, unsafe: true, decision: "prompt", desc: "send-keys: chained rm in payload must NOT auto-allow" },
 ];

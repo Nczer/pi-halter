@@ -104,15 +104,16 @@ async function analyzeTmuxSendKeysPayload(
   payload: string,
   cwd: string,
   depth: number,
-): Promise<{ simple: boolean; unsafe: boolean; paths: string[] }> {
-  if (depth > TMUX_PAYLOAD_MAX_DEPTH) return { simple: false, unsafe: true, paths: [] };
+): Promise<{ simple: boolean; unsafe: boolean; paths: string[]; reasons: string[] }> {
+  if (depth > TMUX_PAYLOAD_MAX_DEPTH) return { simple: false, unsafe: true, paths: [], reasons: [] };
   const chunks = payload.split(TMUX_PAYLOAD_ENTER_RE).map(p => p.trim()).filter(Boolean);
   let simple = true;
   let unsafe = false;
   const paths: string[] = [];
+  const reasons: string[] = [];
   for (const chunk of chunks) {
     const parsed = await parseCommand(chunk, cwd);
-    if (parsed.hasParseError) return { simple: false, unsafe: true, paths: [] };
+    if (parsed.hasParseError) return { simple: false, unsafe: true, paths: [], reasons: [] };
     paths.push(...parsed.paths);
     for (const seg of parsed.segments) {
       const text = seg.text.trim();
@@ -120,18 +121,20 @@ async function analyzeTmuxSendKeysPayload(
         const innerPayload = normalizeTmuxPayload(extractTmuxSendKeys(text));
         const r = innerPayload
           ? await analyzeTmuxSendKeysPayload(innerPayload, cwd, depth + 1)
-          : { simple: true, unsafe: false, paths: [] };
+          : { simple: true, unsafe: false, paths: [], reasons: [] };
         simple &&= r.simple;
         unsafe ||= r.unsafe;
         paths.push(...r.paths);
+        for (const reason of r.reasons) if (!reasons.includes(reason)) reasons.push(reason);
       } else {
         const a = await analyzeSegment(seg, cwd);
         simple &&= a.isSimple;
         unsafe ||= a.isUnsafe;
+        for (const reason of a.risk.reasons) if (!reasons.includes(reason)) reasons.push(reason);
       }
     }
   }
-  return { simple, unsafe, paths };
+  return { simple, unsafe, paths, reasons };
 }
 
 export async function analyzeCommand(
@@ -197,13 +200,16 @@ export async function analyzeCommand(
   const allSimple = segmentAnalyses.every(a => a.isSimple);
   const hasUnsafe = segmentAnalyses.some(a => a.isUnsafe);
 
-  // tmux send-keys payloads inherit the session's auto-allow rules — and must
-  // meet the same auto-allow bar as a direct command. The sync evaluator's
-  // quick check (isTmuxSendKeysSafe) predates wrapper/prefix delegation, so
-  // the payload is recursively analyzed here with the full pipeline
-  // (timeout 5 curl, command -p sh -c, nice rm, git config, … all prompt).
+  // tmux send-keys payloads are typed into a pane's shell — the full pipeline
+  // analyzes each Enter-terminated chunk with the same auto-allow bar as a
+  // direct command (timeout 5 curl, command -p sh -c, nice rm, git config,
+  // … all prompt). Per-chunk risk reasons are folded into the command risk
+  // tagged [TmuxPayload] so the prompt and the decision log show WHY the
+  // payload is dangerous. (The TmuxEvaluator only checks the tmux subcommand
+  // itself — payload judgment lives here, where the full pipeline exists.)
   let tmuxPayloadSimple = true;
   let tmuxPayloadUnsafe = false;
+  const tmuxPayloadReasons: string[] = [];
   for (const seg of segments) {
     const text = seg.text.trim();
     if (getFirstWord(text) !== "tmux" || getTmuxSubcommand(text) !== "send-keys") continue;
@@ -212,12 +218,17 @@ export async function analyzeCommand(
     const r = await analyzeTmuxSendKeysPayload(payload, cwd, 1);
     tmuxPayloadSimple &&= r.simple;
     tmuxPayloadUnsafe ||= r.unsafe;
+    for (const reason of r.reasons) {
+      const tagged = `[TmuxPayload] ${reason}`;
+      if (!tmuxPayloadReasons.includes(tagged)) tmuxPayloadReasons.push(tagged);
+    }
     // Payload paths join the command's path set so getOutsideCwdPaths below
     // applies the same outside-cwd approval bar as for direct commands.
     paths.push(...r.paths);
   }
 
-  // Merge per-segment risks with whole-command risk
+  // Merge per-segment risks with whole-command risk (the [TmuxPayload] fold
+  // below adds the send-keys payload reasons).
   const segmentRisks = segmentAnalyses.map(a => a.risk);
   const wholeRisk = await analyzeWholeCommandRisk(cmd, segmentRisks);
 
@@ -256,17 +267,28 @@ export async function analyzeCommand(
   // but we check both here for defense-in-depth (prevents auto-allow if a rule is bypassed)
   const credentialCheck = checkCommandForCredentialPaths(cmd, cwd);
 
+  // Fold the [TmuxPayload] reasons into the whole-command risk (order-stable,
+  // deduped) so PromptFallbackRule surfaces them in the prompt and log.
+  const riskReasons = tmuxPayloadReasons.length
+    ? [...new Set([...wholeRisk.reasons, ...tmuxPayloadReasons])]
+    : wholeRisk.reasons;
+
   const analysis = {
     segments: segmentTexts,
     signatures,
     paths,
     hasParseError,
     safety: {
-      canBeAutoAllowed: !hasUnsafe && !tmuxPayloadUnsafe,
+      // canBeAutoAllowed requires the payload's TOP-LEVEL bar too: a session
+      // auto-allow rule for "tmux" (or a simple payload that still isn't
+      // simple) must not carry the payload through SafetyRule's signature
+      // branch. Non-tmux commands are unaffected (flags stay at their
+      // direct-command values).
+      canBeAutoAllowed: !hasUnsafe && !tmuxPayloadUnsafe && tmuxPayloadSimple,
       isSimple: allSimple && tmuxPayloadSimple,
       hasUnsafePattern: hasUnsafe || tmuxPayloadUnsafe,
     },
-    risk: wholeRisk,
+    risk: { ...wholeRisk, reasons: riskReasons },
     relativePathSegmentIndices,
     effectiveCwds,
     hasCredentialPath: credentialCheck.denied !== null || credentialCheck.warned !== null,

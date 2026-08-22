@@ -1,7 +1,3 @@
-import { isAllowedCommand, dangerousCommandPatterns, dangerousContextPatterns } from "../config";
-import { containsCommandSubstitution, hasWriteRedirect } from "./segment-helpers";
-import { detectObfuscation } from "./obfuscation";
-import { isGitDangerous } from "./segment-helpers";
 import { tokenizeSegment } from "./tokenizer";
 
 // ── Tmux safe subcommands ──
@@ -24,6 +20,10 @@ export const TMUX_SAFE_SUBCOMMANDS = new Set([
   "select-window", "select-pane",
   "resize-pane", "resize-window",
   "break-pane", "swap-pane", "swap-window", "join-pane",
+  // send-keys is intentionally NOT in the whitelist — it is not judged here;
+  // the send-keys PAYLOAD is analyzed by the full pipeline (see
+  // analyzeTmuxSendKeysPayload in command-analysis.ts), and bare send-keys
+  // (no payload) auto-allows as a harmless no-op.
   // Aliases (tmux 3.7b alias table) of the safe full names above. Dangerous
   // aliases (run, send, if, set, bind, source, splitw, newp, neww, respawn*,
   // menu, popup, confirm, detach, lock*) are intentionally NOT listed — they
@@ -37,7 +37,6 @@ export const TMUX_SAFE_SUBCOMMANDS = new Set([
 
 /** Human-readable descriptions for known dangerous tmux subcommands. */
 export const TMUX_DANGEROUS_DESCRIPTIONS: Record<string, string> = {
-  "send-keys": "arbitrary keystroke injection — executes commands inside tmux pane",
   "run-shell": "executes commands on tmux server",
   "pipe-pane": "pipes pane output to a shell command",
   "respawn-pane": "respawns pane with arbitrary command",
@@ -131,12 +130,6 @@ export function getTmuxSubcommand(segment: string): string | null {
   return null;
 }
 
-export function isTmuxDangerous(segment: string): boolean {
-  const sub = getTmuxSubcommand(segment);
-  if (!sub) return true; // no subcommand → prompt
-  return !TMUX_SAFE_SUBCOMMANDS.has(sub);
-}
-
 /**
  * Extract the keys being sent from a `tmux send-keys` segment.
  * Skips flags like -t, -l, -H, -T and returns the remaining tokens.
@@ -175,64 +168,4 @@ export function extractTmuxSendKeys(segment: string): string | null {
     i++;
   }
   return keys.length > 0 ? keys.join(" ") : null;
-}
-
-// ── Pre-compiled regexes for send-keys safety ──
-
-const SEND_KEYS_ENTER_RE1 = /\s+Enter$/;
-const SEND_KEYS_ENTER_RE2 = /^Enter$/;
-const SEND_KEYS_QUOTE_RE = /^("|')(.*\1)$/;
-/** Shell operators that would chain commands inside send-keys. */
-const SEND_KEYS_SHELL_OPS_RE = /[;|&]/;
-
-// ── Tmux send-keys safety ──
-
-/**
- * Check if send-keys keys are safe (would auto-allow as a standalone command).
- * Allows the send-keys to inherit the session's auto-allow rules.
- */
-export function isTmuxSendKeysSafe(keys: string): boolean {
-  // Strip trailing "Enter" since it's just a keystroke, not part of the command
-  const cmd = keys.replace(SEND_KEYS_ENTER_RE1, "").replace(SEND_KEYS_ENTER_RE2, "").trim();
-  if (!cmd) return true; // pressing Enter on empty line is safe
-
-  // Handle shell-quoted arguments: strip outer quotes from the full key string
-  const unquoted = cmd.replace(SEND_KEYS_QUOTE_RE, "$2").trim();
-
-  // Split on whitespace to get the first command
-  const firstToken = unquoted.split(/\s+/)[0];
-  // Remove any remaining leading/trailing quotes
-  const bare = firstToken.replace(/^["']+/, "").replace(/["']+$/, "");
-
-  // Must be an allowed command
-  if (!isAllowedCommand(bare)) return false;
-
-  // Must not match dangerous command patterns
-  if (dangerousCommandPatterns.some(({ pattern }) => pattern.test(bare))) return false;
-
-  // Must not match dangerous context patterns
-  if (dangerousContextPatterns.some(({ pattern }) => pattern.test(unquoted))) return false;
-
-  // Must not have shell operators (would chain multiple commands)
-  if (SEND_KEYS_SHELL_OPS_RE.test(unquoted)) return false;
-
-  // Must not have write redirects, subshells, or obfuscation
-  if (hasWriteRedirect(unquoted)) return false;
-  if (containsCommandSubstitution(unquoted)) return false;
-  if (detectObfuscation(unquoted).detected) return false;
-
-  // Check if it's a dangerous git/tmux subcommand
-  if (bare === "git" && isGitDangerous(unquoted)) return false;
-  if (bare === "tmux") {
-    // For nested tmux send-keys, recursively check the keys
-    const innerSub = getTmuxSubcommand(unquoted);
-    if (innerSub === "send-keys") {
-      const innerKeys = extractTmuxSendKeys(unquoted);
-      if (!innerKeys || !isTmuxSendKeysSafe(innerKeys)) return false;
-    } else if (isTmuxDangerous(unquoted)) {
-      return false;
-    }
-  }
-
-  return true;
 }
