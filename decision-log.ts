@@ -90,6 +90,14 @@ export interface DecisionLogEntry {
   cwd?: string;
 }
 
+/**
+ * NOTE: judge verdicts (dspat/dspa) are deliberately NOT written to this
+ * log. Judge quality is model-dependent — the user's session model can
+ * change between sessions — so verdict + human-decision stats stay
+ * session-scoped (dspat-mode.ts) and never accumulate cross-session.
+ * This log measures the GATE's decisions, which are model-independent.
+ */
+
 /** Resolve the active log file. null = logging disabled. */
 export function resolveLogPath(): string | null {
   const env = process.env.HALTER_DECISION_LOG;
@@ -116,7 +124,7 @@ export function logDecision(request: PermissionRequest, decision: Decision): voi
           ? decision.reason
           : decision.kind === "prompt"
             ? summarizePrompt(decision)
-            : null,
+            : decision.reason ?? null, // auto-allow: /dspa audit reason, else null
       target: targetOf(request).slice(0, MAX_TARGET_LEN),
       cwd: "cwd" in request ? request.cwd : undefined,
     };

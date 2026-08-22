@@ -22,7 +22,7 @@ export async function handleFile(
   const toolName = event.toolName as string;
   if (!FILE_TOOLS.includes(toolName as "read" | "write" | "edit")) return;
 
-  const input = event.input as { path?: string; edits?: Array<{ oldText: string; newText: string }> };
+  const input = event.input as { path?: string; content?: string; edits?: Array<{ oldText: string; newText: string }> };
   const filePath = input.path;
   if (!filePath) return;
 
@@ -37,12 +37,23 @@ export async function handleFile(
     if (!edits.every(e => typeof e.oldText === "string" && typeof e.newText === "string")) return;
   }
 
+  // Content being written — carried for the judge (verification input),
+  // never shown in the human prompt. write: full new content; edit: the
+  // newText blocks (what lands in the file), joined with an ellipsis line.
+  let content: string | undefined;
+  if (toolName === "write" && typeof input.content === "string") {
+    content = input.content;
+  } else if (toolName === "edit" && edits && edits.length > 0) {
+    content = edits.map((e) => e.newText).join("\n…\n");
+  }
+
   const request: FileRequest = {
     type: "file",
     toolName: toolName as "read" | "write" | "edit",
     filePath,
     cwd: ctx.cwd,
     resolvedPath,
+    content,
   };
 
   // Decide BEFORE any file-content read — and through gateDecide's fail-closed

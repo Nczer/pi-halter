@@ -10,6 +10,16 @@ async function selectIndex(ctx: ExtensionContext, title: string, options: string
 /** User's response to a two-tier prompt. */
 type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | { kind: "no"; reason: string };
 
+/**
+ * On-demand judge hook: when provided, tier-1 gets an "Explain" option.
+ * Selecting it runs `explain` (async, widget handled by the caller) and,
+ * on a non-empty result, re-shows tier-1 with the explanation appended to
+ * the body and the option removed. Empty result → re-show unchanged.
+ */
+export interface JudgeExplain {
+  explain: () => Promise<string>;
+}
+
 /** Tier-2 choice indices. */
 enum Tier2 {
   Confirm = 0,
@@ -194,6 +204,7 @@ export async function twoTierAlwaysPrompt(
   onAlwaysPaths: () => void,
   onAlwaysFile: () => void,
   onAlwaysBroader?: (dir?: string) => void,
+  judge?: JudgeExplain,
 ): Promise<PromptResult> {
   const options = buildAlwaysOptions(prompt, { onAlways, onAlwaysPaths, onAlwaysFile, onAlwaysBroader });
 
@@ -201,14 +212,24 @@ export async function twoTierAlwaysPrompt(
   // shouldn't inflate the frequency warning).
   const { over, count } = store.incrementPromptCount();
 
+  let activePrompt = prompt;
+  let judgeExplained = false;
+
   while (true) {
-    const choices = ["Yes", ...options.map(o => o.label), "No (with reason)", "No"];
+    const showJudge = !!judge && !judgeExplained;
+    const choices = [
+      "Yes",
+      ...options.map(o => o.label),
+      ...(showJudge ? ["Explain"] : []),
+      "No (with reason)",
+      "No",
+    ];
 
     const warningPrefix = over
       ? `⚠️ High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
       : "";
 
-    const idx = await selectIndex(ctx, warningPrefix + prompt.title + "\n---\n" + prompt.body, choices);
+    const idx = await selectIndex(ctx, warningPrefix + activePrompt.title + "\n---\n" + activePrompt.body, choices);
     if (idx === null) return "no"; // cancelled
 
     // ── Direct actions (no tier-2) ──
@@ -219,6 +240,21 @@ export async function twoTierAlwaysPrompt(
       const reason = await ctx.ui.input("Reason for rejection:");
       if (reason === undefined) continue;
       return { kind: "no", reason: reason.trim() || "No reason provided" };
+    }
+
+    // ── On-demand judge explanation ──
+    if (showJudge && idx === 1 + options.length) {
+      const explanation = await judge.explain();
+      // A failed call is surfaced, not swallowed: the option is consumed
+      // and the body says what happened.
+      activePrompt = {
+        ...activePrompt,
+        body: explanation
+          ? activePrompt.body + `\n💭 Judge: ${explanation}`
+          : activePrompt.body + "\n⚠️ Judge: call failed (model unavailable or timed out)",
+      };
+      judgeExplained = true;
+      continue;
     }
 
     // ── "Always" options ──

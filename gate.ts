@@ -1,9 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { PermissionRequest, Decision } from "./decision-engine";
+import type { PermissionRequest, Decision, PromptData } from "./decision-engine";
 import { decide } from "./decision-engine";
 import { logDecision } from "./decision-log";
-import { showPrompt } from "./prompt-flow";
+import { showPrompt, type DspaFallthrough } from "./prompt-flow";
 import type { Store } from "./store";
+import { isDspaActive, recordDspaAutoAllowed, updateDspaWidget } from "./dspa-mode";
+import { checkDspaGate } from "./dspa-gate";
+import { getJudgeVerdict, judgeStatus } from "./judge-prompt";
+import type { JudgeResult } from "./judge";
 
 /** Result of showing a permission prompt. */
 interface PromptResult {
@@ -59,6 +63,56 @@ type RejectHandler = (
  *   (avoids a second decide() call when the handler needed the decision anyway,
  *   e.g. to gate pre-validation reads on the outcome).
  */
+/** Short target label for /dspa widgets and audit lines. */
+function dspaTarget(pd: PromptData): string {
+  return pd.type === "bash"
+    ? pd.command
+    : pd.type === "file"
+      ? `${pd.action} ${pd.resolved}`
+      : `${pd.server}/${pd.tool}`;
+}
+
+/**
+ * /dspa attempt: hard gate → live judge → auto-allow (approve + low risk).
+ * Returns the verdict when it was not auto-allowed (for the fall-through
+ * prompt display), or null when the gate stopped it before the judge ran.
+ * Any judge failure resolves to null-ish fall-through — never an allow.
+ */
+async function tryDspaAutoAllow(
+  request: PermissionRequest,
+  decision: Extract<Decision, { kind: "prompt" }>,
+  ctx: ExtensionContext,
+  store: Store,
+): Promise<{ autoAllowed: boolean; fallthrough: DspaFallthrough }> {
+  const pd = decision.promptData;
+  const gateResult = await checkDspaGate(pd, store);
+  if (!gateResult.ok) {
+    return { autoAllowed: false, fallthrough: { gate: gateResult, verdict: null } };
+  }
+  const verdict = await getJudgeVerdict(pd, ctx, store);
+  if (verdict && verdict.approve === "approve" && verdict.risk === "low") {
+    logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (${verdict.model})` });
+    try {
+      ctx.ui.notify(`✓ Judge auto-allowed: ${verdict.explanation}`, "info");
+    } catch {
+      /* toast must never break the allow */
+    }
+    recordDspaAutoAllowed(verdict.model, dspaTarget(pd));
+    updateDspaWidget(ctx);
+    return { autoAllowed: true, fallthrough: { gate: gateResult, verdict } };
+  }
+  // Gate passed but no approving low-risk verdict. If the verdict is
+  // missing entirely, say WHY (invalid judge state or failed call) so the
+  // fall-through prompt is never silently bare.
+  const jstatus = verdict ? null : judgeStatus(ctx);
+  const note = verdict
+    ? undefined
+    : jstatus!.state === "invalid"
+      ? `judge invalid: ${jstatus!.reason}`
+      : "judge call failed";
+  return { autoAllowed: false, fallthrough: { gate: gateResult, verdict, note } };
+}
+
 export async function gate(
   request: PermissionRequest,
   ctx: ExtensionContext,
@@ -67,6 +121,21 @@ export async function gate(
   precomputedDecision?: Decision,
 ): Promise<undefined | { block: true; reason: string }> {
   const decision = precomputedDecision ?? await gateDecide(request, store, ctx);
+
+  // /dspa: a prompt decision may be auto-allowed (hard gate + judge). This
+  // runs BEFORE the log line so the log records the outcome, not the
+  // pre-dspa decision. Any internal failure here must not block the normal
+  // prompt path — the whole attempt is best-effort.
+  let dspaFallthrough: DspaFallthrough | undefined;
+  if (decision.kind === "prompt" && isDspaActive() && ctx.hasUI) {
+    try {
+      const { autoAllowed, fallthrough } = await tryDspaAutoAllow(request, decision, ctx, store);
+      if (autoAllowed) return;
+      dspaFallthrough = fallthrough;
+    } catch {
+      /* fall through to the normal prompt */
+    }
+  }
 
   // Decision log (JSONL): one line per tool call, including fail-closed
   // synthetic blocks. Fire-and-forget — logDecision never throws.
@@ -86,7 +155,7 @@ export async function gate(
   expandTools(ctx);
 
   try {
-    const result = await showPrompt(decision, ctx, store);
+    const result = await showPrompt(decision, ctx, store, dspaFallthrough);
     if (!result.allowed) {
       return onReject(decision, result);
     }

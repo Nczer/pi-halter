@@ -72,6 +72,7 @@ export function decideFile(req: FileRequest, store: Store): Decision {
     warnedRule: warnResult.matchedRule,
     symlinkHint,
     exists,
+    content: req.toolName === "read" ? undefined : req.content,
   };
 
   return { kind: "prompt", promptData };
