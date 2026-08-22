@@ -10,12 +10,11 @@ import { judgeStatus } from "./judge-prompt";
  * approve/reject suggestion). The human always takes the call — this mode
  * never changes the gate's decision.
  *
- * The widget is a one-line mode indicator. Verdicts + human decisions are
- * still recorded as session-scoped stats (model-scoped, never persisted —
- * judge quality is model-dependent and a model change resets the
- * counters), but nothing beyond the mode is displayed: disagreements are
- * experienced live on each prompt, and the decision log keeps the
- * durable history.
+ * The widget is a mode indicator plus an agreement counter line
+ * (`👁 12/14 agreed — last: <target>`) once the first verdict is in. The
+ * stats are session-scoped and model-scoped (never persisted — judge
+ * quality is model-dependent and a model change resets the counters);
+ * the decision log keeps the durable history.
  */
 
 let dspatActive = false;
@@ -89,15 +88,24 @@ export function updateDspatWidget(ctx: ExtensionContext): void {
     const main = `👁 dspat: judge advises on every permission prompt`;
     ctx.ui.setWidget("dspat", (_tui, theme) => {
       const render = () => {
-        // Live judge state: the widget is a mode indicator — it stays up
-        // when the judge is off (the user's own choice, visible in
-        // halter.json), but DISAPPEARS when the judge is invalid (e.g.
-        // session model switched to something unresolvable); the prompt
-        // body carries the "⚠️ Judge invalid" line there. ctx.model is a
-        // live getter, so a switch is picked up on the next repaint.
+        // Live judge state: the widget stays up when the judge is off
+        // (the user's own choice, visible in halter.json), but DISAPPEARS
+        // when the judge is invalid (e.g. session model switched to
+        // something unresolvable); the prompt body carries the "⚠️ Judge
+        // invalid" line there. ctx.model is a live getter, so a switch is
+        // picked up on the next repaint.
         const js = judgeStatus(ctx);
         if (js.state === "invalid") return [];
-        return [truncateToWidth(theme.fg("accent", theme.bold(main)), 160)];
+        const lines = [truncateToWidth(theme.fg("accent", theme.bold(main)), 160)];
+        // Agreement counter (same muted second line as the /dspa widget).
+        // updateDspatWidget is re-run after every recorded outcome, so the
+        // numbers are live.
+        if (stats.total > 0) {
+          const stat = `👁 ${stats.agreed}/${stats.total} agreed` +
+            (stats.lastDisagreement ? ` — last: ${stats.lastDisagreement}` : "");
+          lines.push(truncateToWidth(theme.fg("muted", stat), 160));
+        }
+        return lines;
       };
       return { render, invalidate: () => {} };
     }, { placement: "belowEditor" });
