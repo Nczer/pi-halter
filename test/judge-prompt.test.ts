@@ -1,7 +1,7 @@
 /**
  * judge-prompt.ts — phase 1 wiring: explanation extraction, script payload
  * detection (untrusted local scripts, trusted/binary/computed exclusion),
- * and the fail-safe behavior of getJudgeExplanation through an injected
+ * and the fail-safe behavior of getJudgeVerdict through an injected
  * `complete` seam (no real model, no network).
  */
 import fs from "node:fs";
@@ -11,9 +11,9 @@ import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { createStore } from "../store";
-import { extractScriptPayload, getJudgeExplanation, judgeAvailable, judgeStatus } from "../judge-prompt";
+import { extractScriptPayload, getJudgeVerdict, judgeAvailable, judgeStatus, judgeVerdictBlock } from "../judge-prompt";
 import { analyzeCommand } from "../analysis/command-analysis";
-import { DEFAULT_JUDGE_SETTINGS, type CompleteFn, type JudgeSettings } from "../judge";
+import { DEFAULT_JUDGE_SETTINGS, type CompleteFn, type JudgeResult, type JudgeSettings } from "../judge";
 import type { BashPromptData as BashPromptDataType } from "../decision-engine";
 
 // ── Fakes ──
@@ -168,51 +168,51 @@ describe("extractScriptPayload", () => {
   });
 });
 
-// ── getJudgeExplanation ──
+// ── getJudgeVerdict ──
 
-describe("getJudgeExplanation", () => {
+describe("getJudgeVerdict", () => {
   it("disabled → no model call, no widget", async () => {
     const calls: CapturedCall[] = [];
     const { ctx, widgets } = makeCtx(fakeModel());
-    const r = await getJudgeExplanation(makePd("ls", tmp), ctx, createStore(), {
+    const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: OFF,
     });
-    expect(r).toBe("");
+    expect(r).toBeNull();
     expect(calls).toHaveLength(0);
     expect(widgets).toHaveLength(0);
   });
 
-  it("no model resolvable → ''", async () => {
+  it("no model resolvable → null", async () => {
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(undefined);
-    const r = await getJudgeExplanation(makePd("ls", tmp), ctx, createStore(), {
+    const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
-    expect(r).toBe("");
+    expect(r).toBeNull();
     expect(calls).toHaveLength(0);
   });
 
-  it("auth failure → ''", async () => {
+  it("auth failure → null", async () => {
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel(), false);
-    const r = await getJudgeExplanation(makePd("ls", tmp), ctx, createStore(), {
+    const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
-    expect(r).toBe("");
+    expect(r).toBeNull();
     expect(calls).toHaveLength(0);
   });
 
   it("valid verdict → explanation; widget shown then cleared; toolChoice auto", async () => {
     const calls: CapturedCall[] = [];
     const { ctx, widgets } = makeCtx(fakeModel());
-    const r = await getJudgeExplanation(makePd("ls -la", tmp), ctx, createStore(), {
+    const r = await getJudgeVerdict(makePd("ls -la", tmp), ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
-    expect(r).toBe(VERDICT.explanation);
+    expect(r?.explanation).toBe(VERDICT.explanation);
     expect(calls).toHaveLength(1);
     expect(calls[0].options?.toolChoice).toBe("auto");
     expect(calls[0].options?.apiKey).toBe("k");
@@ -222,25 +222,25 @@ describe("getJudgeExplanation", () => {
     expect(judgeWidgets[1].fn).toBeUndefined(); // cleared in finally
   });
 
-  it("no-tool-call reply → ''", async () => {
+  it("no-tool-call reply → null", async () => {
     const { ctx } = makeCtx(fakeModel());
-    const r = await getJudgeExplanation(makePd("ls", tmp), ctx, createStore(), {
+    const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
       complete: (async () =>
         assistantText("I refuse to call tools") as AssistantMessage) as CompleteFn,
       settings: ON,
     });
-    expect(r).toBe("");
+    expect(r).toBeNull();
   });
 
   it("the packet includes an untrusted script payload when the command runs one", async () => {
     fs.writeFileSync(path.join(tmp, "job.py"), "import os\nprint('job')\n");
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
-    const r = await getJudgeExplanation(makePd("python3 job.py", tmp), ctx, createStore(), {
+    const r = await getJudgeVerdict(makePd("python3 job.py", tmp), ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
-    expect(r).toBe(VERDICT.explanation);
+    expect(r?.explanation).toBe(VERDICT.explanation);
     const packet = String(calls[0].context.messages[0].content);
     expect(packet).toContain("## Script: " + path.join(tmp, "job.py") + " (untrusted,");
     expect(packet).toContain("import os");
@@ -249,7 +249,7 @@ describe("getJudgeExplanation", () => {
   it("bash -c commands get no script section in the packet", async () => {
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
-    await getJudgeExplanation(makePd("bash -c 'echo hi'", tmp), ctx, createStore(), {
+    await getJudgeVerdict(makePd("bash -c 'echo hi'", tmp), ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
@@ -262,7 +262,7 @@ describe("getJudgeExplanation", () => {
     const { ctx } = makeCtx(fakeModel());
     const carried = await analyzeCommand("ls -la carried-marker", tmp);
     const pd = { ...makePd("f=rm; $f -rf ./build", tmp), analysis: carried };
-    await getJudgeExplanation(pd, ctx, createStore(), {
+    await getJudgeVerdict(pd, ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
@@ -273,15 +273,15 @@ describe("getJudgeExplanation", () => {
     expect(packet).toContain("network: none");
   });
 
-  it("an internal throw still resolves to '' (fail-safe)", async () => {
+  it("an internal throw still resolves to null (fail-safe)", async () => {
     const { ctx } = makeCtx(fakeModel());
-    const r = await getJudgeExplanation(makePd("ls", tmp), ctx, createStore(), {
+    const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
       complete: (async () => {
         throw new Error("boom");
       }) as CompleteFn,
       settings: ON,
     });
-    expect(r).toBe("");
+    expect(r).toBeNull();
   });
 });
 
@@ -297,6 +297,40 @@ function assistantText(text: string): AssistantMessage {
     timestamp: Date.now(),
   } as unknown as AssistantMessage;
 }
+
+// ── judgeVerdictBlock ──
+
+describe("judgeVerdictBlock", () => {
+  const v = (approve: string, risk: string) =>
+    ({ approve, risk, explanation: "Ex.", reason: "", latencyMs: 1, model: "m", cached: false }) as JudgeResult;
+
+  it("approve → APPROVE with the verdict's own risk", () => {
+    expect(judgeVerdictBlock(v("approve", "low"))).toBe(
+      "💭 Judge: Ex.\n   → suggests: APPROVE (low)",
+    );
+  });
+
+  it("deny → REJECT", () => {
+    expect(judgeVerdictBlock(v("deny", "high"))).toContain("→ suggests: REJECT (high)");
+  });
+
+  it("defer → DEFER (distinct from REJECT — 'could not verify' ≠ 'saw something bad')", () => {
+    const block = judgeVerdictBlock(v("defer", "medium"));
+    expect(block).toContain("→ suggests: DEFER (medium)");
+    expect(block).not.toContain("REJECT");
+  });
+
+  it("risk is independent of the verdict word (defer can carry any risk)", () => {
+    expect(judgeVerdictBlock(v("defer", "low"))).toContain("→ suggests: DEFER (low)");
+    expect(judgeVerdictBlock(v("approve", "medium"))).toContain("→ suggests: APPROVE (medium)");
+  });
+
+  it("note appends to the suggests line (the /dspa not-auto-allowed case)", () => {
+    expect(judgeVerdictBlock(v("approve", "medium"), "— not auto-allowed (risk must be low)")).toContain(
+      "→ suggests: APPROVE (medium) — not auto-allowed (risk must be low)",
+    );
+  });
+});
 
 // ── judgeStatus ──
 
@@ -394,11 +428,11 @@ describe("getJudgeVerdict: file & mcp prompts", () => {
     } as never;
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
-    const r = await getJudgeExplanation(pd, ctx, createStore(), {
+    const r = await getJudgeVerdict(pd, ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
-    expect(r).toBe(VERDICT.explanation);
+    expect(r?.explanation).toBe(VERDICT.explanation);
     const packet = String(calls[0].context.messages[0].content);
     expect(packet).toContain("file write (WRITE): /etc/hosts");
     expect(packet).toContain("OUTSIDE base");
@@ -414,11 +448,11 @@ describe("getJudgeVerdict: file & mcp prompts", () => {
     } as never;
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
-    const r = await getJudgeExplanation(pd, ctx, createStore(), {
+    const r = await getJudgeVerdict(pd, ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
-    expect(r).toBe(VERDICT.explanation);
+    expect(r?.explanation).toBe(VERDICT.explanation);
     const packet = String(calls[0].context.messages[0].content);
     expect(packet).toContain("mcp: exa/web_search_exa");
     expect(packet).toContain('{"query":"hello"}');
@@ -442,7 +476,7 @@ describe("getJudgeVerdict: file content threading", () => {
     } as never;
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
-    await getJudgeExplanation(pd, ctx, createStore(), {
+    await getJudgeVerdict(pd, ctx, createStore(), {
       complete: fixedComplete(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });

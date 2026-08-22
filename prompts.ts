@@ -13,11 +13,12 @@ type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | { k
 /**
  * On-demand judge hook: when provided, tier-1 gets an "Explain" option.
  * Selecting it runs `explain` (async, widget handled by the caller) and,
- * on a non-empty result, re-shows tier-1 with the explanation appended to
- * the body and the option removed. Empty result → re-show unchanged.
+ * on a non-null result, re-shows tier-1 with the verdict block appended to
+ * the body and the option removed. Null (failed call) → re-show with the
+ * failure line instead; the option is always consumed.
  */
 export interface JudgeExplain {
-  explain: () => Promise<string>;
+  explain: () => Promise<string | null>;
 }
 
 /** Tier-2 choice indices. */
@@ -244,13 +245,13 @@ export async function twoTierAlwaysPrompt(
 
     // ── On-demand judge explanation ──
     if (showJudge && idx === 1 + options.length) {
-      const explanation = await judge.explain();
+      const block = await judge.explain();
       // A failed call is surfaced, not swallowed: the option is consumed
       // and the body says what happened.
       activePrompt = {
         ...activePrompt,
-        body: explanation
-          ? activePrompt.body + `\n💭 Judge: ${explanation}`
+        body: block
+          ? activePrompt.body + "\n" + block
           : activePrompt.body + "\n⚠️ Judge: call failed (model unavailable or timed out)",
       };
       judgeExplained = true;

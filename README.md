@@ -38,9 +38,9 @@ When the user selects "Always", a second prompt requires explicit confirmation b
 
 The judge is a stateless one-shot model call at the permission prompt: its entire input is a judgment packet — the command (capped), halter's static-analysis digest, and — when the command executes an untrusted local script — the script's content as fenced untrusted data. No conversation history, no session state. Any failure (model unresolved, auth, timeout, malformed reply) resolves to "no verdict": the prompt shows exactly what it would have shown without the judge. The judge never alters the gate's decision on its own.
 
-- **`/dspat`** — the prompt body gains a `💭 Judge:` line (explanation + APPROVE/REJECT suggestion); the user's choice is recorded against the verdict (session stats, incl. disagreements)
+- **`/dspat`** — the prompt body gains a `💭 Judge:` block (explanation + `→ suggests: APPROVE|REJECT|DEFER (<risk>)` — defer is its own word, not collapsed into REJECT); the user's choice is recorded against the verdict (session stats, incl. disagreements)
 - **`/dspa`** — before any prompt, the deterministic hard gate (`dspa-gate.ts`: dangerous classes, network egress, obfuscation, credential patterns, outside-base paths) runs, then the judge; only `approve` + `low` risk past the gate auto-allows (toast). The gate is code, the model is advisory
-- **Default mode** — an on-demand `💭 Explain` prompt option runs the judge when picked
+- **Default mode** — an on-demand `💭 Explain` prompt option runs the judge when picked and appends the same full verdict block (it does not record agreement stats: the human picks when to consult, so those decisions are a self-selected subset)
 
 ### Auto-allow categories
 

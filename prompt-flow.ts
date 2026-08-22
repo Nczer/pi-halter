@@ -5,7 +5,7 @@ import { buildPrompt, pdTargetLabel } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
 import { updateWidget } from "./widget";
 import { RuleGenerator } from "./rule-generator";
-import { getJudgeExplanation, getJudgeVerdict, judgeStatus } from "./judge-prompt";
+import { getJudgeVerdict, judgeStatus, judgeVerdictBlock } from "./judge-prompt";
 import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "./dspat-mode";
 import type { JudgeResult } from "./judge";
 import type { DspaGateResult } from "./dspa-gate";
@@ -60,16 +60,11 @@ export async function showPrompt(
         body: prompt.body + `\n🚧 dspa: not auto-allowed — ${dspa.gate.reason}`,
       };
     } else if (dspa.verdict) {
-      const suggestion =
-        dspa.verdict.approve === "approve"
-          ? `APPROVE (${dspa.verdict.risk}) — not auto-allowed (risk must be low)`
-          : `REJECT (${dspa.verdict.risk})`;
-      prompt = {
-        ...prompt,
-        body:
-          prompt.body +
-          `\n💭 Judge: ${dspa.verdict.explanation}\n   → suggests: ${suggestion}`,
-      };
+      // An approving verdict that did not auto-allow did so only because the
+      // risk was not low — say so on the suggests line.
+      const note =
+        dspa.verdict.approve === "approve" ? "— not auto-allowed (risk must be low)" : undefined;
+      prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(dspa.verdict, note) };
     } else if (dspa.note) {
       prompt = {
         ...prompt,
@@ -101,13 +96,7 @@ export async function showPrompt(
       const verdict = await getJudgeVerdict(pd, ctx, store);
       if (verdict) {
         dspatVerdict = verdict;
-        const suggestion = verdict.approve === "approve" ? "APPROVE" : "REJECT";
-        prompt = {
-          ...prompt,
-          body:
-            prompt.body +
-            `\n💭 Judge: ${verdict.explanation}\n   → suggests: ${suggestion} (${verdict.risk})`,
-        };
+        prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(verdict) };
       } else {
         // The call failed (auth, timeout, bad reply) — surface it instead
         // of silently showing a bare prompt.
@@ -127,10 +116,18 @@ export async function showPrompt(
 
   // On-demand "💭 Explain" (default mode; hidden under /dspat, where the
   // verdict or its failure state is already shown). Offered only when the
-  // judge can actually run.
+  // judge can actually run. It renders the same full verdict block dspat
+  // shows (on-demand dspat) — and, unlike dspat, the verdict is NOT
+  // recorded in the agreement stats: the human picks when to consult, so
+  // the decisions are a self-selected subset, not the shadow regime.
   const judge =
     !isDspatActive() && jstatus.state === "ok" && !dspa?.verdict
-      ? { explain: () => getJudgeExplanation(pd, ctx, store) }
+      ? {
+          explain: async () => {
+            const verdict = await getJudgeVerdict(pd, ctx, store);
+            return verdict ? judgeVerdictBlock(verdict) : null;
+          },
+        }
       : undefined;
 
   const result = await twoTierAlwaysPrompt(prompt, store, ctx, () => {

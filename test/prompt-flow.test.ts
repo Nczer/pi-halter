@@ -10,17 +10,17 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Decision } from "../decision-engine";
 
-const { judgeStatusMock, verdictMock, explainMock, promptSpy } = vi.hoisted(() => ({
+const { judgeStatusMock, verdictMock, promptSpy } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn(),
   verdictMock: vi.fn(),
-  explainMock: vi.fn(),
   promptSpy: vi.fn(),
 }));
 
-vi.mock("../judge-prompt", () => ({
+vi.mock("../judge-prompt", async (importOriginal) => ({
   judgeStatus: judgeStatusMock,
   getJudgeVerdict: verdictMock,
-  getJudgeExplanation: explainMock,
+  // Real renderer — the suggests-line assertions below exercise it.
+  judgeVerdictBlock: (await importOriginal<typeof import("../judge-prompt")>()).judgeVerdictBlock,
 }));
 vi.mock("../prompts", () => ({ twoTierAlwaysPrompt: promptSpy }));
 vi.mock("../prompt-builder", async (importOriginal) => ({
@@ -45,7 +45,6 @@ beforeEach(() => {
   resetDspat();
   judgeStatusMock.mockReturnValue({ state: "ok", modelLabel: "llama-cpp/qwen (session)", reason: null });
   verdictMock.mockResolvedValue(null);
-  explainMock.mockResolvedValue("");
   promptSpy.mockResolvedValue("yes");
 });
 
@@ -139,6 +138,20 @@ describe("/dspat active", () => {
     expect(body).toContain("→ suggests: APPROVE (low)");
     expect(judgeArg()).toBeUndefined();
   });
+
+  it("defer verdict → DEFER, not REJECT (the model could not verify — a different signal)", async () => {
+    verdictMock.mockResolvedValue({
+      model: "llama-cpp/qwen",
+      explanation: "Truncated output hides the target list.",
+      approve: "defer",
+      risk: "medium",
+    });
+    await showPrompt(bashDecision(), ctx, store);
+    const body = shownPrompt().body;
+    expect(body).toContain("→ suggests: DEFER (medium)");
+    expect(body).not.toContain("REJECT");
+    expect(judgeArg()).toBeUndefined();
+  });
 });
 
 describe("/dspa fall-through", () => {
@@ -164,5 +177,16 @@ describe("/dspa fall-through", () => {
     };
     await showPrompt(bashDecision(), ctx, store, dspa);
     expect(shownPrompt().body).toContain("APPROVE (medium) — not auto-allowed (risk must be low)");
+  });
+
+  it("gate ok, deny verdict → REJECT without the not-auto-allowed note", async () => {
+    const dspa: DspaFallthrough = {
+      gate: { ok: true },
+      verdict: { model: "llama-cpp/qwen", explanation: "E.", approve: "deny", risk: "high" },
+    };
+    await showPrompt(bashDecision(), ctx, store, dspa);
+    const body = shownPrompt().body;
+    expect(body).toContain("→ suggests: REJECT (high)");
+    expect(body).not.toContain("not auto-allowed (risk must be low)");
   });
 });

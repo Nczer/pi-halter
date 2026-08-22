@@ -459,7 +459,9 @@ export interface JudgeResult {
   failReason?: JudgeFailReason;
 }
 
-const EXPLANATION_MAX_CHARS = 220;
+// Two plain sentences (the system prompt's "1-2 plain sentences" ask) fit in
+// this budget; 220 cropped them mid-sentence and the prompt body has room.
+const EXPLANATION_MAX_CHARS = 440;
 const RISKS: ReadonlySet<string> = new Set(["low", "medium", "high"]);
 const APPROVES: ReadonlySet<string> = new Set(["approve", "deny", "defer"]);
 

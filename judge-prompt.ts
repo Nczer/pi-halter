@@ -294,15 +294,29 @@ export async function getJudgeVerdict(
 }
 
 /**
- * Get the judge's explanation line for a prompt, or "" (never throws).
- * Wrapper over getJudgeVerdict for the on-demand "💭 Explain" option.
+ * The judge-verdict block for prompt bodies — one shape for every
+ * presentation site (/dspat auto-advice, /dspa fall-through, on-demand
+ * "💭 Explain"):
+ *
+ *   💭 Judge: <explanation>
+ *    → suggests: APPROVE (low)
+ *
+ * The suggests line uses the verdict's own word — a defer renders DEFER,
+ * not REJECT: "the model could not verify" is a different signal from
+ * "the model saw something bad", and the operator reading the line (and
+ * the dspat stats review) needs the distinction. Behavior is unchanged:
+ * only approve + low auto-allows anywhere.
+ *
+ * `note` appends to the suggests line (the /dspa fall-through's
+ * "not auto-allowed" explanation for an approving but not-low verdict).
  */
-export async function getJudgeExplanation(
-  pd: PromptData,
-  ctx: ExtensionContext,
-  store: Store,
-  deps: JudgePromptDeps = {},
-): Promise<string> {
-  const verdict = await getJudgeVerdict(pd, ctx, store, deps);
-  return verdict ? verdict.explanation : "";
+export function judgeVerdictBlock(
+  verdict: JudgeResult,
+  note?: string,
+): string {
+  const suggestion =
+    verdict.approve === "approve" ? "APPROVE"
+    : verdict.approve === "defer" ? "DEFER"
+    : "REJECT";
+  return `💭 Judge: ${verdict.explanation}\n   → suggests: ${suggestion} (${verdict.risk})${note ? ` ${note}` : ""}`;
 }
