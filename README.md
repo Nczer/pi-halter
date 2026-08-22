@@ -12,6 +12,9 @@ A halter for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, and `mcp` 
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
 - **No-UI fallback** — auto-blocks when no UI is available
 - **DSP mode** — `/dsp` command toggles "Dangerously Skip Permissions" to bypass all checks (with persistent warning widget)
+- **Judge modes** — `/dspa` auto-allows operations that pass a deterministic hard gate *and* an approving low-risk LLM-judge verdict (visible toast); `/dspat` shows the judge's verdict in every bash prompt and records agreement stats; both fail toward the prompt
+- **Judge settings** — `/judge` (bare = show; `on|off`, `model <provider/id|session>`, `thinking <level>`, `timeout <ms>`) — persisted in `~/.pi/agent/halter.json`
+- **Decision log** — `/halter-decision-log` records every gate decision to a JSONL file (see *Configuration → Decision log*)
 
 ## How It Works
 
@@ -30,6 +33,14 @@ Handler → Gate → Decision Engine → Prompt Flow → Rule Generator
 ### Two-tier confirmation
 
 When the user selects "Always", a second prompt requires explicit confirmation before granting session-scoped permission. This prevents accidental auto-allow from misclicks.
+
+### The judge (LLM second opinion)
+
+The judge is a stateless one-shot model call at the permission prompt: its entire input is a judgment packet — the command (capped), halter's static-analysis digest, and — when the command executes an untrusted local script — the script's content as fenced untrusted data. No conversation history, no session state. Any failure (model unresolved, auth, timeout, malformed reply) resolves to "no verdict": the prompt shows exactly what it would have shown without the judge. The judge never alters the gate's decision on its own.
+
+- **`/dspat`** — the prompt body gains a `💭 Judge:` line (explanation + APPROVE/REJECT suggestion); the user's choice is recorded against the verdict (session stats, incl. disagreements)
+- **`/dspa`** — before any prompt, the deterministic hard gate (`dspa-gate.ts`: dangerous classes, network egress, obfuscation, credential patterns, outside-base paths) runs, then the judge; only `approve` + `low` risk past the gate auto-allows (toast). The gate is code, the model is advisory
+- **Default mode** — an on-demand `💭 Explain` prompt option runs the judge when picked
 
 ### Auto-allow categories
 
@@ -89,7 +100,7 @@ Rules run in order — `RetryLoop → CredentialDeny → FastAllow → Safety �
 ## Architecture
 
 ```
-index.ts                          Extension entry — event registration, /dsp command
+index.ts                          Extension entry — event registration, /dsp, /dspa, /dspat, /judge, /halter-decision-log
 gate.ts                           Shared halter gate — decide → prompt → reject flow
 rule-generator.ts                 Derives auto-allow rules from PromptData (on-demand)
 ├── handlers/                     Thin adapters (all call gate())
@@ -126,12 +137,18 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 │   ├── file.ts                   File policy
 │   └── mcp.ts                    MCP policy
 ├── prompt-flow.ts                UI interaction loop — showPrompt(decision, ctx, store)
-├── prompt-builder.ts             Pure formatter — PromptData → BuiltPrompt (title/body/options)
-├── prompts.ts                    Two-tier confirmation flow (orchestrates selector)
-├── selector.ts                   Custom TUI components — showSelect + showReasonEditor
+├── prompt-builder.ts             Pure formatter — PromptData → BuiltPrompt (title/body/options/labels)
+├── prompts.ts                    Two-tier confirmation flow — native select + rejection-reason input
 ├── store.ts                      Auto-allow state — Store interface + singleton
 ├── widget.ts                     TUI rendering — halter status bar
 ├── dsp-mode.ts                   DSP mode toggle — bypass all halter checks with warning widget
+├── judge.ts                      Judge settings + the one-shot model call (stateless)
+├── judge-prompt.ts               Judge packet, verdict, widget, on-demand explanation
+├── dspa-mode.ts                  /dspa toggle + auto-allow audit widget
+├── dspa-gate.ts                  Deterministic hard gate for /dspa auto-allow
+├── dspat-mode.ts                 /dspat toggle + agreement-stats widget
+├── decision-log.ts               JSONL decision log (off by default)
+├── halter-settings.ts            Owner of ~/.pi/agent/halter.json (stat-cached reads, corrupt → .bak + defaults)
 ├── renderers/                    Display formatting helpers
 │   ├── mcp.ts                    MCP tool call formatting (proxy + direct, args preview, truncation)
 │   └── tmux.ts                   Tmux command formatting (strips boilerplate flags, structures output)
@@ -140,7 +157,8 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
     ├── bash-patterns.ts          Allowed commands, write handlers, dangerous flags, wrapper commands
     ├── path-rules.ts             Path allow/deny rules (deniedPaths, warnPaths, allowedReadPaths, allowedWritePaths)
     ├── dangerous-patterns.ts     Dangerous command/context regex patterns
-    └── trusted-scripts.ts        Trusted packages (TRUSTED_PACKAGES), trusted script path checks
+    ├── trusted-scripts.ts        Trusted packages (TRUSTED_PACKAGES), trusted script path checks
+    └── logging.ts                Decision-log compile-time default (DECISION_LOG_ENABLED)
 ```
 
 ### Key seams
@@ -152,8 +170,12 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 - **Bash Parser** — lazy-loaded tree-sitter WASM. Public API: `parseCommand(command, cwd) → ParseResult` returns `{ segments, paths, hasSubshell }` in one call
 - **Evaluators** — modular risk evaluators in `analysis/evaluators/`. Each implements `RiskEvaluator` interface. Adding new analyzers is a drop-in file
 - **Segment Helpers** (`segment-helpers.ts`) — shared utilities: `checkStageDanger()`, `isGitDangerous()`, `isWrapperRunningWrite()`, `getCommandSignature()`, `hasWriteRedirect()`, `isFindExecWrite()`, `isFdExecWrite()`, `isRgPreWrite()`
-- **Prompt Builder** — pure function. All prompt wording lives in one module. Truncates long commands to 20 lines
-- **Selector** — only module calling `ctx.ui.custom()`. UI seam for selection prompts and reason editor
+- **Prompt Builder** — pure function. All prompt wording lives in one module (prompt labels + the decision-log why-summary). Truncates long commands to 20 lines
+- **Prompt UI** (`prompts.ts`) — two-tier selection flow on native `ctx.ui.select` / `ctx.ui.input`; the only module that displays the confirmation prompt
+- **Judge** (`judge.ts`, `judge-prompt.ts`) — stateless one-shot model call. Verdicts are advisory: display-only by default, auto-allow only behind `/dspa`'s hard gate
+- **DSP gate** (`dspa-gate.ts`) — deterministic hard gate for `/dspa`: dangerous classes, network egress, obfuscation, credential patterns, outside-base paths. Judges the analysis carried on the prompt — one tree-sitter parse per decision
+- **Settings** (`halter-settings.ts`) — sole owner of `~/.pi/agent/halter.json` (judge settings + log toggle): mtime+size stat cache, corrupt file → `.bak` + defaults, top-level merge writes
+- **Decision log** (`decision-log.ts`) — fire-and-forget JSONL of gate decisions (off by default; see *Configuration*)
 
 ## Reading the Code (Beginner's Guide)
 
@@ -193,6 +215,9 @@ Follow a bash command (`ls -la`) through the system:
 | `analysis/mcp-resolver.ts` | MCP server/tool resolution |
 | `prompt-builder.ts` | Build prompt content |
 | `prompts.ts` | Two-tier confirmation UI |
+| `dspa-gate.ts` | Deterministic hard gate for /dspa auto-allow |
+| `judge-prompt.ts` | Judge packet + verdict (stateless model call) |
+| `decision-log.ts` | JSONL decision log (off by default) |
 | `store.ts` | Auto-allow state management |
 | `renderers/tmux.ts` | Tmux command formatting |
 

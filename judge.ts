@@ -14,8 +14,8 @@
  *  • Fails toward more prompting: any failure (model unresolved, auth failed,
  *    timeout, no tool call, invalid args, thrown call) → `defer` with no
  *    explanation. The prompt then shows exactly what it showed before.
- *  • The `approve` verdict is advisory: auto-allow (when that ships) is a
- *    code-enforced hard gate, never the model's word alone.
+ *  • The `approve` verdict is advisory: /dspa auto-allow sits behind a
+ *    code-enforced hard gate (dspa-gate.ts), never the model's word alone.
  */
 import { createHash } from "node:crypto";
 import type {
