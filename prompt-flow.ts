@@ -16,8 +16,11 @@ import type { DspaGateResult } from "./dspa-gate";
  */
 export interface DspaFallthrough {
   gate: DspaGateResult;
+  /** The FINAL verdict — stage 2 when it rendered one, else stage 1. */
   verdict: JudgeResult | null;
-  /** Set when the gate passed but the judge produced no verdict — why. */
+  /** Stage of the carried verdict (1 = stateless, 2 = intent pass); null = no verdict. */
+  stage: 1 | 2 | null;
+  /** Set when the gate passed but a judge stage produced no verdict — why. */
   note?: string;
 }
 
@@ -61,10 +64,18 @@ export async function showPrompt(
       };
     } else if (dspa.verdict) {
       // An approving verdict that did not auto-allow did so only because the
-      // risk was not low — say so on the suggests line.
-      const note =
-        dspa.verdict.approve === "approve" ? "— not auto-allowed (risk must be low)" : undefined;
+      // risk tier was above the stage's authority — say so on the suggests
+      // line (Q4: stage 1 needs low; stage 2, whose intent context exists
+      // to de-risk, needs low or medium).
+      const note = dspa.verdict.approve === "approve"
+        ? dspa.stage === 2
+          ? "— not auto-allowed (risk must be low or medium)"
+          : "— not auto-allowed (risk must be low)"
+        : undefined;
       prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(dspa.verdict, note) };
+      if (dspa.note) {
+        prompt = { ...prompt, body: prompt.body + `\n🚧 dspa: ${dspa.note}` };
+      }
     } else if (dspa.note) {
       prompt = {
         ...prompt,

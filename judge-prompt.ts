@@ -26,6 +26,7 @@ import { tokenizeSegment } from "./analysis/tokenizer";
 import { isTrustedScriptCommand } from "./config";
 import {
   judge,
+  JUDGE_STAGE2_SYSTEM_PROMPT,
   readJudgeSettings,
   resolveJudgeModel,
   resolveJudgeAuth,
@@ -36,6 +37,7 @@ import {
   type JudgmentInput,
   type JudgmentScript,
 } from "./judge";
+import { buildSessionContext } from "./session-context";
 
 // ── Script payload extraction ──
 
@@ -236,16 +238,21 @@ export interface JudgePromptDeps {
 }
 
 /**
- * Get the judge's full verdict for a prompt (bash / file / mcp), or null
- * (never throws). Shows a status widget while the model call is in flight.
- * A verdict that failed to produce an explanation (defer) is treated as
- * "no verdict".
+ * One judge stage for a prompt (bash / file / mcp), or null (never throws).
+ * Shows a status widget while the model call is in flight. A verdict that
+ * failed to produce an explanation (defer) is treated as "no verdict".
+ *
+ * Stage 1 (stateless): today's packet + prompt, LRU-cached on the operation.
+ * Stage 2 (dspa intent pass): same operation, plus the reasoning-blind
+ * "## Session context" section, under the intent-rules prompt, UNcached
+ * (its context includes the just-blocked operation → a hit is impossible).
  */
-export async function getJudgeVerdict(
+async function runJudgeStage(
   pd: PromptData,
   ctx: ExtensionContext,
   store: Store,
-  deps: JudgePromptDeps = {},
+  deps: JudgePromptDeps,
+  stage: 1 | 2,
 ): Promise<JudgeResult | null> {
   let widgetShown = false;
   try {
@@ -278,6 +285,9 @@ export async function getJudgeVerdict(
       headers: auth.headers,
       timeoutMs: settings.timeoutMs,
       thinking: settings.thinking,
+      systemPrompt: stage === 2 ? JUDGE_STAGE2_SYSTEM_PROMPT : undefined,
+      extraPacket: stage === 2 ? buildSessionContext(ctx, store) : undefined,
+      uncached: stage === 2,
     });
     return result.explanation ? result : null;
   } catch {
@@ -291,6 +301,34 @@ export async function getJudgeVerdict(
       }
     }
   }
+}
+
+/**
+ * Stage 1 — the stateless verdict (all modes: dspat display, dspa auto-
+ * allow, on-demand Explain). See runJudgeStage.
+ */
+export async function getJudgeVerdict(
+  pd: PromptData,
+  ctx: ExtensionContext,
+  store: Store,
+  deps: JudgePromptDeps = {},
+): Promise<JudgeResult | null> {
+  return runJudgeStage(pd, ctx, store, deps, 1);
+}
+
+/**
+ * Stage 2 — the dspa intent pass. Runs only when stage 1 did not auto-
+ * allow; adds the reasoning-blind session context (Q3) and the intent
+ * rules to the judgment. Verdict policy (Q4): approve+{low, medium}
+ * auto-allows; approve+high and reject never do (gate.ts applies it).
+ */
+export async function getStage2Verdict(
+  pd: PromptData,
+  ctx: ExtensionContext,
+  store: Store,
+  deps: JudgePromptDeps = {},
+): Promise<JudgeResult | null> {
+  return runJudgeStage(pd, ctx, store, deps, 2);
 }
 
 /**
