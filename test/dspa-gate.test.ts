@@ -263,4 +263,16 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
       expect(r.ok, cmd).toBe(false);
     }
   });
+
+  it("blocks non-rm dangerous content alongside rm (carve-out covers rm's footprint only)", async () => {
+    for (const cmd of [
+      "cp ./a.txt ./b.txt && rm -f ./b.txt",
+      "python3 gen.py && rm -f ./out.txt",
+      "echo x | sh && rm -f ./a.txt",
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("dangerous:");
+    }
+  });
 });
