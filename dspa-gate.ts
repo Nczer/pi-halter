@@ -90,6 +90,14 @@ export async function checkDspaGate(
     const rm = checkRmTargets(analysis.segments, pd.cwd, isInsideBase);
     if (rm.reason) return { ok: false, reason: rm.reason };
     outsideExempt = rm.exempt;
+    // Non-rm dangerous reasons still block: the carve-out covers only the
+    // rm's own footprint (recursive/forced delete, its self-written
+    // redirect/pipe). Other dangerous content in the command — script
+    // interpreters, file-modification patterns, … — is not judgeable.
+    const otherDanger = analysis.risk.reasons.filter((r) => !RM_RISK_REASON_RE.test(r));
+    if (otherDanger.length > 0) {
+      return { ok: false, reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}` };
+    }
   } else {
     if (analysis.safety.hasUnsafePattern) return { ok: false, reason: "unsafe pattern (obfuscation/subshell/redirect)" };
     if (analysis.risk.dangerous) return { ok: false, reason: `dangerous: ${analysis.risk.reasons.join("; ").slice(0, 120)}` };
@@ -108,9 +116,15 @@ export async function checkDspaGate(
 
 // ── rm carve-out ────────────────────────────────────────────────────────
 
-/** Danger reasons that belong to rm (or its self-written redirect) — evaluated
- * by checkRmTargets instead of the blanket dangerous block. */
-const RM_RISK_REASON_RE = /\brm\b|recursive delete|forced delete|shell output redirection/i;
+/** Risk reasons that belong to rm's own footprint (or the self-write that
+ * feeds it) — filtered out in the rm branch instead of blocking. Everything
+ * else in analysis.risk.reasons blocks the judge. The medium-noise entries
+ * (pipe operator, input/output redirection, tee's file-writing flag) appear
+ * in legitimate self-write shapes (`echo … | tee f && rm f`); the dangerous
+ * pipeline forms have their own, non-matching reasons ("pipe to a shell",
+ * per-stage evaluator hits). New reason strings fail safe (block → prompt). */
+const RM_RISK_REASON_RE =
+  /\brm\b|recursive delete|forced delete|shell (?:input|output) redirection|pipe operator|tee \(file writing\)/i;
 /** Targets that can never be auto-allowed: globs, tildes, computed
  * (variable/substitution) paths. */
 const RM_FORBIDDEN_TARGET_RE = /[*?[~$`]/;
