@@ -190,15 +190,17 @@ uncertainty.
   top-N loop a fourth channel: what the judge is eating silently.
 - auto-allow reason gains the stage: `dspa: judge approved (stage 2, model)`.
 
-## 4. Phasing (proposal)
+## 4. Phasing
 
-- **Phase 1 — done** (this session): rm-branch non-rm-dangerous filter
-  (`4957afc`); dspa stop-tag in the decision log (`2f0da9c`). Suite 3210.
-- **Phase 2**: D1 (gate split — inline scripts/redirects/pipes judgeable) +
-  D2 (stage 2) + D6 (log kind). The doc-extract workload becomes the
-  fixture: replay its 17 python prompts through the new gate+judge.
+- **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
+  stop-tag in the decision log (`2f0da9c`). Suite 3210.
+- **Phase 2 — done** (2026-08-23): D1 gate split (`0ac786e`), D2 stage 2
+  (`3ee25e8`), D6 log kind (`360bac4`). The original 17 doc-extract python
+  lines were lost when the pre-reload log was deleted; the fixture is a
+  representative reconstruction (test/dspa-gate.test.ts, "doc-extract
+class"). Suite 3229.
 - **Phase 3**: D3 (dir-granted file writes judged) + D4 (denial flow +
-  escalation counters).
+  escalation counters), armed with stop-tag + deny-kind data.
 
 ## 5. Open questions (grill order)
 
