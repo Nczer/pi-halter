@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { PermissionRequest, Decision } from "./decision-engine";
+import type { PermissionRequest, Decision, PromptData } from "./decision-engine";
 import { decide } from "./decision-engine";
 import { pdTargetLabel } from "./prompt-builder";
 import { logDecision, type DspModeTag } from "./decision-log";
@@ -8,7 +8,7 @@ import type { Store } from "./store";
 import { isDspaActive, recordDspaAutoAllowed, updateDspaWidget } from "./dspa-mode";
 import { isDspatActive } from "./dspat-mode";
 import { checkDspaGate } from "./dspa-gate";
-import { getJudgeVerdict, judgeStatus } from "./judge-prompt";
+import { getJudgeVerdict, getStage2Verdict, judgeStatus } from "./judge-prompt";
 import type { JudgeResult } from "./judge";
 
 /** Result of showing a permission prompt. */
@@ -76,15 +76,50 @@ type RejectHandler = (
  * auto-allow — the deterministic hard gate (its code-produced reason is
  * safe to accumulate) or the judge (only the declined/failed fact, never
  * the verdict content — verdict stats stay session-scoped by design).
+ * The stage is plumbing (which judge layer decided), not verdict content:
+ *  - `judge: declined (stage 2)` — the intent pass rendered a verdict that
+ *    did not auto-allow (the final call on the operation);
+ *  - `judge: stage 2 failed` — the stateless pass rendered a verdict but
+ *    the intent pass produced none (timeout/auth/model — an infra fact);
+ *  - `judge: <note>` — no verdict at all.
  * undefined outside dspa prompt fall-throughs.
  */
 function dspaStopTag(f: DspaFallthrough | undefined): string | undefined {
   if (!f) return undefined;
   if (!f.gate.ok) return `gate: ${f.gate.reason}`;
-  if (f.verdict) return "judge: declined";
+  if (f.verdict) return f.stage === 2 ? "judge: declined (stage 2)" : "judge: stage 2 failed";
   return `judge: ${f.note ?? "no verdict"}`;
 }
 
+/** Record + surface one dspa auto-allow (D6: the log reason carries the
+ * stage — which judge layer approved — and the model that rendered it). */
+function dspaAutoAllowed(
+  request: PermissionRequest,
+  pd: PromptData,
+  ctx: ExtensionContext,
+  verdict: JudgeResult,
+  stage: 1 | 2,
+): void {
+  logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (stage ${stage}, ${verdict.model})` }, "dspa");
+  try {
+    ctx.ui.notify(`✓ Judge auto-allowed (stage ${stage}): ${verdict.explanation}`, "info");
+  } catch {
+    /* toast must never break the allow */
+  }
+  recordDspaAutoAllowed(verdict.model, pdTargetLabel(pd));
+  updateDspaWidget(ctx);
+}
+
+/**
+ * Two-stage dspa attempt (docs/dspa-redesign.md, D2/Q4):
+ *  1. Hard gate (dspa-gate.ts) — the floor; failure → fall-through.
+ *  2. Stage 1 (stateless, cached): approve+low → auto-allow.
+ *  3. Stage 2 (reasoning-blind session context, uncached): runs when stage
+ *     1 did not auto-allow; approve+{low, medium} → auto-allow. Its verdict
+ *     is final — approve+high and reject never auto-allow (phase 2: both
+ *     still prompt; the phase-3 denial flow changes only the destination).
+ * Any judge failure resolves to fall-through — never an allow.
+ */
 async function tryDspaAutoAllow(
   request: PermissionRequest,
   decision: Extract<Decision, { kind: "prompt" }>,
@@ -94,30 +129,35 @@ async function tryDspaAutoAllow(
   const pd = decision.promptData;
   const gateResult = await checkDspaGate(pd, store);
   if (!gateResult.ok) {
-    return { autoAllowed: false, fallthrough: { gate: gateResult, verdict: null } };
+    return { autoAllowed: false, fallthrough: { gate: gateResult, verdict: null, stage: null } };
   }
-  const verdict = await getJudgeVerdict(pd, ctx, store);
-  if (verdict && verdict.approve === "approve" && verdict.risk === "low") {
-    logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (${verdict.model})` }, "dspa");
-    try {
-      ctx.ui.notify(`✓ Judge auto-allowed: ${verdict.explanation}`, "info");
-    } catch {
-      /* toast must never break the allow */
-    }
-    recordDspaAutoAllowed(verdict.model, pdTargetLabel(pd));
-    updateDspaWidget(ctx);
-    return { autoAllowed: true, fallthrough: { gate: gateResult, verdict } };
+  // Stage 1 — stateless (the packet's static analysis is the whole input).
+  const v1 = await getJudgeVerdict(pd, ctx, store);
+  if (v1 && v1.approve === "approve" && v1.risk === "low") {
+    dspaAutoAllowed(request, pd, ctx, v1, 1);
+    return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v1, stage: 1 } };
   }
-  // Gate passed but no approving low-risk verdict. If the verdict is
-  // missing entirely, say WHY (invalid judge state or failed call) so the
-  // fall-through prompt is never silently bare.
-  const jstatus = verdict ? null : judgeStatus(ctx);
-  const note = verdict
-    ? undefined
-    : jstatus!.state === "invalid"
-      ? `judge invalid: ${jstatus!.reason}`
-      : "judge call failed";
-  return { autoAllowed: false, fallthrough: { gate: gateResult, verdict, note } };
+  // Stage 2 — intent pass (session context, uncached, final verdict).
+  const v2 = await getStage2Verdict(pd, ctx, store);
+  if (v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium")) {
+    dspaAutoAllowed(request, pd, ctx, v2, 2);
+    return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v2, stage: 2 } };
+  }
+  // Gate passed but neither stage auto-allowed. The fall-through prompt
+  // carries the FINAL verdict (stage 2 when it rendered one); when a stage
+  // produced no verdict, say WHY so the prompt is never silently bare.
+  const final = (v2 ?? v1) ?? null;
+  let note: string | undefined;
+  if (!v2 && !v1) {
+    const jstatus = judgeStatus(ctx);
+    note = jstatus.state === "invalid" ? `judge invalid: ${jstatus.reason}` : "judge call failed";
+  } else if (v1 && !v2) {
+    note = "stage 2 (session context) unavailable — stateless verdict only";
+  }
+  return {
+    autoAllowed: false,
+    fallthrough: { gate: gateResult, verdict: final, stage: v2 ? 2 : v1 ? 1 : null, note },
+  };
 }
 
 export async function gate(

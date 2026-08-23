@@ -388,6 +388,44 @@ describe("judge cache", () => {
     expect(r2.cached).toBe(false);
     expect(calls).toHaveLength(2);
   });
+
+  it("uncached: the same operation calls the model again and pollutes nothing", async () => {
+    const calls: CapturedCall[] = [];
+    const opts: JudgeOptions = {
+      ...baseOpts,
+      uncached: true,
+      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+    };
+    const r1 = await judge(baseInput, opts);
+    const r2 = await judge(baseInput, opts);
+    expect(r1.cached).toBe(false);
+    expect(r2.cached).toBe(false);
+    expect(calls).toHaveLength(2);
+    // The uncached result must not be served to a later cached call.
+    const cachedCalls: CapturedCall[] = [];
+    await judge(baseInput, { ...baseOpts, complete: fixedComplete(() => toolCallReply(VERDICT), cachedCalls) });
+    expect(cachedCalls).toHaveLength(1);
+  });
+
+  it("systemPrompt + extraPacket: the stage-2 inputs reach the model call", async () => {
+    const calls: CapturedCall[] = [];
+    const opts: JudgeOptions = {
+      ...baseOpts,
+      systemPrompt: "STAGE2 PROMPT",
+      extraPacket: "## Session context\n### User messages\ncompare the two extractions",
+      uncached: true,
+      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+    };
+    await judge(baseInput, opts);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].context.systemPrompt).toContain("STAGE2 PROMPT");
+    const user = (calls[0].context.messages[0].content as string);
+    expect(user).toContain("## Command");
+    // The extra section rides AFTER the operation packet (the operation
+    // stays the judgment subject; the context annotates it).
+    expect(user).toContain("## Session context");
+    expect(user.indexOf("## Session context")).toBeGreaterThan(user.indexOf("## Command"));
+  });
 });
 
 // ── Settings ──
