@@ -155,6 +155,9 @@ describe("auto-allow path", () => {
       expect(lines[0].kind).toBe("auto-allow");
       expect(lines[0].mode).toBe("dspa");
       expect(String(lines[0].reason)).toContain("dspa: judge approved (m-test)");
+      // The auto-allow line carries no stop-tag — nothing declined.
+      expect(lines[0].dspa).toBeUndefined();
+      expect("dspa" in lines[0]).toBe(false);
     } finally {
       spy.mockRestore();
     }
@@ -187,6 +190,7 @@ describe("fall-through", () => {
     expect(getDspaStats().autoAllowed).toBe(0);
     expect(logLines()[0].kind).toBe("prompt");
     expect(logLines()[0].mode).toBe("dspa");
+    expect(logLines()[0].dspa).toBe("judge: declined");
   });
 
   it("judge unavailable (null) → plain prompt, no verdict", async () => {
@@ -195,6 +199,7 @@ describe("fall-through", () => {
     await runGate(bashDecision("make test"));
     const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
     expect(fallthrough?.verdict).toBeNull();
+    expect(logLines()[0].dspa).toBe("judge: judge call failed");
   });
 
   it("hard gate block (network) → prompt with gate reason, judge never called", async () => {
@@ -203,6 +208,7 @@ describe("fall-through", () => {
     expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
     const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
     expect(fallthrough?.gate.ok).toBe(false);
+    expect(String(logLines()[0].dspa)).toMatch(/^gate: /);
   });
 
   it("file outside base → prompt with gate reason, judge never called", async () => {
@@ -239,6 +245,7 @@ describe("decision-log mode tag", () => {
     const line = logLines()[0];
     expect(line.kind).toBe("prompt");
     expect(line.mode).toBe("dspat");
+    expect(line.dspa).toBeUndefined();
   });
 
   it("gate auto-allow under dspa is the gate's decision — untagged", async () => {
