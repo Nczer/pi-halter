@@ -75,7 +75,15 @@ export interface DecisionLogEntry {
   /** ISO timestamp. */
   ts: string;
   tool: "bash" | "file" | "mcp";
-  kind: Decision["kind"];
+  /**
+   * `deny` is the phase-3 dspa denial flow (D4): a judge-rejected
+   * operation returned to the AGENT instead of a user prompt. It is a
+   * synthetic entry (no Decision exists for it) emitted by the denial
+   * flow, not by logDecision; phase 2 does not emit it. Its reason is
+   * `dspa: judge denied (stage N)` — plumbing only, no model text
+   * (verdict content stays session-scoped per the NOTE below).
+   */
+  kind: Decision["kind"] | "deny";
   /**
    * The dsp regime this decision was made under; absent = manual regime.
    * A regime marker, not verdict content (see the NOTE below).
