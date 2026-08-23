@@ -1,9 +1,11 @@
 /**
- * dspa-gate.ts — deterministic hard gate for /dspa auto-allow.
+ * dspa-gate.ts — deterministic hard floor for /dspa auto-allow (D1).
  *
  * The gate uses halter's real analysis (analyzeCommand), so these cases run
- * through the actual parser. Fail closed: every dangerous class must block;
- * only plain in-base work passes.
+ * through the actual parser. Fail closed on the floor: network egress,
+ * credentials, outside-base paths, obscured command positions, and the rm
+ * carve-out must block; everything else (inline scripts, redirects, pipes,
+ * risk reasons) is judgeable and passes to the judge.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { checkDspaGate } from "../dspa-gate";
@@ -145,7 +147,7 @@ describe("bash", () => {
     if (!r.ok) expect(r.reason).toContain("network egress");
   });
 
-  it("blocks obfuscation / unsafe patterns", async () => {
+  it("blocks obscured command position (variable indirection)", async () => {
     const r = await checkDspaGate(bashPd("f=rm; $f -rf ./build"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("obscured");
@@ -163,10 +165,40 @@ describe("bash", () => {
     if (!r.ok) expect(r.reason).toContain("credential");
   });
 
-  it("respects halter's own danger list (cargo is always-prompt for halter)", async () => {
+  it("judgeable: halter-dangerous commands (cargo) reach the judge (D1)", async () => {
+    // No longer a floor check — the judge sees the command + risk digest
+    // and decides (a wrong verdict at most produces a prompt).
     const r = await checkDspaGate(bashPd("cargo build --release"), store);
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toMatch(/unsafe pattern|dangerous/);
+    expect(r.ok).toBe(true);
+  });
+
+  it("judgeable: the doc-extract class (D1 — reconstructed fixture)", async () => {
+    // The 2026-08-23 doc-extract session's dominant prompt class: fully-
+    // visible inline python and in-base file work, hard-gate rejected by
+    // hasUnsafePattern/risk.dangerous (the original 17 log lines were
+    // deleted with the pre-reload log; this is a representative replay).
+    const docExtractClass = [
+      // heredoc comparing two local extractions (the session's actual case)
+      `python3 - <<'EOF'\nimport re\na = set(re.findall(r"\\w+", open("a.txt").read().lower()))\nb = set(re.findall(r"\\w+", open("b.txt").read().lower()))\noverlap = len(a & b) / max(1, min(len(a), len(b)))\nprint(f"overlap: {overlap:.2%}")\nEOF`,
+      // -c one-liner over a local file
+      `python3 -c "import json; print(sum(1 for line in open('manifest.tsv') if line.strip()))"`,
+      // heredoc writing a report (in-base output redirect)
+      `python3 - <<'PY' > report.txt\nprint("pages: 42")\nprint("images: 7")\nPY`,
+      // pipe into python stdin (content fully visible)
+      `cat a.txt | python3 -c "import sys; print(len(sys.stdin.read()))"`,
+      // in-base file-modification patterns
+      `sed -i 's/old/new/' notes.md`,
+      `cp notes.md notes.bak.md`,
+      `mv tmp.md final.md`,
+      // tee self-write (the medium self-write noise shape)
+      `echo done | tee build.log`,
+      // command substitution with a literal body
+      `grep -c TODO $(ls src/*.ts | head -3)`,
+    ];
+    for (const cmd of docExtractClass) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd.slice(0, 60)).toBe(true);
+    }
   });
 
   it("passes in-base builds/tooling halter considers safe", async () => {

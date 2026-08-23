@@ -1,17 +1,20 @@
 /**
- * dspa-gate.ts — deterministic hard gate for /dspa auto-allow.
+ * dspa-gate.ts — deterministic hard floor for /dspa auto-allow.
  *
- * The code-enforced floor: an operation may only reach the judge (and be
- * auto-allowed) if it passes every check here. The LLM never has authority
- * over these — a wrong judge verdict can at most produce a prompt, never an
- * auto-allowed operation the gate would have forbidden.
+ * The code-enforced floor (docs/dspa-redesign.md, D1): an operation may only
+ * reach the judge (and be auto-allowed) if it passes every check here. The
+ * LLM never has authority over these. Everything the gate does NOT check is
+ * JUDGEABLE — the judge sees the full command text (including inline script
+ * bodies) plus halter's analysis digest and decides; a wrong verdict can at
+ * most produce a prompt, never an auto-allowed operation the floor forbids.
  *
- * Checks (fail closed on any):
- *  - bash: parseable, no unsafe pattern (obfuscation/subshell/redirect — the
- *    same class that always prompts), halter's risk not "dangerous", no
- *    obscured command position (variable indirection — NOT flagged by
- *    halter's own analysis, checked here explicitly), no credential-pattern
- *    paths, no network egress, no paths outside the session base.
+ * Hard floor (fail closed on any):
+ *  - bash: parseable, no obscured command position (variable indirection —
+ *    NOT flagged by halter's own analysis, checked here explicitly), no
+ *    credential-pattern paths, no network egress, no paths outside the
+ *    session base. Unsafe patterns (inline scripts, redirects, pipes,
+ *    subshells) and risk reasons are NOT floor checks — judgeable: the
+ *    packet already carries the full command text and the analysis digest.
  *  - rm carve-out (dspa only): halter always flags rm as dangerous, and
  *    danger patterns always prompt even after Always grants. An rm command
  *    may reach the judge only when every rm target is explicit, not the
@@ -19,7 +22,8 @@
  *    of a create-then-delete set (a path this same command writes via
  *    redirect/tee/touch/mkdir in an earlier segment AND rms). With -r/-R
  *    the target (if it exists) must be a directory or self-written.
- *    Non-rm danger reasons still block. The judge still approves.
+ *    Non-rm danger reasons still block the carve-out (rm's neighborhood is
+ *    bounded by design). The judge still approves.
  *  - file: inside the session base, no credential-pattern warning.
  *  - mcp: never auto-allowed — the gate has no model of server behavior, so
  *    the judge's word alone is not enough for automatic execution.
@@ -98,10 +102,12 @@ export async function checkDspaGate(
     if (otherDanger.length > 0) {
       return { ok: false, reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}` };
     }
-  } else {
-    if (analysis.safety.hasUnsafePattern) return { ok: false, reason: "unsafe pattern (obfuscation/subshell/redirect)" };
-    if (analysis.risk.dangerous) return { ok: false, reason: `dangerous: ${analysis.risk.reasons.join("; ").slice(0, 120)}` };
   }
+  // Non-rm: unsafe patterns and risk reasons are JUDGEABLE (D1) — inline
+  // scripts, redirects, pipes, subshells, file-modification patterns. The
+  // packet carries the full command text (heredoc bodies included) plus
+  // halter's analysis digest; the judge decides. The floor checks below
+  // (obscured position, credentials, network, outside base) still apply.
   const obscured = obscuredHit(analysis.segments);
   if (obscured) return { ok: false, reason: `obscured command position (${obscured})` };
   if (pd.credentialRule) return { ok: false, reason: `credential pattern (${pd.credentialRule})` };
