@@ -82,6 +82,18 @@ export interface DecisionLogEntry {
    */
   mode?: DspModeTag;
 
+  /**
+   * dspa prompt fall-through only (absent otherwise): which layer stopped
+   * the auto-allow before the prompt was shown.
+   *  - `gate: <reason>` — the deterministic hard gate (code-produced;
+   *    accumulates safely across sessions).
+   *  - `judge: declined` — the gate passed, the judge's verdict was not
+   *    approve+low (verdict content stays session-scoped, see the NOTE).
+   *  - `judge: <note>` — the gate passed but no verdict was produced
+   *    (judge invalid or call failed — plumbing, not verdict quality).
+   */
+  dspa?: string;
+
   /** Block reason, or a one-line summary of why a prompt was needed; null for auto-allow. */
   reason: string | null;
   /** Bash command (truncated), file path, or "server/tool". */
@@ -97,7 +109,10 @@ export interface DecisionLogEntry {
  * session-scoped (dspat-mode.ts) and never accumulate cross-session.
  * This log measures the GATE's decisions, which are model-independent.
  * The `mode` tag (DspModeTag) marks which judge mode a prompt was shown
- * under — it is a regime marker, not verdict content.
+ * under — it is a regime marker, not verdict content. The `dspa` stop-tag
+ * on dspa prompt lines likewise records only WHICH layer stopped the
+ * auto-allow (the gate's code-produced reason, or the fact that the judge
+ * declined/failed) — still no verdict content.
  */
 
 /** Resolve the active log file. null = logging disabled. */
@@ -115,11 +130,14 @@ export function resolveLogPath(): string | null {
  * @param mode - dsp regime tag (see DspModeTag); omit for the manual regime.
  *   undefined is dropped by JSON.stringify, so untagged lines carry no
  *   `mode` key at all.
+ * @param dspaStop - dspa stop-tag (see DecisionLogEntry.dspa); omit outside
+ *   dspa prompt fall-throughs.
  */
 export function logDecision(
   request: PermissionRequest,
   decision: Decision,
   mode?: DspModeTag,
+  dspaStop?: string,
 ): void {
   try {
     const file = resolveLogPath();
@@ -130,6 +148,7 @@ export function logDecision(
       tool: request.type,
       kind: decision.kind,
       mode,
+      dspa: dspaStop,
       reason:
         decision.kind === "block"
           ? decision.reason

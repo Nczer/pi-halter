@@ -26,7 +26,7 @@ import {
 	type DecisionLogEntry,
 } from "../decision-log";
 import { DECISION_LOG_ENABLED } from "../config/logging";
-import type { BashRequest, FileRequest, McpRequest } from "../decision-engine";
+import type { BashRequest, Decision, FileRequest, McpRequest } from "../decision-engine";
 
 const noUiCtx = { hasUI: false } as never;
 const noReject = (() => {
@@ -91,6 +91,46 @@ describe("decision log", () => {
 		expect(tagged).toMatchObject({ kind: "auto-allow", mode: "dspa", reason: "dspa: judge approved (m-test)" });
 		expect(plain.mode).toBeUndefined();
 		expect("mode" in plain).toBe(false);
+	});
+
+	it("writes the dspa stop-tag on prompt fall-throughs; absent when omitted", () => {
+		const filePrompt = {
+			kind: "prompt",
+			promptData: {
+				type: "file",
+				action: "Write",
+				filePath: "x.txt",
+				resolved: "/x/x.txt",
+				cwd: tmp,
+				outsideDir: null,
+				isWriteOp: true,
+				warnedRule: null,
+				symlinkHint: null,
+				exists: false,
+			},
+		} as Decision;
+		logDecision(
+			{ type: "bash", command: "make test", cwd: tmp } as BashRequest,
+			filePrompt,
+			"dspa",
+			"gate: unsafe pattern (obfuscation/subshell/redirect)",
+		);
+		logDecision(
+			{ type: "bash", command: "make test", cwd: tmp } as BashRequest,
+			filePrompt,
+			"dspa",
+			"judge: declined",
+		);
+		logDecision({ type: "bash", command: "pwd", cwd: tmp } as BashRequest, { kind: "auto-allow" });
+		const [gateStop, judgeStop, plain] = lines(logFile);
+		expect(gateStop).toMatchObject({
+			kind: "prompt",
+			mode: "dspa",
+			dspa: "gate: unsafe pattern (obfuscation/subshell/redirect)",
+		});
+		expect(judgeStop.dspa).toBe("judge: declined");
+		expect(plain.dspa).toBeUndefined();
+		expect("dspa" in plain).toBe(false);
 	});
 
 	it("logs a block decision with the reason", async () => {

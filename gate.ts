@@ -71,6 +71,20 @@ type RejectHandler = (
  * prompt display), or null when the gate stopped it before the judge ran.
  * Any judge failure resolves to null-ish fall-through — never an allow.
  */
+/**
+ * The dspa stop-tag for the decision log: which layer stopped the
+ * auto-allow — the deterministic hard gate (its code-produced reason is
+ * safe to accumulate) or the judge (only the declined/failed fact, never
+ * the verdict content — verdict stats stay session-scoped by design).
+ * undefined outside dspa prompt fall-throughs.
+ */
+function dspaStopTag(f: DspaFallthrough | undefined): string | undefined {
+  if (!f) return undefined;
+  if (!f.gate.ok) return `gate: ${f.gate.reason}`;
+  if (f.verdict) return "judge: declined";
+  return `judge: ${f.note ?? "no verdict"}`;
+}
+
 async function tryDspaAutoAllow(
   request: PermissionRequest,
   decision: Extract<Decision, { kind: "prompt" }>,
@@ -132,7 +146,7 @@ export async function gate(
 
   // Decision log (JSONL): one line per tool call, including fail-closed
   // synthetic blocks. Fire-and-forget — logDecision never throws.
-  logDecision(request, decision, dspModeTag(decision, ctx));
+  logDecision(request, decision, dspModeTag(decision, ctx), dspaStopTag(dspaFallthrough));
 
   if (decision.kind === "auto-allow") return;
 
