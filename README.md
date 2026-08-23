@@ -12,7 +12,7 @@ A halter for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, and `mcp` 
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
 - **No-UI fallback** — auto-blocks when no UI is available
 - **DSP mode** — `/dsp` command toggles "Dangerously Skip Permissions" to bypass all checks (with persistent warning widget)
-- **Judge modes** — `/dspa` auto-allows operations that pass a deterministic hard gate *and* an approving low-risk LLM-judge verdict (visible toast); `/dspat` shows the judge's verdict in every bash prompt and records agreement stats; both fail toward the prompt. The modes are one machine — **manual / dspa / dspat / dsp**: enabling one leaves the others off (switching resets the left judge mode's session stats)
+- **Judge modes** — `/dspa` auto-allows operations that pass a deterministic hard floor *and* a two-stage LLM-judge verdict (stateless pass, then an intent pass with reasoning-blind session context) (visible toast); `/dspat` shows the judge's verdict in every bash prompt and records agreement stats; both fail toward the prompt. The modes are one machine — **manual / dspa / dspat / dsp**: enabling one leaves the others off (switching resets the left judge mode's session stats)
 - **Judge settings** — `/judge` (bare = show; `on|off`, `model <provider/id|session>`, `thinking <level>`, `timeout <ms>`) — persisted in `~/.pi/agent/halter.json`
 - **Decision log** — `/halter-decision-log` records every gate decision to a JSONL file (see *Configuration → Decision log*)
 
@@ -39,7 +39,7 @@ When the user selects "Always", a second prompt requires explicit confirmation b
 The judge is a stateless one-shot model call at the permission prompt: its entire input is a judgment packet — the command (capped), halter's static-analysis digest, and — when the command executes an untrusted local script — the script's content as fenced untrusted data. No conversation history, no session state. Any failure (model unresolved, auth, timeout, malformed reply) resolves to "no verdict": the prompt shows exactly what it would have shown without the judge. The judge never alters the gate's decision on its own.
 
 - **`/dspat`** — the prompt body gains a `💭 Judge:` block (explanation + `→ suggests: APPROVE|REJECT|DEFER (<risk>)` — defer is its own word, not collapsed into REJECT); the user's choice is recorded against the verdict (session stats, incl. disagreements)
-- **`/dspa`** — before any prompt, the deterministic hard gate (`dspa-gate.ts`: dangerous classes, network egress, obfuscation, credential patterns, outside-base paths) runs, then the judge; only `approve` + `low` risk past the gate auto-allows (toast). The gate is code, the model is advisory
+- **`/dspa`** — before any prompt, the deterministic hard floor (`dspa-gate.ts`: parse errors, obscured command positions, credential patterns, network egress, outside-base paths, the rm carve-out) runs — everything else is judgeable (the judge sees the full command, including inline script bodies, plus halter's analysis). Then the two-stage judge: stage 1 (stateless) auto-allows `approve` + `low` only; when it doesn't, stage 2 (same packet + reasoning-blind session context — the user's last messages, a tool-call digest, session grants; never agent prose or tool outputs) auto-allows `approve` + `low|medium`. `approve` + `high` and rejects always prompt; auto-allows toast. The floor is code, the model is advisory (`docs/dspa-redesign.md`)
 - **One mode at a time** — manual / dspa / dspat / dsp is a single machine: enabling one disables the others (enabling `/dsp` always confirms; leaving a judge mode resets its session stats; a cancelled `/dsp` confirmation keeps the current mode)
 - **Default mode** — an on-demand `💭 Explain` prompt option runs the judge when picked and appends the same full verdict block (it does not record agreement stats: the human picks when to consult, so those decisions are a self-selected subset)
 
@@ -146,7 +146,8 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── judge.ts                      Judge settings + the one-shot model call (stateless)
 ├── judge-prompt.ts               Judge packet, verdict, widget, on-demand explanation
 ├── dspa-mode.ts                  /dspa toggle + auto-allow audit widget
-├── dspa-gate.ts                  Deterministic hard gate for /dspa auto-allow
+├── dspa-gate.ts                  Deterministic hard floor for /dspa auto-allow
+├── session-context.ts            Reasoning-blind session context for the stage-2 intent pass
 ├── dspat-mode.ts                 /dspat toggle + agreement-stats widget
 ├── decision-log.ts               JSONL decision log (off by default)
 ├── halter-settings.ts            Owner of ~/.pi/agent/halter.json (stat-cached reads, corrupt → .bak + defaults)
@@ -173,8 +174,9 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 - **Segment Helpers** (`segment-helpers.ts`) — shared utilities: `checkStageDanger()`, `isGitDangerous()`, `isWrapperRunningWrite()`, `getCommandSignature()`, `hasWriteRedirect()`, `isFindExecWrite()`, `isFdExecWrite()`, `isRgPreWrite()`
 - **Prompt Builder** — pure function. All prompt wording lives in one module (prompt labels + the decision-log why-summary). Truncates long commands to 20 lines
 - **Prompt UI** (`prompts.ts`) — two-tier selection flow on native `ctx.ui.select` / `ctx.ui.input`; the only module that displays the confirmation prompt
-- **Judge** (`judge.ts`, `judge-prompt.ts`) — stateless one-shot model call. Verdicts are advisory: display-only by default, auto-allow only behind `/dspa`'s hard gate
-- **DSP gate** (`dspa-gate.ts`) — deterministic hard gate for `/dspa`: dangerous classes, network egress, obfuscation, credential patterns, outside-base paths. Judges the analysis carried on the prompt — one tree-sitter parse per decision
+- **Judge** (`judge.ts`, `judge-prompt.ts`) — one-shot model call, two dspa stages: stage 1 stateless (LRU-cached on the operation); stage 2 adds the session context and runs uncached (its context includes the just-blocked op → a hit is impossible). Verdicts are advisory: display-only by default, auto-allow only behind `/dspa`'s hard floor
+- **DSP floor** (`dspa-gate.ts`) — deterministic hard floor for `/dspa`: parse errors, obscured command positions, credential patterns, network egress, outside-base paths, the rm carve-out. Everything else is judgeable. Judges the analysis carried on the prompt — one tree-sitter parse per decision
+- **Session context** (`session-context.ts`) — the reasoning-blind `## Session context` section for stage 2 (user messages + tool-call digest + grants; never agent prose or tool outputs — a compromised agent can't talk the approver into compliance)
 - **Settings** (`halter-settings.ts`) — sole owner of `~/.pi/agent/halter.json` (judge settings + log toggle): mtime+size stat cache, corrupt file → `.bak` + defaults, top-level merge writes
 - **Decision log** (`decision-log.ts`) — fire-and-forget JSONL of gate decisions (off by default; see *Configuration*)
 
@@ -216,7 +218,8 @@ Follow a bash command (`ls -la`) through the system:
 | `analysis/mcp-resolver.ts` | MCP server/tool resolution |
 | `prompt-builder.ts` | Build prompt content |
 | `prompts.ts` | Two-tier confirmation UI |
-| `dspa-gate.ts` | Deterministic hard gate for /dspa auto-allow |
+| `dspa-gate.ts` | Deterministic hard floor for /dspa auto-allow |
+| `session-context.ts` | Reasoning-blind session context (stage-2 intent pass) |
 | `judge-prompt.ts` | Judge packet + verdict (stateless model call) |
 | `decision-log.ts` | JSONL decision log (off by default) |
 | `store.ts` | Auto-allow state management |
@@ -236,7 +239,7 @@ Config is split across focused modules in `config/`:
 
 ### Decision log
 
-**Off by default.** When enabled, every decision the gate makes is appended to a JSONL log — one line per tool call, `auto-allow`, `prompt` (with a one-line why), and `block` (with the reason), plus the command/path and cwd. It exists to measure blast radius: after changing gate code, diff what now prompts vs. what used to auto-allow; or mine repeatedly-prompting commands into contract rows. The log records what the *gate* decided — user approvals/rejections of prompts are not logged. Lines made under a judge mode carry a `mode` tag — `dspa` (a prompt that fell through the judge auto-allow, or the judge auto-allow itself) or `dspat` (a prompt shown with the verdict) — so judge-mode decisions can be debugged separately from the manual regime; untagged lines are manual. (A regime marker, not verdict content: verdicts stay session-scoped, and the dsp bypass regime never reaches the log — the gate is skipped.)
+**Off by default.** When enabled, every decision the gate makes is appended to a JSONL log — one line per tool call, `auto-allow`, `prompt` (with a one-line why), and `block` (with the reason), plus the command/path and cwd. (`deny` is a reserved kind for the planned judge-denial flow — an op the judge rejects returned to the agent instead of a prompt; not emitted yet.) It exists to measure blast radius: after changing gate code, diff what now prompts vs. what used to auto-allow; or mine repeatedly-prompting commands into contract rows. The log records what the *gate* decided — user approvals/rejections of prompts are not logged. Lines made under a judge mode carry a `mode` tag — `dspa` (a prompt that fell through the judge auto-allow, or the judge auto-allow itself) or `dspat` (a prompt shown with the verdict) — so judge-mode decisions can be debugged separately from the manual regime; untagged lines are manual. (A regime marker, not verdict content: verdicts stay session-scoped, and the dsp bypass regime never reaches the log — the gate is skipped.)
 
 - Enable: `/halter-decision-log [on|off]` (bare = toggle) — persisted in `~/.pi/agent/halter.json` (halter's own settings file, like gallop's `gallop.json`; pi owns `settings.json`). Compile-time default: `DECISION_LOG_ENABLED` in `config/logging.ts` (false)
 - Transient override: `HALTER_DECISION_LOG=<path>` (enables at that path); `HALTER_DECISION_LOG=off` forces off
@@ -256,8 +259,7 @@ jq -r 'select(.mode=="dspat" and .kind=="prompt") | .target' .log/decisions.json
 # manual-regime prompts (no judge mode active)
 jq -r 'select(.kind=="prompt" and .mode==null) | .reason' .log/decisions.jsonl | sort | uniq -c | sort -rn | head
 ```
-
-Caveat: on a dspa fall-through prompt line, `reason` is the standard one-line risk summary — whether the *hard gate* or the *judge* declined is shown in the prompt body (`🚧 dspa: …` / verdict block), not in the log.
+The dspa prompt line additionally carries a `dspa` stop-tag — which layer stopped the auto-allow: `gate: <reason>` (the deterministic floor; code-produced), `judge: declined (stage 2)` (the intent pass rendered a final verdict that did not auto-allow), `judge: stage 2 failed` (only the stateless verdict rendered), `judge: <note>` (no verdict at all). And the dspa auto-allow line's `reason` carries the approving stage + model (`dspa: judge approved (stage 2, <model>)`). Still no verdict *content* — verdicts stay session-scoped.
 
 ### Iterating policy from the log (debug/fix cycle)
 
