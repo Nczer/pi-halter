@@ -262,10 +262,44 @@ explicit (the existing bar: no globs/vars/tilde) and non-recursive passes
 the floor to the judge. Recursive (`rm -rf /tmp/x`), `/tmp` itself, and
 computed targets stay on the floor.
 
-What did NOT change: the `/` stop in the log was a true positive
-(`find / -name tty.js` — it really scans root); outside-base reads stay
-user-only (Q1); MCP stays never-auto-allowed; the single `rm target not
-explicit ($d)` stop is by design.
+What did NOT change: outside-base reads stay user-only (Q1); MCP stays
+never-auto-allowed; the single `rm target not explicit ($d)` stop is by
+design.
+
+### D9. Root scans get a dedicated stop; the root is never an Always grant (2026-08-24)
+
+The log's `touches paths outside base (/)` stop was a true positive —
+`find / -name tty.js` really scans root — but the generic reason hid what
+the command does, and the prompt on it was worse than the stop: its
+"Always" tiers offered `Read /*` (the primary rule carried readDirs ["/"]),
+and an /etc file prompt's broader umbrella reached up to `/` (one click =
+write the whole disk). A full-disk scan is conspicuous in plain sight —
+no judge ambiguity, no obfuscation — so it gets its own deterministic
+reason instead of the generic outside-base one.
+
+**Dedicated root-scan stop** (floor + analysis, all modes):
+
+- The disk evaluator flags a scanner (`find`, `grep`, `egrep`, `fgrep`,
+  `rg`, `ag`, `locate`) whose path argument is exactly `/` with
+  `full filesystem scan (<cmd> /)` (medium — read-only traversal, heavy
+  and conspicuous, not dangerous).
+- The dspa floor stops the same shape with the same reason before the
+  judge (the judge could approve a root scan; it should not need to).
+- `find /etc`, `ls /`, `grep -rn x /home/u` keep the ordinary
+  outside-base reason (they are not full-filesystem scans).
+
+**The root is never an Always grant** (prompt + rule generation, all modes):
+
+- Bash dir tiers filter `/` out of `outsideDirs`: a root-only path prompt
+  (`find /`) offers NO dir tier — no dead "Always: Read /*" button; mixed
+  prompts (`ls / /etc`) grant only the non-root dirs.
+- File prompts: a file directly under `/` falls back to the file-level
+  grant (label + rule match); the broader umbrella (inside- and
+  outside-cwd) stops before root, so an `/etc` file prompt offers no
+  broader option at all.
+- Scope: this is about the filesystem ROOT specifically. Granting
+  `/home/u` or `~/.pi` remains a legitimate one-click choice — Q1's
+  user-only scope grants are unchanged.
 
 ## 4. Phasing
 
@@ -288,6 +322,9 @@ class"). Suite 3229.
 - **Phase 3d — done** (2026-08-24): D8 (floor shrink: package-manager run
   forms + non-recursive /tmp scratch rm are judgeable; fetch forms and
   recursive/var/glob rm stay on the floor). Suite 3263.
+- **Phase 3e — done** (2026-08-24): D9 (dedicated `full filesystem scan
+  (<cmd> /)` stop in the floor + analysis; the root is never an Always
+  grant — bash dir tiers and file umbrellas stop before `/`). Suite 3272.
 
 ## 5. Open questions (grill order)
 
