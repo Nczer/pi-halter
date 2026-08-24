@@ -70,7 +70,8 @@ export function recordDspatOutcome(
   if (suggestedApprove === humanApproved) {
     stats.agreed++;
   } else {
-    stats.lastDisagreement = target.slice(0, 80);
+    // Flatten newlines — widget lines must never contain \n (see dspa-mode).
+    stats.lastDisagreement = target.replace(/[\r\n]+/g, " ").slice(0, 80);
   }
 }
 
