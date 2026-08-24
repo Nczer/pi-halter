@@ -47,7 +47,9 @@ export function recordDspaAutoAllowed(m: string, target: string): void {
     lastTarget = null;
   }
   autoAllowed++;
-  lastTarget = target.slice(0, 80);
+  // Flatten newlines: the widget line array is one element per screen row;
+  // an embedded \n makes the terminal wrap mid-row and desyncs the TUI diff.
+  lastTarget = target.replace(/[\r\n]+/g, " ").slice(0, 80);
 }
 
 export function getDspaStats(): {

@@ -73,6 +73,16 @@ describe("counters", () => {
     recordDspaAutoAllowed("m1", "x".repeat(200));
     expect(getDspaStats().lastTarget).toHaveLength(80);
   });
+
+  it("flattens newlines in multi-line targets (one widget element = one screen row)", () => {
+    // Regression: a multi-line python3 -c command auto-allowed under /dspa
+    // stored a raw \n in lastTarget; the widget line wrapped mid-row and
+    // desynced the TUI diff renderer.
+    recordDspaAutoAllowed("m1", 'cd /tmp/x && python3 -c "\na = 1\nb = 2\n"');
+    const t = getDspaStats().lastTarget;
+    expect(t).not.toMatch(/[\r\n]/);
+    expect(t).toBe('cd /tmp/x && python3 -c " a = 1 b = 2 "');
+  });
 });
 
 describe("widget", () => {

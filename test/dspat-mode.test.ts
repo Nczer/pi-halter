@@ -81,6 +81,13 @@ describe("stats", () => {
     recordDspatOutcome("m1", true, false, "x".repeat(200));
     expect(getDspatStats().lastDisagreement).toHaveLength(80);
   });
+
+  it("flattens newlines in multi-line disagreement targets", () => {
+    recordDspatOutcome("m1", true, false, 'python3 -c "\na = 1\nb = 2"');
+    const t = getDspatStats().lastDisagreement;
+    expect(t).not.toMatch(/[\r\n]/);
+    expect(t).toBe('python3 -c " a = 1 b = 2"');
+  });
 });
 
 describe("widget", () => {
