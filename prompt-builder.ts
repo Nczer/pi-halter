@@ -25,6 +25,9 @@ export interface BuiltPrompt {
   broaderPaths?: { label: string; dir: string }[];
   /** Whether the operation is a write (vs read) — used for accurate prompt text. */
   isWriteOp?: boolean;
+  /** D10: bare package names from a dspa untrusted-package stop — tier-1
+   *  offers a "Trust" option (session grant) when set. */
+  trustPackages?: string[];
 }
 
 /**

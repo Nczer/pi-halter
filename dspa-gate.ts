@@ -49,9 +49,17 @@ import {
   NETWORK_COMMANDS,
   GIT_NETWORK_SUBCOMMANDS,
   NETWORK_URL_RE,
+  fetchFormPackage,
 } from "./config";
 
-export type DspaGateResult = { ok: true } | { ok: false; reason: string };
+export type DspaGateResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: string;
+      /** D10: bare package names that stopped the command (prompt offers Trust). */
+      untrustedPackages?: string[];
+    };
 
 /**
  * Command position obscured by variable indirection, subshell, or backtick
@@ -371,6 +379,29 @@ export async function checkDspaGate(
   const obscured = obscuredHit(analysis.segments);
   if (obscured) return { ok: false, reason: `obscured command position (${obscured})` };
   if (pd.credentialRule) return { ok: false, reason: `credential pattern (${pd.credentialRule})` };
+  // D10 (docs/dspa-redesign.md): a fetchable run form names a package that
+  // may be FETCHED (and executed) on cache miss — the same fetch class the
+  // floor stops for fetch forms. Trust is per bare package name, granted
+  // only by the user's "Trust" click on the stop's prompt. Local run forms
+  // (npm run, uv run, bun <script>) execute repo-visible code and are never
+  // gated. The parser flattens subshell contents into segments, so
+  // `out=$(npx foo)` is seen too; only opaque indirection (eval, $f) stays
+  // judge-only (the obscured-position check above).
+  const untrusted: string[] = [];
+  for (const seg of analysis.segments) {
+    const words = seg.trim().split(/\s+/);
+    const first = words[0]?.toLowerCase() ?? "";
+    const pkg = fetchFormPackage(first, words);
+    if (pkg && !store.hasTrustedPackage(pkg)) untrusted.push(`${first} ${pkg}`);
+  }
+  if (untrusted.length > 0) {
+    const uniq = [...new Set(untrusted)];
+    return {
+      ok: false,
+      reason: `untrusted package (${uniq.slice(0, 3).join(", ")})`,
+      untrustedPackages: uniq.map((s) => s.split(/\s+/)[1]),
+    };
+  }
   // Full-filesystem scan (find /, grep -rn /): a dedicated stop reason —
   // conspicuous in plain sight, and the generic outside-base reason
   // ("touches paths outside base (/)") understates what the command does.

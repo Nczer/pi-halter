@@ -1712,3 +1712,50 @@ describe("Bash: cwd-bound exact-sig grants for relative-path tools (log FP clust
 		expect(d.kind).toBe("prompt");
 	});
 });
+
+describe("Bash: D10 trusted package run forms", () => {
+	it("npx <untrusted pkg> prompts (trust is what makes it auto-allow)", async () => {
+		const s = createStore();
+		const d = await decide({ type: "bash", command: "npx tsc --noEmit index.ts", cwd }, s);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("npx <trusted pkg> auto-allows deterministically (judge never runs)", async () => {
+		const s = createStore();
+		s.trustPackage("tsc");
+		const d = await decide({ type: "bash", command: "npx tsc --noEmit index.ts", cwd }, s);
+		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("trust is per package: an untrusted sibling still prompts", async () => {
+		const s = createStore();
+		s.trustPackage("tsc");
+		const d = await decide({ type: "bash", command: "npx vitest run", cwd }, s);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("local run forms are never trust-gated (npm run without grant prompts)", async () => {
+		const s = createStore();
+		s.trustPackage("test");
+		const d = await decide({ type: "bash", command: "npm run test", cwd }, s);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("trusted run form in a plain && chain auto-allows (user's dev loop)", async () => {
+		const s = createStore();
+		s.trustPackage("tsc");
+		s.trustPackage("vitest");
+		const d = await decide({ type: "bash", command: "npx tsc --noEmit index.ts && npx vitest run", cwd }, s);
+		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("version pins and scoped names resolve to the bare trust key", async () => {
+		const s = createStore();
+		s.trustPackage("tsc");
+		s.trustPackage("@org/tool");
+		const pinned = await decide({ type: "bash", command: "npx tsc@5.0.0 --noEmit index.ts", cwd }, s);
+		expect(pinned.kind).toBe("auto-allow");
+		const scoped = await decide({ type: "bash", command: "npx @org/tool run", cwd }, s);
+		expect(scoped.kind).toBe("auto-allow");
+	});
+});

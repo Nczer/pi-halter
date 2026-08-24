@@ -61,6 +61,7 @@ export function updateWidget(ctx: ExtensionContext): void {
   const readDirItems = filterSubPaths([...store.listAllowedReadDirs()]);
   const writeDirItems = filterSubPaths([...store.listAllowedWriteDirs()]);
   const mcpServerItems = [...store.listAllowedMcpServers()];
+  const pkgItems = [...store.listTrustedPackages()];
   const cwdItems = store
     .listAllowedBashCwds()
     .map(({ sig, cwd }) => `${sig} @ ${cwd}`);
@@ -75,7 +76,8 @@ export function updateWidget(ctx: ExtensionContext): void {
     readOnlyPaths.length > 0 ||
     allWritePaths.length > 0 ||
     mcpServerItems.length > 0 ||
-    cwdItems.length > 0;
+    cwdItems.length > 0 ||
+    pkgItems.length > 0;
 
   if (!hasSessionRules) {
     ctx.ui.setWidget("halter", undefined);
@@ -98,6 +100,10 @@ export function updateWidget(ctx: ExtensionContext): void {
       }
       if (mcpServerItems.length > 0) {
         baseLines.push(theme.fg("muted", "MCP:") + " " + theme.fg("dim", mcpServerItems.map(s => `${s}:*`).join(", ")));
+      }
+      if (pkgItems.length > 0) {
+        // D10: trusted packages (fetchable run forms — npx/uvx/dlx …)
+        baseLines.push(theme.fg("muted", "Pkg:") + " " + theme.fg("dim", pkgItems.join(" ")));
       }
       if (cwdItems.length > 0) {
         // Cwd-bound bash grants (relative-path tools): shown with the cwd
