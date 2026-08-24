@@ -10,9 +10,9 @@ import {
   isPathDeniedResolved,
   isPathWarnedResolved,
 } from "../analysis/path-analysis";
-import type { Store, AllowRules, FileRequest, Decision, FilePromptData } from "../decision-engine";
+import type { Store, AllowRules, FileRequest, Decision, FilePromptData, DecideOptions } from "../decision-engine";
 
-export function decideFile(req: FileRequest, store: Store): Decision {
+export function decideFile(req: FileRequest, store: Store, opts?: DecideOptions): Decision {
   const resolved = req.resolvedPath ?? resolvePathReal(expandTilde(req.filePath), req.cwd);
 
   // Denied paths block everything — credentials/secrets
@@ -33,8 +33,12 @@ export function decideFile(req: FileRequest, store: Store): Decision {
   // Session auto-allowed dirs (write dirs imply read) — checks membership directly, no Set copy
   if (req.toolName === "read") {
     if (store.isInsideAllowedDir(resolved, "read")) return { kind: "auto-allow" };
-  } else {
-    if (store.isInsideAllowedDir(resolved, "write")) return { kind: "auto-allow" };
+  } else if (store.isInsideAllowedDir(resolved, "write")) {
+    // D3 (docs/dspa-redesign.md): with judgeDirGrants (dspa mode), a write
+    // into a granted dir falls through to the prompt decision instead — the
+    // dir is trusted, the content is judged. Without the flag (manual/dspat),
+    // grant = auto-allow, as before.
+    if (!opts?.judgeDirGrants) return { kind: "auto-allow" };
   }
 
   // Static config paths

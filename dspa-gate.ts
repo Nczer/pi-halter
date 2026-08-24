@@ -24,7 +24,10 @@
  *    the target (if it exists) must be a directory or self-written.
  *    Non-rm danger reasons still block the carve-out (rm's neighborhood is
  *    bounded by design). The judge still approves.
- *  - file: inside the session base, no credential-pattern warning.
+ *  - file: ungranted writes inside the session base, no credential-pattern
+ *    warning. A write into a session-granted dir is JUDGEABLE (D3) — the dir
+ *    is user-trusted, the content is judged; ungranted outside-cwd writes
+ *    stay on the floor (Q1: outside base). Reads are never judged.
  *  - mcp: never auto-allowed — the gate has no model of server behavior, so
  *    the judge's word alone is not enough for automatic execution.
  */
@@ -70,7 +73,12 @@ export async function checkDspaGate(
   }
 
   if (pd.type === "file") {
-    if (pd.outsideDir) return { ok: false, reason: `outside base (${pd.outsideDir})` };
+    // D3 (docs/dspa-redesign.md): a write into a session-granted dir is
+    // judgeable — the user trusted the dir, so the outside-base stop does
+    // not apply; the two-stage judge decides on the content. Ungranted
+    // outside-cwd writes stay on the floor (Q1). Reads are never judged.
+    const grantedDirWrite = pd.isWriteOp && store.isInsideAllowedDir(pd.resolved, "write");
+    if (!grantedDirWrite && pd.outsideDir) return { ok: false, reason: `outside base (${pd.outsideDir})` };
     if (pd.warnedRule) return { ok: false, reason: `credential pattern (${pd.warnedRule})` };
     return { ok: true };
   }

@@ -87,6 +87,35 @@ describe("file", () => {
   it("passes clean in-base writes", async () => {
     expect((await checkDspaGate(filePd(), store)).ok).toBe(true);
   });
+
+  it("D3: a write into a session-granted dir is judgeable (floor passes)", async () => {
+    store.addAllowed({ writeDirs: ["/home/u/granted"] });
+    const r = await checkDspaGate(
+      filePd({ resolved: "/home/u/granted/out.txt", outsideDir: "/home/u/granted" }),
+      store,
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("D3: the grant exemption never applies to reads", async () => {
+    store.addAllowed({ writeDirs: ["/home/u/granted"] });
+    const r = await checkDspaGate(
+      filePd({ resolved: "/home/u/granted/out.txt", outsideDir: "/home/u/granted", isWriteOp: false }),
+      store,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("outside base");
+  });
+
+  it("D3: credential-warned granted-dir writes still hit the floor", async () => {
+    store.addAllowed({ writeDirs: ["/home/u/granted"] });
+    const r = await checkDspaGate(
+      filePd({ resolved: "/home/u/granted/.env", outsideDir: "/home/u/granted", warnedRule: ".env" }),
+      store,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("credential");
+  });
 });
 
 describe("carried analysis (single analysis per decision)", () => {

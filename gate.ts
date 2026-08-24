@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { PermissionRequest, Decision, PromptData } from "./decision-engine";
+import type { PermissionRequest, Decision, PromptData, DecideOptions } from "./decision-engine";
 import { decide } from "./decision-engine";
 import { pdTargetLabel } from "./prompt-builder";
 import { logDecision, type DspModeTag } from "./decision-log";
@@ -167,7 +167,19 @@ export async function gate(
   onReject: RejectHandler,
   precomputedDecision?: Decision,
 ): Promise<undefined | { block: true; reason: string }> {
-  const decision = precomputedDecision ?? await gateDecide(request, store, ctx);
+  let decision = precomputedDecision ?? await gateDecide(request, store, ctx);
+
+  // D3 (docs/dspa-redesign.md): in dspa, a file write into a session-granted
+  // dir is JUDGEABLE, not a blind auto-allow — the dir is trusted, the
+  // content is judged (two stages, same policy as bash). The probe re-decides
+  // with judgeDirGrants: only the dir-grant fast path behaves differently
+  // (project-pi / static / file-level grants still auto-allow → no
+  // conversion). Manual/dspat and non-file decisions are untouched.
+  if (decision.kind === "auto-allow" && request.type === "file"
+      && request.toolName !== "read" && isDspaActive() && ctx.hasUI) {
+    const probed = await gateDecide(request, store, ctx, { judgeDirGrants: true });
+    if (probed.kind === "prompt") decision = probed;
+  }
 
   // /dspa: a prompt decision may be auto-allowed (hard gate + judge). This
   // runs BEFORE the log line so the log records the outcome, not the
@@ -238,9 +250,10 @@ export async function gateDecide(
   request: PermissionRequest,
   store: Store,
   ctx: ExtensionContext,
+  opts?: DecideOptions,
 ): Promise<Decision> {
   try {
-    return await decide(request, store);
+    return await decide(request, store, opts);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     try {

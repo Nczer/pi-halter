@@ -106,6 +106,47 @@ describe("File: Write outside cwd", () => {
 	});
 });
 
+describe("File: D3 judgeDirGrants (dspa)", () => {
+	const granted = path.join(home, "granted-dir");
+
+	it("write into a granted dir: auto-allow by default (manual/dspat)", async () => {
+		const store = createStore();
+		store.addAllowed({ writeDirs: [realPath(granted)] });
+		const req: FileRequest = { type: "file", toolName: "write", filePath: path.join(granted, "out.txt"), cwd };
+		const d = await decide(req, store);
+		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("write into a granted dir with judgeDirGrants: judgeable prompt, content carried", async () => {
+		const store = createStore();
+		store.addAllowed({ writeDirs: [realPath(granted)] });
+		const req: FileRequest = { type: "file", toolName: "write", filePath: path.join(granted, "out.txt"), cwd, content: "hello" };
+		const d = await decide(req, store, { judgeDirGrants: true });
+		expect(d.kind).toBe("prompt");
+		if (d.kind === "prompt") {
+			expect(d.promptData.type).toBe("file");
+			expect(d.promptData.isWriteOp).toBe(true);
+			expect(d.promptData.outsideDir).toBe(realPath(granted));
+			expect(d.promptData.content).toBe("hello");
+		}
+	});
+
+	it("read into a granted dir with judgeDirGrants: still auto-allow", async () => {
+		const store = createStore();
+		store.addAllowed({ writeDirs: [realPath(granted)] });
+		const req: FileRequest = { type: "file", toolName: "read", filePath: path.join(granted, "out.txt"), cwd };
+		const d = await decide(req, store, { judgeDirGrants: true });
+		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("static /tmp write with judgeDirGrants: still auto-allow (static allow, not a dir grant)", async () => {
+		const store = createStore();
+		const req: FileRequest = { type: "file", toolName: "write", filePath: "/tmp/d3-test-out.txt", cwd };
+		const d = await decide(req, store, { judgeDirGrants: true });
+		expect(d.kind).toBe("auto-allow");
+	});
+});
+
 describe("File: Edit inside cwd", () => {
 	it("prompts as write op", async () => {
 		const store = createStore();

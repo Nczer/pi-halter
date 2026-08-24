@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { gate, rejectBash } from "../gate";
+import { gate, rejectBash, rejectFile } from "../gate";
 import { createStore } from "../store";
 import type { Decision, BashPromptData, FilePromptData } from "../decision-engine";
 import * as decisionEngine from "../decision-engine";
@@ -350,6 +350,77 @@ describe("decision-log mode tag", () => {
     await runGate(bashDecision("make test"));
     const line = logLines()[0];
     expect(line.kind).toBe("prompt");
+    expect(line.mode).toBeUndefined();
+  });
+});
+
+describe("D3: granted-dir file writes are judged (dspa)", () => {
+  // The full path: real decide() (no spy) — the auto-allow from the dir-grant
+  // fast path is probed, re-decided as a prompt, and handed to the dspa flow.
+  const GRANTED = "/home/u/granted";
+
+  function fileReq(): { type: "file"; toolName: "write"; filePath: string; cwd: string; content: string } {
+    return {
+      type: "file",
+      toolName: "write",
+      filePath: path.join(GRANTED, "out.txt"),
+      cwd: "/home/u/project",
+      content: "hello",
+    };
+  }
+
+  async function runFileGate(req: Parameters<typeof gate>[0]) {
+    const store = createStore();
+    store.addAllowed({ writeDirs: [GRANTED] });
+    const ctx = makeCtx();
+    const result = await gate(req, ctx, store, (d, r) => rejectFile(d, r, store, ctx));
+    return { result, ctx, store };
+  }
+
+  it("dspa ON, stage 1 approve/low → auto-allowed (blind grant auto-allow replaced by judge)", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(
+      verdict({ explanation: "benign edit" }),
+    );
+    const { result, ctx } = await runFileGate(fileReq());
+    expect(result).toBeUndefined();
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    // Stage-1 happy path — the intent pass is never reached.
+    expect(judgePrompt.getStage2Verdict).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledWith("✓ Judge auto-allowed (stage 1): benign edit", "info");
+    const line = logLines()[0];
+    expect(line.kind).toBe("auto-allow");
+    expect(line.mode).toBe("dspa");
+    expect(String(line.reason)).toContain("dspa: judge approved (stage 1, m-test)");
+  });
+
+  it("dspa ON, judge rejects (stage 2 final) → prompt, gate passed, stage-2 stop-tag", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(null); // stage 1: no verdict
+    vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(
+      verdict({ approve: "reject", risk: "high", explanation: "truncates existing data" }),
+    );
+    const { result } = await runFileGate(fileReq());
+    expect(result).toBeUndefined(); // showPrompt mock allows
+    expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+    const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
+    expect(fallthrough?.gate.ok).toBe(true); // granted dir passed the floor
+    expect(fallthrough?.stage).toBe(2);
+    const line = logLines()[0];
+    expect(line.kind).toBe("prompt");
+    expect(line.mode).toBe("dspa");
+    expect(line.dspa).toBe("judge: declined (stage 2)");
+  });
+
+  it("dspa OFF (manual) → blind auto-allow, no probe, no judge", async () => {
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(verdict());
+    const { result } = await runFileGate(fileReq());
+    expect(result).toBeUndefined();
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
+    expect(judgePrompt.getStage2Verdict).not.toHaveBeenCalled();
+    const line = logLines()[0];
+    expect(line.kind).toBe("auto-allow");
     expect(line.mode).toBeUndefined();
   });
 });
