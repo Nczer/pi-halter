@@ -43,6 +43,7 @@ import { analyzeCommand } from "./analysis/command-analysis";
 import { expandTilde } from "./analysis/path-util";
 import { resolvePathReal } from "./analysis/path-analysis";
 import { UNKNOWN_CWD_MARKER } from "./analysis/cwd-tracking";
+import { rootScanTarget } from "./analysis/evaluators/disk-evaluator";
 import { OPAQUE_VAR_DIR } from "./analysis/bash-parser";
 import {
   NETWORK_COMMANDS,
@@ -370,6 +371,13 @@ export async function checkDspaGate(
   const obscured = obscuredHit(analysis.segments);
   if (obscured) return { ok: false, reason: `obscured command position (${obscured})` };
   if (pd.credentialRule) return { ok: false, reason: `credential pattern (${pd.credentialRule})` };
+  // Full-filesystem scan (find /, grep -rn /): a dedicated stop reason —
+  // conspicuous in plain sight, and the generic outside-base reason
+  // ("touches paths outside base (/)") understates what the command does.
+  for (const seg of analysis.segments) {
+    const scan = rootScanTarget(seg);
+    if (scan) return { ok: false, reason: `full filesystem scan (${scan} /)` };
+  }
   const net = networkHit(pd.command, analysis.segments);
   if (net) return { ok: false, reason: `network egress (${net})` };
   const outside = (analysis.prompt.outsidePaths ?? []).filter((p) => !outsideExempt.has(p));

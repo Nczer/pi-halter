@@ -299,6 +299,22 @@ describe("bash", () => {
     expect(r.ok).toBe(true);
   });
 
+  it("stops full-filesystem scans with a dedicated reason (find /, grep -r /)", async () => {
+    for (const cmd of ["find / -name tty.js", "grep -rn x /", "rg foo /"]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(false);
+      if (!r.ok) expect(r.reason, cmd).toBe(`full filesystem scan (${cmd.split(/\s+/)[0]} /)`);
+    }
+  });
+
+  it("non-root scanner targets keep the ordinary outside-base reason", async () => {
+    for (const cmd of ["find /etc -name x", "grep -rn x /home/u", "ls /"]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(false);
+      if (!r.ok) expect(r.reason, cmd).not.toContain("full filesystem scan");
+    }
+  });
+
   it("blocks URLs embedded anywhere in the command", async () => {
     const r = await checkDspaGate(bashPd('grep -r "https://example.com" src/'), store);
     expect(r.ok).toBe(false);

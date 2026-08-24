@@ -77,6 +77,30 @@ describe("bash body content", () => {
     expect(prompt.title).toBe("Path");
   });
 
+  it("root-only path prompt offers no dir Always tier (never grant /)", () => {
+    const prompt = buildPrompt(bashDecision({
+      command: "find / -name tty.js",
+      signatures: [],
+      outsideDirs: ["/"],
+      needsPathApproval: true,
+      needsCommandApproval: false,
+    }));
+    expect(prompt.includeAlwaysOption).toBe(false);
+    expect(prompt.includePathsOption).toBe(false);
+    expect(prompt.alwaysLabel).toBe("");
+  });
+
+  it("mixed root+dir path prompt grants only the dir, never the root", () => {
+    const prompt = buildPrompt(bashDecision({
+      command: "ls / /etc",
+      outsideDirs: ["/", "/etc"],
+      needsPathApproval: true,
+      needsCommandApproval: false,
+    }));
+    expect(prompt.includeAlwaysOption).toBe(true);
+    expect(prompt.alwaysLabel).toBe("Read /etc/*");
+  });
+
   it("title is Bash + Path when both need approval", () => {
     const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true, includePathsOption: true }));
     expect(prompt.title).toBe("Bash + Path");
@@ -407,11 +431,14 @@ describe("file labels and tier2", () => {
     expect(prompt.tier2Broader).toBeDefined();
   });
 
-  it("generates broaderPaths for outside cwd (parents of outsideDir)", () => {
+  it("outside cwd: no broader option when the only parent is the root", () => {
+    // parent of /etc is / — a root grant is never offered (one click must
+    // not hand out the whole disk); the file-level tiers remain.
     const prompt = buildPrompt(fileDecision({ action: "Read", outsideDir: "/etc", resolved: "/etc/hosts" }));
-    expect(prompt.broaderPaths).toBeDefined();
-    // parent of /etc is /
-    expect(prompt.broaderPaths!.map(p => p.dir)).toEqual(["/"]);
+    expect(prompt.broaderPaths).toBeUndefined();
+    expect(prompt.includeBroaderOption).toBe(false);
+    expect(prompt.includeFileOption).toBe(true);
+    expect(prompt.includeAlwaysOption).toBe(true);
   });
 
   it("broaderPaths for outside cwd includes up to 3 levels above outsideDir", () => {
@@ -443,6 +470,15 @@ describe("file labels and tier2", () => {
   it("outside cwd excludes root as broader path (loops stops at root)", () => {
     const prompt = buildPrompt(fileDecision({ action: "Read", outsideDir: "/", resolved: "/hosts" }));
     // When outsideDir is /, no parent beyond root exists → broaderPaths undefined
+    expect(prompt.broaderPaths).toBeUndefined();
+    expect(prompt.includeBroaderOption).toBe(false);
+  });
+
+  it("a file directly under root offers file-level tiers only (never a root grant)", () => {
+    const prompt = buildPrompt(fileDecision({ action: "Write", isWriteOp: true, outsideDir: "/", resolved: "/hosts" }));
+    // primary label is the file, not "Write /*" (the rule is sanitized too)
+    expect(prompt.alwaysLabel).toBe("Write hosts");
+    expect(prompt.tier2Everything.body).toContain("/hosts");
     expect(prompt.broaderPaths).toBeUndefined();
     expect(prompt.includeBroaderOption).toBe(false);
   });
@@ -480,7 +516,7 @@ describe("file labels and tier2", () => {
     ]);
   });
 
-  it("broaderPaths stops at root", () => {
+  it("broaderPaths stops before the root", () => {
     const prompt = buildPrompt(fileDecision({
       action: "Read",
       outsideDir: null,
@@ -488,15 +524,13 @@ describe("file labels and tier2", () => {
       resolved: "/etc/file.ts",
     }));
     expect(prompt.broaderPaths).toBeDefined();
-    // immediate: /etc, then / (root) — stops because dirname(/) === /
+    // immediate: /etc — then root, which is never offered
     expect(prompt.broaderPaths!.map(p => p.dir)).toEqual([
       "/etc",
-      "/",
     ]);
     // labels use path.join so no double slashes
     expect(prompt.broaderPaths!.map(p => p.label)).toEqual([
       "Read /etc/*",
-      "Read /*",
     ]);
   });
 

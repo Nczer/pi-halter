@@ -32,7 +32,7 @@ Handler → Gate → Decision Engine → Prompt Flow → Rule Generator
 
 ### Two-tier confirmation
 
-When the user selects "Always", a second prompt requires explicit confirmation before granting session-scoped permission. This prevents accidental auto-allow from misclicks.
+When the user selects "Always", a second prompt requires explicit confirmation before granting session-scoped permission. This prevents accidental auto-allow from misclicks. The filesystem root is never an Always grant: a root-only path prompt (e.g. `find /`) offers no dir tier at all, mixed prompts drop `/` from the grant, and a file prompt's broader umbrella stops before root — one click can never hand out the whole disk.
 
 ### The judge (LLM second opinion)
 
@@ -175,7 +175,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 - **Prompt Builder** — pure function. All prompt wording lives in one module (prompt labels + the decision-log why-summary). Truncates long commands to 20 lines
 - **Prompt UI** (`prompts.ts`) — two-tier selection flow on native `ctx.ui.select` / `ctx.ui.input`; the only module that displays the confirmation prompt
 - **Judge** (`judge.ts`, `judge-prompt.ts`) — one-shot model call, two dspa stages: stage 1 stateless (LRU-cached on the operation); stage 2 adds the session context and runs uncached (its context includes the just-blocked op → a hit is impossible). Verdicts are advisory: display-only by default, auto-allow only behind `/dspa`'s hard floor
-- **DSP floor** (`dspa-gate.ts`) — deterministic hard floor for `/dspa`: parse errors, obscured command positions, credential patterns, network egress (fetch forms + raw egress; package-manager run forms are judgeable — D8), outside-base paths (unbound paths are resolved from the command when possible before gating — D7), the rm carve-out (non-recursive explicit `/tmp` scratch rm is judgeable — D8). Everything else is judgeable — including file writes into session-granted dirs (D3: the grant exempts the dir, the two-stage judge decides the content). Judges the analysis carried on the prompt — one tree-sitter parse per decision
+- **DSP floor** (`dspa-gate.ts`) — deterministic hard floor for `/dspa`: parse errors, obscured command positions, credential patterns, network egress (fetch forms + raw egress; package-manager run forms are judgeable — D8), full-filesystem scans (`find /`, `grep -rn x /` — dedicated reason, D9), outside-base paths (unbound paths are resolved from the command when possible before gating — D7), the rm carve-out (non-recursive explicit `/tmp` scratch rm is judgeable — D8). Everything else is judgeable — including file writes into session-granted dirs (D3: the grant exempts the dir, the two-stage judge decides the content). Judges the analysis carried on the prompt — one tree-sitter parse per decision
 - **Session context** (`session-context.ts`) — the reasoning-blind `## Session context` section for stage 2 (user messages + tool-call digest + grants; never agent prose or tool outputs — a compromised agent can't talk the approver into compliance)
 - **Settings** (`halter-settings.ts`) — sole owner of `~/.pi/agent/halter.json` (judge settings + log toggle): mtime+size stat cache, corrupt file → `.bak` + defaults, top-level merge writes
 - **Decision log** (`decision-log.ts`) — fire-and-forget JSONL of gate decisions (off by default; see *Configuration*)

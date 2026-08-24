@@ -135,6 +135,10 @@ function buildBashPrompt(
 
   const hasBoth = needsCommandApproval && needsPathApproval;
   const uniqueSigs = [...new Set(signatures)];
+  // The root is never an Always grant (one click must not hand out the whole
+  // disk): filter it from every dir tier. A root-only path prompt (find /)
+  // then offers no dir tier at all instead of a dead "Read /*" button.
+  const grantableDirs = outsideDirs.filter((d) => d !== "/");
   // Relative-path tool identities (../node_modules/.bin/tsc …) with the base
   // they resolve against. Deduped against uniqueSigs — a relative tool whose
   // basename is NOT allowlisted appears in both lists. Granted base-bound
@@ -142,12 +146,12 @@ function buildBashPrompt(
   const relToolIds = (relativeToolIds ?? []).filter(r => !uniqueSigs.includes(r.sig));
 
   // Compute prompt options from data (previously on PromptDecision)
-  const includePathsOption = hasBoth;
+  const includePathsOption = hasBoth && grantableDirs.length > 0;
   // PACKAGE_MANAGERS imported from config
   const pmSigs = uniqueSigs.filter(sig => PACKAGE_MANAGERS.has(sig.split(/\s+/)[0]));
   const broaderSigs = [...new Set(pmSigs.map(sig => sig.split(/\s+/)[0]))];
   const includeBroaderOption = broaderSigs.some(s => !uniqueSigs.includes(s));
-  const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (uniqueSigs.length > 0 || outsideDirs.length > 0 || relToolIds.length > 0);
+  const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (uniqueSigs.length > 0 || grantableDirs.length > 0 || relToolIds.length > 0);
   const cmdBullets = [
     ...uniqueSigs.map(s => `  \u2022 ${s} *`),
     ...relToolIds.map(r => `  \u2022 ${r.sig} (this cwd)`),
@@ -215,15 +219,16 @@ function buildBashPrompt(
     const aligned = alignedReasons.map(({ tag, rest }) => `  \u2022 ${tag.padEnd(tagWidth)} ${rest}`);
     dangerWarning = `\n\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n${aligned.join("\n")}`;
   }
+  const pathBullets = grantableDirs.map(d => `  \u2022 ${d}/*`).join("\n");
   const tier2Everything = hasBoth
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow:\n\nCommands:\n${cmdBullets}\n\nPaths:\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}${dangerWarning}`,
+        body: `"Always Yes" will auto-allow:\n\nCommands:\n${cmdBullets}${grantableDirs.length ? `\n\nPaths:\n${pathBullets}` : ""}${dangerWarning}`,
       }
     : needsPathApproval
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow read for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}`,
+        body: `"Always Yes" will auto-allow read for these directories this session:\n\n${pathBullets}`,
       }
     : {
         title: `Confirm Always Allow`,
@@ -231,21 +236,21 @@ function buildBashPrompt(
       };
 
   // Tier 2 — "always (paths only)" confirmation
-  const tier2Paths = hasBoth
+  const tier2Paths = hasBoth && grantableDirs.length > 0
     ? {
         title: `Confirm Always (paths only)`,
-        body: `"Always Yes" will auto-allow read for these directories this session:\n\n${outsideDirs.map(d => `  \u2022 ${d}/*`).join("\n")}\n\nThe command will still prompt next time`,
+        body: `"Always Yes" will auto-allow read for these directories this session:\n\n${pathBullets}\n\nThe command will still prompt next time`,
       }
     : undefined;
 
   const alwaysLabel = (needsCommandApproval && (uniqueSigs.length > 0 || relToolIds.length > 0))
     ? [...uniqueSigs.map(s => s + " *"), ...relToolIds.map(r => r.sig + " (this cwd)")].join(", ")
-    : (needsPathApproval ? outsideDirs.map(d => `Read ${d}/*`).join(", ") : "");
+    : (needsPathApproval ? grantableDirs.map(d => `Read ${d}/*`).join(", ") : "");
   const alwaysBroaderLabel = includeBroaderOption
     ? uniqueSigs.map(s => s.split(" ")[0] + " *").join(", ")
     : undefined;
-  const alwaysPathsLabel = hasBoth
-    ? outsideDirs.map(d => `Read ${d}/*`).join(", ")
+  const alwaysPathsLabel = hasBoth && grantableDirs.length > 0
+    ? grantableDirs.map(d => `Read ${d}/*`).join(", ")
     : undefined;
 
   // Tier 2 — broader (package manager prefix only, e.g. "npm *")
@@ -281,18 +286,23 @@ function buildFilePrompt(
       : `auto-allow read for this directory this session (write/edit will still prompt)`;
     const fileName = resolved.split("/").pop() || resolved;
     const parentDir = path.dirname(resolved);
-    // Compute broader parent directories: immediate parent then up to 3 levels above
+    // Compute broader parent directories: immediate parent then up to 3 levels
+    // above. The root is never an option (a file directly under / would
+    // otherwise offer "Always (broader): /").
     const broaderPaths: { label: string; dir: string }[] = [];
     // Immediate parent is the file's containing directory
-    broaderPaths.push({
-      label: `${action} ${path.join(parentDir, '*')}`,
-      dir: parentDir,
-    });
+    if (parentDir !== "/") {
+      broaderPaths.push({
+        label: `${action} ${path.join(parentDir, '*')}`,
+        dir: parentDir,
+      });
+    }
     // Additional levels above the parent
     let cur = parentDir;
     for (let i = 0; i < 3; i++) {
       const parent = path.dirname(cur);
       if (parent === cur) break; // hit root
+      if (parent === "/") break; // never offer a grant of the root
       cur = parent;
       broaderPaths.push({
         label: `${action} ${path.join(cur, '*')}`,
@@ -312,29 +322,36 @@ function buildFilePrompt(
       },
       includePathsOption: false,
       includeFileOption: false,
-      includeBroaderOption: true,
+      includeBroaderOption: broaderPaths.length > 0,
       includeAlwaysOption: true,
       alwaysLabel: `${action} ${fileName}`,
-      alwaysBroaderLabel: `${action} ${path.join(parentDir, '*')}`,
-      broaderPaths,
+      alwaysBroaderLabel: broaderPaths.length > 0 ? broaderPaths[0].label : undefined,
+      broaderPaths: broaderPaths.length > 0 ? broaderPaths : undefined,
     };
   }
 
   const scope = isWriteOp
     ? `auto-allow ${action.toLowerCase()} for this directory this session`
     : `auto-allow read for this directory this session (write/edit will still prompt)`;
-  const tier2Label = isWriteOp ? `${action} ${path.join(outsideDir, '*')}` : `Read ${path.join(outsideDir, '*')}`;
+  // A file directly under / has no grantable directory (the root is never
+  // granted): the primary label is the file, matching the sanitized rule.
+  const tier2Label = outsideDir === "/"
+    ? `${isWriteOp ? action : "Read"} ${resolved.split("/").pop() || resolved}`
+    : isWriteOp ? `${action} ${path.join(outsideDir, '*')}` : `Read ${path.join(outsideDir, '*')}`;
   const fileName = resolved.split("/").pop() || resolved;
   const fileScope = isWriteOp
     ? `auto-allow ${action.toLowerCase()} on this file this session (includes read)`
     : `auto-allow read on this file this session (write/edit will still prompt)`;
 
-  // Broader paths: parents of outsideDir (1–3 levels above)
+  // Broader paths: parents of outsideDir (1–3 levels above). The root is
+  // never an option — an /etc file prompt used to offer "Always (broader): /
+  //" (write the whole disk with one click).
   const broaderPaths: { label: string; dir: string }[] = [];
   let cur = outsideDir;
   for (let i = 0; i < 3; i++) {
     const parent = path.dirname(cur);
     if (parent === cur) break; // hit root
+    if (parent === "/") break; // never offer a grant of the root
     cur = parent;
     broaderPaths.push({
       label: `${action} ${path.join(cur, '*')}`,
@@ -342,7 +359,7 @@ function buildFilePrompt(
     });
   }
 
-  const outsideDirGlob = path.join(outsideDir, '*');
+  const outsideDirGlob = outsideDir === "/" ? resolved : path.join(outsideDir, '*');
 
   return {
     title: `\u26a0\ufe0f ${action} outside cwd`,

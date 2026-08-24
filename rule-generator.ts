@@ -4,6 +4,17 @@ import type { AllowRules } from "./store";
 import type { PromptData, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
 
 /**
+ * The filesystem root is never part of an Always grant: one click must not
+ * hand out read/write of `/`. A `find /` prompt used to offer
+ * "Always (paths only): /" → readDirs ["/"] (read the whole disk), and an
+ * /etc file prompt's broader umbrella reached up to `/` (write the whole
+ * disk). Root-touching prompts still prompt; they just can't be Always-ed.
+ */
+function withoutRoot(dirs: string[]): string[] {
+  return dirs.filter((d) => d !== "/");
+}
+
+/**
  * Generates auto-allow rules based on the provided prompt data.
  * Decouples policy decision from the specific rules used for "Always" options.
  */
@@ -44,8 +55,9 @@ export class RuleGenerator {
   static generatePathsOnlyRules(data: PromptData): AllowRules | undefined {
     if (data.type !== "bash") return undefined;
     const bash = data as BashPromptData;
-    if (bash.outsideDirs.length === 0) return undefined;
-    return { readDirs: bash.outsideDirs };
+    const readDirs = withoutRoot(bash.outsideDirs);
+    if (readDirs.length === 0) return undefined;
+    return { readDirs };
   }
 
   /**
@@ -65,8 +77,9 @@ export class RuleGenerator {
 
   private static generateBashPrimaryRules(data: BashPromptData): AllowRules {
     const rules: AllowRules = {};
-    if (data.outsideDirs.length > 0) {
-      rules.readDirs = data.outsideDirs;
+    const readDirs = withoutRoot(data.outsideDirs);
+    if (readDirs.length > 0) {
+      rules.readDirs = readDirs;
     }
     // Relative-path tools: store the exact signature bound to this cwd —
     // "Always" must actually work for ../node_modules/.bin/*, and the cwd
@@ -102,9 +115,10 @@ export class RuleGenerator {
     if (pmSigs.length === 0) return undefined;
 
     const broaderSigs = [...new Set(pmSigs.map(sig => sig.split(/\s+/)[0]))];
+    const readDirs = withoutRoot(data.outsideDirs);
     return {
       bashSigs: broaderSigs,
-      ...(data.outsideDirs.length > 0 ? { readDirs: data.outsideDirs } : {}),
+      ...(readDirs.length > 0 ? { readDirs } : {}),
     };
   }
 
@@ -112,13 +126,14 @@ export class RuleGenerator {
 
   private static generateFilePrimaryRules(data: FilePromptData): AllowRules {
     const { resolved, outsideDir } = data;
-    if (outsideDir !== null) {
-      // Outside cwd: Always allow the directory
+    if (outsideDir !== null && outsideDir !== "/") {
+      // Outside cwd: Always allow the directory (never the root — a file
+      // directly under / falls through to the file-level grant below)
       return data.isWriteOp
         ? { writeDirs: [outsideDir], readDirs: [outsideDir] }
         : { readDirs: [outsideDir] };
     }
-    // Inside cwd: Always allow the specific file
+    // Inside cwd (or outsideDir is the root): Always allow the specific file
     return data.isWriteOp
       ? { writePaths: [resolved], readPaths: [resolved] }
       : { readPaths: [resolved] };
@@ -127,6 +142,7 @@ export class RuleGenerator {
   private static generateFileBroaderRules(data: FilePromptData, targetDir?: string): AllowRules | undefined {
     if (data.outsideDir !== null && !targetDir) return undefined; // Only for inside-cwd (or explicit target)
     const dir = targetDir ?? (data.outsideDir ?? path.dirname(data.resolved));
+    if (dir === "/") return undefined; // never grant the root
     return data.isWriteOp
       ? { writeDirs: [dir], readDirs: [dir] }
       : { readDirs: [dir] };
