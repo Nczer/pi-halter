@@ -199,8 +199,11 @@ uncertainty.
   lines were lost when the pre-reload log was deleted; the fixture is a
   representative reconstruction (test/dspa-gate.test.ts, "doc-extract
 class"). Suite 3229.
-- **Phase 3**: D3 (dir-granted file writes judged) + D4 (denial flow +
-  escalation counters), armed with stop-tag + deny-kind data.
+- **Phase 3a — done** (2026-08-24): D3 (dir-granted file writes judged —
+  `judgeDirGrants` flag in decide/decideFile, the probe in `gate()`, floor
+  exemption in `dspa-gate.ts`). Suite 3239.
+- **Phase 3b**: D4 (denial flow + escalation counters), armed with
+  stop-tag + deny-kind data.
 
 ## 5. Open questions (grill order)
 
