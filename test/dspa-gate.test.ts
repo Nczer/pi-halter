@@ -8,6 +8,9 @@
  * risk reasons) is judgeable and passes to the judge.
  */
 import { describe, it, expect, beforeEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { checkDspaGate } from "../dspa-gate";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../store";
@@ -115,6 +118,89 @@ describe("file", () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("credential");
+  });
+});
+
+describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
+  it("var with a default chain resolves to a concrete outside path → stop (2026-08-24 socket probe)", async () => {
+    const r = await checkDspaGate(
+      bashPd('SOCKET_DIR=${PI_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/sockets}; mkdir -p "$SOCKET_DIR"; ls -la "$SOCKET_DIR/"'),
+      store,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("/tmp/sockets");
+  });
+
+  it("var with a granted dir resolves inside → judgeable", async () => {
+    store.addAllowed({ writeDirs: ["/home/u/granted"] });
+    const r = await checkDspaGate(bashPd('OUT=/home/u/granted/out; mkdir -p "$OUT"'), store);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("var with a relative value resolves inside base → judgeable", async () => {
+    const r = await checkDspaGate(bashPd("OUT=./out; mkdir -p \"$OUT\""), store);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("unassigned var stays unresolvable → judgeable", async () => {
+    const r = await checkDspaGate(bashPd('mkdir -p "$FOO"'), store);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("cd into an outside dir inside a || chain resolves to a concrete stop (2026-08-24 read-only flow)", async () => {
+    // The parser tracks cd targets by stat — use a real temp dir so the
+    // `||` side runs under a nulled base and emits <unresolved-cwd> paths.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halter-d7-"));
+    try {
+      const r = await checkDspaGate(
+        bashPd(`cd ${dir} && cat f || ls x`),
+        store,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain(dir);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cd into an in-base dir inside a || chain resolves inside → judgeable", async () => {
+    const r = await checkDspaGate(bashPd("cd sub && ls f || echo no; grep -rn a g.ts"), store);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("cd with a var target is unresolvable → judgeable", async () => {
+    const r = await checkDspaGate(bashPd("cd $D && ls f || echo no"), store);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("two cd targets is ambiguous → judgeable", async () => {
+    const r = await checkDspaGate(bashPd("cd /opt/a && ls || echo no; cd /opt/b; ls f"), store);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("unresolved-cwd with no cd in the command stays judgeable (carried analysis)", async () => {
+    const a: any = await analyzeCommand("ls", BASE, {
+      isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+    });
+    a.prompt.outsidePaths = ["<unresolved-cwd>/f.txt", "<unresolved-cwd>/g.txt"];
+    const r = await checkDspaGate(bashPd("ls", { analysis: a }), store);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("a resolved outside-base path still stops, even alongside sentinels", async () => {
+    const a: any = await analyzeCommand("ls", BASE, {
+      isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+    });
+    a.prompt.outsidePaths = ["/etc/shadow", "<unresolved-cwd>/f.txt"];
+    const r = await checkDspaGate(bashPd("ls", { analysis: a }), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("/etc/shadow");
+  });
+
+  it("rm with an opaque target stays on the floor", async () => {
+    const r = await checkDspaGate(bashPd("rm -rf $X"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("rm target");
   });
 });
 

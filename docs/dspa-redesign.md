@@ -190,6 +190,40 @@ uncertainty.
   top-N loop a fourth channel: what the judge is eating silently.
 - auto-allow reason gains the stage: `dspa: judge approved (stage 2, model)`.
 
+### D7. Resolve-then-gate for unbound paths (2026-08-24 log)
+
+The parser emits sentinels when it cannot bind a path to a location:
+`<unresolved-cwd>` (a cd inside a `||` chain — the side's directory is
+genuinely ambiguous: original cwd or the cd target) and
+`<unresolved-var>` (opaque variable). The floor's outside-base stop used to
+treat them like resolved outside paths. Live cases from the 2026-08-24
+log: a read-only `cd ~/… && ls || echo; grep; node -e` inspection flow
+and `SOCKET_DIR=${PI_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/…}` probes — all
+forced into manual prompts with unhelpful sentinel reasons instead of a
+concrete dir or the judge.
+
+**Resolve first, then the ordinary bar** (floor only, dspa mode):
+
+1. **Opaque vars** resolve from command-local `VAR=value` assignments:
+   literal values, `${X:-default}` default chains (the default is taken
+   when X has no local assignment — the environment may set X elsewhere,
+   which the judge still sees in the full text), `~` expansion.
+2. **Unresolved cwd** resolves to the command's cd target when there is
+   exactly one resolvable cd (no `*?[$```, not `cd -`); the ambiguous side
+   runs under either the original cwd (always in-base) or that target, so
+   the target alone bounds it.
+3. The resolved path gets the ordinary in-base/grant check: inside or
+   granted → judgeable; concrete outside-base path → stop **naming the dir**
+   (one Always-for-dir makes later runs judgeable, D3-style).
+4. Still unresolvable (unassigned var, var/ambiguous cd targets, …) →
+   judgeable: the packet carries the full text and stage 2 has session
+   context the static parser lacks.
+
+Unchanged: resolved outside-base paths still stop; the rm carve-out keeps
+non-explicit rm targets on the floor (`rm -rf $X`); obscured positions,
+credentials, network egress. Manual/dspat modes are unchanged (no floor
+there — the prompt path was already the outcome).
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -203,7 +237,11 @@ class"). Suite 3229.
   `judgeDirGrants` flag in decide/decideFile, the probe in `gate()`, floor
   exemption in `dspa-gate.ts`). Suite 3239.
 - **Phase 3b**: D4 (denial flow + escalation counters), armed with
-  stop-tag + deny-kind data.
+  stop-tag + deny-kind data. Tally after the 2026-08-24 log (220 lines):
+  22 judge verdicts, 0 rejects.
+- **Phase 3c — done** (2026-08-24): D7 (resolve-then-gate for unbound paths
+  in the floor: command-local var assignments + the `||`-ambiguous cd target
+  resolve to the ordinary bar; unresolvable → judgeable).
 
 ## 5. Open questions (grill order)
 
