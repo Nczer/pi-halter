@@ -139,12 +139,22 @@ export type PromptData = BashPromptData | FilePromptData | McpPromptData;
  * UI-agnostic — always returns "prompt" when human judgment is needed,
  * regardless of whether a UI is available. The handler adapts.
  */
-export async function decide(request: PermissionRequest, store: Store): Promise<Decision> {
+export interface DecideOptions {
+  /**
+   * D3 (docs/dspa-redesign.md, dspa mode only): a file write into a
+   * session-granted dir returns the prompt decision (judgeable — the dir is
+   * trusted, the content is judged) instead of the grant fast-path
+   * auto-allow. Off (default): manual/dspat behavior — grant = auto-allow.
+   */
+  judgeDirGrants?: boolean;
+}
+
+export async function decide(request: PermissionRequest, store: Store, opts?: DecideOptions): Promise<Decision> {
   switch (request.type) {
     case "bash":
       return decideBash(request, store);
     case "file":
-      return decideFile(request, store);
+      return decideFile(request, store, opts);
     case "mcp":
       return decideMcp(request, store);
   }
