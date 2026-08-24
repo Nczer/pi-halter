@@ -248,8 +248,13 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
 
       if (!isAllowedCommand(stageCmd)) {
         allStagesSimple = false;
-        // Pipe-to-interpreter is a unique pipeline concern — not caught by evaluators
+        // Pipe-to-interpreter is a unique pipeline concern — not caught by evaluators.
+        // hasDanger MUST be set: without it isUnsafe stays false and SafetyRule's
+        // signature branch auto-allows on the FIRST segment's first word (echo/ls/…)
+        // — `ls | bash /any/script` would run arbitrary scripts (see log 2026-08-24,
+        // the aiu-update session: risk:high "pipe to a shell" yet auto-allowed).
         if (SHELL_INTERPRETERS.has(stageCmd)) {
+          pipeAcc.hasDanger = true;
           addReason(pipeAcc, "[Pipeline] pipe to a shell (possible remote code execution)");
           pipeAcc.severity = "high";
         }
