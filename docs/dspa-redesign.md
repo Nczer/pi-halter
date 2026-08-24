@@ -224,6 +224,49 @@ non-explicit rm targets on the floor (`rm -rf $X`); obscured positions,
 credentials, network egress. Manual/dspat modes are unchanged (no floor
 there — the prompt path was already the outcome).
 
+### D8. Shrink the floor: package-manager run forms + /tmp scratch rm are judgeable (2026-08-24 log)
+
+The stop-tag data settled it: in the 2026-08-24 log (231 lines) **all 26
+dspa prompts were floor stops — the judge stopped zero of them** (26
+approvals, 0 denies). 11 of the 26 were shapes a human (and the judge)
+would plainly allow: 7× `network egress (npx/uv/bun)` — the `npx tsc`,
+`npx vitest`, `uv run` dev-loop probes — and 4× `rm target outside session
+base` for `/tmp` scratch cleanup (`rm -f /tmp/width-probe.log`). The floor
+was intercepting exactly the operations the judge should have decided, and
+the prompts offered no useful Always tier for the compound npx probe shape.
+
+**Run forms are judgeable** (floor only, dspa mode). A package-manager
+RUN form executes local/cached code; the package name and args are visible
+in the judge's full-text input, so the judge — not a floor stop — decides.
+Fetch forms stay on the floor: fetch = arbitrary postinstall execution +
+registry access, and a lenient local judge is no backstop for that.
+
+- `npx …`, `uvx …` — inherently run-a-package (fetches on miss; the
+  judge sees the name).
+- `npm run|exec|x`, `pnpm run|dlx|exec|x`, `yarn run|dlx|x`,
+  `uv run|x` — explicit run forms only (the `npm test` shorthand and
+  `yarn <script>` stay on the floor, conservatively).
+- `bun <anything-but-fetch>` — the interpreter form (`bun index.ts`,
+  `bun x tsc`, `bun -e …`); the fetch verbs (`install`, `add`, `update`,
+  `publish`, …) stay on the floor.
+- Unchanged on the floor: raw egress (curl/wget/nc/ssh/scp/rsync), `git
+  push|fetch|pull|clone`, http(s) URLs in the text, every fetch form
+  (`npm install`, `uv sync|add`, `bun install|add`, `pnpm install`, pip),
+  docker/podman/kubectl/aws/gcloud/az. Manual/dspat analysis is untouched
+  (this is floor policy, not the shared egress analysis).
+
+**Non-recursive /tmp scratch rm is judgeable** (rm carve-out, dspa mode).
+/tmp is the conventional world-scratch area; `rm -f /tmp/probe.log` is the
+normal cleanup pattern. An rm target directly under `/tmp/` that is
+explicit (the existing bar: no globs/vars/tilde) and non-recursive passes
+the floor to the judge. Recursive (`rm -rf /tmp/x`), `/tmp` itself, and
+computed targets stay on the floor.
+
+What did NOT change: the `/` stop in the log was a true positive
+(`find / -name tty.js` — it really scans root); outside-base reads stay
+user-only (Q1); MCP stays never-auto-allowed; the single `rm target not
+explicit ($d)` stop is by design.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -241,7 +284,10 @@ class"). Suite 3229.
   22 judge verdicts, 0 rejects.
 - **Phase 3c — done** (2026-08-24): D7 (resolve-then-gate for unbound paths
   in the floor: command-local var assignments + the `||`-ambiguous cd target
-  resolve to the ordinary bar; unresolvable → judgeable).
+  resolve to the ordinary bar; unresolvable → judgeable). Suite 3258.
+- **Phase 3d — done** (2026-08-24): D8 (floor shrink: package-manager run
+  forms + non-recursive /tmp scratch rm are judgeable; fetch forms and
+  recursive/var/glob rm stay on the floor). Suite 3263.
 
 ## 5. Open questions (grill order)
 
