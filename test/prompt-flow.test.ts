@@ -189,4 +189,20 @@ describe("/dspa fall-through", () => {
     expect(body).toContain("→ suggests: REJECT (high)");
     expect(body).not.toContain("not auto-allowed (risk must be low)");
   });
+
+  it("gate blocked on untrusted package → 🚧 line + advisory verdict block (D10)", async () => {
+    const dspa: DspaFallthrough = {
+      gate: { ok: false, reason: "untrusted package (npx evil-pkg)", untrustedPackages: ["evil-pkg"] },
+      verdict: { model: "llama-cpp/qwen", explanation: "Dev tool in use this session.", approve: "approve", risk: "low", reason: "dev tool", latencyMs: 10, cached: false },
+      stage: 2,
+      untrustedPackages: ["evil-pkg"],
+    };
+    await showPrompt(bashDecision(), ctx, store, dspa);
+    const body = shownPrompt().body;
+    expect(body).toContain("🚧 dspa: not auto-allowed — untrusted package (npx evil-pkg)");
+    expect(body).toContain("💭 Judge: Dev tool in use this session.");
+    expect(body).toContain("→ suggests: APPROVE (low) — advisory (floor stop stands)");
+    // the prompt offers the Trust option for the stopped packages
+    expect((shownPrompt() as any).trustPackages).toEqual(["evil-pkg"]);
+  });
 });

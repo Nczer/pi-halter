@@ -266,19 +266,27 @@ describe("bash", () => {
     }
   });
 
-  it("passes package-manager RUN forms (D8 — judgeable: local/cached code the judge sees)", async () => {
+  it("stops untrusted fetchable run forms (D10 — npx/uvx/dlx/x may fetch on miss)", async () => {
     for (const cmd of [
       "npx tsc --noEmit index.ts",
       "npx vitest run",
-      "npx tsx probe.mts",
-      "npm run test",
       "npm exec eslint .",
       "pnpm dlx esbuild",
       "yarn dlx vite",
-      "uv run extract.py",
       "uvx ruff --version",
-      "bun index.ts",
       "bun x tsc",
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(false);
+      if (!r.ok) expect(r.reason, cmd).toMatch(/^untrusted package \(/);
+    }
+  });
+
+  it("passes local run forms (D8 — repo-visible code the judge sees; never trust-gated)", async () => {
+    for (const cmd of [
+      "npm run test",
+      "uv run extract.py",
+      "bun index.ts",
       "bun -e 'console.log(1)'",
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
@@ -286,17 +294,69 @@ describe("bash", () => {
     }
   });
 
-  it("passes the compound npx probe shape from the 2026-08-24 log (substitution + pipes)", async () => {
+  it("passes trusted fetchable run forms (D10 — trust is per bare package name)", async () => {
+    store.trustPackage("tsc");
+    store.trustPackage("eslint");
+    store.trustPackage("esbuild");
+    store.trustPackage("vite");
+    store.trustPackage("ruff");
+    for (const cmd of [
+      "npx tsc --noEmit index.ts",
+      "npm exec eslint .",
+      "pnpm dlx esbuild",
+      "yarn dlx vite",
+      "uvx ruff --version",
+      "bun x tsc",
+      "npx tsc@5.0.0 --noEmit index.ts",
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(true);
+    }
+  });
+
+  it("trust keys are bare package names: version pins stripped, scoped kept (D10)", async () => {
+    store.trustPackage("tsc");
+    store.trustPackage("@org/tool");
+    const pinned = await checkDspaGate(bashPd("npx tsc@latest --noEmit"), store);
+    expect(pinned.ok).toBe(true);
+    const scoped = await checkDspaGate(bashPd("npx @org/tool run"), store);
+    expect(scoped.ok).toBe(true);
+    const other = await checkDspaGate(bashPd("npx @org/other run"), store);
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.reason).toBe("untrusted package (npx @org/other)");
+  });
+
+  it("a chain with one untrusted package stops the whole command, naming it (D10)", async () => {
+    store.trustPackage("tsc");
+    const r = await checkDspaGate(bashPd("npx tsc --noEmit && npx unknown-tool"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("untrusted package (npx unknown-tool)");
+      expect(r.untrustedPackages).toEqual(["unknown-tool"]);
+    }
+  });
+
+  it("the compound npx probe from the 2026-08-24 log: subshell npx is seen (D10)", async () => {
+    // The parser flattens subshell contents into segments, so the npx inside
+    // out=$(npx tsc …) is gated like any top-level run form.
     const cmd =
       'cd ~/project && out=$(npx tsc --noEmit index.ts 2>&1 | grep "error TS"); '
       + 'n=$(echo "$out" | grep -c .); echo "tsc %s" "$([ "$n" = 0 ] && echo CLEAN || echo "$n errors")"';
-    const r = await checkDspaGate(bashPd(cmd), store);
-    expect(r.ok).toBe(true);
+    const untrusted = await checkDspaGate(bashPd(cmd), store);
+    expect(untrusted.ok).toBe(false);
+    if (!untrusted.ok) expect(untrusted.reason).toBe("untrusted package (npx tsc)");
+    store.trustPackage("tsc");
+    const trusted = await checkDspaGate(bashPd(cmd), store);
+    expect(trusted.ok).toBe(true);
   });
 
-  it("npx + pipe-to-shell still passes the FLOOR (the danger flag is judgeable, not a floor check)", async () => {
-    const r = await checkDspaGate(bashPd("npx evil | sh"), store);
-    expect(r.ok).toBe(true);
+  it("untrusted npx + pipe-to-shell stops on the package; trusted passes the floor (D10)", async () => {
+    const untrusted = await checkDspaGate(bashPd("npx evil | sh"), store);
+    expect(untrusted.ok).toBe(false);
+    if (!untrusted.ok) expect(untrusted.reason).toBe("untrusted package (npx evil)");
+    store.trustPackage("evil");
+    const trusted = await checkDspaGate(bashPd("npx evil | sh"), store);
+    expect(trusted.ok).toBe(true); // pipe-to-shell danger is judgeable, not a floor check
   });
 
   it("stops full-filesystem scans with a dedicated reason (find /, grep -r /)", async () => {

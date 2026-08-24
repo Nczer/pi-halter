@@ -214,6 +214,65 @@ export const NETWORK_COMMANDS = new Set([
   "docker", "podman", "kubectl", "aws", "gcloud", "az",
 ]);
 
+// ── D10: fetchable package run forms (docs/dspa-redesign.md) ──
+
+/**
+ * Run forms that may FETCH the package on cache miss — the same fetch class
+ * the floor stops for fetch forms (arbitrary postinstall execution). Keyed by
+ * first word; "all" = bare form (`npx <pkg>`), else the subcommand set
+ * (`npm exec`, `pnpm dlx`, …). LOCAL run forms (`npm run`, `uv run`,
+ * `bun <script>`) are deliberately absent — they execute repo-visible code
+ * the judge already sees and are never trust-gated.
+ *
+ * ONE definition: the dspa floor (untrusted-package stop) and the bash
+ * policy (trusted-package auto-allow) must not drift.
+ */
+export const FETCH_PKG_FORMS: Record<string, ReadonlySet<string> | "all"> = {
+  npx: "all",
+  uvx: "all",
+  npm: new Set(["exec", "x"]),
+  pnpm: new Set(["dlx", "exec", "x"]),
+  yarn: new Set(["dlx", "x"]),
+  uv: new Set(["x"]),
+  bun: new Set(["x"]),
+};
+
+/** Strip a `@version` pin (`tsc@5.0.0` → `tsc`); keeps scoped `@scope/name`. */
+function stripPkgVersion(pkg: string): string {
+  const at = pkg.lastIndexOf("@");
+  return at > 0 ? pkg.slice(0, at) : pkg;
+}
+
+/**
+ * The package a fetchable run form segment names, or null: not a fetch form,
+ * a local form (`npm run …`), or no package token. Flags and `K=V` env
+ * prefixes are skipped; version pins are stripped so trust keys are bare
+ * package names. Only TOP-LEVEL segments are checked (indirection like
+ * `out=$(npx foo)` stays judge-only by design).
+ */
+export function fetchFormPackage(first: string, words: string[]): string | null {
+  const forms = FETCH_PKG_FORMS[first];
+  if (!forms) return null;
+  let i = 1;
+  let sub: string | undefined;
+  for (; i < words.length; i++) {
+    const w = words[i];
+    if (w.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+    sub = w.toLowerCase();
+    break;
+  }
+  if (forms === "all") {
+    return sub ? stripPkgVersion(sub) : null;
+  }
+  if (!sub || !forms.has(sub)) return null;
+  for (let j = i + 1; j < words.length; j++) {
+    const w = words[j];
+    if (w.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+    return stripPkgVersion(w);
+  }
+  return null;
+}
+
 /** git subcommands that talk to a remote. */
 export const GIT_NETWORK_SUBCOMMANDS = new Set(["push", "fetch", "pull", "clone"]);
 

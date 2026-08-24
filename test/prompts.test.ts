@@ -772,3 +772,47 @@ describe("twoTierAlwaysPrompt: Explain option", () => {
 		expect(calls[0].options).not.toContain("Explain");
 	});
 });
+
+// ── D10: trust option ──────────────────────────────────────────────────
+
+describe("twoTierAlwaysPrompt: D10 trust option", () => {
+	it("shows Trust option and calls onTrust → 'always'", async () => {
+		const cb = makeCallbacks();
+		const onTrust = vi.fn();
+		// choices = ["Yes", "Always: test *", "Trust: tsc, ruff (session)", "No (with reason)", "No"]
+		// indices:     0           1                     2                        3                4
+		const result = await twoTierAlwaysPrompt(
+			makePrompt({ trustPackages: ["tsc", "ruff"] }), store, makeCtx([2, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader, undefined, onTrust,
+		);
+		expect(result).toBe("always");
+		expect(onTrust).toHaveBeenCalledTimes(1);
+		expect(cb.onAlways).not.toHaveBeenCalled();
+	});
+
+	it("trust option is offered even when includeAlwaysOption is false", async () => {
+		const cb = makeCallbacks();
+		const onTrust = vi.fn();
+		// choices = ["Yes", "Trust: tsc (session)", "No (with reason)", "No"]
+		// indices:     0           1                  3
+		const result = await twoTierAlwaysPrompt(
+			makePrompt({ includeAlwaysOption: false, trustPackages: ["tsc"] }), store, makeCtx([1, 0]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader, undefined, onTrust,
+		);
+		expect(result).toBe("always");
+		expect(onTrust).toHaveBeenCalledTimes(1);
+	});
+
+	it("no trust option without packages (plain layout unchanged)", async () => {
+		const cb = makeCallbacks();
+		const onTrust = vi.fn();
+		// choices = ["Yes", "Always: test *", "No (with reason)", "No"] — no Trust
+		// Always → Back → No
+		const result = await twoTierAlwaysPrompt(
+			makePrompt(), store, makeCtx([1, 1, 3]),
+			cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader, undefined, onTrust,
+		);
+		expect(result).toBe("no");
+		expect(onTrust).not.toHaveBeenCalled();
+	});
+});

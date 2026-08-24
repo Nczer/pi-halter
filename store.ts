@@ -32,6 +32,10 @@ export interface Store {
   hasAllowedReadPath(path: string): boolean;
   hasAllowedWritePath(path: string): boolean;
   hasAllowedMcpServer(server: string): boolean;
+  /** D10: bare package name trusted for fetchable run forms (npx tsc, uvx …). */
+  hasTrustedPackage(pkg: string): boolean;
+  /** D10: trust a bare package name for the session (prompt's "Trust" option). */
+  trustPackage(pkg: string): void;
   /** Check if a resolved path is inside a session-auto-allowed dir (no Set copy). */
   isInsideAllowedDir(resolved: string, kind: "read" | "write"): boolean;
   addAllowed(rules: AllowRules): void;
@@ -47,6 +51,8 @@ export interface Store {
   listAllowedReadPaths(): Set<string>;
   listAllowedWritePaths(): Set<string>;
   listAllowedMcpServers(): Set<string>;
+  /** D10: trusted package names (widget renders these alongside bash grants). */
+  listTrustedPackages(): Set<string>;
 
   /** Get current time (uses injected clock for testability). */
   now(): number;
@@ -68,6 +74,7 @@ export function createStore(nowFn = Date.now): Store {
   const readPaths = new Set<string>();
   const writePaths = new Set<string>();
   const mcpServers = new Set<string>();
+  const trustedPackages = new Set<string>();
   const aborted = new Map<string, number>();
   let pcount = 0;
 
@@ -99,6 +106,8 @@ export function createStore(nowFn = Date.now): Store {
     hasAllowedReadPath(p) { return readPaths.has(p); },
     hasAllowedWritePath(p) { return writePaths.has(p); },
     hasAllowedMcpServer(s) { return mcpServers.has(s); },
+    hasTrustedPackage(pkg) { return trustedPackages.has(pkg); },
+    trustPackage(pkg) { trustedPackages.add(pkg); },
     isInsideAllowedDir(resolved, kind) {
       // Write dirs imply read, so "read" checks both sets.
       const sets = kind === "read" ? [readDirs, writeDirs] : [writeDirs];
@@ -144,6 +153,7 @@ export function createStore(nowFn = Date.now): Store {
     listAllowedReadPaths() { return new Set(readPaths); },
     listAllowedWritePaths() { return new Set(writePaths); },
     listAllowedMcpServers() { return new Set(mcpServers); },
+    listTrustedPackages() { return new Set(trustedPackages); },
 
     incrementPromptCount() {
       pcount++;
@@ -158,6 +168,7 @@ export function createStore(nowFn = Date.now): Store {
       readPaths.clear();
       writePaths.clear();
       mcpServers.clear();
+      trustedPackages.clear();
       aborted.clear();
       pcount = 0;
     },

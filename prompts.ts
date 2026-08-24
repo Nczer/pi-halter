@@ -38,6 +38,8 @@ interface AlwaysCallbacks {
   onAlwaysPaths: () => void;
   onAlwaysFile: () => void;
   onAlwaysBroader?: (dir?: string) => void;
+  /** D10: trust the prompt's untrusted packages (session grant). */
+  onTrust?: () => void;
 }
 
 /** A tier-1 "Always" option that confirms via a standard tier-2 prompt. */
@@ -76,7 +78,7 @@ function confirmOpt(
  * no index arithmetic to keep in sync.
  */
 function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOption[] {
-  if (!prompt.includeAlwaysOption) return [];
+  if (!prompt.includeAlwaysOption && !prompt.trustPackages?.length) return [];
 
   const { broaderPaths } = prompt;
   const hasBroaderPaths = !!(prompt.includeBroaderOption && broaderPaths && broaderPaths.length > 0);
@@ -121,13 +123,16 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
           : SESSION_SCOPE_WARNING.trimStart(),
       };
 
-  const options: AlwaysOption[] = [
-    confirmOpt(
-      prompt.includeFileOption ? `Always (path): ${prompt.alwaysLabel}` : `Always: ${prompt.alwaysLabel}`,
-      primaryConfig,
-      () => { cb.onAlways(); return "always"; },
-    ),
-  ];
+  const options: AlwaysOption[] = [];
+  if (prompt.includeAlwaysOption) {
+    options.push(
+      confirmOpt(
+        prompt.includeFileOption ? `Always (path): ${prompt.alwaysLabel}` : `Always: ${prompt.alwaysLabel}`,
+        primaryConfig,
+        () => { cb.onAlways(); return "always"; },
+      ),
+    );
+  }
   if (prompt.includeFileOption) {
     options.push(confirmOpt(`Always (file): ${prompt.alwaysFileLabel}`, prompt.tier2File!, () => { cb.onAlwaysFile(); return "alwaysFile"; }));
   }
@@ -137,6 +142,21 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
   }
   if (prompt.includePathsOption) {
     options.push(confirmOpt(`Always (paths): ${prompt.alwaysPathsLabel}`, prompt.tier2Paths ?? prompt.tier2Everything, () => { cb.onAlwaysPaths(); return "alwaysPaths"; }));
+  }
+  if (prompt.trustPackages?.length && cb.onTrust) {
+    // D10: per-package trust for fetchable run forms — broader than the
+    // signature grant (any args/flags), narrower than "npx *" (this package
+    // only, across npx/uvx/dlx/x run forms).
+    options.push(
+      confirmOpt(
+        `Trust: ${prompt.trustPackages.join(", ")} (session)`,
+        {
+          title: "Confirm Trust Package",
+          body: `"Trust" will auto-allow run forms of these packages for the ENTIRE SESSION:\n\n${prompt.trustPackages.map(p => `  \u2022 ${p} (npx/uvx/dlx \u2026 any args)`).join("\n")}${SESSION_SCOPE_WARNING}`,
+        },
+        () => { cb.onTrust?.(); return "always"; },
+      ),
+    );
   }
   return options;
 }
@@ -206,8 +226,9 @@ export async function twoTierAlwaysPrompt(
   onAlwaysFile: () => void,
   onAlwaysBroader?: (dir?: string) => void,
   judge?: JudgeExplain,
+  onTrust?: () => void,
 ): Promise<PromptResult> {
-  const options = buildAlwaysOptions(prompt, { onAlways, onAlwaysPaths, onAlwaysFile, onAlwaysBroader });
+  const options = buildAlwaysOptions(prompt, { onAlways, onAlwaysPaths, onAlwaysFile, onAlwaysBroader, onTrust });
 
   // Count this prompt once — not once per loop iteration (Back from tier-2
   // shouldn't inflate the frequency warning).

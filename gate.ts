@@ -129,6 +129,24 @@ async function tryDspaAutoAllow(
   const pd = decision.promptData;
   const gateResult = await checkDspaGate(pd, store);
   if (!gateResult.ok) {
+    // D10 (docs/dspa-redesign.md): an untrusted package stops the
+    // auto-allow, but the judge still runs — its verdict is advisory
+    // (rendered in the prompt) to inform the Trust/Yes/No decision.
+    // Never an auto-allow: the floor's stop stands.
+    if (gateResult.untrustedPackages && gateResult.untrustedPackages.length > 0) {
+      const v1 = await getJudgeVerdict(pd, ctx, store);
+      const v2 = await getStage2Verdict(pd, ctx, store);
+      const final = (v2 ?? v1) ?? null;
+      return {
+        autoAllowed: false,
+        fallthrough: {
+          gate: gateResult,
+          verdict: final,
+          stage: v2 ? 2 : v1 ? 1 : null,
+          untrustedPackages: gateResult.untrustedPackages,
+        },
+      };
+    }
     return { autoAllowed: false, fallthrough: { gate: gateResult, verdict: null, stage: null } };
   }
   // Stage 1 — stateless (the packet's static analysis is the whole input).

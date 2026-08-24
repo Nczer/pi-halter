@@ -237,3 +237,23 @@ describe("cwd-bound bash signatures (bashSigCwds)", () => {
 		expect(store.listAllowedBashCwds()).toEqual([]);
 	});
 });
+
+describe("trusted packages (D10)", () => {
+	it("trustPackage / hasTrustedPackage / listTrustedPackages", () => {
+		const store = createStore();
+		expect(store.hasTrustedPackage("tsc")).toBe(false);
+		store.trustPackage("tsc");
+		store.trustPackage("@org/tool");
+		expect(store.hasTrustedPackage("tsc")).toBe(true);
+		expect(store.hasTrustedPackage("@org/tool")).toBe(true);
+		expect(store.hasTrustedPackage("ts")).toBe(false);
+		expect([...store.listTrustedPackages()].sort()).toEqual(["@org/tool", "tsc"]);
+	});
+
+	it("reset clears trust", () => {
+		const store = createStore();
+		store.trustPackage("tsc");
+		store.reset();
+		expect(store.hasTrustedPackage("tsc")).toBe(false);
+	});
+});

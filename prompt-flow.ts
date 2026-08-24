@@ -22,6 +22,10 @@ export interface DspaFallthrough {
   stage: 1 | 2 | null;
   /** Set when the gate passed but a judge stage produced no verdict — why. */
   note?: string;
+  /** D10: bare package names that stopped the command — the prompt offers a
+   *  "Trust" option for them (session grant), and the carried verdict is
+   *  advisory (the floor's stop stands). */
+  untrustedPackages?: string[];
 }
 
 /** Result of showing a permission prompt to the user. */
@@ -62,6 +66,20 @@ export async function showPrompt(
         ...prompt,
         body: prompt.body + `\n🚧 dspa: not auto-allowed — ${dspa.gate.reason}`,
       };
+      if (dspa.verdict) {
+        // D10: untrusted-package stop — the judge ran anyway; its verdict is
+        // advisory input for the Trust/Yes/No decision, not an auto-allow.
+        prompt = {
+          ...prompt,
+          body: prompt.body + "\n" + judgeVerdictBlock(dspa.verdict, "— advisory (floor stop stands)"),
+        };
+      }
+      if (dspa.note) {
+        prompt = {
+          ...prompt,
+          body: prompt.body + `\n🚧 dspa: ${dspa.note}`,
+        };
+      }
     } else if (dspa.verdict) {
       // An approving verdict that did not auto-allow did so only because the
       // risk tier was above the stage's authority — say so on the suggests
@@ -142,6 +160,12 @@ export async function showPrompt(
         }
       : undefined;
 
+  // D10: surface the untrusted packages as a tier-1 "Trust" option. The
+  // grant is per bare package name (npx/uvx/dlx run forms, any args).
+  if (dspa?.untrustedPackages && dspa.untrustedPackages.length > 0) {
+    prompt = { ...prompt, trustPackages: dspa.untrustedPackages };
+  }
+
   const result = await twoTierAlwaysPrompt(prompt, store, ctx, () => {
     store.addAllowed(RuleGenerator.generatePrimaryRules(decision.promptData));
     updateWidget(ctx);
@@ -163,7 +187,10 @@ export async function showPrompt(
       store.addAllowed(rules);
       updateWidget(ctx);
     }
-  }, judge);
+  }, judge, () => {
+    for (const pkg of dspa!.untrustedPackages!) store.trustPackage(pkg);
+    updateWidget(ctx);
+  });
 
   // /dspat: record the verdict paired with the human's decision —
   // session-scoped stats only (judge quality is model-dependent).

