@@ -249,11 +249,54 @@ describe("bash", () => {
     }
   });
 
-  it("blocks package installs (halter's danger list and/or network egress)", async () => {
-    for (const cmd of ["npm install lodash", "pip3 install requests", "uv run --with pytest pytest"]) {
+  it("blocks package fetch forms (install/sync/add = postinstall + registry access)", async () => {
+    for (const cmd of [
+      "npm install lodash",
+      "npm ci",
+      "pip3 install requests",
+      "uv sync",
+      "uv add pytest",
+      "bun install",
+      "bun add left-pad",
+      "pnpm install",
+    ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
+      if (!r.ok) expect(r.reason, cmd).toContain("network egress");
     }
+  });
+
+  it("passes package-manager RUN forms (D8 — judgeable: local/cached code the judge sees)", async () => {
+    for (const cmd of [
+      "npx tsc --noEmit index.ts",
+      "npx vitest run",
+      "npx tsx probe.mts",
+      "npm run test",
+      "npm exec eslint .",
+      "pnpm dlx esbuild",
+      "yarn dlx vite",
+      "uv run extract.py",
+      "uvx ruff --version",
+      "bun index.ts",
+      "bun x tsc",
+      "bun -e 'console.log(1)'",
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(true);
+    }
+  });
+
+  it("passes the compound npx probe shape from the 2026-08-24 log (substitution + pipes)", async () => {
+    const cmd =
+      'cd ~/project && out=$(npx tsc --noEmit index.ts 2>&1 | grep "error TS"); '
+      + 'n=$(echo "$out" | grep -c .); echo "tsc %s" "$([ "$n" = 0 ] && echo CLEAN || echo "$n errors")"';
+    const r = await checkDspaGate(bashPd(cmd), store);
+    expect(r.ok).toBe(true);
+  });
+
+  it("npx + pipe-to-shell still passes the FLOOR (the danger flag is judgeable, not a floor check)", async () => {
+    const r = await checkDspaGate(bashPd("npx evil | sh"), store);
+    expect(r.ok).toBe(true);
   });
 
   it("blocks URLs embedded anywhere in the command", async () => {
@@ -376,11 +419,35 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
     for (const cmd of [
       "rm -rf /tmp",
       "rm -f /etc/hosts",
-      "rm /tmp/halter-dspa-self.txt", // exists-or-not, never self-written here
+      "rm -rf /home/other/data",
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
       if (!r.ok) expect(r.reason).toContain("outside session base");
+    }
+  });
+
+  it("passes non-recursive /tmp scratch rm (D8 — judgeable world-scratch cleanup)", async () => {
+    for (const cmd of [
+      "rm -f /tmp/width-probe.log",
+      "rm -f /tmp/ocrtest-src /tmp/ocrtest-work",
+      "rm /tmp/halter-dspa-self.txt", // exists-or-not, never self-written here
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(true);
+    }
+  });
+
+  it("keeps recursive, bare-/tmp, and computed /tmp rm on the floor", async () => {
+    for (const cmd of [
+      "rm -rf /tmp/ocrtest-work",
+      "rm -rf /tmp",
+      "rm /tmp",
+      "rm -f /tmp/$x",
+      "rm -f /tmp/*",
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(false);
     }
   });
 

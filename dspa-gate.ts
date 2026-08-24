@@ -15,13 +15,17 @@
  *    session base. Unsafe patterns (inline scripts, redirects, pipes,
  *    subshells) and risk reasons are NOT floor checks — judgeable: the
  *    packet already carries the full command text and the analysis digest.
+ *    Package-manager RUN forms (npx, `uv run`, `bun <script>`, …) are
+ *    judgeable too (D8) — they execute local/cached code the judge can see;
+ *    FETCH forms (`npm install`, `uv sync`, `bun add`, …) stay on the floor.
  *  - rm carve-out (dspa only): halter always flags rm as dangerous, and
  *    danger patterns always prompt even after Always grants. An rm command
  *    may reach the judge only when every rm target is explicit, not the
  *    working directory itself, and either inside the session base or part
  *    of a create-then-delete set (a path this same command writes via
- *    redirect/tee/touch/mkdir in an earlier segment AND rms). With -r/-R
- *    the target (if it exists) must be a directory or self-written.
+ *    redirect/tee/touch/mkdir in an earlier segment AND rms), or a
+ *    non-recursive world-scratch target directly under /tmp (D8). With
+ *    -r/-R the target (if it exists) must be a directory or self-written.
  *    Non-rm danger reasons still block the carve-out (rm's neighborhood is
  *    bounded by design). The judge still approves.
  *  - file: ungranted writes inside the session base, no credential-pattern
@@ -40,7 +44,11 @@ import { expandTilde } from "./analysis/path-util";
 import { resolvePathReal } from "./analysis/path-analysis";
 import { UNKNOWN_CWD_MARKER } from "./analysis/cwd-tracking";
 import { OPAQUE_VAR_DIR } from "./analysis/bash-parser";
-import { findNetworkEgress } from "./config";
+import {
+  NETWORK_COMMANDS,
+  GIT_NETWORK_SUBCOMMANDS,
+  NETWORK_URL_RE,
+} from "./config";
 
 export type DspaGateResult = { ok: true } | { ok: false; reason: string };
 
@@ -60,10 +68,67 @@ function obscuredHit(segments: string[]): string | null {
   return null;
 }
 
-/** First egress hit only (gate reason line); URLs truncated to 60 chars. */
+/**
+ * D8 (docs/dspa-redesign.md): a package-manager RUN form executes
+ * local/cached code — the package name and args are visible in the judge's
+ * full-text input, so it is judgeable, not a floor stop. FETCH forms
+ * (`npm install`, `uv sync`, `bun add`, …) stay on the floor: fetch =
+ * arbitrary postinstall execution + registry access. The 2026-08-24 log:
+ * the pre-D8 floor stopped 7 of 26 dspa prompts (`npx tsc`, `npx vitest`,
+ * `uv run`) while the judge stopped zero.
+ */
+const PKG_RUN_FORMS: Record<string, ReadonlySet<string> | "all" | "except-fetch"> = {
+  npx: "all", // inherently run-a-package (fetches on miss — the judge sees the name)
+  uvx: "all",
+  npm: new Set(["run", "exec", "x"]),
+  pnpm: new Set(["run", "dlx", "exec", "x"]),
+  yarn: new Set(["run", "dlx", "x"]),
+  uv: new Set(["run", "x"]),
+  bun: "except-fetch", // `bun <script>` interpreter form: all but fetch verbs
+};
+
+/** bun subcommands that fetch from the registry. */
+const BUN_FETCH_VERBS = new Set([
+  "install", "i", "add", "remove", "rm", "update", "upgrade", "up",
+  "publish", "pub", "link",
+]);
+
+/** First operative token after the command word (skips flags, `K=V` env prefixes). */
+function firstSubcommand(words: string[]): string | null {
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i];
+    if (w.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+    return w.toLowerCase();
+  }
+  return null;
+}
+
+/** True when this segment's first word is a judgeable package-manager RUN form (D8). */
+function isPkgRunForm(first: string, words: string[]): boolean {
+  const forms = PKG_RUN_FORMS[first];
+  if (!forms) return false;
+  if (forms === "all") return true;
+  const sub = firstSubcommand(words);
+  if (forms === "except-fetch") return !sub || !BUN_FETCH_VERBS.has(sub);
+  return !!sub && forms.has(sub);
+}
+
+/** First egress hit only (gate reason line); URLs truncated to 60 chars.
+ *  Package-manager RUN forms are skipped (D8 — judgeable). */
 function networkHit(command: string, segments: string[]): string | null {
-  const { commands, urls } = findNetworkEgress(command, segments);
-  return commands[0] ?? urls[0]?.slice(0, 60) ?? null;
+  for (const seg of segments) {
+    const words = seg.trim().split(/\s+/);
+    const first = words[0]?.toLowerCase();
+    if (!first) continue;
+    if (isPkgRunForm(first, words)) continue;
+    if (NETWORK_COMMANDS.has(first)) return first;
+    if (first === "git") {
+      const sub = words[1]?.toLowerCase() ?? "";
+      if (GIT_NETWORK_SUBCOMMANDS.has(sub)) return `git ${words[1]}`;
+    }
+  }
+  const m = command.match(NETWORK_URL_RE);
+  return m ? m[0].slice(0, 60) : null;
 }
 
 /**
@@ -345,6 +410,18 @@ const RM_RISK_REASON_RE =
  * (variable/substitution) paths. */
 const RM_FORBIDDEN_TARGET_RE = /[*?[~$`]/;
 
+/**
+ * D8 (docs/dspa-redesign.md): an explicit, non-recursive rm of a
+ * world-scratch target directly under /tmp is judgeable — the judge sees
+ * the full text, and /tmp is the conventional scratch area (`rm -f
+ * /tmp/probe.log` cleanup stopped 4 of 26 dspa prompts in the 2026-08-24
+ * log). Recursive, glob, variable, and tilde targets never reach here
+ * (the explicitness checks fail first); /tmp itself is not a target.
+ */
+function isTmpScratchTarget(resolved: string, recursive: boolean): boolean {
+  return !recursive && resolved.startsWith("/tmp/");
+}
+
 function isRmSegment(seg: string): boolean {
   const first = seg.trim().split(/\s+/)[0]?.split("/").pop()?.toLowerCase();
   return first === "rm";
@@ -415,7 +492,11 @@ function checkRmTargets(
           }
         }
         rmTargets.add(resolved);
-        if (!isInsideBase(resolved) && !written.has(resolved)) {
+        if (
+          !isInsideBase(resolved) &&
+          !written.has(resolved) &&
+          !isTmpScratchTarget(resolved, recursive)
+        ) {
           return { reason: `rm target outside session base (${a.slice(0, 60)})`, exempt: new Set() };
         }
       }
