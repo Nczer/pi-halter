@@ -749,8 +749,8 @@ export const cases: TestCase[] = [
 
 	// ── Trust bypass regressions: trust covers the script invocation only, never
 	//    shell operators around it (pipe stages, write redirects, arg substitution) ──
-	{ cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query | bash", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: pipe stage to shell is not covered by script trust" },
-	{ cmd: "python3 ~/.pi/agent/skills/docx/scripts/comment.py x.docx | bash", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: pipe to shell after trusted .py" },
+	{ cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query | bash", simple: false, unsafe: true, decision: "prompt", desc: "TRUST BYPASS: pipe stage to shell is not covered by script trust (flagged unsafe — 2026-08-24)" },
+	{ cmd: "python3 ~/.pi/agent/skills/docx/scripts/comment.py x.docx | bash", simple: false, unsafe: true, decision: "prompt", desc: "TRUST BYPASS: pipe to shell after trusted .py (flagged unsafe — 2026-08-24)" },
 	{ cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query | ./evil", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: pipe to relative-path script" },
 	{ cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query > ./pwned.txt", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: write redirect after trusted script" },
 	{ cmd: "python3 ~/.pi/agent/skills/docx/scripts/comment.py x.docx \"$(rm -rf /tmp/xyz)\"", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: command substitution in trusted script args" },

@@ -994,6 +994,54 @@ describe("Bash: pipeline-merge auto-allow with stored signatures", () => {
 	});
 });
 
+describe("Bash: pipe to a shell stage never auto-allows (2026-08-24 log)", () => {
+	// `X | bash <script>` (X allowlisted) used to auto-allow on the FIRST
+	// segment's first word: the pipe-to-shell branch set severity+reason but
+	// never hasDanger, so canBeAutoAllowed stayed true. Live incident: an
+	// `echo n | bash ~/.local/bin/aiu …` update script ran untagged while the
+	// log line was labeled risk:high "pipe to a shell (possible RCE)".
+	const script = path.join(home, ".local", "bin", "script.sh");
+
+	it("echo-prefixed script execution prompts", async () => {
+		const store = createStore();
+		const d = await decide(
+			{ type: "bash", command: `echo n | bash ${script} 2>&1 | head -60`, cwd },
+			store,
+		);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("ls-prefixed script execution prompts", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: `ls | bash ${script}`, cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("bare shell reading a script from stdin prompts", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: "ls | sh", cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("inline -c form still prompts", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: `echo n | bash -c "id"`, cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("direct script execution still prompts", async () => {
+		const store = createStore();
+		const d = await decide({ type: "bash", command: `bash ${script}`, cwd }, store);
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("controls: allowlisted pipelines without a shell stage stay auto-allowed", async () => {
+		const store = createStore();
+		expect((await decide({ type: "bash", command: "ls 2>&1 | head -5", cwd }, store)).kind).toBe("auto-allow");
+		expect((await decide({ type: "bash", command: "echo hi", cwd }, store)).kind).toBe("auto-allow");
+	});
+});
+
 describe("Bash: outside path auto-allow with dir approval", () => {
 	it("cat /etc/hosts auto-allows after read dir approval", async () => {
 		const store = createStore();
