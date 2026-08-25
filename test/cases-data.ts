@@ -1013,4 +1013,16 @@ export const cases: TestCase[] = [
 	{ cmd: "tmux send-keys -t foo C-c", simple: false, unsafe: false, decision: "prompt", desc: "send-keys: non-Enter keystroke is not a simple command → prompt" },
 	{ cmd: "tmux send-keys -t foo 'rm -rf /' Enter", simple: false, unsafe: true, decision: "prompt", desc: "send-keys: dangerous payload prompts with [TmuxPayload] risk reason" },
 	{ cmd: "tmux send-keys -t foo 'ls && rm -rf . ' Enter", simple: false, unsafe: true, decision: "prompt", desc: "send-keys: chained rm in payload must NOT auto-allow" },
+
+	// ═══════════════════════════════════════════════════════════
+	// variable resolution (2026-09-21 <unresolved-var> hardening)
+	// ═══════════════════════════════════════════════════════════
+	{ cmd: "for f in a.txt b.txt; do cat $f; done", simple: true, unsafe: false, decision: "auto-allow", desc: "bare loop in-list resolves under the session cwd (log false positive)" },
+	{ cmd: "cd /etc && for f in a b; do cat $f; done", simple: true, unsafe: false, decision: "prompt", desc: "bare in-list after a cd outside cwd names the base (the <unresolved-cwd> hole)" },
+	{ cmd: 'f=./x.jsonl; cat "$f"', simple: true, unsafe: false, decision: "auto-allow", desc: "local assignment binds a relative value (cwd-local)" },
+	{ cmd: 'f=/etc/passwd; cat "$f"', simple: true, unsafe: false, decision: "prompt", desc: "local assignment binds an absolute outside value (named, grantable)" },
+	{ cmd: 'f=$(find . -name \'*.log\' | head); cat "$f"', simple: true, unsafe: false, decision: "auto-allow", desc: "cwd-local find value resolves under the tracked base" },
+	{ cmd: "f=$(find . -exec ls {} \\;); cat $f", simple: true, unsafe: false, decision: "prompt", desc: "find -exec value stays opaque (unresolvable → forced approval)" },
+	{ cmd: "export f=/etc/x; cat $f", simple: true, unsafe: false, decision: "prompt", desc: "export form binds (declaration_command), outside value prompts" },
+	{ cmd: "f=$g; cat $f", simple: true, unsafe: false, decision: "prompt", desc: "unbound chain stays opaque" },
 ];

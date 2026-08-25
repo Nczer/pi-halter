@@ -211,9 +211,10 @@ describe("parseCommand: opaque var markers (log FPs)", () => {
 		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
 	});
 
-	it("non-loop var in path position still gets the marker (control)", async () => {
+	it("non-loop var in path position is classified opaque (control)", async () => {
 		const r = await parseCommand("cat $X", cwd);
-		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(true);
+		expect(r.opaque).toEqual([{ raw: "$X", segIdx: 0, kind: "opaque" }]);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
 	});
 });
 
@@ -237,16 +238,18 @@ describe("parseCommand: loop in-list roots (symlink verification)", () => {
 		}
 	});
 
-	it("glob in-list with an escaping symlink keeps the opaque marker", async () => {
+	it("glob in-list with an escaping symlink keeps an opaque ref", async () => {
 		const base = makeRoot(true);
 		const r = await parseCommand(`for d in ${base}/*/; do ls "$d"; done`, cwd);
-		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(true);
+		expect(r.opaque.length).toBeGreaterThan(0);
+		expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
 	});
 
-	it("literal in-list token that is an escaping symlink keeps the opaque marker", async () => {
+	it("literal in-list token that is an escaping symlink keeps an opaque ref", async () => {
 		const base = makeRoot(true);
 		const r = await parseCommand(`for d in ${base}/esc; do cat "$d/passwd"; done`, cwd);
-		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(true);
+		expect(r.opaque.length).toBeGreaterThan(0);
+		expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
 	});
 
 	it("glob in-list of real dirs under an allowed root is exempt", async () => {

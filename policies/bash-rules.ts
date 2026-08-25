@@ -238,6 +238,7 @@ export const PromptFallbackRule: BashRule = (req, _store, analysis?: CommandAnal
       credentialRule: analysis.credentialRule,
       needsCommandApproval: !analysis.safety.isSimple,
       needsPathApproval: prompt.needsPathApproval ?? false,
+      unresolved: prompt.unresolved,
       // Single analysis per decision: the /dspa gate and the judge packet
       // consume this instance instead of re-parsing (see BashPromptData).
       analysis,

@@ -3,10 +3,10 @@ import os from "node:os";
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import { allowedReadPaths, allowedWritePaths, deniedPaths, warnPaths, isTrustedScriptPath } from "../config";
-import { expandTilde } from "./path-util";
+import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
 import { tokenizeSegment } from "./tokenizer";
 import { UNKNOWN_CWD_MARKER } from "./cwd-tracking";
-export { expandTilde }; // Re-export for existing importers
+export { expandTilde, OPAQUE_VAR_DIR }; // Re-export for existing importers
 
 // ── Relative path detection ──
 
@@ -608,6 +608,33 @@ export function checkCommandForCredentialPaths(
 // ── Path-to-directory resolution ──
 
 /**
+ * The grantable static prefix of an opaque token: the leading portion before
+ * the first $/backtick, when it is absolute (or ~/) and pins to a real
+ * directory. `~/.pi/x/$f` → the real `~/.pi/x`; `$f`, `./x/$f`,
+ * `/?x/b/$f` → null (no static prefix, base-dependent, or glob-prefixed —
+ * a glob prefix spans several dirs, none of which is provably the prefix).
+ */
+export function opaqueStaticPrefixDir(raw: string): string | null {
+  let idx = raw.length;
+  for (const c of ["$", "`"]) {
+    const i = raw.indexOf(c);
+    if (i !== -1 && i < idx) idx = i;
+  }
+  if (idx <= 0) return null;
+  const prefix = raw.slice(0, idx).replace(/\/+$/, "");
+  if (!prefix) return null;
+  if (/[\\`*?\[\]$]/.test(prefix)) return null;
+  if (/(^|\/)\.\.(\/|$)/.test(prefix)) return null;
+  if (prefix === "~" || prefix.startsWith("~/")) {
+    if (!/^~\/[A-Za-z0-9._/-]+$/.test(prefix)) return null;
+    const t = expandTilde(prefix);
+    return path.isAbsolute(t) ? resolvePathReal(t, os.homedir()) : null;
+  }
+  if (!prefix.startsWith("/")) return null; // relative — base-dependent
+  return resolvePathReal(prefix, os.homedir());
+}
+
+/**
  * Resolve a list of paths to their containing directories.
  * For directories, returns the path as-is. For files (or non-existent paths),
  * returns the parent directory.
@@ -619,6 +646,11 @@ export async function resolvePathsToDirs(paths: string[]): Promise<string[]> {
     // path.dirname would degrade them to `.` (or the literal prefix). Keep
     // the marker so the prompt reads `outside <unresolved-cwd>`.
     if (p.includes(UNKNOWN_CWD_MARKER)) return UNKNOWN_CWD_MARKER;
+    // Unbound opaque reference: show the static prefix the token provably
+    // pins (real dir), or the bare sentinel when it pins nothing.
+    if (p.startsWith(OPAQUE_VAR_DIR + "/")) {
+      return opaqueStaticPrefixDir(p.slice(OPAQUE_VAR_DIR.length + 1)) ?? OPAQUE_VAR_DIR;
+    }
     try {
       const stat = await fsPromises.stat(p);
       return stat.isDirectory() ? p : path.dirname(p);

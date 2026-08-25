@@ -89,3 +89,24 @@ describe("root grants are never generated", () => {
     expect(etc).toEqual({ writeDirs: ["/etc"], readDirs: ["/etc"] });
   });
 });
+
+describe("sentinel dirs are never granted", () => {
+  it("primary rules drop <unresolved-…> dirs, keeping real ones", () => {
+    const r = RuleGenerator.generatePrimaryRules(
+      bashPd({ outsideDirs: ["/etc", "<unresolved-var>/$f"] }),
+    );
+    expect(r).toEqual({ readDirs: ["/etc"], bashSigs: ["ls"] });
+  });
+
+  it("paths-only rules drop sentinel dirs", () => {
+    const r = RuleGenerator.generatePathsOnlyRules(
+      bashPd({ outsideDirs: ["/etc", "<unresolved-cwd>"] }),
+    );
+    expect(r).toEqual({ readDirs: ["/etc"] });
+  });
+
+  it("a sentinel-only prompt offers no dir tier at all", () => {
+    expect(RuleGenerator.generatePrimaryRules(bashPd({ outsideDirs: ["<unresolved-var>/$f"] }))).toEqual({ bashSigs: ["ls"] });
+    expect(RuleGenerator.generatePathsOnlyRules(bashPd({ outsideDirs: ["<unresolved-cwd>"] }))).toBeUndefined();
+  });
+});

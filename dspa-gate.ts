@@ -40,6 +40,7 @@ import path from "node:path";
 import type { PromptData } from "./decision-engine";
 import type { Store } from "./store";
 import { analyzeCommand } from "./analysis/command-analysis";
+import { resolveOpaqueRefs } from "./analysis/var-resolution";
 import { expandTilde } from "./analysis/path-util";
 import { resolvePathReal } from "./analysis/path-analysis";
 import { UNKNOWN_CWD_MARKER } from "./analysis/cwd-tracking";
@@ -144,23 +145,16 @@ function networkHit(command: string, segments: string[]): string | null {
  * D7 (docs/dspa-redesign.md): outside paths the parser could not bind to a
  * location — `<unresolved-cwd>` (a cd inside a `||` chain leaves the side's
  * directory genuinely ambiguous) or `<unresolved-var>` (opaque variable).
- * The floor resolves what it can from the command text itself (the
- * 2026-08-24 log: a read-only `cd ~/… && ls || echo; grep;` flow and a
- * `SOCKET_DIR=${…:-/tmp/…}` probe forced manual prompts instead of reaching
- * the judge):
- *
- * - opaque vars: command-local `VAR=value` assignments — literal values,
- *   `${X:-default}` default chains (the default is taken when X has no local
- *   assignment; the environment may set X elsewhere, which the judge still
- *   sees in the full text), `~` expansion;
- * - unresolved cwd: the command's cd target (exactly one resolvable cd)
- *   bounds the side — it runs under either the original cwd or that target.
- *
- * Resolved → the ordinary in-base/grant bar applies: a stop then names the
- * CONCRETE dir, so one Always-for-dir makes later runs judgeable (D3-style).
- * Still unresolvable → judgeable: the packet carries the full text and stage
- * 2 has session context the static parser lacks. Resolved outside-base paths
- * and the rm carve-out are unchanged.
+ * The opaque-variable dataflow now lives in the analysis layer
+ * (analysis/var-resolution: scoped local assignments + the tracked
+ * effective base + cwd-local loop/pipeline modeling) — a sentinel that
+ * reaches the gate is unbound by construction and is JUDGEABLE (the packet
+ * carries the full text and stage 2 has session context the static parser
+ * lacks). The gate keeps only the cd-boundary bound for unresolved-cwd
+ * markers: the command's cd target (exactly one resolvable cd) bounds the
+ * side — it runs under either the original cwd or that target. Resolved →
+ * the ordinary in-base/grant bar applies: a stop then names the CONCRETE
+ * dir, so one Always-for-dir makes later runs judgeable (D3-style).
  */
 const D7_ASSIGNMENT_RE = /^(?:export\s+|readonly\s+|declare\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 const D7_UNRESOLVED_RE = /[?*$`\[{}]/;
@@ -169,114 +163,6 @@ type D7Resolution =
   | { kind: "inside" } // resolves inside base or a granted dir
   | { kind: "outside"; path: string } // resolves to a concrete outside-base path
   | { kind: "open" }; // unresolvable — judgeable
-
-/** Command-local `VAR=value` assignments, in appearance order. */
-function d7Assignments(command: string): Map<string, string[]> {
-  const m = new Map<string, string[]>();
-  for (const chunk of command.split(/;|&&|\|\||\||\n/)) {
-    const tokens = chunk.trim().match(/\S+/g) ?? [];
-    for (const tok of tokens) {
-      const am = D7_ASSIGNMENT_RE.exec(tok);
-      if (!am) break; // first non-assignment token ends the env prefix
-      const prev = m.get(am[1]) ?? [];
-      prev.push(am[2]);
-      m.set(am[1], prev);
-    }
-  }
-  return m;
-}
-
-/** Parse a `${NAME}` / `${NAME:-default}` expression with balanced braces. */
-function d7ParseVarExpr(v: string, start: number): { name: string; def: string | null; end: number } | null {
-  if (v.slice(start, start + 2) !== "${") return null;
-  let i = start + 2;
-  const nameStart = i;
-  while (i < v.length && /[A-Za-z0-9_]/.test(v[i])) i++;
-  if (i === nameStart) return null;
-  const name = v.slice(nameStart, i);
-  if (v[i] === "}") return { name, def: null, end: i + 1 };
-  if (v.slice(i, i + 2) === ":-") {
-    let depth = 1;
-    let j = i + 2;
-    let defEnd = -1;
-    while (j < v.length) {
-      if (v[j] === "{") depth++;
-      else if (v[j] === "}") {
-        depth--;
-        if (depth === 0) {
-          defEnd = j;
-          break;
-        }
-      }
-      j++;
-    }
-    if (defEnd < 0) return null;
-    return { name, def: v.slice(i + 2, defEnd), end: defEnd + 1 };
-  }
-  return null; // other ${NAME…} forms ($?, arithmetic, …) — unresolvable
-}
-
-/** The value a reference stands for: the local assignment when unambiguous,
-* else the `:-` default (the command's stated fallback) when present. */
-function d7ResolveRef(
-  expr: { name: string; def: string | null },
-  assignments: Map<string, string[]>,
-  depth: number,
-): string | null {
-  const values = assignments.get(expr.name);
-  const local = values && values.length === 1 ? d7ResolveExpr(values[0], assignments, depth) : null;
-  if (local !== null) return local;
-  if (expr.def !== null) return d7ResolveExpr(expr.def, assignments, depth);
-  return null; // env var with no local assignment and no default
-}
-
-/** Resolve a value expression: a lone `${…}`, or a literal with `$` refs inside. */
-function d7ResolveExpr(v: string, assignments: Map<string, string[]>, depth = 0): string | null {
-  if (depth > 4) return null;
-  let val = v;
-  const quoted = /^"(.*)"$/.exec(val)?.[1] ?? /^'(.*)'$/.exec(val)?.[1];
-  if (quoted !== undefined) val = quoted;
-  if (val === "") return null;
-  if (val.startsWith("${")) {
-    const expr = d7ParseVarExpr(val, 0);
-    if (!expr) return null;
-    if (expr.end === val.length) return d7ResolveRef(expr, assignments, depth + 1);
-  } // expression with a literal tail → fall through to substitution
-  const sub = d7Substitute(val, assignments, depth);
-  if (sub === null || D7_UNRESOLVED_RE.test(sub)) return null;
-  return expandTilde(sub);
-}
-
-/** Substitute every `$NAME` / `${NAME…}` reference in `v`; null if any cannot be bounded. */
-function d7Substitute(v: string, assignments: Map<string, string[]>, depth = 0): string | null {
-  if (depth > 4) return null;
-  let out = "";
-  let i = 0;
-  while (i < v.length) {
-    if (v[i] !== "$") {
-      out += v[i];
-      i++;
-      continue;
-    }
-    if (v[i + 1] === "{") {
-      const expr = d7ParseVarExpr(v, i);
-      if (!expr) return null;
-      const r = d7ResolveRef(expr, assignments, depth);
-      if (r === null) return null;
-      out += r;
-      i = expr.end;
-      continue;
-    }
-    const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(v.slice(i + 1));
-    if (!m) return null;
-    const values = assignments.get(m[0]);
-    const r = values && values.length === 1 ? d7ResolveExpr(values[0], assignments, depth) : null;
-    if (r === null) return null;
-    out += r;
-    i += 1 + m[0].length;
-  }
-  return out;
-}
 
 /** The command's cd targets (flags skipped; `cd -` and `cd` are unresolvable). */
 function d7CdTargets(command: string): string[] {
@@ -302,17 +188,12 @@ function d7ResolveOutsidePath(
   p: string,
   cwd: string,
   isInsideBase: (p: string) => boolean,
-  assignments: Map<string, string[]>,
   cdTargets: string[],
 ): D7Resolution {
   if (p.startsWith(OPAQUE_VAR_DIR)) {
-    // The parser emits path.join(OPAQUE_VAR_DIR, rawVal) — drop the join
-    // slash so a RELATIVE resolved value stays cwd-relative (not "/./x").
-    const rest = p.slice(OPAQUE_VAR_DIR.length + 1);
-    const substituted = d7Substitute(rest, assignments);
-    if (substituted === null || D7_UNRESOLVED_RE.test(substituted)) return { kind: "open" };
-    const resolved = path.resolve(cwd, expandTilde(substituted));
-    return isInsideBase(resolved) ? { kind: "inside" } : { kind: "outside", path: resolved };
+    // Unbound by construction (the analysis layer resolved what it could with
+    // proper scoping) — judgeable: the judge sees the full text.
+    return { kind: "open" };
   }
   if (p.startsWith(UNKNOWN_CWD_MARKER)) {
     const rest = p.slice(UNKNOWN_CWD_MARKER.length);
@@ -412,10 +293,9 @@ export async function checkDspaGate(
   const net = networkHit(pd.command, analysis.segments);
   if (net) return { ok: false, reason: `network egress (${net})` };
   const outside = (analysis.prompt.outsidePaths ?? []).filter((p) => !outsideExempt.has(p));
-  // D7: resolve what the parser could not bind, then apply the ordinary bar.
+  // D7: bound the cd-ambiguous markers, then apply the ordinary bar.
   // Concrete resolved paths stop (naming the dir for a one-time grant);
   // still-unresolvable paths go to the judge.
-  const assignments = d7Assignments(pd.command);
   const cdTargets = d7CdTargets(pd.command);
   const resolvedOutside: string[] = [];
   for (const p of outside) {
@@ -423,10 +303,23 @@ export async function checkDspaGate(
       resolvedOutside.push(p);
       continue;
     }
-    const r = d7ResolveOutsidePath(p, pd.cwd, isInsideBase, assignments, cdTargets);
+    const r = d7ResolveOutsidePath(p, pd.cwd, isInsideBase, cdTargets);
     if (r.kind === "outside") resolvedOutside.push(r.path);
     // inside → drop; open → judgeable (the judge sees the full text)
   }
+  // The analysis layer resolved opaque refs under the MANUAL bar (cwd +
+  // config-allowed + granted). The dspa floor is stricter (session base
+  // only): re-resolve the raw opaque data under the floor's bar, so a value
+  // the manual bar would allow (e.g. /tmp via config) still stops here (D7).
+  const floor = resolveOpaqueRefs(
+    analysis.opaque,
+    analysis.parsedSegments,
+    analysis.effectiveCwds,
+    analysis.assignments,
+    pd.cwd,
+    isInsideBase,
+  );
+  resolvedOutside.push(...floor.paths);
   if (resolvedOutside.length > 0) {
     const shown = [...new Set(resolvedOutside)].slice(0, 2);
     return { ok: false, reason: `touches paths outside base (${shown.join(", ")})` };

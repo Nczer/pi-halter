@@ -1,8 +1,9 @@
 import path from "node:path";
-import { parseCommand } from "./bash-parser";
+import { parseCommand, type OpaqueRef, type BashSegment } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
 import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath } from "./cwd-tracking";
-import { expandTilde } from "./path-util";
+import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
+import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
 import { getTmuxSubcommand, extractTmuxSendKeys } from "./tmux-helpers";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs, checkCommandForCredentialPaths } from "./path-analysis";
@@ -31,6 +32,13 @@ export interface PromptHints {
   outsideDirs: string[] | undefined;
   /** Whether path approval is needed (outside paths exist). Undefined if allowed dirs not provided. */
   needsPathApproval: boolean | undefined;
+  /**
+   * Opaque references the analysis could not statically bind (a variable
+   * value not knowable from the command text, or a cwd-local value under an
+   * unknown base). Their markers are in the path set (approval is forced);
+   * the prompt lists the tokens. They are never part of an Always grant.
+   */
+  unresolved: UnresolvedRef[];
 }
 
 /** Full analysis of a shell command — single source of truth for parsing, safety, and risk. */
@@ -49,6 +57,11 @@ export interface CommandAnalysis {
   relativePathSegmentIndices: number[];
   /** Effective working directory per segment (null = unresolvable base). */
   effectiveCwds: (string | null)[];
+  /** Raw opaque data (unresolved — the dspa floor re-resolves it under its
+   * own stricter bar). Parsed segments carry subshell depth for scoping. */
+  opaque: OpaqueRef[];
+  assignments: ShellAssignment[];
+  parsedSegments: BashSegment[];
   /** Credential path detected in the command (denied paths are blocked earlier; this is for warned paths). */
   hasCredentialPath: boolean;
   /** Matched credential pattern name, if any (e.g. ".env", ".aws"). */
@@ -114,7 +127,20 @@ async function analyzeTmuxSendKeysPayload(
   for (const chunk of chunks) {
     const parsed = await parseCommand(chunk, cwd);
     if (parsed.hasParseError) return { simple: false, unsafe: true, paths: [], reasons: [] };
-    paths.push(...parsed.paths);
+    // The payload's opaque refs resolve against the payload's own segment
+    // bases (a cd inside the payload threads); the full outside-cwd bar
+    // (allowed roots, granted dirs) applies downstream at command level.
+    const payloadCwds = trackEffectiveCwd(parsed.segments, cwd);
+    const payloadOpaque = resolveOpaqueRefs(
+      parsed.opaque,
+      parsed.segments,
+      payloadCwds,
+      parsed.assignments,
+      cwd,
+      (p) => p === cwd || p.startsWith(cwd + "/"),
+    );
+    paths.push(...parsed.paths, ...payloadOpaque.paths);
+    for (const u of payloadOpaque.unresolved) paths.push(u.marker);
     for (const seg of parsed.segments) {
       const text = seg.text.trim();
       if (getFirstWord(text) === "tmux" && getTmuxSubcommand(text) === "send-keys") {
@@ -142,9 +168,9 @@ export async function analyzeCommand(
   cwd: string,
   options?: AnalyzeCommandOptions,
 ): Promise<CommandAnalysis> {
-  // Single AST parse: segments, paths, and subshell flags in one pass
+  // Single AST parse: segments, paths, opaque refs, and assignments in one pass
   const parseResult = await parseCommand(cmd, cwd);
-  const { segments, paths, hasParseError } = parseResult;
+  const { segments, paths, opaque, assignments, hasParseError } = parseResult;
   const segmentTexts = segments.map(s => s.text);
   const signatures = segmentTexts.map(getCommandSignature);
 
@@ -180,6 +206,26 @@ export async function analyzeCommand(
       paths.push(...reResolveCwdDependentPaths(segments[i], base, { skipDotPaths: true }));
     }
   }
+
+  // Opaque references (an expansion in path position the parser could not
+  // resolve on its own): bind them with the command's own dataflow — the
+  // visible local assignments (scoped: subshell-local and backgrounded
+  // assignments don't count) plus each ref's tracked effective base. A bound
+  // ref resolves to its concrete location — dropped when inside (the runtime
+  // location is proven, no approval needed), named when outside (one
+  // Always-for-dir makes later runs pass). An unbound ref keeps its sentinel
+  // marker: approval is still forced, the prompt shows the token, and no
+  // dead grant can be recorded for it.
+  const opaqueResolution = resolveOpaqueRefs(
+    opaque,
+    segments,
+    effectiveCwds,
+    assignments,
+    cwd,
+    (p) => getOutsideCwdPaths([p], cwd, options?.isInsideAllowedDir).length === 0,
+  );
+  paths.push(...opaqueResolution.paths);
+  for (const u of opaqueResolution.unresolved) paths.push(u.marker);
 
   // Unified segment analysis: one call per segment replaces
   // hasKnownDanger + isSimpleAllowedCommand + isSegmentUnsafe + analyzeSegmentRisk.
@@ -259,7 +305,10 @@ export async function analyzeCommand(
       cwd,
       options.isInsideAllowedDir,
     );
-    outsideDirs = await resolvePathsToDirs(outsidePaths);
+    // The bare unresolved-var sentinel names no directory — the prompt shows
+    // it via the unresolved list instead (the unknown-cwd marker stays: it is
+    // the display of a base the cd chain could not resolve).
+    outsideDirs = (await resolvePathsToDirs(outsidePaths)).filter(d => d !== OPAQUE_VAR_DIR);
     needsPathApproval = outsidePaths.length > 0;
   }
 
@@ -291,6 +340,9 @@ export async function analyzeCommand(
     risk: { ...wholeRisk, reasons: riskReasons },
     relativePathSegmentIndices,
     effectiveCwds,
+    opaque,
+    assignments,
+    parsedSegments: segments,
     hasCredentialPath: credentialCheck.denied !== null || credentialCheck.warned !== null,
     credentialRule: credentialCheck.denied ?? credentialCheck.warned,
     prompt: {
@@ -299,6 +351,7 @@ export async function analyzeCommand(
       outsidePaths,
       outsideDirs,
       needsPathApproval,
+      unresolved: opaqueResolution.unresolved,
     },
   };
   return analysis;

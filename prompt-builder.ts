@@ -65,7 +65,13 @@ export function summarizePrompt(decision: PromptDecision): string {
         : (p.relativeToolIds?.length ? `${p.relativeToolIds.slice(0, 3).map(r => r.sig).join(",")} (unlisted)` : "(unlisted)");
       parts.push(`cmd ${named}`);
     }
-    if (p.needsPathApproval) parts.push(`outside ${p.outsideDirs.slice(0, 3).join(",")}`);
+    if (p.needsPathApproval) {
+      const dirs = p.outsideDirs.slice(0, 3).join(",");
+      const unres = (p.unresolved ?? []).slice(0, 3).map(u => u.token).join(",");
+      if (dirs && unres) parts.push(`outside ${dirs}; unresolved ${unres}`);
+      else if (dirs) parts.push(`outside ${dirs}`);
+      else if (unres) parts.push(`unresolved ${unres}`);
+    }
     return parts.join("; ") || "unclassified";
   }
   if (p.type === "file") {
@@ -124,6 +130,7 @@ function buildBashPrompt(
           riskDangerous, riskSeverity, riskReasons, hasUnsafePattern,
           needsCommandApproval, needsPathApproval, nonAllowedSegmentIndices,
           credentialRule, relativeToolIds } = data;
+  const unresolved = data.unresolved ?? [];
   const nonAllowedSet = new Set(nonAllowedSegmentIndices);
 
   // Pre-compute aligned risk reasons (reused in body and tier2)
@@ -141,7 +148,10 @@ function buildBashPrompt(
   // The root is never an Always grant (one click must not hand out the whole
   // disk): filter it from every dir tier. A root-only path prompt (find /)
   // then offers no dir tier at all instead of a dead "Read /*" button.
-  const grantableDirs = outsideDirs.filter((d) => d !== "/");
+  // Marker dirs (<unresolved-…>) are never grantable either — a grant for a
+  // sentinel can never match, and one for a token's static prefix would be
+  // escapable (an unbound value could contain `..`).
+  const grantableDirs = outsideDirs.filter((d) => d !== "/" && !d.startsWith("<"));
   // Relative-path tool identities (../node_modules/.bin/tsc …) with the base
   // they resolve against. Deduped against uniqueSigs — a relative tool whose
   // basename is NOT allowlisted appears in both lists. Granted base-bound
@@ -178,7 +188,12 @@ function buildBashPrompt(
   let body = `Command:\n  ${rawDisplay}\n`;
 
   if (needsPathApproval) {
-    body += `\n\u26a0\ufe0f Paths outside cwd:\n${outsideDirs.map(d => `  \u2022 ${d}`).join("\n")}`;
+    if (outsideDirs.length > 0) {
+      body += `\n\u26a0\ufe0f Paths outside cwd:\n${outsideDirs.map(d => `  \u2022 ${d}`).join("\n")}`;
+    }
+    if (unresolved.length > 0) {
+      body += `\n\u26a0\ufe0f Unresolved references (runtime location not statically provable):\n${unresolved.map(u => `  \u2022 ${u.token}${u.reason === "base" ? " \u2014 working directory not statically known" : ""}`).join("\n")}`;
+    }
   }
   if (riskDangerous) {
     body += `\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n`;

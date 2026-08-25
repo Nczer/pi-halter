@@ -209,10 +209,12 @@ describe("$HOME expansion (parseCommand)", () => {
     expect(p.paths).toContain(path.join(HOME, "other", "probe2.txt"));
   }, 15000);
 
-  it("does not treat $HOME-lookalike variables as $HOME (they stay opaque → markers)", async () => {
+  it("does not treat $HOME-lookalike variables as $HOME (they stay opaque)", async () => {
     const { parseCommand } = await import("../analysis/bash-parser");
     const p = await parseCommand("cat $HOMEDIR/x $HOME_DIR/x", CWD);
-    expect(p.paths).toEqual([`${OPAQUE_VAR_DIR}/$HOMEDIR/x`, `${OPAQUE_VAR_DIR}/$HOME_DIR/x`]);
+    expect(p.paths).toEqual([]);
+    expect(p.opaque.map(r => r.raw)).toEqual(["$HOMEDIR/x", "$HOME_DIR/x"]);
+    expect(p.opaque.every(r => r.kind === "opaque")).toBe(true);
   }, 15000);
 });
 
