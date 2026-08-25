@@ -50,28 +50,6 @@ type RejectHandler = (
 ) => { block: true; reason: string };
 
 /**
- * Shared permission gate: decide → dispatch → prompt → reject.
- *
- * Encapsulates the common flow shared by all handlers:
- *  1. Call decide() to get auto-allow / block / prompt
- *  2. Auto-allow → proceed (return undefined)
- *  3. Block → return block immediately
- *  4. No UI → handler provides a block reason
- *  5. Prompt → show prompt, handle rejection via onReject
- *
- * The handler only needs to provide request construction and rejection formatting.
- *
- * @param precomputedDecision - Optional decision already computed by the handler
- *   (avoids a second decide() call when the handler needed the decision anyway,
- *   e.g. to gate pre-validation reads on the outcome).
- */
-/**
- * /dspa attempt: hard gate → live judge → auto-allow (approve + low risk).
- * Returns the verdict when it was not auto-allowed (for the fall-through
- * prompt display), or null when the gate stopped it before the judge ran.
- * Any judge failure resolves to null-ish fall-through — never an allow.
- */
-/**
  * The dspa stop-tag for the decision log: which layer stopped the
  * auto-allow — the deterministic hard gate (its code-produced reason is
  * safe to accumulate) or the judge (only the declined/failed fact, never
@@ -178,6 +156,22 @@ async function tryDspaAutoAllow(
   };
 }
 
+/**
+ * Shared permission gate: decide → dispatch → prompt → reject.
+ *
+ * Encapsulates the common flow shared by all handlers:
+ *  1. Call decide() to get auto-allow / block / prompt
+ *  2. Auto-allow → proceed (return undefined)
+ *  3. Block → return block immediately
+ *  4. No UI → handler provides a block reason
+ *  5. Prompt → show prompt, handle rejection via onReject
+ *
+ * The handler only needs to provide request construction and rejection formatting.
+ *
+ * @param precomputedDecision - Optional decision already computed by the handler
+ *   (avoids a second decide() call when the handler needed the decision anyway,
+ *   e.g. to gate pre-validation reads on the outcome).
+ */
 export async function gate(
   request: PermissionRequest,
   ctx: ExtensionContext,

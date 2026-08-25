@@ -148,9 +148,8 @@ function buildBashPrompt(
   // (exact sig + this effective working dir only).
   const relToolIds = (relativeToolIds ?? []).filter(r => !uniqueSigs.includes(r.sig));
 
-  // Compute prompt options from data (previously on PromptDecision)
+  // Compute prompt options from data
   const includePathsOption = hasBoth && grantableDirs.length > 0;
-  // PACKAGE_MANAGERS imported from config
   const pmSigs = uniqueSigs.filter(sig => PACKAGE_MANAGERS.has(sig.split(/\s+/)[0]));
   const broaderSigs = [...new Set(pmSigs.map(sig => sig.split(/\s+/)[0]))];
   const includeBroaderOption = broaderSigs.some(s => !uniqueSigs.includes(s));
