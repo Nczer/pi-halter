@@ -38,8 +38,8 @@ describe("unconditionallySafeCommands invariant", () => {
   it("fast path and full pipeline agree on every entry (behavioral)", async () => {
     const drift: string[] = [];
     for (const cmd of unconditionallySafeCommands) {
-      const fast = FastAllowRule(req(cmd), store);
-      const full = SafetyRule(req(cmd), store, await analyzeCommand(cmd, cwd));
+      const fast = await FastAllowRule(req(cmd), store);
+      const full = await SafetyRule(req(cmd), store, await analyzeCommand(cmd, cwd));
       if (fast?.kind !== "auto-allow") drift.push(`${cmd}: fast=${fast?.kind ?? "null"}`);
       if (full?.kind !== "auto-allow") drift.push(`${cmd}: full=${full?.kind ?? "null"}`);
     }

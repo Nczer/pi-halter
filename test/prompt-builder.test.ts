@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildPrompt, pdTargetLabel, summarizePrompt } from "../prompt-builder";
-import type { PromptDecision } from "../decision-engine";
+import type { PromptDecision, BashPromptData, FilePromptData, McpPromptData } from "../decision-engine";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function bashDecision(overrides: Partial<PromptDecision["promptData"]> = {}): PromptDecision {
+function bashDecision(overrides: Partial<BashPromptData> = {}): PromptDecision {
   return {
     kind: "prompt",
     promptData: {
@@ -14,11 +14,13 @@ function bashDecision(overrides: Partial<PromptDecision["promptData"]> = {}): Pr
       outsideDirs: [],
       segments: ["ls -la"],
       signatures: ["ls"],
+      relativeToolIds: [],
       nonAllowedSegmentIndices: [],
       riskDangerous: false,
       riskSeverity: null,
       riskReasons: [],
       hasUnsafePattern: false,
+      credentialRule: null,
       needsCommandApproval: false,
       needsPathApproval: false,
       ...overrides,
@@ -26,7 +28,7 @@ function bashDecision(overrides: Partial<PromptDecision["promptData"]> = {}): Pr
   };
 }
 
-function fileDecision(overrides: Partial<PromptDecision["promptData"]> = {}): PromptDecision {
+function fileDecision(overrides: Partial<FilePromptData> = {}): PromptDecision {
   return {
     kind: "prompt",
     promptData: {
@@ -45,7 +47,7 @@ function fileDecision(overrides: Partial<PromptDecision["promptData"]> = {}): Pr
   };
 }
 
-function mcpDecision(overrides: Partial<PromptDecision["promptData"]> = {}): PromptDecision {
+function mcpDecision(overrides: Partial<McpPromptData> = {}): PromptDecision {
   return {
     kind: "prompt",
     promptData: {
@@ -102,7 +104,7 @@ describe("bash body content", () => {
   });
 
   it("title is Bash + Path when both need approval", () => {
-    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true, includePathsOption: true }));
+    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true }));
     expect(prompt.title).toBe("Bash + Path");
   });
 
@@ -228,12 +230,12 @@ describe("bash labels", () => {
   });
 
   it("alwaysLabel shows command sig when both need approval", () => {
-    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true, includePathsOption: true }));
+    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true }));
     expect(prompt.alwaysLabel).toBe("rm *");
   });
 
   it("alwaysPathsLabel shows path text when both need approval", () => {
-    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true, includePathsOption: true }));
+    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true }));
     expect(prompt.alwaysPathsLabel).toBe("Read /etc/*");
   });
 
@@ -243,12 +245,12 @@ describe("bash labels", () => {
   });
 
   it("alwaysBroaderLabel shows parent command when broader option enabled", () => {
-    const prompt = buildPrompt(bashDecision({ command: "npm test", signatures: ["npm test"], needsCommandApproval: true, includeBroaderOption: true }));
+    const prompt = buildPrompt(bashDecision({ command: "npm test", signatures: ["npm test"], needsCommandApproval: true }));
     expect(prompt.alwaysBroaderLabel).toBe("npm *");
   });
 
   it("alwaysBroaderLabel is undefined when broader option disabled", () => {
-    const prompt = buildPrompt(bashDecision({ signatures: ["rm"], needsCommandApproval: true, includeBroaderOption: false }));
+    const prompt = buildPrompt(bashDecision({ signatures: ["rm"], needsCommandApproval: true }));
     expect(prompt.alwaysBroaderLabel).toBeUndefined();
   });
 });
@@ -268,13 +270,13 @@ describe("bash tier2 confirmations", () => {
   });
 
   it("tier2 everything includes both commands and paths when both need approval", () => {
-    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true, includePathsOption: true }));
+    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true }));
     expect(prompt.tier2Everything.body).toContain("rm *");
     expect(prompt.tier2Everything.body).toContain("/etc/*");
   });
 
   it("tier2 paths option exists when both command and path approval needed", () => {
-    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true, includePathsOption: true }));
+    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true }));
     expect(prompt.tier2Paths).toBeDefined();
     expect(prompt.tier2Paths!.body).toContain("/etc");
     expect(prompt.tier2Paths!.body).toContain("will still prompt");
@@ -607,7 +609,7 @@ describe("edge cases", () => {
   it("handles minimal prompt data gracefully", () => {
     const decision: PromptDecision = {
       kind: "prompt",
-      promptData: { type: "bash", command: "ls", cwd: "/tmp", outsideDirs: [], segments: ["ls"], signatures: ["ls"], nonAllowedSegmentIndices: [], riskDangerous: false, riskSeverity: null, riskReasons: [], hasUnsafePattern: false, needsCommandApproval: false, needsPathApproval: false },
+      promptData: { type: "bash", command: "ls", cwd: "/tmp", outsideDirs: [], segments: ["ls"], signatures: ["ls"], relativeToolIds: [], nonAllowedSegmentIndices: [], riskDangerous: false, riskSeverity: null, riskReasons: [], hasUnsafePattern: false, credentialRule: null, needsCommandApproval: false, needsPathApproval: false },
     };
     expect(() => buildPrompt(decision)).not.toThrow();
   });

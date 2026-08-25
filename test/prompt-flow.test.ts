@@ -58,6 +58,7 @@ function bashDecision(): Decision {
       outsideDirs: [],
       segments: ["rm -rf /tmp/test"],
       signatures: ["rm"],
+      relativeToolIds: [],
       nonAllowedSegmentIndices: [0],
       riskDangerous: true,
       riskSeverity: "high",
@@ -67,7 +68,7 @@ function bashDecision(): Decision {
       needsCommandApproval: true,
       needsPathApproval: false,
     },
-  } as Decision;
+  };
 }
 
 const ctx = {
@@ -157,7 +158,7 @@ describe("/dspat active", () => {
 describe("/dspa fall-through", () => {
   it("gate blocked → 🚧 gate reason line (even with invalid judge)", async () => {
     judgeStatusMock.mockReturnValue({ state: "invalid", modelLabel: null, reason: "session model not resolvable" });
-    const dspa: DspaFallthrough = { gate: { ok: false, reason: "dangerous: rm" }, verdict: null };
+    const dspa: DspaFallthrough = { gate: { ok: false, reason: "dangerous: rm" }, verdict: null, stage: null };
     await showPrompt(bashDecision(), ctx, store, dspa);
     const body = shownPrompt().body;
     expect(body).toContain("🚧 dspa: not auto-allowed — dangerous: rm");
@@ -165,7 +166,7 @@ describe("/dspa fall-through", () => {
   });
 
   it("gate ok, judge unavailable → 🚧 note line", async () => {
-    const dspa: DspaFallthrough = { gate: { ok: true }, verdict: null, note: "judge invalid: session model not resolvable" };
+    const dspa: DspaFallthrough = { gate: { ok: true }, verdict: null, stage: null, note: "judge invalid: session model not resolvable" };
     await showPrompt(bashDecision(), ctx, store, dspa);
     expect(shownPrompt().body).toContain("🚧 dspa: not auto-allowed — judge invalid: session model not resolvable");
   });
@@ -173,7 +174,10 @@ describe("/dspa fall-through", () => {
   it("gate ok, verdict present → 💭 Judge line (unchanged)", async () => {
     const dspa: DspaFallthrough = {
       gate: { ok: true },
-      verdict: { model: "llama-cpp/qwen", explanation: "E.", approve: "approve", risk: "medium" },
+      // Stage 1: an approve/medium at stage 2 would have auto-allowed, so a
+      // medium-risk fallthrough verdict can only be stage 1 (needs low there).
+      verdict: { model: "llama-cpp/qwen", explanation: "E.", approve: "approve", risk: "medium", reason: "r", latencyMs: 10, cached: false },
+      stage: 1,
     };
     await showPrompt(bashDecision(), ctx, store, dspa);
     expect(shownPrompt().body).toContain("APPROVE (medium) — not auto-allowed (risk must be low)");
@@ -182,7 +186,8 @@ describe("/dspa fall-through", () => {
   it("gate ok, deny verdict → REJECT without the not-auto-allowed note", async () => {
     const dspa: DspaFallthrough = {
       gate: { ok: true },
-      verdict: { model: "llama-cpp/qwen", explanation: "E.", approve: "deny", risk: "high" },
+      verdict: { model: "llama-cpp/qwen", explanation: "E.", approve: "deny", risk: "high", reason: "r", latencyMs: 10, cached: false },
+      stage: 2,
     };
     await showPrompt(bashDecision(), ctx, store, dspa);
     const body = shownPrompt().body;

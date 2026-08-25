@@ -276,7 +276,7 @@ The log is the *input* to a log-driven fix loop, not just a measurement: the sui
 3. **Triage** — prompt lines split into by-design (outside-cwd paths, first-encounter commands, genuinely risky operators), false positives (analysis misreading safe syntax), and noise (risk reasons, not gates). For bypass hunting read the *auto-allow* set instead: entries with operators, quotes, wrappers, or globs that auto-allowed are the ones worth a second look — that is the direction that matters.
 4. **Reproduce** — `npx tsx tools/probe.mts '<cmd>'` shows the first-encounter decision with its why; drop to `analyzeCommand` / `parseCommand` to see extracted paths and markers.
 5. **Fix** — every fix is a code change *plus* a contract row: `test/cases-data.ts` for pass/prompt/block decisions, `test/cwd-threading.test.ts` for cd/var/path threading. The row encodes the observed command with its expected decision, so the same input can never silently regress.
-6. **Prove** — `npx vitest run` (full suite) plus strict tsc (`cd ~/.pi/agent/extensions && npx tsc --noEmit --strict --target es2022 --module esnext --moduleResolution bundler --skipLibCheck <changed files>`), then confirm the flip with the probe: a fixed false positive now `ALLOW`s, a plugged bypass now `PROMPT`s or `BLOCK`s — and the new contract row keeps it there.
+6. **Prove** — `npx vitest run` (full suite) plus `npm run typecheck` (strict tsc over source *and* tests — test files are no longer excluded), then confirm the flip with the probe: a fixed false positive now `ALLOW`s, a plugged bypass now `PROMPT`s or `BLOCK`s — and the new contract row keeps it there.
 7. **Reload** — `/reload` in pi (or restart). Never exercise changed extension code in a running pi session before reloading. Once new gate code is loaded, delete `.log/decisions.jsonl` so the next cycle only measures the new behavior.
 
 ## Testing
@@ -285,12 +285,13 @@ The log is the *input* to a log-driven fix loop, not just a measurement: the sui
 - **Prompt builder** — pure function. Verify prompt content for each decision type
 - **Command analysis** — async pure function. Verify risk scoring, AST path extraction, safety verdicts
 - **Segment analysis** — verify evaluator integration, pipeline checks, safety boolean derivation
-- **Evaluators** — each evaluator is independently testable via `RiskEvaluator.evaluate()`
+- **Evaluators** — exercised end-to-end: every `decide()` runs all six risk evaluators per segment via segment-analysis; the bypass suites pin each detector's findings
 - **Bash parser** — lazy WASM loading. Verify path extraction across heredocs, comments, quotes, subshells
 - **Path utilities** — pure functions. Verify path resolution, deny rules, cwd checks
 - **Obfuscation detection** — pure function. Verify each technique regex
 - **MCP renderer** — pure functions. Verify formatting, truncation, edge cases
 - **Round-trip tests** — verify prompt → rules → auto-allow cycle works end-to-end
+- **Hermetic cwd** — the contract suites (`cases-data.ts`, the bypass suites, `decision-engine`, `cwd-threading`, …) run `decide()` against a per-file temp cwd (`test/hermetic-cwd.ts`), under `$HOME` but out of any path-allowlisted zone (tmp/`/tmp` are write-allowed scratch, `.pi` is auto-allowed by location), so no row's decision depends on what happens to live in the user's real tree. Typecheck: `npm run typecheck` covers `test/**` too.
 
 ## Ad-hoc testing a command
 

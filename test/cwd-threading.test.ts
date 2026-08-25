@@ -12,12 +12,18 @@ import { analyzeCommand } from "../analysis/command-analysis";
 import { decide, type BashPromptData } from "../decision-engine";
 import { createStore } from "../store";
 import type { BashSegment } from "../analysis/bash-parser";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 const HOME = os.homedir();
 const DOC_EXTRACT = path.join(HOME, ".pi", "agent", "skills", "doc-extract");
 const SKILL_SCRIPT = path.join(DOC_EXTRACT, "scripts", "extract.py");
 const BASE = "/mnt/projects";
-const CWD = "/mnt/Ndr/Projects";
+let CWD: string;
+
+beforeAll(() => {
+  CWD = createContractCwd();
+});
+afterAll(() => removeContractCwd(CWD));
 
 function seg(text: string, ops: string[] = [], hasSubshell = false): BashSegment {
   return { text, ops, hasSubshell };

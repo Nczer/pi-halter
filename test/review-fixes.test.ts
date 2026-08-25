@@ -18,9 +18,15 @@ import fs from "node:fs";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { decide } from "../decision-engine";
 import { createStore } from "../store";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 const home = os.homedir();
-const cwd = path.join(home, "Projects");
+let cwd: string;
+
+beforeAll(() => {
+  cwd = createContractCwd();
+});
+afterAll(() => removeContractCwd(cwd));
 
 const bash = (command: string, cwdOverride?: string) =>
   decide({ type: "bash", command, cwd: cwdOverride ?? cwd }, createStore());

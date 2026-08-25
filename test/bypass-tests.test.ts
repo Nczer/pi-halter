@@ -1,18 +1,25 @@
 /**
- * Security bypass regression tests.
+ * Security bypass regression tests — FastAllow/wrapper/tmux/sed attack
+ * vectors.
  *
- * Each test verifies a specific attack vector that should NOT auto-allow.
- * Run with: uv run vitest run test/bypass-tests.test.ts
+ * Sibling of verified-bypasses.test.ts (the handoff-verified P0–P5 vectors);
+ * together the two files cover the known bypass classes. Each test verifies
+ * a specific attack vector that should NOT auto-allow.
  */
 
 import path from "node:path";
 import os from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { decide } from "../decision-engine";
 import { createStore } from "../store";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
-const home = os.homedir();
-const cwd = path.join(home, "Projects");
+let cwd: string;
+
+beforeAll(() => {
+	cwd = createContractCwd();
+});
+afterAll(() => removeContractCwd(cwd));
 
 // ──────────────────────────────────────────────────────────────────────
 // 🔴 CRITICAL: FastAllowRule — newline command injection

@@ -30,7 +30,7 @@ vi.mock("../prompt-flow", () => ({
 
 const tmpLog = path.join(os.tmpdir(), `dspa-test-log-${process.pid}.jsonl`);
 
-function verdict(partial: Partial<JudgeResult>): JudgeResult {
+function verdict(partial: Partial<JudgeResult> = {}): JudgeResult {
   return {
     approve: "approve",
     risk: "low",
@@ -51,6 +51,7 @@ function bashDecision(command: string): Decision {
     outsideDirs: [],
     segments: [command],
     signatures: [command.split(/\s+/)[0]],
+    relativeToolIds: [],
     nonAllowedSegmentIndices: [0],
     riskDangerous: false,
     riskSeverity: null,
@@ -227,19 +228,19 @@ describe("auto-allow path", () => {
 });
 
 describe("fall-through", () => {
-  it("judge reject → prompt with the verdict, no counter", async () => {
+  it("judge denies → prompt with the verdict, no counter", async () => {
     setDspaActive(true);
     vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(
-      verdict({ approve: "reject", risk: "high" }),
+      verdict({ approve: "deny", risk: "high" }),
     );
     vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(
-      verdict({ approve: "reject", risk: "high" }),
+      verdict({ approve: "deny", risk: "high" }),
     );
     await runGate(bashDecision("make test"));
     expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
     // The prompt carries the FINAL (stage-2) verdict.
     const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
-    expect(fallthrough?.verdict?.approve).toBe("reject");
+    expect(fallthrough?.verdict?.approve).toBe("deny");
     expect(fallthrough?.stage).toBe(2);
     expect(getDspaStats().autoAllowed).toBe(0);
     expect(logLines()[0].kind).toBe("prompt");
@@ -247,15 +248,15 @@ describe("fall-through", () => {
     expect(logLines()[0].dspa).toBe("judge: declined (stage 2)");
   });
 
-  it("stage 1 reject, stage 2 failed → prompt with the stateless verdict", async () => {
+  it("stage 1 deny, stage 2 failed → prompt with the stateless verdict", async () => {
     setDspaActive(true);
     vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(
-      verdict({ approve: "reject", risk: "high" }),
+      verdict({ approve: "deny", risk: "high" }),
     );
     vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(null);
     await runGate(bashDecision("make test"));
     const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
-    expect(fallthrough?.verdict?.approve).toBe("reject");
+    expect(fallthrough?.verdict?.approve).toBe("deny");
     expect(fallthrough?.stage).toBe(1);
     expect(String(logLines()[0].dspa)).toBe("judge: stage 2 failed");
   });
@@ -398,7 +399,7 @@ describe("D3: granted-dir file writes are judged (dspa)", () => {
     setDspaActive(true);
     vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(null); // stage 1: no verdict
     vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(
-      verdict({ approve: "reject", risk: "high", explanation: "truncates existing data" }),
+      verdict({ approve: "deny", risk: "high", explanation: "truncates existing data" }),
     );
     const { result } = await runFileGate(fileReq());
     expect(result).toBeUndefined(); // showPrompt mock allows

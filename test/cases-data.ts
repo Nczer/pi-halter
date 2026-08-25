@@ -1,9 +1,8 @@
 import os from "node:os";
-import path from "node:path";
 
-export const home = os.homedir();
+// Decisions are asserted against a hermetic temp cwd (see hermetic-cwd.ts) —
+// this file only exports row data.
 export const tmpdir = os.tmpdir();
-export const cwd = path.join(home, "Projects");
 
 export type TestCase = {
 	cmd: string;

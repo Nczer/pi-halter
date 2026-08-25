@@ -1,18 +1,25 @@
 /**
- * Regression tests for verified auto-allow bypasses (handoff /tmp/handoff-h1QLa6.md
- * + the user-reported `timeout npx vitest` wrapper gap).
+ * Regression tests for verified auto-allow bypasses (the original handoff
+ * findings, P0–P5, + the user-reported `timeout npx vitest` wrapper gap).
  *
- * Each test verifies a specific attack vector that must NOT auto-allow.
+ * Sibling of bypass-tests.test.ts (FastAllow/wrapper/tmux/sed vectors); the
+ * two files cover the known bypass classes together. Each test verifies a
+ * specific attack vector that must NOT auto-allow.
  */
 
 import path from "node:path";
 import os from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { decide } from "../decision-engine";
 import { createStore } from "../store";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
-const home = os.homedir();
-const cwd = path.join(home, "Projects");
+let cwd: string;
+
+beforeAll(() => {
+	cwd = createContractCwd();
+});
+afterAll(() => removeContractCwd(cwd));
 
 // ──────────────────────────────────────────────────────────────────────
 // P0: `cd` target amplification — cd was not path-aware, so its argument
