@@ -224,6 +224,8 @@ describe("auto-allow path", () => {
     expect(fallthrough?.stage).toBe(2);
     expect(getDspaStats().autoAllowed).toBe(0);
     expect(logLines()[0].dspa).toBe("judge: declined (stage 2)");
+    // An approving verdict is not a rejection — no LLM reject words.
+    expect(logLines()[0].judgeDeny).toBeUndefined();
   });
 });
 
@@ -246,6 +248,8 @@ describe("fall-through", () => {
     expect(logLines()[0].kind).toBe("prompt");
     expect(logLines()[0].mode).toBe("dspa");
     expect(logLines()[0].dspa).toBe("judge: declined (stage 2)");
+    // The LLM's reject words ride along for debugging (the log's NOTE exception).
+    expect(logLines()[0].judgeDeny).toBe("does the thing");
   });
 
   it("stage 1 deny, stage 2 failed → prompt with the stateless verdict", async () => {
@@ -259,6 +263,8 @@ describe("fall-through", () => {
     expect(fallthrough?.verdict?.approve).toBe("deny");
     expect(fallthrough?.stage).toBe(1);
     expect(String(logLines()[0].dspa)).toBe("judge: stage 2 failed");
+    // The stateless (stage-1) reject still carries the LLM's words.
+    expect(logLines()[0].judgeDeny).toBe("does the thing");
   });
 
   it("judge unavailable (null) → plain prompt, no verdict", async () => {

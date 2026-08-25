@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { DECISION_LOG_ENABLED } from "./config/logging";
 import { SETTINGS_PATH, readSettingsFile, writeSettings } from "./halter-settings";
 import { summarizePrompt } from "./prompt-builder";
-import type { Decision, PermissionRequest } from "./decision-engine";
+import type { Decision, FilePromptData, PermissionRequest } from "./decision-engine";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -96,8 +96,8 @@ export interface DecisionLogEntry {
    *  - `gate: <reason>` — the deterministic hard gate (code-produced;
    *    accumulates safely across sessions).
    *  - `judge: declined (stage 2)` — the gate passed, the intent pass's
-   *    verdict did not auto-allow (verdict content stays session-scoped,
-   *    see the NOTE).
+   *    verdict did not auto-allow (a REJECT verdict's explanation rides
+   *    along in `judgeDeny` — the NOTE's debug exception).
    *  - `judge: stage 2 failed` — stage 1 produced a verdict but the intent
    *    pass did not (an infra fact).
    *  - `judge: <note>` — no verdict was produced at all (judge invalid or
@@ -105,10 +105,27 @@ export interface DecisionLogEntry {
    */
   dspa?: string;
 
+  /**
+   * dspa prompt fall-through only, and only when the FINAL verdict is a
+   * REJECT (approve === "deny"): the LLM's own words for why it refused.
+   * The NOTE's debug exception — raw verdict content for inspecting judge
+   * behavior, never aggregated (stats stay session-scoped).
+   */
+  judgeDeny?: string;
+
   /** Block reason, or a one-line summary of why a prompt was needed; null for auto-allow. */
   reason: string | null;
   /** Bash command (truncated), file path, or "server/tool". */
   target: string;
+  /**
+   * File prompt only: the directory the prompt offers to grant — the
+   * resolved path's containing dir (the outside-cwd primary grant and the
+   * inside-cwd "Always (path)" option are both `dirname(resolved)`).
+   * Absent when the parent is the root (a root file prompt offers the
+   * file, not "/"). Debug aid for the path resolver: cross-check against
+   * `target` (raw) + `cwd` to see where the resolver landed.
+   */
+  promptDir?: string;
   /** The tool call's working directory (bash + file). */
   cwd?: string;
 }
@@ -123,7 +140,10 @@ export interface DecisionLogEntry {
  * under — it is a regime marker, not verdict content. The `dspa` stop-tag
  * on dspa prompt lines likewise records only WHICH layer stopped the
  * auto-allow (the gate's code-produced reason, or the fact that the judge
- * declined/failed) — still no verdict content.
+ * declined/failed) — still no verdict content, with one exception:
+ * `judgeDeny` carries a dspa REJECT verdict's explanation verbatim — a
+ * raw debug aid for judge behavior, read by a human inspecting the log,
+ * never aggregated into stats.
  */
 
 /** Resolve the active log file. null = logging disabled. */
@@ -143,12 +163,16 @@ export function resolveLogPath(): string | null {
  *   `mode` key at all.
  * @param dspaStop - dspa stop-tag (see DecisionLogEntry.dspa); omit outside
  *   dspa prompt fall-throughs.
+ * @param judgeDeny - the LLM's reject explanation (see
+ *   DecisionLogEntry.judgeDeny); omit unless the fall-through verdict is
+ *   a REJECT.
  */
 export function logDecision(
   request: PermissionRequest,
   decision: Decision,
   mode?: DspModeTag,
   dspaStop?: string,
+  judgeDeny?: string,
 ): void {
   try {
     const file = resolveLogPath();
@@ -160,6 +184,7 @@ export function logDecision(
       kind: decision.kind,
       mode,
       dspa: dspaStop,
+      judgeDeny,
       reason:
         decision.kind === "block"
           ? decision.reason
@@ -167,6 +192,10 @@ export function logDecision(
             ? summarizePrompt(decision)
             : decision.reason ?? null, // auto-allow: /dspa audit reason, else null
       target: targetOf(request).slice(0, MAX_TARGET_LEN),
+      promptDir:
+        decision.kind === "prompt" && decision.promptData.type === "file"
+          ? promptDirOf(decision.promptData)
+          : undefined,
       cwd: "cwd" in request ? request.cwd : undefined,
     };
     const line = JSON.stringify(entry) + "\n";
@@ -197,4 +226,13 @@ function targetOf(request: PermissionRequest): string {
   if (request.type === "bash") return request.command;
   if (request.type === "file") return request.filePath;
   return `${request.server}/${request.tool}`;
+}
+
+// The directory a file prompt offers to grant (see promptDir): the
+// outside-cwd primary grant and the inside-cwd "Always (path)" option are
+// both the resolved path's containing dir. The root is never offered — a
+// root file prompt grants the file, not "/".
+function promptDirOf(pd: FilePromptData): string | undefined {
+  const dir = path.dirname(pd.resolved);
+  return dir === "/" ? undefined : dir;
 }

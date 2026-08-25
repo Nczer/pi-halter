@@ -178,7 +178,10 @@ uncertainty.
 - The dsp bypass mode, dspat display mode, the mode machine.
 - Decision-log design: verdict *content* stays session-scoped; the gate
   layer accumulates. The stop-tag (`2f0da9c`) already splits gate vs judge
-  in `decisions.jsonl`.
+  in `decisions.jsonl`. **Debug exception (2026-08-25):** a dspa REJECT
+  verdict's explanation is logged verbatim as `judgeDeny` on the
+  fall-through prompt line — a raw debug aid for judge behavior, read by
+  a human inspecting the log, never aggregated into stats.
 
 ### D6. Log additions (Q9, resolved)
 
