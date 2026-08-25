@@ -10,8 +10,9 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { analyzeCommand, type CommandAnalysis } from "../analysis/command-analysis";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 // Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /etc → /private/etc)
 const realPath = (p: string) => {
@@ -23,7 +24,12 @@ const realPath = (p: string) => {
 };
 
 const home = os.homedir();
-const cwd = path.join(home, "Projects");
+let cwd: string;
+
+beforeAll(() => {
+	cwd = createContractCwd();
+});
+afterAll(() => removeContractCwd(cwd));
 
 describe("Signatures: basic", () => {
 	it("single command → 1 signature", async () => {

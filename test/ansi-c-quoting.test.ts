@@ -9,13 +9,18 @@
 
 import path from "node:path";
 import os from "node:os";
-import { describe, expect, it } from "vitest";
-import { decide } from "../decision-engine";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { decide, type BashPromptData } from "../decision-engine";
 import { createStore } from "../store";
 import { decodeAnsiCEscapes, tokenizeSegment, splitOnPipe } from "../analysis/tokenizer";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
-const home = os.homedir();
-const cwd = path.join(home, "Projects");
+let cwd: string;
+
+beforeAll(() => {
+	cwd = createContractCwd();
+});
+afterAll(() => removeContractCwd(cwd));
 
 // ── decodeAnsiCEscapes: bash-verified escape semantics ──
 
@@ -170,7 +175,7 @@ describe("ANSI-C quoting bypass regression", () => {
     const d = await decide({ type: "bash", command: "cat $'\\x2fetc\\x2f.env'", cwd }, createStore());
     expect(d.kind).not.toBe("auto-allow");
     if (d.kind === "prompt") {
-      expect(d.promptData.credentialRule).toBe(".env");
+      expect((d.promptData as BashPromptData).credentialRule).toBe(".env");
     }
   });
 

@@ -35,6 +35,7 @@ function bashPd(command: string, overrides: Partial<BashPromptData> = {}): BashP
     outsideDirs: [],
     segments: [command],
     signatures: [command.split(/\s+/)[0]],
+    relativeToolIds: [],
     nonAllowedSegmentIndices: [0],
     riskDangerous: false,
     riskSeverity: null,

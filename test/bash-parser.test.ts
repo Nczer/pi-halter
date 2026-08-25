@@ -1,8 +1,9 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, afterAll, describe, expect, it } from "vitest";
 import { parseCommand, OPAQUE_VAR_DIR } from "../analysis/bash-parser";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 // Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /etc → /private/etc)
 const realPath = (p: string) => {
@@ -15,7 +16,12 @@ const realPath = (p: string) => {
 };
 
 const home = os.homedir();
-const cwd = path.join(home, "Projects");
+let cwd: string;
+
+beforeAll(() => {
+	cwd = createContractCwd();
+});
+afterAll(() => removeContractCwd(cwd));
 
 describe("parseCommand: segments", () => {
 	it("single command → 1 segment", async () => {

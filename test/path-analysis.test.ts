@@ -16,10 +16,16 @@ import {
 	stripHeredocBodies,
 	stripShellComments,
 } from "../analysis/path-analysis";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 const home = os.homedir();
 const tmpdir = os.tmpdir();
-const cwd = path.join(home, "Projects");
+let cwd: string;
+
+beforeAll(() => {
+	cwd = createContractCwd();
+});
+afterAll(() => removeContractCwd(cwd));
 
 describe("expandTilde", () => {
 	it("expands ~/foo", () => {

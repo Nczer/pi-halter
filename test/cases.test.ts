@@ -17,10 +17,14 @@ import { analyzeCommand } from "../analysis/command-analysis";
 import { decide } from "../decision-engine";
 import { createStore } from "../store";
 import { cases } from "./cases-data";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
-const home = os.homedir();
-const tmpdir = os.tmpdir();
-const cwd = path.join(home, "Projects");
+let cwd: string;
+
+beforeAll(() => {
+	cwd = createContractCwd();
+});
+afterAll(() => removeContractCwd(cwd));
 
 
 // Bare-name symlink escaping cwd → prompt (the checkBareSymlinkTokens `warned`

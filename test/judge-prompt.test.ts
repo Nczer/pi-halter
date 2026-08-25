@@ -130,14 +130,14 @@ describe("extractScriptPayload", () => {
 
   it("includes an interpreter-run local script", async () => {
     fs.writeFileSync(path.join(tmp, "job.py"), "print('hello from job')\n");
-    const s = extractScriptPayload(await analyze("python3 job.py"));
+    const s = extractScriptPayload(await analyze("python3 job.py"), tmp);
     expect(s?.path).toBe(path.join(tmp, "job.py"));
     expect(s?.content).toContain("hello from job");
   });
 
   it("includes a directly-executed local script", async () => {
     fs.writeFileSync(path.join(tmp, "job.sh"), "#!/bin/sh\necho hi\n");
-    const s = extractScriptPayload(await analyze("./job.sh"));
+    const s = extractScriptPayload(await analyze("./job.sh"), tmp);
     expect(s?.path).toBe(path.join(tmp, "job.sh"));
     expect(s?.content).toContain("echo hi");
   });
@@ -146,25 +146,25 @@ describe("extractScriptPayload", () => {
     const sub = path.join(tmp, "sub");
     fs.mkdirSync(sub);
     fs.writeFileSync(path.join(sub, "job.py"), "print('nested')\n");
-    const s = extractScriptPayload(await analyze(`cd ${sub} && python3 job.py`));
+    const s = extractScriptPayload(await analyze(`cd ${sub} && python3 job.py`), tmp);
     expect(s?.path).toBe(path.join(sub, "job.py"));
   });
 
   it("returns null for bash -c (no resolvable file)", async () => {
-    expect(extractScriptPayload(await analyze("bash -c 'echo hi'"))).toBeNull();
+    expect(extractScriptPayload(await analyze("bash -c 'echo hi'"), tmp)).toBeNull();
   });
 
   it("returns null for computed script paths", async () => {
-    expect(extractScriptPayload(await analyze("python3 $SCRIPT"))).toBeNull();
+    expect(extractScriptPayload(await analyze("python3 $SCRIPT"), tmp)).toBeNull();
   });
 
   it("returns null for executables without a script extension", async () => {
     fs.writeFileSync(path.join(tmp, "tool"), "not a script\n");
-    expect(extractScriptPayload(await analyze("./tool"))).toBeNull();
+    expect(extractScriptPayload(await analyze("./tool"), tmp)).toBeNull();
   });
 
   it("returns null when the file does not exist", async () => {
-    expect(extractScriptPayload(await analyze("python3 missing.py"))).toBeNull();
+    expect(extractScriptPayload(await analyze("python3 missing.py"), tmp)).toBeNull();
   });
 });
 

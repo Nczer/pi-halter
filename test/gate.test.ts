@@ -24,6 +24,7 @@ function bashPrompt(overrides: Partial<Extract<Extract<Decision, { kind: "prompt
       outsideDirs: [],
       segments: ["rm -rf /tmp/test"],
       signatures: ["rm"],
+      relativeToolIds: [],
       nonAllowedSegmentIndices: [0],
       riskDangerous: true,
       riskSeverity: "high",
@@ -50,6 +51,7 @@ function filePrompt(overrides: Partial<Extract<Extract<Decision, { kind: "prompt
       isWriteOp: false,
       warnedRule: null,
       symlinkHint: null,
+      exists: false,
       ...overrides,
     },
   };

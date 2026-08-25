@@ -170,7 +170,7 @@ describe("tmux: send-keys payload paths meet outside-cwd approval", () => {
     ["multi-chunk payload, one outside path prompts", "tmux send-keys -t foo ls Enter cat /etc/passwd Enter", "prompt"],
     ["payload path inside cwd auto-allows", "tmux send-keys -t foo cat file.txt Enter", "auto-allow"],
     ["payload denied credential still blocks", "tmux send-keys -t foo cat .ssh/id_rsa Enter", "block"],
-  ] as [string, string, "prompt" | "auto-allow" | "block"])("%s: %s", async (_label, cmd, expected) => {
+  ] as [string, string, "prompt" | "auto-allow" | "block"][])("%s: %s", async (_label, cmd, expected) => {
     const { decision: dec } = await decision(cmd);
     expect(dec.kind, cmd).toBe(expected);
   });

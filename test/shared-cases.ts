@@ -1,5 +1,5 @@
 /**
- * Shared test cases used by both cases.test.ts and tmux.test.ts mirror suite.
+ * Shared test cases for the tmux send-keys mirror suite (tmux.test.ts).
  * Prevents drift between the bash command matrix and the send-keys mirror.
  */
 

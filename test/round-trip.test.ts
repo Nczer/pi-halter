@@ -14,13 +14,18 @@
 
 import path from "node:path";
 import os from "node:os";
-import { describe, expect, it } from "vitest";
-import { decide, BashRequest, FileRequest, McpRequest } from "../decision-engine";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { decide, BashRequest, FileRequest, McpRequest, type BashPromptData } from "../decision-engine";
 import { createStore } from "../store";
 import { RuleGenerator } from "../rule-generator";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
-const home = os.homedir();
-const cwd = path.join(home, "Projects");
+let cwd: string;
+
+beforeAll(() => {
+	cwd = createContractCwd();
+});
+afterAll(() => removeContractCwd(cwd));
 
 // ─── Bash: unsafe commands never auto-allow (principle 5) ───
 // Unsafe patterns → always prompt, even after "approval".
@@ -117,8 +122,9 @@ describe("Round-trip: Bash command + outside paths", () => {
 			expect(d2.kind).toBe("prompt");
 			if (d2.kind === "prompt") {
 				// Path approval is gone (already approved), only command remains
-				expect(d2.promptData.needsPathApproval).toBe(false);
-				expect(d2.promptData.needsCommandApproval).toBe(true);
+				const pd = d2.promptData as BashPromptData;
+				expect(pd.needsPathApproval).toBe(false);
+				expect(pd.needsCommandApproval).toBe(true);
 			}
 		}
 	});

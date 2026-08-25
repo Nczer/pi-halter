@@ -27,7 +27,7 @@ function makeCtx(scripted: (number | string | null)[]): any {
 			},
 			input: async (_title?: string): Promise<string | undefined> => {
 				const val = scripted[idx++];
-				return val === null || val === undefined ? undefined : val;
+				return val === null || val === undefined ? undefined : String(val);
 			},
 		},
 	};
