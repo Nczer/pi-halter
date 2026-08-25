@@ -211,16 +211,25 @@ concrete dir or the judge.
    literal values, `${X:-default}` default chains (the default is taken
    when X has no local assignment — the environment may set X elsewhere,
    which the judge still sees in the full text), `~` expansion.
-2. **Unresolved cwd** resolves to the command's cd target when there is
-   exactly one resolvable cd (no `*?[$```, not `cd -`); the ambiguous side
-   runs under either the original cwd (always in-base) or that target, so
-   the target alone bounds it.
+2. **Unresolved cwd** resolves against every candidate base the ambiguous
+   side could run under (2026-08-25 audit): the session cwd plus the target
+   of every literal cd in the command (threaded the way the parser tracks
+   them, relative targets resolved against the session cwd — never the
+   test/process cwd). A `..` tail can escape from ANY candidate, so every
+   candidate is checked against the base, not just the last cd target.
 3. The resolved path gets the ordinary in-base/grant check: inside or
    granted → judgeable; concrete outside-base path → stop **naming the dir**
    (one Always-for-dir makes later runs judgeable, D3-style).
-4. Still unresolvable (unassigned var, var/ambiguous cd targets, …) →
-   judgeable: the packet carries the full text and stage 2 has session
-   context the static parser lacks.
+4. Still unresolvable → **floor stop, never judgeable** (2026-08-25 audit,
+   Q1): an unassigned/externally-set var (`mkdir -p "$FOO"`) or any
+   unresolvable cd (`cd $D && … || …`) means the location is not
+   statically knowable — and a location the user cannot see is a scope
+   grant, which is the user's call, not the judge's. The stop names the
+   cause (`runtime location unresolvable ($FOO)` / `runtime working
+   directory unresolvable`). This flips the 2026-08-24 decision (point 4
+   was "judgeable"); the D7 premise that "the judge has session context
+   the static parser lacks" is empirically false for locations the
+   parser cannot even enumerate.
 
 Unchanged: resolved outside-base paths still stop; the rm carve-out keeps
 non-explicit rm targets on the floor (`rm -rf $X`); obscured positions,
@@ -244,8 +253,8 @@ in the judge's full-text input, so the judge — not a floor stop — decides.
 Fetch forms stay on the floor: fetch = arbitrary postinstall execution +
 registry access, and a lenient local judge is no backstop for that.
 
-- `npx …`, `uvx …` — inherently run-a-package (fetches on miss; the
-  judge sees the name).
+- `npx …`, `uvx …`, `bunx …` — inherently run-a-package (fetches on miss;
+  the judge sees the name).
 - `npm run|exec|x`, `pnpm run|dlx|exec|x`, `yarn run|dlx|x`,
   `uv run|x` — explicit run forms only (the `npm test` shorthand and
   `yarn <script>` stay on the floor, conservatively).

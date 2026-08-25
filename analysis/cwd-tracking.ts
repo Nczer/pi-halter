@@ -66,7 +66,7 @@ function stripEscapes(text: string): string {
  * `cwd === null` means the base is already unknown (relative targets stay
  * unknown; absolute literals recover).
  */
-function resolveCdTarget(seg: BashSegment, cwd: CwdBase): CdResolution {
+export function resolveCdTarget(seg: BashSegment, cwd: CwdBase): CdResolution {
   // Pipeline stages and subshells run in a subshell — their cd does not
   // persist into subsequent segments.
   if (seg.hasSubshell) return { kind: "unchanged" };
@@ -130,6 +130,48 @@ function resolveCdTarget(seg: BashSegment, cwd: CwdBase): CdResolution {
     return { kind: "unchanged" };
   }
   return { kind: "thread", dir: resolved };
+}
+
+/**
+ * The set of directories a marker segment's UNKNOWN base could be at runtime
+ * (the /dspa floor's D7 bound — dspa-gate.ts).
+ *
+ * Soundness: a marker exists because trackEffectiveCwd lost the base. The
+ * base is only ever (a) the session cwd, (b) the target of a LITERAL cd that
+ * existed when the gate stat'd it, or (c) nowhere knowable — an UNRESOLVABLE
+ * cd (variable, glob, `cd -`, …) makes it (c) and it stays (c): no later cd
+ * can re-narrow it (even a literal one — the unresolvable side may still be
+ * the runtime base if the later cd fails). So:
+ *  - any unresolvable persistent cd → `unbounded: true` (the base could be
+ *    ANYWHERE — the caller must fail closed, not guess);
+ *  - otherwise the base ∈ {session cwd} ∪ {each literal cd's target}: a cd
+ *    that could fail at runtime (TOCTOU) leaves its pre-cd base possible,
+ *    so candidates only ever grow. Proved-failed cds (target missing) and
+ *    subshell/pipeline/backgrounded cds change nothing.
+ *
+ * Only persistent top-level cds participate: a ( ) subshell's cd dies with
+ * the child, a pipeline stage's cd runs in a subshell, a backgrounded cd is
+ * `cd … &` (subshell). resolveCdTarget already classifies those as
+ * "unchanged"; the depth/background filter keeps the scan honest for them.
+ */
+export function cdBaseBounds(
+  segments: BashSegment[],
+  sessionCwd: string,
+): { unbounded: boolean; candidates: string[] } {
+  const candidates: string[] = [sessionCwd];
+  let base: CwdBase = sessionCwd;
+  let unbounded = false;
+  for (const seg of segments) {
+    if ((seg.subshellDepth ?? 0) !== 0 || seg.backgrounded) continue;
+    if (unbounded) continue;
+    const r = resolveCdTarget(seg, base);
+    if (r.kind === "unknown") unbounded = true;
+    else if (r.kind === "thread") {
+      base = r.dir;
+      if (!candidates.includes(r.dir)) candidates.push(r.dir);
+    }
+  }
+  return { unbounded, candidates };
 }
 
 /**
@@ -243,9 +285,10 @@ const CWD_DEFAULT_COMMANDS = new Set(["ls", "find", "du"]);
 // Redirect operators. Output: [N]>, [N]>>, [N]&>, [N]>&(. Input: [N]< — but
 // not the heredoc forms (<< / <<<), which carry DATA, not a file target.
 // The target may be glued to the operator (2>/dev/null) or a separate token.
-const OUT_REDIRECT_RE = /^(\d{0,1}(?:&?>|>&))(.*)$/;
-const IN_REDIRECT_RE = /^(\d{0,1}<)(?!<)(.*)$/;
-const BARE_REDIRECT_RE = /^(?:\d{0,1}(?:&?>|>&)|\d{0,1}<)$/;
+// Shared with dspa-gate's quote-aware self-write scan (checkRmTargets).
+export const OUT_REDIRECT_RE = /^(\d{0,1}(?:&?>|>&))(.*)$/;
+export const IN_REDIRECT_RE = /^(\d{0,1}<)(?!<)(.*)$/;
+export const BARE_REDIRECT_RE = /^(?:\d{0,1}(?:&?>|>&)|\d{0,1}<)$/;
 
 /** Token names a location resolvable (or already marker-flagged) by the path set. */
 function isResolvableTarget(t: string): boolean {

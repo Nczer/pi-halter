@@ -143,9 +143,11 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
     expect(r).toEqual({ ok: true });
   });
 
-  it("unassigned var stays unresolvable → judgeable", async () => {
+  it("unassigned var is a floor stop, never judgeable (Q1 — 2026-08-25 audit)", async () => {
     const r = await checkDspaGate(bashPd('mkdir -p "$FOO"'), store);
-    expect(r).toEqual({ ok: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("runtime location unresolvable");
+    if (!r.ok) expect(r.reason).toContain("$FOO");
   });
 
   it("cd into an outside dir inside a || chain resolves to a concrete stop (2026-08-24 read-only flow)", async () => {
@@ -169,17 +171,63 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
     expect(r).toEqual({ ok: true });
   });
 
-  it("cd with a var target is unresolvable → judgeable", async () => {
+  it("cd with a var target is a floor stop — unbounded base (Q1 — 2026-08-25 audit)", async () => {
     const r = await checkDspaGate(bashPd("cd $D && ls f || echo no"), store);
-    expect(r).toEqual({ ok: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("runtime working directory unresolvable");
   });
 
-  it("two cd targets is ambiguous → judgeable", async () => {
-    const r = await checkDspaGate(bashPd("cd /opt/a && ls || echo no; cd /opt/b; ls f"), store);
-    expect(r).toEqual({ ok: true });
+  it("a prior unresolvable cd stays unbounded even when a later cd is literal (S1)", async () => {
+    const r = await checkDspaGate(bashPd("cd $X && cd sub && false || cat ../secret"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("runtime working directory unresolvable");
   });
 
-  it("unresolved-cwd with no cd in the command stays judgeable (carried analysis)", async () => {
+  it("relative cd target resolves against the SESSION cwd, not the process cwd (S1)", async () => {
+    const home = fs.mkdtempSync(path.join(os.homedir(), ".halter-d7-"));
+    try {
+      fs.mkdirSync(path.join(home, "sub"));
+      // The || side can only run at `home` or `home/sub` — both in base.
+      // The old code resolved `sub` against the test process cwd and stopped.
+      const r = await checkDspaGate(bashPd("cd sub && false || cat secret", { cwd: home }), store);
+      expect(r).toEqual({ ok: true });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("a .. tail is checked against EVERY candidate base, not just the last cd", async () => {
+    const home = fs.mkdtempSync(path.join(os.homedir(), ".halter-d7-"));
+    try {
+      fs.mkdirSync(path.join(home, "sub"));
+      // If `cd sub` fails, `cat ../secret` reads <home>/../secret = $HOME/secret.
+      const r = await checkDspaGate(bashPd("cd sub && false || cat ../secret", { cwd: home }), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain(path.join(os.homedir(), "secret"));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("multiple literal cd targets outside base stop, naming the targets (multi-candidate)", async () => {
+    const home = fs.mkdtempSync(path.join(os.homedir(), ".halter-d7-"));
+    const a = fs.mkdtempSync(path.join(os.homedir(), ".halter-d7-"));
+    const b = fs.mkdtempSync(path.join(os.homedir(), ".halter-d7-"));
+    try {
+      const r = await checkDspaGate(
+        bashPd(`cd ${a} && false || cat f; cd ${b}`, { cwd: home }),
+        store,
+      );
+      // The concrete cd targets (outside the session base) name the stop.
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain(a);
+      if (!r.ok) expect(r.reason).toContain(b);
+    } finally {
+      for (const d of [home, a, b]) fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("unresolved-cwd with no cd in the command resolves against the session cwd (carried analysis)", async () => {
     const a: any = await analyzeCommand("ls", BASE, {
       isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
     });
@@ -243,6 +291,20 @@ describe("bash", () => {
     expect(r.ok).toBe(false);
   });
 
+  it("git global flags and env prefixes do not hide network egress (flag-evasion audit)", async () => {
+    for (const cmd of [
+      "git -C /tmp/repo push origin main",
+      "git --git-dir=/tmp/repo push",
+      "git -c user.name=x fetch",
+      "git --no-pager push",
+      "FOO=bar curl http://x",
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(false);
+      if (!r.ok) expect(r.reason, cmd).toContain("network egress");
+    }
+  });
+
   it("allows local git", async () => {
     for (const cmd of ["git status", "git log --oneline -5", "git add -A && git commit -m x"]) {
       const r = await checkDspaGate(bashPd(cmd), store);
@@ -276,6 +338,19 @@ describe("bash", () => {
       "yarn dlx vite",
       "uvx ruff --version",
       "bun x tsc",
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(false);
+      if (!r.ok) expect(r.reason, cmd).toMatch(/^untrusted package \(/);
+    }
+  });
+
+  it("env prefixes and wrappers do not hide an untrusted fetch (S2 — no bypass)", async () => {
+    for (const cmd of [
+      "FOO=bar npx evil",
+      "env npx evil",
+      "FOO=bar uvx foo",
+      "bunx left-pad",
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
@@ -325,6 +400,11 @@ describe("bash", () => {
     const other = await checkDspaGate(bashPd("npx @org/other run"), store);
     expect(other.ok).toBe(false);
     if (!other.ok) expect(other.reason).toBe("untrusted package (npx @org/other)");
+    // Scoped names are case-sensitive (registry identity): a different case
+    // is a different package and must not inherit the trust (S3).
+    const cased = await checkDspaGate(bashPd("npx @Org/Tool run"), store);
+    expect(cased.ok).toBe(false);
+    if (!cased.ok) expect(cased.reason).toBe("untrusted package (npx @Org/Tool)");
   });
 
   it("a chain with one untrusted package stops the whole command, naming it (D10)", async () => {
@@ -540,6 +620,19 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
     const r = await checkDspaGate(bashPd("rm --no-preserve-root /") , store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("--no-preserve-root");
+  });
+
+  it("a quoted > is data, not a self-write (no fabricated outside write)", async () => {
+    // `echo "a > /etc/zz"` writes nothing: the old raw-regex scan saw a
+    // redirect to /etc/zz and stopped the rm carve-out for it.
+    const r = await checkDspaGate(bashPd('echo "a > /etc/zz" && rm -f ./out.txt'), store);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("a non-rm dangerous op blocks the carve-out (git rm is no longer matched as rm's reason)", async () => {
+    const r = await checkDspaGate(bashPd("rm -rf ./build && git rm file"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("git rm");
   });
 
   it("still blocks network/credential reasons alongside rm", async () => {

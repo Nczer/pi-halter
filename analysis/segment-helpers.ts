@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
-import { isWriteOperation, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands } from "../config";
+import { isWriteOperation, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, fetchFormPackage } from "../config";
 import { splitIntoSegments, splitOnPipe, tokenizeSegment } from "./tokenizer";
 
 // splitPipeline is splitOnPipe — same semantics (split on | not ||)
@@ -233,6 +233,32 @@ function resolveDelegatedTokens(words: string[]): DelegatedResolution | null {
   const word = words[i] ?? "";
   if (!word || word.startsWith("-") || word === "__STR__" || word === "__CMD_SUBST__") return null;
   return { cmd: path.basename(word.toLowerCase()), index: i, lookup };
+}
+
+/**
+ * The package a segment's fetchable run form names, with inline env-assignment
+ * prefixes (`FOO=bar npx evil`) and prefix/wrapper delegation (`env npx evil`,
+ * `timeout npx evil`) resolved FIRST — the D10 trust gate must not be evadable
+ * by prefixing, mirroring the manual policy's wrapper transparency. Null when
+ * the segment names no fetchable run form. Quote-aware (tokenizeSegment).
+ * The single definition for both consumers — the /dspa floor and SafetyRule's
+ * trust check (the "ONE definition" invariant of FETCH_PKG_FORMS).
+ */
+export function segmentFetchPackage(segment: string): { first: string; pkg: string } | null {
+  const words = tokenizeSegment(segment);
+  let i = 0;
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+  const rest = words.slice(i);
+  // Prefix/wrapper delegation (env/timeout/command/…): the package the
+  // wrapped run form names (`env npx evil` → npx evil).
+  const deleg = getDelegatedCommand(rest.join(" "));
+  if (deleg) {
+    const pkg = fetchFormPackage(deleg.cmd, deleg.tail.split(/\s+/));
+    return pkg ? { first: deleg.cmd, pkg } : null;
+  }
+  const first = rest[0]?.toLowerCase() ?? "";
+  const pkg = fetchFormPackage(first, rest);
+  return pkg ? { first, pkg } : null;
 }
 
 /**
@@ -482,9 +508,6 @@ const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => bo
   { match: (sub, a) => sub === "gc" && a.some(x => x.startsWith("--prune")) },
   { match: (sub, a) => sub === "config" && isGitConfigWrite(a) },
 ];
-
-/** Git global flags that appear before the subcommand. */
-const GIT_GLOBAL_FLAGS = new Set(["-c", "-C", "--git-dir", "--work-tree", "--no-pager", "-p", "--paginate", "--no-replace-objects", "--literal-pathspec", "--no-optional-locks", "--bare", "--help"]);
 
 /**
  * Resolve the git subcommand, skipping the global flags that may precede it
