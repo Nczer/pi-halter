@@ -105,7 +105,6 @@ export class RuleGenerator {
   }
 
   private static generateBashBroaderRules(data: BashPromptData): AllowRules | undefined {
-    // PACKAGE_MANAGERS imported from config
     const signatures = data.signatures;
     const pmSigs = signatures.filter(sig => {
       const firstWord = sig.split(/\s+/)[0];

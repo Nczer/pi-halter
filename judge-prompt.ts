@@ -1,13 +1,15 @@
 /**
- * Judge wiring — the LLM judge's explanation inside the bash permission prompt.
+ * Judge wiring — the LLM judge's verdict inside the permission prompts.
  *
- * Phase 1: display-only. When a bash prompt is about to be shown, a one-shot
- * model call (judge.ts) explains what the command will actually do, and one
- * line is appended to the prompt body. The explanation never reaches the
- * agent's context, never pre-fills the rejection reason, and never alters the
- * gate's decision: ANY failure here (settings off, model unresolved, auth
- * failed, timeout, bad reply) returns "" and the prompt looks exactly as it
- * did before.
+ * Display-only (manual/dspat): when a prompt (bash / file / MCP) is about to
+ * be shown, a one-shot model call (judge.ts) explains what the operation will
+ * actually do, and the verdict block is appended to the prompt body. The
+ * verdict never reaches the agent's context, never pre-fills the rejection
+ * reason, and never alters the gate's decision — under /dspa the same verdict
+ * additionally sits behind the hard gate (dspa-gate.ts) as the auto-allow
+ * authority. ANY failure here (settings off, model unresolved, auth failed,
+ * timeout, bad reply) resolves to "no verdict" and the prompt looks exactly
+ * as it did before.
  *
  * Script payloads: when the command executes an untrusted local script, its
  * content is read and handed to the judge fenced as untrusted data (trusted
@@ -108,8 +110,8 @@ function readScriptFile(resolved: string): JudgmentScript | null {
  * Build the judgment input for a prompt, per type. Bash uses the analysis
  * carried on the prompt (single analysis per decision — re-run only for
  * hand-constructed prompt data) so the packet shows exactly what the gate
- * decided on; file and MCP map straight from the prompt data (no content is
- * carried — the judge weighs the path/args that halter already resolved).
+ * decided on; file and MCP map straight from the prompt data (file
+ * writes/edits carry the new content, fenced as untrusted).
  */
 async function buildJudgmentInput(
   pd: PromptData,
@@ -342,8 +344,8 @@ export async function getStage2Verdict(
  * The suggests line uses the verdict's own word — a defer renders DEFER,
  * not REJECT: "the model could not verify" is a different signal from
  * "the model saw something bad", and the operator reading the line (and
- * the dspat stats review) needs the distinction. Behavior is unchanged:
- * only approve + low auto-allows anywhere.
+ * the dspat stats review) needs the distinction. Auto-allow authority is
+ * per stage (Q4): stage 1 approve+low, stage 2 approve+{low, medium}.
  *
  * `note` appends to the suggests line (the /dspa fall-through's
  * "not auto-allowed" explanation for an approving but not-low verdict).

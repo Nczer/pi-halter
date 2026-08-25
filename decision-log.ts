@@ -92,13 +92,16 @@ export interface DecisionLogEntry {
 
   /**
    * dspa prompt fall-through only (absent otherwise): which layer stopped
-   * the auto-allow before the prompt was shown.
+   * the auto-allow before the prompt was shown (see dspaStopTag, gate.ts).
    *  - `gate: <reason>` — the deterministic hard gate (code-produced;
    *    accumulates safely across sessions).
-   *  - `judge: declined` — the gate passed, the judge's verdict was not
-   *    approve+low (verdict content stays session-scoped, see the NOTE).
-   *  - `judge: <note>` — the gate passed but no verdict was produced
-   *    (judge invalid or call failed — plumbing, not verdict quality).
+   *  - `judge: declined (stage 2)` — the gate passed, the intent pass's
+   *    verdict did not auto-allow (verdict content stays session-scoped,
+   *    see the NOTE).
+   *  - `judge: stage 2 failed` — stage 1 produced a verdict but the intent
+   *    pass did not (an infra fact).
+   *  - `judge: <note>` — no verdict was produced at all (judge invalid or
+   *    call failed — plumbing, not verdict quality).
    */
   dspa?: string;
 

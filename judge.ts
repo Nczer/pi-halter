@@ -220,11 +220,11 @@ export function buildJudgmentPacket(input: JudgmentInput): string {
   return buildBashPacket(input);
 }
 
-/** Packet for a file read/write/edit (no content — the prompt data doesn't
- * carry it; the judge weighs the path, the write-vs-read nature, and whether
- * the target exists). */
 const FILE_CONTENT_MAX_CHARS = 8000;
 
+/** Packet for a file read/write/edit: the judge weighs the path, the
+ * write-vs-read nature, and whether the target exists; writes/edits carry
+ * the new content, fenced as untrusted data. */
 function buildFilePacket(input: JudgmentFileInput): string {
   const parts: string[] = [];
   const op = input.isWriteOp ? `file ${input.action} (WRITE)` : "file read";

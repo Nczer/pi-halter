@@ -3,9 +3,10 @@
  * widget.
  *
  * /dspa is the automatic counterpart of /dspat: operations that pass the
- * deterministic hard gate (dspa-gate.ts) AND get an approving low-risk judge
- * verdict run without a prompt (visible toast + decision-log line). Anything
- * else falls through to the normal prompt with its full Always options.
+ * deterministic hard gate (dspa-gate.ts) AND get an approving judge verdict
+ * within the stage's risk authority (stage 1: low; stage 2: low or medium)
+ * run without a prompt (visible toast + decision-log line). Anything else
+ * falls through to the normal prompt with its full Always options.
  *
  * Like /dspat, counters are session-scoped and model-scoped: judge quality
  * is model-dependent, so a model change resets the stats.
