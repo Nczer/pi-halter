@@ -12,9 +12,14 @@
  *  - bash: parseable, no obscured command position (variable indirection —
  *    NOT flagged by halter's own analysis, checked here explicitly), no
  *    credential-pattern paths, no network egress, no paths outside the
- *    session base. Unsafe patterns (inline scripts, redirects, pipes,
- *    subshells) and risk reasons are NOT floor checks — judgeable: the
- *    packet already carries the full command text and the analysis digest.
+ *    session base — INCLUDING paths whose location is statically unprovable
+ *    (unbound variable, unresolvable cd target): Q1 is absolute, scope
+ *    grants are the user's call, never the judge's. First-word checks are
+ *    wrapper/env-prefix transparent (`FOO=bar npx evil` is npx evil; `env
+ *    $f` is obscured) — the policy's delegation transparency, mirrored.
+ *    Unsafe patterns (inline scripts, redirects, pipes, subshells) and risk
+ *    reasons are NOT floor checks — judgeable: the packet already carries
+ *    the full command text and the analysis digest.
  *    Package-manager RUN forms (npx, `uv run`, `bun <script>`, …) are
  *    judgeable too (D8) — they execute local/cached code the judge can see;
  *    FETCH forms (`npm install`, `uv sync`, `bun add`, …) stay on the floor.
@@ -43,14 +48,16 @@ import { analyzeCommand } from "./analysis/command-analysis";
 import { resolveOpaqueRefs } from "./analysis/var-resolution";
 import { expandTilde } from "./analysis/path-util";
 import { resolvePathReal } from "./analysis/path-analysis";
-import { UNKNOWN_CWD_MARKER } from "./analysis/cwd-tracking";
+import { UNKNOWN_CWD_MARKER, cdBaseBounds, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "./analysis/cwd-tracking";
 import { rootScanTarget } from "./analysis/evaluators/disk-evaluator";
 import { OPAQUE_VAR_DIR } from "./analysis/bash-parser";
+import { getDelegatedCommand, segmentFetchPackage } from "./analysis/segment-helpers";
+import { tokenizeSegment, splitOnPipe } from "./analysis/tokenizer";
 import {
   NETWORK_COMMANDS,
-  GIT_NETWORK_SUBCOMMANDS,
   NETWORK_URL_RE,
-  fetchFormPackage,
+  gitNetworkSubcommand,
+  skipEnvPrefixes,
 } from "./config";
 
 export type DspaGateResult =
@@ -66,14 +73,20 @@ export type DspaGateResult =
  * Command position obscured by variable indirection, subshell, or backtick
  * (e.g. `f=rm; $f -rf ./build`). halter's own analysis does not flag this,
  * so the gate checks it explicitly — an obscured command can never be
- * verified for auto-allow.
+ * verified for auto-allow. Inline env-assignment prefixes and prefix/wrapper
+ * delegation are resolved first (`FOO=bar $f …`, `env $f …` obscure exactly
+ * like `$f …`).
  */
-const OBSCURED_CMD_RE = /^\s*(?:\$\w|\$\(|`)/;
+const OBSCURED_CMD_RE = /^(?:\$\w|\$\(|`)/;
 
 function obscuredHit(segments: string[]): string | null {
   for (const seg of segments) {
-    const t = seg.trim();
-    if (OBSCURED_CMD_RE.test(t)) return t.split(/\s+/)[0].slice(0, 20);
+    const words = seg.trim().split(/\s+/);
+    const oper = words.slice(skipEnvPrefixes(words));
+    let first = oper[0] ?? "";
+    const deleg = getDelegatedCommand(oper.join(" "));
+    if (deleg) first = deleg.tail.split(/\s+/)[0] ?? "";
+    if (OBSCURED_CMD_RE.test(first)) return first.slice(0, 20);
   }
   return null;
 }
@@ -124,18 +137,20 @@ function isPkgRunForm(first: string, words: string[]): boolean {
 }
 
 /** First egress hit only (gate reason line); URLs truncated to 60 chars.
- *  Package-manager RUN forms are skipped (D8 — judgeable). */
+ *  Package-manager RUN forms are skipped (D8 — judgeable). The operative
+ *  first word (env-prefixes skipped) is checked, and git's subcommand is
+ *  resolved past global flags via the shared gitNetworkSubcommand —
+ *  `git -C dir push` is egress exactly like `git push`. */
 function networkHit(command: string, segments: string[]): string | null {
   for (const seg of segments) {
     const words = seg.trim().split(/\s+/);
-    const first = words[0]?.toLowerCase();
+    const oper = words.slice(skipEnvPrefixes(words));
+    const first = oper[0]?.toLowerCase();
     if (!first) continue;
-    if (isPkgRunForm(first, words)) continue;
+    if (isPkgRunForm(first, oper)) continue;
     if (NETWORK_COMMANDS.has(first)) return first;
-    if (first === "git") {
-      const sub = words[1]?.toLowerCase() ?? "";
-      if (GIT_NETWORK_SUBCOMMANDS.has(sub)) return `git ${words[1]}`;
-    }
+    const sub = gitNetworkSubcommand(words);
+    if (sub) return `git ${sub}`;
   }
   const m = command.match(NETWORK_URL_RE);
   return m ? m[0].slice(0, 60) : null;
@@ -144,65 +159,58 @@ function networkHit(command: string, segments: string[]): string | null {
 /**
  * D7 (docs/dspa-redesign.md): outside paths the parser could not bind to a
  * location — `<unresolved-cwd>` (a cd inside a `||` chain leaves the side's
- * directory genuinely ambiguous) or `<unresolved-var>` (opaque variable).
- * The opaque-variable dataflow now lives in the analysis layer
- * (analysis/var-resolution: scoped local assignments + the tracked
- * effective base + cwd-local loop/pipeline modeling) — a sentinel that
- * reaches the gate is unbound by construction and is JUDGEABLE (the packet
- * carries the full text and stage 2 has session context the static parser
- * lacks). The gate keeps only the cd-boundary bound for unresolved-cwd
- * markers: the command's cd target (exactly one resolvable cd) bounds the
- * side — it runs under either the original cwd or that target. Resolved →
- * the ordinary in-base/grant bar applies: a stop then names the CONCRETE
- * dir, so one Always-for-dir makes later runs judgeable (D3-style).
+ * directory ambiguous) or `<unresolved-var>` (opaque variable). The
+ * opaque-variable dataflow lives in the analysis layer (analysis/
+ * var-resolution: scoped local assignments + the tracked effective base +
+ * cwd-local loop/pipeline modeling) — a sentinel that reaches the gate is
+ * unbound by construction.
+ *
+ * Q1 is absolute (scope grants are the user's call, NEVER the judge's), so
+ * an unprovable location is a FLOOR STOP, not a judgeable fall-through:
+ *  - unbound variable → stop, naming the token (the prompt already lists it);
+ *  - unbounded cwd marker (any unresolvable cd in the command — `cd $X`,
+ *    glob, `cd -`) → stop; the side's base could be ANYWHERE;
+ *  - bounded cwd marker (every cd literal, per cdBaseBounds) → the side runs
+ *    under one of the candidate bases (session cwd + each literal cd target);
+ *    EVERY candidate is checked against the base — all inside → drop, any
+ *    outside → stop naming the CONCRETE dir (one Always-for-dir makes later
+ *    runs pass, D3-style).
+ *
+ * The 2026-08-24 "single resolvable cd target bounds the side" reading is
+ * REVISED (2026-08-25 review): it resolved relative targets against the
+ * PROCESS cwd (wrong root) and claimed boundedness even when an earlier
+ * unresolvable cd made the base unbounded — both let outside-base reads
+ * pass the floor.
  */
-const D7_ASSIGNMENT_RE = /^(?:export\s+|readonly\s+|declare\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
-const D7_UNRESOLVED_RE = /[?*$`\[{}]/;
-
 type D7Resolution =
-  | { kind: "inside" } // resolves inside base or a granted dir
-  | { kind: "outside"; path: string } // resolves to a concrete outside-base path
-  | { kind: "open" }; // unresolvable — judgeable
+  | { kind: "inside" } // every candidate base keeps it in-base
+  | { kind: "outside"; paths: string[] } // concrete outside-base locations
+  | { kind: "stop"; reason: string }; // unprovable location — Q1 floor stop
 
-/** The command's cd targets (flags skipped; `cd -` and `cd` are unresolvable). */
-function d7CdTargets(command: string): string[] {
-  const out: string[] = [];
-  for (const chunk of command.split(/;|&&|\|\||\||\n/)) {
-    const tokens = chunk.trim().match(/\S+/g) ?? [];
-    let i = 0;
-    while (i < tokens.length && D7_ASSIGNMENT_RE.test(tokens[i])) i++;
-    if (path.basename(tokens[i] ?? "").toLowerCase() !== "cd") continue;
-    i++;
-    while (i < tokens.length && ["--", "-L", "-P"].includes(tokens[i])) i++;
-    const t = tokens[i];
-    if (t && t !== "-" && !t.startsWith("-")) out.push(t);
-  }
-  return out;
-}
-
-/**
- * Resolve one sentinel outside path. `rest` keeps the variable reference or
- * relative tail exactly as the parser emitted it.
- */
-function d7ResolveOutsidePath(
+/** Resolve one sentinel outside path (see D7 above). */
+function d7ResolveSentinel(
   p: string,
   cwd: string,
   isInsideBase: (p: string) => boolean,
-  cdTargets: string[],
+  bounds: { unbounded: boolean; candidates: string[] },
 ): D7Resolution {
   if (p.startsWith(OPAQUE_VAR_DIR)) {
-    // Unbound by construction (the analysis layer resolved what it could with
-    // proper scoping) — judgeable: the judge sees the full text.
-    return { kind: "open" };
+    const token = p.slice(OPAQUE_VAR_DIR.length + 1).replace(/^\//, "");
+    return { kind: "stop", reason: `runtime location unresolvable (${token})` };
   }
   if (p.startsWith(UNKNOWN_CWD_MARKER)) {
-    const rest = p.slice(UNKNOWN_CWD_MARKER.length);
-    const targets = cdTargets.filter((t) => !D7_UNRESOLVED_RE.test(t)).map(expandTilde);
-    if (targets.length !== 1) return { kind: "open" };
-    const resolved = path.resolve(targets[0], rest.replace(/^\//, ""));
-    return isInsideBase(resolved) ? { kind: "inside" } : { kind: "outside", path: resolved };
+    if (bounds.unbounded) {
+      return { kind: "stop", reason: "runtime working directory unresolvable (cd target not statically knowable)" };
+    }
+    // Bounded: the side's base is one of the candidates; a `..` tail can
+    // escape from ANY of them, so every candidate must be checked against
+    // the base (not just the last cd target).
+    const rest = p.slice(UNKNOWN_CWD_MARKER.length).replace(/^\//, "");
+    const locations = bounds.candidates.map((c) => path.resolve(c, rest));
+    const outside = locations.filter((l) => !isInsideBase(l));
+    return outside.length > 0 ? { kind: "outside", paths: outside } : { kind: "inside" };
   }
-  return { kind: "open" };
+  return { kind: "stop", reason: "runtime location unresolvable" };
 }
 
 export async function checkDspaGate(
@@ -267,13 +275,14 @@ export async function checkDspaGate(
   // (npm run, uv run, bun <script>) execute repo-visible code and are never
   // gated. The parser flattens subshell contents into segments, so
   // `out=$(npx foo)` is seen too; only opaque indirection (eval, $f) stays
-  // judge-only (the obscured-position check above).
+  // judge-only (the obscured-position check above). segmentFetchPackage
+  // resolves inline env prefixes and wrapper delegation first
+  // (`FOO=bar npx evil`, `env npx evil` are npx evil) — the gate must not
+  // be evadable by prefixing.
   const untrusted: string[] = [];
   for (const seg of analysis.segments) {
-    const words = seg.trim().split(/\s+/);
-    const first = words[0]?.toLowerCase() ?? "";
-    const pkg = fetchFormPackage(first, words);
-    if (pkg && !store.hasTrustedPackage(pkg)) untrusted.push(`${first} ${pkg}`);
+    const ff = segmentFetchPackage(seg);
+    if (ff && !store.hasTrustedPackage(ff.pkg)) untrusted.push(`${ff.first} ${ff.pkg}`);
   }
   if (untrusted.length > 0) {
     const uniq = [...new Set(untrusted)];
@@ -293,19 +302,20 @@ export async function checkDspaGate(
   const net = networkHit(pd.command, analysis.segments);
   if (net) return { ok: false, reason: `network egress (${net})` };
   const outside = (analysis.prompt.outsidePaths ?? []).filter((p) => !outsideExempt.has(p));
-  // D7: bound the cd-ambiguous markers, then apply the ordinary bar.
-  // Concrete resolved paths stop (naming the dir for a one-time grant);
-  // still-unresolvable paths go to the judge.
-  const cdTargets = d7CdTargets(pd.command);
+  // D7: resolve the sentinels (see d7ResolveSentinel). Concrete outside
+  // locations stop (naming the dir for a one-time grant); unprovable
+  // locations stop outright (Q1 — never judgeable).
+  const bounds = cdBaseBounds(analysis.parsedSegments, pd.cwd);
   const resolvedOutside: string[] = [];
   for (const p of outside) {
     if (!p.startsWith(OPAQUE_VAR_DIR) && !p.startsWith(UNKNOWN_CWD_MARKER)) {
       resolvedOutside.push(p);
       continue;
     }
-    const r = d7ResolveOutsidePath(p, pd.cwd, isInsideBase, cdTargets);
-    if (r.kind === "outside") resolvedOutside.push(r.path);
-    // inside → drop; open → judgeable (the judge sees the full text)
+    const r = d7ResolveSentinel(p, pd.cwd, isInsideBase, bounds);
+    if (r.kind === "outside") resolvedOutside.push(...r.paths);
+    else if (r.kind === "stop") return { ok: false, reason: r.reason };
+    // inside → drop
   }
   // The analysis layer resolved opaque refs under the MANUAL bar (cwd +
   // config-allowed + granted). The dspa floor is stricter (session base
@@ -331,13 +341,18 @@ export async function checkDspaGate(
 
 /** Risk reasons that belong to rm's own footprint (or the self-write that
  * feeds it) — filtered out in the rm branch instead of blocking. Everything
- * else in analysis.risk.reasons blocks the judge. The medium-noise entries
- * (pipe operator, input/output redirection, tee's file-writing flag) appear
- * in legitimate self-write shapes (`echo … | tee f && rm f`); the dangerous
- * pipeline forms have their own, non-matching reasons ("pipe to a shell",
- * per-stage evaluator hits). New reason strings fail safe (block → prompt). */
+ * else in analysis.risk.reasons blocks the judge. The strings are the rm
+ * footprint reasons actually emitted — system-evaluator (recursive/forced
+ * delete, mass deletion, entire-tree/home targets) and the dangerous-
+ * pattern hit `[Pattern] rm (any file deletion)` — plus the medium-noise
+ * self-write entries (pipe operator, input/output redirection, tee's file-
+ * writing flag) that appear in legitimate shapes (`echo … | tee f && rm f`);
+ * the dangerous pipeline forms have their own, non-matching reasons ("pipe
+ * to a shell", per-stage evaluator hits). Deliberately NOT a bare word match
+ * — `git rm (…)` and `aws s3 rm (…)` are non-rm dangerous ops and must
+ * block the carve-out. New reason strings fail safe (block → prompt). */
 const RM_RISK_REASON_RE =
-  /\brm\b|recursive delete|forced delete|shell (?:input|output) redirection|pipe operator|tee \(file writing\)/i;
+  /\brecursive delete\b|\bforced delete\b|mass deletion|entire (?:tree|home) deleted|\[Pattern\] rm \(|shell (?:input|output) redirection|pipe operator|tee \(file writing\)/i;
 /** Targets that can never be auto-allowed: globs, tildes, computed
  * (variable/substitution) paths. */
 const RM_FORBIDDEN_TARGET_RE = /[*?[~$`]/;
@@ -354,13 +369,24 @@ function isTmpScratchTarget(resolved: string, recursive: boolean): boolean {
   return !recursive && resolved.startsWith("/tmp/");
 }
 
+/**
+ * The tokens a segment OPERATES with: quote-aware (tokenizeSegment), inline
+ * env-assignment prefixes stripped (`FOO=bar rm …` is an rm), and
+ * prefix/wrapper delegation resolved (`env rm …` is an rm) — the carve-out's
+ * target checks must see the same command the policy sees.
+ */
+function operativeTokens(seg: string): string[] {
+  const tokens = tokenizeSegment(seg);
+  const rest = tokens.slice(skipEnvPrefixes(tokens));
+  const deleg = getDelegatedCommand(rest.join(" "));
+  return deleg ? deleg.tail.split(/\s+/) : rest;
+}
+
 function isRmSegment(seg: string): boolean {
-  const first = seg.trim().split(/\s+/)[0]?.split("/").pop()?.toLowerCase();
+  const first = operativeTokens(seg)[0]?.split("/").pop()?.toLowerCase();
   return first === "rm";
 }
 
-/** Write-redirect target (`> p` / `>> p` / `2> p`) in a raw segment. */
-const REDIRECT_TARGET_RE = /\d*(?:>>?)\s*([A-Za-z0-9_./-]+|"[^"\s]+"|'[^'\s]+')/g;
 const SELF_WRITE_CMDS = new Set(["tee", "touch", "mkdir"]);
 
 /** Strip one pair of matching quotes from a raw token. */
@@ -393,7 +419,7 @@ function checkRmTargets(
   // First pass: collect self-written paths (ordered by segment) and rm targets.
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    const words = seg.trim().split(/\s+/);
+    const words = operativeTokens(seg);
     if (isRmSegment(seg)) {
       if (words.includes("--no-preserve-root")) return noPreserveRoot();
       const args = words.slice(1).filter((t) => !t.startsWith("-"));
@@ -433,18 +459,26 @@ function checkRmTargets(
         }
       }
     } else {
-      // Self-written paths from this earlier segment.
-      for (const m of seg.matchAll(REDIRECT_TARGET_RE)) {
-        const raw = cleanToken(m[1]);
-        if (RM_FORBIDDEN_TARGET_RE.test(raw)) continue;
-        const resolved = resolvePathReal(expandTilde(raw), cwd);
+      // Self-written paths from this earlier segment. Quote-aware token scan:
+      // a `>` inside quotes (echo "a > b") is data, not a redirect — the old
+      // raw-text regex fabricated a self-write for it.
+      const tokens = tokenizeSegment(seg);
+      for (let ti = 0; ti < tokens.length; ti++) {
+        const tok = tokens[ti];
+        const m = tok.match(OUT_REDIRECT_RE) ?? tok.match(IN_REDIRECT_RE);
+        let target: string | null = null;
+        if (m) target = m[2] !== "" ? m[2] : (tokens[ti + 1] ?? null);
+        else if (BARE_REDIRECT_RE.test(tok)) target = tokens[ti + 1] ?? null;
+        if (target === null || target.startsWith("&")) continue; // fd duplication (2>&1, > &1)
+        if (RM_FORBIDDEN_TARGET_RE.test(target)) continue; // glob/var/computed — never a concrete self-write
+        const resolved = resolvePathReal(expandTilde(target), cwd);
         if (isDevNullish(resolved)) continue;
         written.add(resolved);
       }
       // Self-write commands per pipeline stage — `a | tee f` hides tee
-      // behind the segment's first word.
-      for (const stage of seg.split("|")) {
-        const sw = stage.trim().split(/\s+/);
+      // behind the segment's first word. splitOnPipe is quote-aware.
+      for (const stage of splitOnPipe(seg)) {
+        const sw = operativeTokens(stage);
         const scmd = sw[0]?.split("/").pop()?.toLowerCase() ?? "";
         if (!SELF_WRITE_CMDS.has(scmd)) continue;
         for (const t of sw.slice(1)) {

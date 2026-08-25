@@ -230,6 +230,7 @@ export const NETWORK_COMMANDS = new Set([
 export const FETCH_PKG_FORMS: Record<string, ReadonlySet<string> | "all"> = {
   npx: "all",
   uvx: "all",
+  bunx: "all",
   npm: new Set(["exec", "x"]),
   pnpm: new Set(["dlx", "exec", "x"]),
   yarn: new Set(["dlx", "x"]),
@@ -249,28 +250,85 @@ function stripPkgVersion(pkg: string): string {
  * prefixes are skipped; version pins are stripped so trust keys are bare
  * package names. Only TOP-LEVEL segments are checked (indirection like
  * `out=$(npx foo)` stays judge-only by design).
+ *
+ * The package token is kept VERBATIM as the trust key: npm scoped names are
+ * case-sensitive (`@org/tool` and `@Org/Tool` are different packages), so a
+ * trust grant for one must not cover the other. Lowercasing is used only to
+ * match the SUBCOMMAND of set forms (`npm run` vs `npm RUN` — git/npm treat
+ * subcommands case-insensitively in practice, and the set is lowercase).
  */
 export function fetchFormPackage(first: string, words: string[]): string | null {
   const forms = FETCH_PKG_FORMS[first];
   if (!forms) return null;
   let i = 1;
   let sub: string | undefined;
+  let subLower: string | undefined;
   for (; i < words.length; i++) {
     const w = words[i];
     if (w.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
-    sub = w.toLowerCase();
+    sub = w;
+    subLower = w.toLowerCase();
     break;
   }
   if (forms === "all") {
     return sub ? stripPkgVersion(sub) : null;
   }
-  if (!sub || !forms.has(sub)) return null;
+  if (!subLower || !forms.has(subLower)) return null;
   for (let j = i + 1; j < words.length; j++) {
     const w = words[j];
     if (w.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
     return stripPkgVersion(w);
   }
   return null;
+}
+
+/** Leading inline env-assignment prefix (`FOO=bar cmd`) on raw words.
+ *  One pair of surrounding quotes is ignored (`"FOO=bar" cmd` is the same). */
+const ENV_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+function stripQuotes(w: string): string {
+  return w.length >= 2 && ((w[0] === '"' && w.endsWith('"')) || (w[0] === "'" && w.endsWith("'")))
+    ? w.slice(1, -1)
+    : w;
+}
+
+/** Index of the first non-env-assignment word (0 when none lead). */
+export function skipEnvPrefixes(words: string[]): number {
+  let i = 0;
+  while (i < words.length && ENV_PREFIX_RE.test(stripQuotes(words[i]))) i++;
+  return i;
+}
+
+/** Git global flags that may precede the subcommand. Single definition —
+ *  used by the risk layer (segment-helpers parseGitSubcommand) and both
+ *  network-egress collectors below. */
+export const GIT_GLOBAL_FLAGS = new Set(["-c", "-C", "--git-dir", "--work-tree", "--no-pager", "-p", "--paginate", "--no-replace-objects", "--literal-pathspec", "--no-optional-locks", "--bare", "--help"]);
+
+/**
+ * The git remote subcommand a segment names, or null: not git, env prefixes
+ * skipped, and the subcommand resolved PAST global flags (`git -C dir push`
+ * → push — the -C value is a location, not the subcommand). Raw words (no
+ * re-tokenization): both network-egress collectors call this on their own
+ * segment split, so the two stay in sync.
+ */
+export function gitNetworkSubcommand(words: string[]): string | null {
+  const start = skipEnvPrefixes(words);
+  if (words[start]?.toLowerCase() !== "git") return null;
+  let i = start + 1;
+  while (i < words.length) {
+    const a = words[i];
+    if (GIT_GLOBAL_FLAGS.has(a)) {
+      // -c/-C and --git-dir/--work-tree consume a value argument.
+      if (a === "-c" || a === "-C" || a.startsWith("--git-dir") || a.startsWith("--work-tree")) i++;
+      i++;
+      continue;
+    }
+    if (a.startsWith("--") && a.includes("=")) { i++; continue; } // --flag=value
+    break;
+  }
+  if (i >= words.length) return null;
+  const sub = words[i].toLowerCase();
+  return GIT_NETWORK_SUBCOMMANDS.has(sub) ? sub : null;
 }
 
 /** git subcommands that talk to a remote. */
@@ -282,14 +340,17 @@ export const NETWORK_URL_RE = /https?:\/\/[^\s"'`)\]]+/;
 const NETWORK_URL_RE_GLOBAL = new RegExp(NETWORK_URL_RE.source, "g");
 
 /**
- * All network egress in a command: per-segment first words that can open a
- * network (or fetch/deploy — see NETWORK_COMMANDS), `git` remote
- * subcommands, and http(s) URLs anywhere in the text (deduped, in order).
+ * All network egress in a command: per-segment OPERATIVE first words that can
+ * open a network (or fetch/deploy — see NETWORK_COMMANDS), `git` remote
+ * subcommands (resolved past global flags), and http(s) URLs anywhere in the
+ * text (deduped, in order).
  *
- * ONE collector for both consumers — the /dspa hard gate (first hit) and
- * the judge packet (annotated list). What counts as egress lives here so
- * the two can never drift: a command the gate treats as network egress must
- * not be annotated "network: none" in the packet the judge sees.
+ * Shared with the /dspa hard gate (dspa-gate.ts networkHit — first hit),
+ * which layers one exception on top: package-manager RUN forms (D8) are
+ * judgeable there, though still annotated here. The operative-command and
+ * git-subcommand resolution lives in the shared helpers above so the two
+ * cannot drift: a command the gate treats as network egress must not be
+ * annotated "network: none" in the packet the judge sees.
  */
 export function findNetworkEgress(
   command: string,
@@ -301,14 +362,14 @@ export function findNetworkEgress(
   };
   for (const seg of segments) {
     const words = seg.trim().split(/\s+/);
-    const first = words[0]?.toLowerCase();
+    const first = words[skipEnvPrefixes(words)]?.toLowerCase();
     if (!first) continue;
     if (NETWORK_COMMANDS.has(first)) {
       add(first);
-    } else if (first === "git") {
-      const sub = words[1]?.toLowerCase() ?? "";
-      if (GIT_NETWORK_SUBCOMMANDS.has(sub)) add(`git ${words[1]}`);
+      continue;
     }
+    const sub = gitNetworkSubcommand(words);
+    if (sub) add(`git ${sub}`);
   }
   const urls: string[] = [];
   for (const m of command.matchAll(NETWORK_URL_RE_GLOBAL)) {

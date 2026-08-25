@@ -1772,4 +1772,22 @@ describe("Bash: D10 trusted package run forms", () => {
 		const scoped = await decide({ type: "bash", command: "npx @org/tool run", cwd }, s);
 		expect(scoped.kind).toBe("auto-allow");
 	});
+
+	it("env prefixes resolve to the same trust key (S2 — no bypass)", async () => {
+		const s = createStore();
+		s.trustPackage("tsc");
+		const envPrefixed = await decide({ type: "bash", command: "FOO=bar npx tsc --noEmit index.ts", cwd }, s);
+		expect(envPrefixed.kind).toBe("auto-allow");
+		const untrusted = await decide({ type: "bash", command: "FOO=bar npx vitest run", cwd }, s);
+		expect(untrusted.kind).toBe("prompt");
+	});
+
+	it("wrapper forms stay under the safety gate even when the package is trusted", async () => {
+		// canBeAutoAllowed is false for delegating segments by design (the
+		// wrapper adds opacity) — trust covers the run form, not the wrapper.
+		const s = createStore();
+		s.trustPackage("tsc");
+		const wrapped = await decide({ type: "bash", command: "env npx tsc --noEmit index.ts", cwd }, s);
+		expect(wrapped.kind).toBe("prompt");
+	});
 });
