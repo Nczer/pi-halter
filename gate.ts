@@ -52,8 +52,9 @@ type RejectHandler = (
 /**
  * The dspa stop-tag for the decision log: which layer stopped the
  * auto-allow — the deterministic hard gate (its code-produced reason is
- * safe to accumulate) or the judge (only the declined/failed fact, never
- * the verdict content — verdict stats stay session-scoped by design).
+ * safe to accumulate) or the judge (only the declined/failed fact; a
+ * REJECT's explanation is logged separately via dspaJudgeDeny as a debug
+ * aid — verdict stats stay session-scoped by design).
  * The stage is plumbing (which judge layer decided), not verdict content:
  *  - `judge: declined (stage 2)` — the intent pass rendered a verdict that
  *    did not auto-allow (the final call on the operation);
@@ -67,6 +68,17 @@ function dspaStopTag(f: DspaFallthrough | undefined): string | undefined {
   if (!f.gate.ok) return `gate: ${f.gate.reason}`;
   if (f.verdict) return f.stage === 2 ? "judge: declined (stage 2)" : "judge: stage 2 failed";
   return `judge: ${f.note ?? "no verdict"}`;
+}
+
+/**
+ * The LLM's reject words for the decision log (the NOTE's debug exception
+ * in decision-log.ts): the FINAL verdict's explanation when it is a
+ * REJECT. Which layer stopped first does not matter for debugging the
+ * judge — the stop tag already says that; this is what the model said.
+ */
+function dspaJudgeDeny(f: DspaFallthrough | undefined): string | undefined {
+  if (!f?.verdict || f.verdict.approve !== "deny") return undefined;
+  return f.verdict.explanation;
 }
 
 /** Record + surface one dspa auto-allow (D6: the log reason carries the
@@ -210,7 +222,7 @@ export async function gate(
 
   // Decision log (JSONL): one line per tool call, including fail-closed
   // synthetic blocks. Fire-and-forget — logDecision never throws.
-  logDecision(request, decision, dspModeTag(decision, ctx), dspaStopTag(dspaFallthrough));
+  logDecision(request, decision, dspModeTag(decision, ctx), dspaStopTag(dspaFallthrough), dspaJudgeDeny(dspaFallthrough));
 
   if (decision.kind === "auto-allow") return;
 

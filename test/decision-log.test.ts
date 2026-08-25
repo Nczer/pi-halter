@@ -133,6 +133,63 @@ describe("decision log", () => {
 		expect("dspa" in plain).toBe(false);
 	});
 
+	it("logs the LLM reject explanation as judgeDeny; absent when omitted", () => {
+		const filePrompt = {
+			kind: "prompt",
+			promptData: {
+				type: "file",
+				action: "Write",
+				filePath: "x.txt",
+				resolved: "/x/x.txt",
+				cwd: tmp,
+				outsideDir: null,
+				isWriteOp: true,
+				warnedRule: null,
+				symlinkHint: null,
+				exists: false,
+			},
+		} as Decision;
+		logDecision(
+			{ type: "bash", command: "make test", cwd: tmp } as BashRequest,
+			filePrompt,
+			"dspa",
+			"judge: declined (stage 2)",
+			"wipes the build output the user asked to keep",
+		);
+		logDecision(
+			{ type: "bash", command: "make test", cwd: tmp } as BashRequest,
+			filePrompt,
+			"dspa",
+			"judge: declined (stage 2)",
+		);
+		const [withDeny, withoutDeny] = lines(logFile);
+		expect(withDeny).toMatchObject({
+			kind: "prompt",
+			mode: "dspa",
+			dspa: "judge: declined (stage 2)",
+			judgeDeny: "wipes the build output the user asked to keep",
+		});
+		expect(withoutDeny.judgeDeny).toBeUndefined();
+		expect("judgeDeny" in withoutDeny).toBe(false);
+	});
+
+	it("logs the prompted directory for file prompts (path-resolver debug)", async () => {
+		// Inside cwd: the "Always (path)" dir is the resolved path's parent.
+		await gate(
+			{ type: "file", toolName: "write", filePath: "src/a/b.txt", cwd: "/home/u/project", resolvedPath: "/home/u/project/src/a/b.txt" } as FileRequest,
+			noUiCtx, createStore(), noReject,
+		);
+		// Outside cwd: the outside dir (also the resolved path's parent).
+		await gate({ type: "file", toolName: "read", filePath: "/etc/passwd", cwd: tmp } as FileRequest, noUiCtx, createStore(), noReject);
+		// Root file: the prompt offers the file, not a dir → no promptDir.
+		await gate({ type: "file", toolName: "write", filePath: "/top.txt", cwd: tmp } as FileRequest, noUiCtx, createStore(), noReject);
+		const [inside, outside, root] = lines(logFile);
+		expect(inside).toMatchObject({ tool: "file", kind: "prompt", promptDir: "/home/u/project/src/a" });
+		expect(outside).toMatchObject({ tool: "file", kind: "prompt", promptDir: "/etc" });
+		expect(root.promptDir).toBeUndefined();
+		expect("promptDir" in root).toBe(false);
+	});
+
 	it("logs a block decision with the reason", async () => {
 		await gate({ type: "bash", command: "cat .ssh/id_rsa", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
 		const [entry] = lines(logFile);
