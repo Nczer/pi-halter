@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { allowedReadPaths, allowedWritePaths, pathAwareCommands } from "../config";
 import { expandTilde, resolvePathReal } from "./path-analysis";
+import { OPAQUE_VAR_DIR } from "./path-util";
+import { isCwdLocalWord } from "./cwd-local";
+import type { ShellAssignment } from "./var-resolution";
 import { decodeAnsiCEscapes } from "./tokenizer";
+
+export { OPAQUE_VAR_DIR }; // Re-export for existing importers
 
 // ── Lazy tree-sitter parser ────────────────────────────────────────────────
 
@@ -13,6 +18,8 @@ interface TSNode {
   readonly text: string;
   readonly childCount: number;
   readonly parent: TSNode | null;
+  /** Stable node identity within the tree (child(i) wrappers are fresh per call). */
+  readonly id: number;
   child(index: number): TSNode | null;
 }
 
@@ -218,8 +225,10 @@ function expandHomeToken(p: string): string {
  * Closed-set $HOME/${HOME} is excluded (resolved statically below).
  * Note: single-quoted literal arguments (`cat '$X'`) lose their literalness
  * at the text level and are over-flagged — the safe direction.
+ * The parser no longer emits marker PATHS for these — it emits an OpaqueRef
+ * (below), which the analysis layer (var-resolution) binds against the
+ * command's assignments and the tracked effective cwd.
  */
-export const OPAQUE_VAR_DIR = "<unresolved-var>";
 
 /** Strip a leading flag (-f=, --file=) so the VALUE is inspected, not the flag. */
 function flagValue(arg: string): string {
@@ -250,6 +259,22 @@ function isBareName(w: string): boolean {
 }
 
 /**
+ * True when an absolute directory is under (or is) the session cwd or an
+ * allowed read/write root — lexically, or through realpath (symlinked
+ * roots). A non-existent directory fails closed.
+ */
+function underKnownRoots(p: string, cwd: string): boolean {
+  const roots = [...allowedReadPaths, ...allowedWritePaths, path.resolve(cwd)];
+  const under = (x: string) => roots.some(r => x === r || x.startsWith(r + "/"));
+  if (under(p)) return true;
+  try {
+    return under(fs.realpathSync(p));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when an absolute in-list token can only expand inside the cwd or a
  * static allowed path root. Glob chars (*, ?, [) never cross `/`, so the
  * static (non-glob) prefix pins the root every expansion value lives under.
@@ -276,16 +301,10 @@ function isAllowedRootToken(w: string, cwd: string): boolean {
   const prefix = globIdx === -1 ? t : t.slice(0, globIdx);
   const base = prefix.endsWith("/") ? prefix.slice(0, -1) : path.dirname(prefix);
   if (base === "/" || base === "") return false; // the root itself would allow everything
+  // Prefix under a root — lexically, or through realpath (symlinked roots).
+  if (!underKnownRoots(base, cwd)) return false;
   const roots = [...allowedReadPaths, ...allowedWritePaths, path.resolve(cwd)];
   const underRoot = (p: string) => roots.some(r => p === r || p.startsWith(r + "/"));
-  // Prefix under a root — lexically, or through realpath (symlinked roots).
-  if (!underRoot(base)) {
-    try {
-      if (!underRoot(fs.realpathSync(base))) return false;
-    } catch {
-      return false; // prefix doesn't exist — fail closed
-    }
-  }
   if (globIdx === -1) {
     // Literal path: verify where it really points.
     try {
@@ -309,15 +328,6 @@ function isAllowedRootToken(w: string, cwd: string): boolean {
   return true;
 }
 
-/**
- * True if `varName` is bound by an enclosing for/select loop to an in-list
- * where every token is statically safe: a cwd-local bare name (`for f in a b
- * *.txt`) or an absolute token under the cwd / an allowed path root
- * (`for d in /tmp/jobs/*`). Such references can only reach locations that
- * need no path approval, so they are exempt from the opaque marker. Any
- * other in-list (paths outside allowed roots, expansions) keeps the marker
- * (fail closed).
- */
 /**
  * The in-list words of the NEAREST enclosing for loop that binds `varName`,
  * or null when no such loop exists (a loop binding a different variable is
@@ -344,11 +354,6 @@ function enclosingLoopInList(node: TSNode, varName: string): string[] | null {
     cur = cur.parent;
   }
   return null;
-}
-
-function isLoopBoundSafe(node: TSNode, varName: string, cwd: string): boolean {
-  const inList = enclosingLoopInList(node, varName);
-  return inList !== null && inList.every(w => isBareName(w) || isAllowedRootToken(w, cwd));
 }
 
 /**
@@ -404,19 +409,138 @@ function loopBoundRef(val: string): { name: string; rest: string | null } | null
 }
 
 /**
- * Marker for an opaque expansion in path position, or null when the token is
- * not opaque (or is an exempt loop-bound reference). The marker sits outside
- * every allowed dir, forcing path approval — the only safe outcome when the
- * runtime location is knowable only by running the shell.
- * Note: single-quoted literal arguments (`cat '$X'`) lose their literalness at
- * the text level and are over-flagged — the safe direction.
+ * An opaque expansion in path position, classified for the analysis layer's
+ * resolution (var-resolution). Null when the token is not opaque or is
+ * statically exempt (a loop-bound reference whose in-list is pinned to known
+ * roots — base-independent, every expansion needs no path approval).
+ *
+ * Kinds (the parser only proves what the token text + loop binding show):
+ *  - "pinned": `prefix/$var` (or `${var}`) where the in-list is bounded —
+ *    every expansion lands under prefixDir (see isBoundedInListWord).
+ *  - "cwdLocal": a loop-bound reference whose in-list is cwd-local (bare
+ *    names, globs, `$(find …)` words) — the value is relative to the
+ *    RUNTIME cwd; the resolver must bound it against the tracked effective
+ *    base (the old blanket exemption skipped that check entirely — the
+ *    `cd /etc && for f in a b; do cat $f; done` hole).
+ *  - "opaque": everything else — the resolver may still bind it through the
+ *    command's own assignments (`f=x; cat $f`).
+ *
+ * Note: single-quoted literal arguments (`cat '$X'`) lose their literalness
+ * at the text level and are over-flagged — the safe direction.
  */
-function opaqueVarMarker(node: TSNode, arg: string, cwd: string): string | null {
+export interface OpaqueRef {
+  /** Dequoted shell text of the token ($f, ${d:-x}, $f/sub, $(find .)…). */
+  raw: string;
+  /** Index of the segment the token belongs to (-1: unidentifiable). */
+  segIdx: number;
+  /** segIdx -1: segments whose text contains the token's node text; the
+   * resolver takes the worst case across them. */
+  candidates?: number[];
+  kind: "opaque" | "cwdLocal" | "pinned";
+  /** kind "pinned": the directory every expansion lands under (realpath'd). */
+  prefixDir?: string;
+}
+
+/**
+ * A trailing loop reference: `staticPrefix/$var` or `staticPrefix/${var}` —
+ * one reference, everything before it static.
+ */
+function trailingLoopRef(val: string): { prefix: string; name: string } | null {
+  const m = val.match(/^(.+)\/\$(\w+)$/)
+    ?? val.match(/^(.+)\/\$\{(\w+)\}$/);
+  if (!m) return null;
+  return { prefix: m[1], name: m[2] };
+}
+
+/**
+ * An in-list word whose expansion stays under a pinned prefix: non-empty, no
+ * expansion (a $-word could name anything), no `..` segment. Globs and
+ * embedded `/` stay under the prefix (a glob never crosses `/`; an embedded
+ * `/` only goes deeper).
+ */
+function isBoundedInListWord(w: string): boolean {
+  let t = w;
+  const q = w.match(/^(['"])(.*)\1$/);
+  if (q) {
+    if (q[1] === '"' && /[$`]/.test(q[2])) return false; // expansion inside double quotes
+    t = q[2];
+  }
+  if (!t) return false;
+  if (/[`$]/.test(t)) return false;
+  if (/(^|\/)\.\.(\/|$)/.test(t)) return false;
+  return true;
+}
+
+/**
+ * Resolve a static prefix that pins the token to a known root: absolute
+ * (or ~/), no expansion/glob/`..`, and the prefix directory under the cwd or
+ * an allowed read/write root (realpath'd). Returns the resolved directory,
+ * or null when the prefix cannot prove containment.
+ */
+function resolvePinPrefix(prefix: string, cwd: string): string | null {
+  if (!prefix) return null;
+  if (/[\\`*?\[\]$]/.test(prefix)) return null;
+  if (/(^|\/)\.\.(\/|$)/.test(prefix)) return null;
+  const t = expandTilde(prefix);
+  if (!path.isAbsolute(t)) return null;
+  const dir = t.endsWith("/") ? t.slice(0, -1) : t;
+  if (!dir || dir === "/") return null;
+  if (!underKnownRoots(dir, cwd)) return null;
+  return resolvePathReal(dir, os.homedir());
+}
+
+/** Segment indices whose text contains the token's node text (worst-case
+ * bases for a token whose own segment is unidentifiable, e.g. a command
+ * substitution inside a command argument). */
+function containmentCandidates(nodeText: string, segments: BashSegment[]): number[] | undefined {
+  const t = nodeText.trim();
+  if (!t) return undefined;
+  const c: number[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i].text.includes(t)) c.push(i);
+  }
+  return c.length ? c : undefined;
+}
+
+/** Classify an opaque expansion in path position (see OpaqueRef). */
+function opaqueRef(node: TSNode, arg: string, cwd: string, segIdx: number, segments: BashSegment[]): OpaqueRef | null {
   const val = flagValue(arg);
   if (!isOpaqueValue(val)) return null;
+  const cands = segIdx < 0 ? containmentCandidates(node.text, segments) : undefined;
+  const mk = (kind: OpaqueRef["kind"], prefixDir?: string): OpaqueRef => {
+    const r: OpaqueRef = { raw: val, segIdx, kind };
+    if (prefixDir) r.prefixDir = prefixDir;
+    if (cands) r.candidates = cands;
+    return r;
+  };
+  // Leading form: $var or $var/rest, bound by an enclosing loop.
   const ref = loopBoundRef(val);
-  if (ref !== null && isLoopBoundSafe(node, ref.name, cwd)) return null;
-  return path.join(OPAQUE_VAR_DIR, val);
+  if (ref !== null) {
+    const inList = enclosingLoopInList(node, ref.name);
+    if (inList !== null) {
+      // Base-independent: every in-list word is pinned to a known root
+      // (absolute, realpath/glob-verified) — no base needed at all.
+      if (inList.every(w => !isBareName(w) && isAllowedRootToken(w, cwd))) return null;
+      // Base-dependent: bare names and cwd-local finds — the values are
+      // relative to the runtime cwd; the resolver bounds them against the
+      // tracked effective base.
+      if (inList.every(w => isBareName(w) || isCwdLocalWord(w))) {
+        return mk("cwdLocal");
+      }
+      // Mixed (bare + root-pinned) or expanded in-list — the value set spans
+      // bases — opaque (the resolver may still bind a prefixed form below).
+    }
+  }
+  // Trailing form: static prefix + loop-bound reference — pinned.
+  const trail = trailingLoopRef(val);
+  if (trail !== null) {
+    const inList = enclosingLoopInList(node, trail.name);
+    if (inList !== null && inList.every(isBoundedInListWord)) {
+      const prefixDir = resolvePinPrefix(trail.prefix, cwd);
+      if (prefixDir) return mk("pinned", prefixDir);
+    }
+  }
+  return mk("opaque");
 }
 
 /** Check if a token looks like a filesystem path worth resolving. */
@@ -539,8 +663,21 @@ const OPERATOR_TYPES = new Set(["&&", "||", ";", "|", "|&", "&"]);
  * - pipeline (|, |&) → group as one segment with pipe ops
  * - backgrounding (&) → split into separate segments
  * - command/file_redirect → leaf segment
+ *
+ * Side effects (document order, same walk that emits the segments):
+ *  - `assignments` — top-level standalone assignments (`f=x`), with `at` =
+ *    the segment count at the assignment's position (its visibility bound for
+ *    var-resolution). Env-prefix and subshell-local assignments never reach
+ *    the intercept (they are command children / inside a subshell node).
+ *  - `segMap` — node id → segment index, so parseCommand can tell which
+ *    segment an opaque token belongs to (var-resolution resolves it against
+ *    that segment's visible assignments and effective cwd).
  */
-function extractSegmentsFromNode(node: TSNode): BashSegment[] {
+function extractSegmentsFromNode(
+  node: TSNode,
+  assignments: ShellAssignment[],
+  segMap: Map<number, number>,
+): BashSegment[] {
   const segments: BashSegment[] = [];
 
   // Document-order slot: the operator seen so far belongs to the NEXT segment
@@ -627,6 +764,13 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
     }
     if (cmdTexts.length > 0) {
       pushSeg({ text: cmdTexts.join(" | "), ops: [...ops], hasSubshell: segHasSubshell, subshellTexts: extractSubshellInnerTexts(n) });
+      const idx = segments.length - 1;
+      for (let i = 0; i < n.childCount; i++) {
+        const child = n.child(i);
+        if (child && child.type === "command") segMap.set(child.id, idx);
+      }
+      // Compound children (folded redirected_statements) recorded their inner
+      // commands during the walk — the pop+push above keeps their index valid.
     }
   };
 
@@ -677,15 +821,30 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
     }
     if (!hasCompoundChild && cmdTexts.length > 0) {
       pushSeg({ text: cmdTexts.join(" "), ops: [...ops], hasSubshell: segHasSubshell, subshellTexts: extractSubshellInnerTexts(n) });
+      const idx = segments.length - 1;
+      for (let i = 0; i < n.childCount; i++) {
+        const child = n.child(i);
+        if (child && (child.type === "command" || child.type === "file_redirect")) segMap.set(child.id, idx);
+      }
     } else if (hasCompoundChild && redirectTexts.length > 0) {
       if (segments.length > 0) {
         // Propagate redirects to the last segment so hasWriteRedirect can detect them
         segments[segments.length - 1].text += " " + redirectTexts.join(" ");
         for (const op of ops) segments[segments.length - 1].ops.push(op);
+        const idx = segments.length - 1;
+        for (let i = 0; i < n.childCount; i++) {
+          const child = n.child(i);
+          if (child && child.type === "file_redirect") segMap.set(child.id, idx);
+        }
       } else {
         // Compound child walk produced no segments (e.g. empty subshell "() > out").
         // Create a redirect-only segment so write-redirect detection isn't silently lost.
         pushSeg({ text: redirectTexts.join(" "), ops: [...ops], hasSubshell: false, subshellTexts: extractSubshellInnerTexts(n) });
+        const idx = segments.length - 1;
+        for (let i = 0; i < n.childCount; i++) {
+          const child = n.child(i);
+          if (child && child.type === "file_redirect") segMap.set(child.id, idx);
+        }
       }
     }
   };
@@ -699,6 +858,7 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       if (inList) seg.loopCdInList = inList;
     }
     pushSeg(seg);
+    segMap.set(n.id, segments.length - 1);
   };
 
 
@@ -725,6 +885,43 @@ function extractSegmentsFromNode(node: TSNode): BashSegment[] {
       subshellDepth++;
       recurseAll(n);
       subshellDepth--;
+      return;
+    }
+
+    // Standalone top-level assignment: not a segment, but data for the
+    // resolver (f=x; cat $f). Qualifies in statement position: a direct
+    // program/list child, or inside a declaration command (export/readonly/
+    // declare) at statement position — an env prefix (command child) or a
+    // subshell-local assignment must not leak into the parent scope — and it
+    // must not be backgrounded (`f=a &` sets nothing in the parent shell).
+    if (n.type === "variable_assignment" && subshellDepth === 0) {
+      // Statement container (program/list) + the slot node that occupies the
+      // statement slot (the assignment itself, or its declaration_command
+      // wrapper for `export f=x`).
+      const p = n.parent;
+      let stmtParent: TSNode | null = null;
+      let slot: TSNode = n;
+      if (p && (p.type === "program" || p.type === "list")) {
+        stmtParent = p;
+      } else if (p && p.type === "declaration_command") {
+        slot = p;
+        const gp = p.parent;
+        if (gp && (gp.type === "program" || gp.type === "list")) stmtParent = gp;
+      }
+      if (stmtParent) {
+        for (let i = 0; i < stmtParent.childCount; i++) {
+          if (stmtParent.child(i)?.id !== slot.id) continue;
+          if (stmtParent.child(i + 1)?.type !== "&") {
+            const m = n.text.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
+            if (m) assignments.push({ name: m[1], value: m[2], at: segments.length });
+          }
+          break;
+        }
+      }
+      // Descend anyway: the value may embed a command substitution whose
+      // inner commands become segments (D10: out=$(npx …) is gated like a
+      // top-level run form).
+      recurseAll(n);
       return;
     }
 
@@ -909,12 +1106,21 @@ function detectOpsInNode(node: TSNode): string[] {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Single parse that extracts segments, paths, and subshell flags.
+ * Single parse that extracts segments, paths, opaque refs, and assignments.
  */
-export async function parseCommand(command: string, cwd: string): Promise<{ segments: BashSegment[]; paths: string[]; hasParseError: boolean }> {
+export async function parseCommand(
+  command: string,
+  cwd: string,
+): Promise<{
+  segments: BashSegment[];
+  paths: string[];
+  opaque: OpaqueRef[];
+  assignments: ShellAssignment[];
+  hasParseError: boolean;
+}> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], paths: [], hasParseError: false };
+  if (!tree) return { segments: [], paths: [], opaque: [], assignments: [], hasParseError: false };
 
   try {
     // Check for ERROR nodes in the AST (malformed bash)
@@ -930,12 +1136,16 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
     // Cache subshell checks per parse session to avoid redundant subtree walks
     subshellCache = new WeakMap();
 
-    // Extract segments (includes per-segment hasSubshell)
-    const segments = extractSegmentsFromNode(tree.rootNode);
+    // Extract segments (includes per-segment hasSubshell); the walk also
+    // records standalone assignments and the node→segment index map.
+    const assignments: ShellAssignment[] = [];
+    const segMap = new Map<number, number>();
+    const segments = extractSegmentsFromNode(tree.rootNode, assignments, segMap);
 
-    // Extract paths from command nodes
+    // Extract paths and opaque refs from command nodes
     const commandNodes = collectCommandNodes(tree.rootNode);
     const allPaths: string[] = [];
+    const opaque: OpaqueRef[] = [];
 
     for (const cmdNode of commandNodes) {
       const cmdName = getCommandName(cmdNode);
@@ -960,9 +1170,10 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
           }
 
           // Opaque expansion in path position (cat $X, -f=$X, cat ./$Y) →
-          // marker path, so the read/write target is path-approved.
-          const marker = opaqueVarMarker(cmdNode, arg, cwd);
-          if (marker) allPaths.push(marker);
+          // classified OpaqueRef, resolved by the analysis layer against the
+          // command's assignments and the tracked effective cwd.
+          const ref = opaqueRef(cmdNode, arg, cwd, segMap.get(cmdNode.id) ?? -1, segments);
+          if (ref) opaque.push(ref);
 
           if (isPathCandidate(arg)) {
             // For flag values (--file=/path), resolve the value, not the flag itself.
@@ -995,8 +1206,8 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
           }
           // `-` means stdout; skip it and bare flags (e.g. `sort -o -k 1`).
           if (target && target !== "-" && !target.startsWith("-")) {
-            const marker = opaqueVarMarker(cmdNode, target, cwd);
-            if (marker) allPaths.push(marker);
+            const ref = opaqueRef(cmdNode, target, cwd, segMap.get(cmdNode.id) ?? -1, segments);
+            if (ref) opaque.push(ref);
             else allPaths.push(resolvePathReal(expandHomeToken(expandTilde(target)), cwd));
           }
         }
@@ -1012,9 +1223,9 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
           if (isPathCandidate(p)) {
             redirectPaths.push(resolvePathReal(expandHomeToken(expandTilde(p)), cwd));
           } else {
-            // `> $X` — write destination only knowable at runtime → marker.
-            const marker = opaqueVarMarker(node, p, cwd);
-            if (marker) redirectPaths.push(marker);
+            // `> $X` — write destination only knowable at runtime → opaque ref.
+            const ref = opaqueRef(node, p, cwd, segMap.get(node.id) ?? -1, segments);
+            if (ref) opaque.push(ref);
           }
         }
       }
@@ -1035,7 +1246,7 @@ export async function parseCommand(command: string, cwd: string): Promise<{ segm
       return true;
     });
 
-    return { segments, paths, hasParseError };
+    return { segments, paths, opaque, assignments, hasParseError };
   } finally {
     subshellCache = null;
     tree.delete();

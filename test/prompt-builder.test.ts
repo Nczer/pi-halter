@@ -694,3 +694,37 @@ describe("summarizePrompt", () => {
     expect(summarizePrompt(d)).toBe("cmd ./node_modules/.bin/unknown-tool (unlisted)");
   });
 });
+
+describe("buildPrompt: unresolved references", () => {
+  it("lists the tokens that could not be statically bound", () => {
+    const d = bashDecision({
+      outsideDirs: ["/etc"],
+      needsPathApproval: true,
+      relativeToolIds: [],
+      unresolved: [{ token: "$f", reason: "var" }, { token: "$x/sub", reason: "base" }],
+    });
+    const b = buildPrompt(d);
+    expect(b.body).toContain("Unresolved references");
+    expect(b.body).toContain("  \u2022 $f\n");
+    expect(b.body).toContain("$x/sub \u2014 working directory not statically known");
+  });
+
+  it("omits the section when everything resolved", () => {
+    const d = bashDecision({ outsideDirs: ["/etc"], needsPathApproval: true, relativeToolIds: [] });
+    expect(buildPrompt(d).body).not.toContain("Unresolved references");
+  });
+
+  it("never offers a sentinel dir in the Always grant label", () => {
+    const d = bashDecision({
+      outsideDirs: ["/etc", "<unresolved-cwd>"],
+      needsPathApproval: true,
+      relativeToolIds: [],
+    });
+    const b = buildPrompt(d);
+    // The marker stays visible in the body (a base the cd chain could not
+    // resolve), but the grant covers only the real dir.
+    expect(b.body).toContain("<unresolved-cwd>");
+    expect(b.alwaysLabel).toBe("Read /etc/*");
+    expect(b.alwaysLabel).not.toContain("<");
+  });
+});

@@ -93,6 +93,12 @@ export interface BashPromptData {
   needsCommandApproval: boolean;
   needsPathApproval: boolean;
   /**
+   * Opaque references the analysis could not statically bind (the prompt
+   * lists them; they force path approval via their markers but are never
+   * part of an Always grant). Absent on hand-constructed PromptData.
+   */
+  unresolved?: Array<{ token: string; reason: "var" | "base" }>;
+  /**
    * The single analysis this decision was made from. Downstream consumers
    * (the /dspa hard gate, the judge packet) use it instead of re-parsing,
    * so they see exactly the analysis the decision was based on — one

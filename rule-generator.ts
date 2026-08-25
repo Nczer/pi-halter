@@ -11,7 +11,10 @@ import type { PromptData, BashPromptData, FilePromptData, McpPromptData } from "
  * disk). Root-touching prompts still prompt; they just can't be Always-ed.
  */
 function withoutRoot(dirs: string[]): string[] {
-  return dirs.filter((d) => d !== "/");
+  // Marker dirs (<unresolved-…>) are never granted: a grant for a sentinel
+  // can never match, and a token's static prefix is escapable by a value
+  // containing `..` (the prompt already shows it for context).
+  return dirs.filter((d) => d !== "/" && !d.startsWith("<"));
 }
 
 /**
