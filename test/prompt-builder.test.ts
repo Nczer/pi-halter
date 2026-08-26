@@ -695,6 +695,17 @@ describe("summarizePrompt", () => {
     });
     expect(summarizePrompt(d)).toBe("cmd ./node_modules/.bin/unknown-tool (unlisted)");
   });
+
+  it("file prompts name outsideDir as the location, not the thing the file is outside of", () => {
+    const d = fileDecision({
+      action: "Write",
+      isWriteOp: true,
+      filePath: "x.ts",
+      resolved: "/etc/config/x.ts",
+      outsideDir: "/etc/config",
+    });
+    expect(summarizePrompt(d)).toBe("file write outside cwd (/etc/config)");
+  });
 });
 
 describe("buildPrompt: unresolved references", () => {

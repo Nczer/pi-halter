@@ -1061,6 +1061,50 @@ function sedScriptArgIndices(args: string[]): Set<number> {
 }
 
 /**
+ * Indices of `grep` PATTERN arguments: the first non-flag argument (grep's
+ * grammar is `grep [flags] PATTERN [files…]`) and the values consumed by
+ * -e / --regexp / --regex. Unlike sed's script position (which can also be
+ * a script FILE), grep's PATTERN position is never a file — the 2026-08-26
+ * log case `grep -vE "//|\*" …` resolved the pattern as an absolute path
+ * (a leading `//` is a network-prefix absolute) into a phantom root child
+ * ("outside /"). -f / --file switches the grammar: its value IS a file
+ * (pattern file — stays path-checked), and every later non-flag argument
+ * is a plain file.
+ */
+function grepPatternArgIndices(args: string[]): Set<number> {
+  const idxs = new Set<number>();
+  let patternSeen = false;
+  let filePatterns = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-e" || a === "--regexp" || a === "--regex") {
+      if (i + 1 < args.length) idxs.add(i + 1);
+      continue;
+    }
+    if (a.startsWith("--regexp=") || a.startsWith("--regex=")) continue;
+    if (a === "-f" || a === "--file") {
+      filePatterns = true;
+      if (i + 1 < args.length) i++; // the pattern FILE — keep path-checked
+      continue;
+    }
+    if (a === "--file=" || (a.startsWith("-f") && a.length > 2 && !a.startsWith("--"))) {
+      filePatterns = true; // -fFILE inline, or --file= (stdin)
+      continue;
+    }
+    if (a.startsWith("-") && a !== "-") {
+      // Flag cluster (-vE, -ef, …): an f whose value is the next argument
+      // (-ef FILE) makes it a pattern file; -fe consumes the rest of the
+      // cluster as that value. Either way: later args are files, not patterns.
+      if (a.endsWith("f")) { filePatterns = true; if (i + 1 < args.length) i++; }
+      else if (a.includes("f")) filePatterns = true;
+      continue;
+    }
+    if (!patternSeen && !filePatterns) { patternSeen = true; idxs.add(i); }
+  }
+  return idxs;
+}
+
+/**
  * Check if an argument to `awk` looks like an inline script rather than a file path.
  *
  * Awk scripts are typically the first non-flag argument. When they start with `/`,
@@ -1156,16 +1200,23 @@ export async function parseCommand(
         // — the `sed -n "$(grep … | cut …),+12p" f` line-range idiom must not
         // produce <unresolved-var>. File-position args keep the opaque marker.
         const sedScripts = cmdName === "sed" ? sedScriptArgIndices(args) : null;
+        // Grep: the PATTERN position is data, never a file (see
+        // grepPatternArgIndices) — skipping it also keeps pattern-position
+        // vars ($re in `grep -vE "$re" f`) out of the opaque ref set, where
+        // they would floor-stop the command.
+        const grepPatterns = cmdName === "grep" ? grepPatternArgIndices(args) : null;
         for (let ai = 0; ai < args.length; ai++) {
           const arg = args[ai];
           // Skip inline script/pattern expressions that look like paths but aren't:
           //   sed: script position, /pattern/p, /describe(...)/,/^});/p, s/foo/bar/
           //   awk: /pattern/ {print}, /foo/ {action}
+          //   grep: PATTERN position, -e PATTERN
           if ((cmdName === "sed" && (
               (sedScripts !== null && sedScripts.has(ai) && !/^(?:\/|\.\/|~\/)/.test(arg)) ||
               isSedPatternArg(arg)
             )) ||
-              (cmdName === "awk" && isAwkScriptArg(arg))) {
+              (cmdName === "awk" && isAwkScriptArg(arg)) ||
+              (cmdName === "grep" && grepPatterns !== null && grepPatterns.has(ai))) {
             continue;
           }
 

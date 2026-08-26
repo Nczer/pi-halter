@@ -227,7 +227,11 @@ export async function checkDspaGate(
     // not apply; the two-stage judge decides on the content. Ungranted
     // outside-cwd writes stay on the floor (Q1). Reads are never judged.
     const grantedDirWrite = pd.isWriteOp && store.isInsideAllowedDir(pd.resolved, "write");
-    if (!grantedDirWrite && pd.outsideDir) return { ok: false, reason: `outside base (${pd.outsideDir})` };
+    // Name the violated base (the session cwd), not outsideDir — the
+    // target's own parent (the grant-offer unit): `outside base (/a/b/config)`
+    // read as though the file were outside its parent dir. The grant dir
+    // stays visible in the same log line (promptDir/target).
+    if (!grantedDirWrite && pd.outsideDir) return { ok: false, reason: `outside base (session ${pd.cwd})` };
     if (pd.warnedRule) return { ok: false, reason: `credential pattern (${pd.warnedRule})` };
     return { ok: true };
   }
@@ -301,7 +305,15 @@ export async function checkDspaGate(
   }
   const net = networkHit(pd.command, analysis.segments);
   if (net) return { ok: false, reason: `network egress (${net})` };
-  const outside = (analysis.prompt.outsidePaths ?? []).filter((p) => !outsideExempt.has(p));
+  // Re-filter the FULL path set under the floor's bar, not the manual bar:
+  // prompt.outsidePaths drops config-allowed paths (/tmp, ~/.pi, trusted
+  // skill scripts) and read-only session grants — but the floor is session-
+  // base only (D7), so a config-allowed concrete write (`cat > /tmp/x`) must
+  // stop here exactly like its opaque-resolved counterpart. Sentinels pass
+  // through unchanged and keep the D7 resolution below.
+  const outside = analysis.paths
+    .filter((p) => !isInsideBase(p))
+    .filter((p) => !outsideExempt.has(p));
   // D7: resolve the sentinels (see d7ResolveSentinel). Concrete outside
   // locations stop (naming the dir for a one-time grant); unprovable
   // locations stop outright (Q1 — never judgeable).
@@ -317,10 +329,12 @@ export async function checkDspaGate(
     else if (r.kind === "stop") return { ok: false, reason: r.reason };
     // inside → drop
   }
-  // The analysis layer resolved opaque refs under the MANUAL bar (cwd +
-  // config-allowed + granted). The dspa floor is stricter (session base
-  // only): re-resolve the raw opaque data under the floor's bar, so a value
-  // the manual bar would allow (e.g. /tmp via config) still stops here (D7).
+  // The analysis layer resolved paths and opaque refs under the MANUAL bar
+  // (cwd + config-allowed + granted). The dspa floor is stricter (session
+  // base only): the concrete set is re-filtered above, and the raw opaque
+  // data is re-resolved here, so a value the manual bar would allow (e.g.
+  // /tmp via config) still stops here (D7) — concrete paths and opaque
+  // refs alike.
   const floor = resolveOpaqueRefs(
     analysis.opaque,
     analysis.parsedSegments,
@@ -499,5 +513,10 @@ function checkRmTargets(
     }
   }
 
-  return { reason: null, exempt: new Set([...rmTargets].filter((t) => written.has(t))) };
+  // Every surviving rm target is judgeable per the carve-out (inside base,
+  // self-written, or non-recursive /tmp scratch) — exempt them ALL from the
+  // floor's outside-base re-filter. The old self-written-only set sufficed
+  // because the manual bar hid /tmp-scratch targets in config-allowed space;
+  // the floor re-filter sees them, and D8 requires they stay judgeable.
+  return { reason: null, exempt: new Set(rmTargets) };
 }
