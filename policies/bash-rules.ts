@@ -126,13 +126,13 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   const canAutoAllow = analysis.safety.canBeAutoAllowed && outsidePaths.length === 0 && !analysis.hasCredentialPath;
 
   if (analysis.safety.isSimple && canAutoAllow) {
-    return { kind: "auto-allow" };
+    return { kind: "auto-allow", analysis }; // D11: carried for the dspa content review
   }
 
   // All segments are safe subcommands (stricter than allowed commands — excludes wrappers like timeout)
   const segIsSafeSubcommand = analysis.segments.map(seg => isSafeSubcommand(seg));
   if (segIsSafeSubcommand.every(Boolean) && canAutoAllow) {
-    return { kind: "auto-allow" };
+    return { kind: "auto-allow", analysis }; // D11: carried for the dspa content review
   }
 
   const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
@@ -196,7 +196,7 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   };
 
   if (analysis.signatures.every((sig, i) => isSigApproved(sig, i)) && canAutoAllow) {
-    return { kind: "auto-allow" };
+    return { kind: "auto-allow", analysis }; // D11: carried for the dspa content review
   }
 
   return null;

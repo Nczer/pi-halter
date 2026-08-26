@@ -52,9 +52,6 @@ const SCRIPT_INTERPRETERS = new Set([
   "deno", "bun",
   "bash", "sh", "zsh",
 ]);
-/** Hard cap on script bytes read; the packet builder applies the display caps. */
-const SCRIPT_READ_MAX = 64 * 1024;
-
 /**
  * Find the local script a command executes (if any) and read its content.
  * Null for interpreter forms without a resolvable file (`bash -c`,
@@ -97,7 +94,9 @@ function readScriptFile(resolved: string): JudgmentScript | null {
   try {
     const stat = fs.statSync(resolved);
     if (!stat.isFile()) return null;
-    const content = fs.readFileSync(resolved, "utf-8").slice(0, SCRIPT_READ_MAX);
+    // Full read (D11): the payload is write content — trimmed payloads made
+    // the judge defer on safe long scripts.
+    const content = fs.readFileSync(resolved, "utf-8");
     return { path: resolved, content };
   } catch {
     return null;

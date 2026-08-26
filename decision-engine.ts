@@ -45,6 +45,9 @@ interface AutoAllowDecision {
   kind: "auto-allow";
   /** Set when /dspa auto-allowed (audit trail: which model approved). */
   reason?: string;
+  /** D11: the analysis a bash auto-allow was made from — the dspa content
+   *  review (granted script executions) reuses it instead of re-parsing. */
+  analysis?: import("./analysis/command-analysis").CommandAnalysis;
 }
 
 /** Command must be blocked — no prompt shown. */
@@ -147,12 +150,13 @@ export type PromptData = BashPromptData | FilePromptData | McpPromptData;
  */
 export interface DecideOptions {
   /**
-   * D3 (docs/dspa-redesign.md, dspa mode only): a file write into a
-   * session-granted dir returns the prompt decision (judgeable — the dir is
-   * trusted, the content is judged) instead of the grant fast-path
-   * auto-allow. Off (default): manual/dspat behavior — grant = auto-allow.
+   * D3/D11 (docs/dspa-redesign.md, dspa mode only): a file WRITE that manual
+   * mode would auto-allow (session-granted dir or file, config-allowed,
+   * project-pi) returns the prompt decision instead — the location is
+   * trusted, the content is judged in full. Off (default): manual/dspat
+   * behavior — auto-allow.
    */
-  judgeDirGrants?: boolean;
+  judgeWriteAutoAllows?: boolean;
 }
 
 export async function decide(request: PermissionRequest, store: Store, opts?: DecideOptions): Promise<Decision> {

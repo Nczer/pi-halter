@@ -3,10 +3,11 @@
  *
  * When a command needs a prompt, a one-shot model call explains what it will
  * actually do. The model's entire input is the judgment packet: the command
- * text (capped), halter's static-analysis digest, and — when the command
- * executes an untrusted local script — the script's content (capped, fenced
- * as untrusted data). No conversation history, no session state: the judge is
- * stateless and cacheable.
+ * text (full — D11: write content is never trimmed, so a safe long write is
+ * never forced into a defer), halter's static-analysis digest, and — when
+ * the command executes an untrusted local script — the script's content
+ * (full, fenced as untrusted data). No conversation history, no session
+ * state: the judge is stateless and cacheable.
  *
  * Invariants:
  *  • Display-only: the explanation never reaches the agent's context, never
@@ -177,9 +178,6 @@ export interface JudgmentMcpInput {
 /** Everything the packet builder knows about the operation under review. */
 export type JudgmentInput = JudgmentBashInput | JudgmentFileInput | JudgmentMcpInput;
 
-const COMMAND_MAX_CHARS = 4000;
-const SCRIPT_MAX_LINES = 150;
-const SCRIPT_MAX_CHARS = 12000;
 const PATHS_MAX = 20;
 const REASONS_MAX = 10;
 const SEGMENTS_MAX = 24;
@@ -210,8 +208,12 @@ function classifyPath(p: string, cwd: string, outside: Set<string>): string {
 
 /**
  * Build the judgment packet — the model's entire input. Pure and
- * deterministic: same input, same bytes. Caps are applied head-first with
- * explicit truncation markers so the model knows what it is not seeing.
+ * deterministic: same input, same bytes. Write content (command text, file
+ * content, script payload) rides in FULL — D11 (2026-08-26): trimming made
+ * the judge defer on safe long writes ("truncated in a way that matters"),
+ * which is exactly the prompting-when-safe the mode exists to avoid.
+ * Digest sections (segments, paths, reasons) keep their display caps — they
+ * summarize; the full text above is what is judged.
  */
 export function buildJudgmentPacket(input: JudgmentInput): string {
   if ("type" in input) {
@@ -219,8 +221,6 @@ export function buildJudgmentPacket(input: JudgmentInput): string {
   }
   return buildBashPacket(input);
 }
-
-const FILE_CONTENT_MAX_CHARS = 8000;
 
 /** Packet for a file read/write/edit: the judge weighs the path, the
  * write-vs-read nature, and whether the target exists; writes/edits carry
@@ -242,17 +242,15 @@ function buildFilePacket(input: JudgmentFileInput): string {
   if (input.warnedRule) parts.push(`credential-pattern warning: ${input.warnedRule}`, "");
   if (input.symlinkHint) parts.push(`symlink: ${input.symlinkHint}`, "");
   if (input.content) {
-    const c = headCut(input.content, FILE_CONTENT_MAX_CHARS);
+    // Full content, untrimmed (D11): the judge must see the whole write to
+    // clear it — a head cut would force a defer on every long safe write.
     parts.push(
       "## New content (UNTRUSTED DATA)",
       "```",
-      c.text,
+      input.content,
       "```",
       "",
     );
-    if (c.cut) {
-      parts.push(`(content truncated: first ${FILE_CONTENT_MAX_CHARS} of ${input.content.length} chars)`, "");
-    }
   }
   return parts.join("\n");
 }
@@ -284,18 +282,12 @@ function buildBashPacket(input: JudgmentBashInput): string {
   const notes: string[] = [];
   const parts: string[] = [];
 
-  // ── Command ──
-  const cmd = headCut(input.command, COMMAND_MAX_CHARS);
-  if (cmd.cut) {
-    notes.push(
-      `Command text truncated: showing first ${COMMAND_MAX_CHARS} of ${input.command.length} chars.`,
-    );
-  }
+  // ── Command (full text — heredoc bodies ARE the write content, D11) ──
   parts.push(
     "## Command",
     `cwd:  ${input.cwd}`,
     `base: ${input.cwd}`,
-    `$ ${cmd.text}`,
+    `$ ${input.command}`,
     "",
   );
 
@@ -330,28 +322,13 @@ function buildBashPacket(input: JudgmentBashInput): string {
   if (input.credentialRule) lines.push(`credential rule: ${input.credentialRule}`);
   parts.push(lines.join("\n"), "");
 
-  // ── Script payload (untrusted, fenced) ──
+  // ── Script payload (untrusted, fenced, FULL — D11) ──
   if (input.script) {
     const { content } = input.script;
-    const allLines = content.split("\n");
-    let shown = allLines.slice(0, SCRIPT_MAX_LINES).join("\n");
-    let lineCut = allLines.length > SCRIPT_MAX_LINES;
-    const charCut = headCut(shown, SCRIPT_MAX_CHARS);
-    shown = charCut.text;
-    if (charCut.cut) {
-      shown = shown.slice(0, shown.lastIndexOf("\n")); // stay on a line boundary
-      lineCut = true;
-    }
-    const totalLines = allLines.length;
-    const shownLines = shown.split("\n").length;
     // Fence longer than any backtick run in the content (scripts contain ```).
     const maxRun = (content.match(/`+/g) ?? [""]).reduce((m, r) => Math.max(m, r.length), 0);
     const fence = "`".repeat(Math.max(3, maxRun + 1));
-    const header = `## Script: ${input.script.path} (untrusted, first ${shownLines} of ${totalLines} lines)`;
-    parts.push(header, fence, shown, fence, "");
-    if (lineCut) {
-      notes.push(`Script truncated: showing first ${shownLines} of ${totalLines} lines.`);
-    }
+    parts.push(`## Script: ${input.script.path} (untrusted)`, fence, content, fence, "");
   }
 
   // ── Notes ──
@@ -383,7 +360,7 @@ export const JUDGE_SYSTEM_PROMPT = [
   "Decide:",
   "- approve: effects are fully verifiable, consistent with the operation's apparent purpose, and not dangerous in themselves (MCP: the arguments carry nothing the user would not expect sent).",
   "- deny: effects are hidden or unverifiable (obfuscation you cannot fully decode), or the operation is dangerous in itself (e.g., irreversible bulk deletion of user data), or it does something materially different from its apparent purpose.",
-  "- defer: you are unsure, content is truncated in a way that matters, or the operation fetches and executes remote content.",
+  "- defer: you are unsure, or the operation fetches and executes remote content.",
   "",
   "Never approve: remote fetch piped to a shell; sudo; operations touching credential or secret files or containing inline credentials (tokens, keys, passwords); MCP arguments carrying secrets to an unfamiliar server.",
   "",

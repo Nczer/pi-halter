@@ -24,32 +24,34 @@ export function decideFile(req: FileRequest, store: Store, opts?: DecideOptions)
   // Warned paths — may contain credentials, prompt with warning
   const warnResult = isPathWarnedResolved(req.filePath, resolved);
 
-  // Auto-allow checks
-  if (isProjectPiPathResolved(resolved, req.cwd)) return { kind: "auto-allow" };
-  if (req.toolName === "read" && store.hasAllowedReadPath(resolved)) return { kind: "auto-allow" };
-  if (req.toolName === "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" }; // write implies read
-  if (req.toolName !== "read" && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" };
+  // Auto-allow checks. D3/D11 (docs/dspa-redesign.md): with
+  // judgeWriteAutoAllows (dspa mode only) a WRITE auto-allow falls through
+  // to the prompt decision instead — the location is trusted, the content is
+  // judged in full (the gate's file branch lets every manual-bar write
+  // through). Without the flag (manual/dspat), auto-allow, as before. Reads
+  // are never judged — their fast paths are unaffected.
+  const isWriteOp = req.toolName !== "read";
+  const judged = isWriteOp && !!opts?.judgeWriteAutoAllows;
+  if (!judged && isProjectPiPathResolved(resolved, req.cwd)) return { kind: "auto-allow" };
+  if (!isWriteOp && store.hasAllowedReadPath(resolved)) return { kind: "auto-allow" };
+  if (!isWriteOp && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" }; // write implies read
+  if (!judged && store.hasAllowedWritePath(resolved)) return { kind: "auto-allow" };
 
   // Session auto-allowed dirs (write dirs imply read) — checks membership directly, no Set copy
-  if (req.toolName === "read") {
+  if (!isWriteOp) {
     if (store.isInsideAllowedDir(resolved, "read")) return { kind: "auto-allow" };
-  } else if (store.isInsideAllowedDir(resolved, "write")) {
-    // D3 (docs/dspa-redesign.md): with judgeDirGrants (dspa mode), a write
-    // into a granted dir falls through to the prompt decision instead — the
-    // dir is trusted, the content is judged. Without the flag (manual/dspat),
-    // grant = auto-allow, as before.
-    if (!opts?.judgeDirGrants) return { kind: "auto-allow" };
+  } else if (!judged && store.isInsideAllowedDir(resolved, "write")) {
+    return { kind: "auto-allow" };
   }
 
   // Static config paths
-  if (req.toolName === "read" && isAllowedReadPath(resolved)) return { kind: "auto-allow" };
-  if (req.toolName !== "read" && isAllowedWritePath(resolved)) return { kind: "auto-allow" };
+  if (!isWriteOp && isAllowedReadPath(resolved)) return { kind: "auto-allow" };
+  if (!judged && isAllowedWritePath(resolved)) return { kind: "auto-allow" };
 
   // Inside cwd (read only, unless warned)
   const insideCwd = isInsideCwd(resolved, req.cwd);
-  if (req.toolName === "read" && insideCwd && !warnResult.warned) return { kind: "auto-allow" };
+  if (!isWriteOp && insideCwd && !warnResult.warned) return { kind: "auto-allow" };
   const action = req.toolName.charAt(0).toUpperCase() + req.toolName.slice(1);
-  const isWriteOp = req.toolName !== "read";
 
   // Pre-compute values reused multiple times
   const resolvedDir = path.dirname(resolved);

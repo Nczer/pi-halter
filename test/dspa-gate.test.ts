@@ -127,13 +127,15 @@ describe("file", () => {
 });
 
 describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
-  it("var with a default chain resolves to a concrete outside path → stop (2026-08-24 socket probe)", async () => {
+  it("var with a default chain resolves to config-allowed /tmp → judgeable (D11: the floor's bar is the manual bar)", async () => {
+    // 2026-08-24 socket probe: resolves to /tmp/sockets — config-allowed,
+    // so inside the manual bar → judgeable (was a floor stop under the
+    // session-base bar the D11 re-alignment reverts).
     const r = await checkDspaGate(
       bashPd('SOCKET_DIR=${PI_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/sockets}; mkdir -p "$SOCKET_DIR"; ls -la "$SOCKET_DIR/"'),
       store,
     );
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain("/tmp/sockets");
+    expect(r).toEqual({ ok: true });
   });
 
   it("var with a granted dir resolves inside → judgeable", async () => {
@@ -155,19 +157,14 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
   });
 
   it("cd into an outside dir inside a || chain resolves to a concrete stop (2026-08-24 read-only flow)", async () => {
-    // The parser tracks cd targets by stat — use a real temp dir so the
+    // The parser tracks cd targets by stat — use a real existing dir so the
     // `||` side runs under a nulled base and emits <unresolved-cwd> paths.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halter-d7-"));
-    try {
-      const r = await checkDspaGate(
-        bashPd(`cd ${dir} && cat f || ls x`),
-        store,
-      );
-      expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.reason).toContain(dir);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    // $HOME (not a temp dir: /tmp is inside the manual bar since D11, and
+    // the cd target must sit OUTSIDE it).
+    const dir = os.homedir();
+    const r = await checkDspaGate(bashPd(`cd ${dir} && cat f || ls x`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain(dir);
   });
 
   it("cd into an in-base dir inside a || chain resolves inside → judgeable", async () => {
@@ -235,9 +232,9 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
     const a: any = await analyzeCommand("ls", BASE, {
       isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
     });
-    // The floor reads the FULL path set (a.paths), not prompt.outsidePaths
-    // (the manual bar) — hand-craft it the way the parser would.
-    a.paths = ["<unresolved-cwd>/f.txt", "<unresolved-cwd>/g.txt"];
+    // Hand-craft the manual-bar outside set the way the parser would (the
+    // floor reads prompt.outsidePaths — D11 reverted the full-paths bar).
+    a.prompt.outsidePaths = ["<unresolved-cwd>/f.txt", "<unresolved-cwd>/g.txt"];
     const r = await checkDspaGate(bashPd("ls", { analysis: a }), store);
     expect(r).toEqual({ ok: true });
   });
@@ -246,10 +243,11 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
     const a: any = await analyzeCommand("ls", BASE, {
       isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
     });
-    a.paths = ["/etc/shadow", "<unresolved-cwd>/f.txt"];
+    a.prompt.outsidePaths = ["/etc/shadow", "<unresolved-cwd>/f.txt"];
     const r = await checkDspaGate(bashPd("ls", { analysis: a }), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("/etc/shadow");
+    if (!r.ok) expect(r.advisory).toBe(true);
   });
 
   it("rm with an opaque target stays on the floor", async () => {
@@ -259,35 +257,40 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
   });
 });
 
-describe("floor bar for concrete paths (D7 consistency — 2026-08-25 log)", () => {
-  it("config-allowed concrete write stops at the floor (log: cd … && cat > /tmp/compare.py)", async () => {
-    // /tmp is config-allowed (allowedReadPaths/WritePaths): the manual bar
-    // drops it from prompt.outsidePaths, and the old floor trusted that bar
-    // for concrete paths — the judge auto-allowed it (3 instances in the
-    // 2026-08-25 log). The floor is session-base only: it must stop here.
+describe("floor bar for concrete paths (D11 — the bar is the manual bar)", () => {
+  it("config-allowed concrete write is judgeable (log: cd … && cat > /tmp/compare.py — the judge's 2026-08-25 auto-alls were correct)", async () => {
+    // /tmp is config-allowed (allowedReadPaths/WritePaths) → inside the
+    // manual bar → judgeable: the heredoc body rides in the packet and the
+    // judge decides (3 instances in the 2026-08-25 log). The 5ef1f0f
+    // session-base re-filter (which stopped this) is reverted by D11.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halter-floor-"));
     try {
       const r = await checkDspaGate(
         bashPd(`cd ${dir} && cat > /tmp/compare.py <<'EOF'\nprint(1)\nEOF`),
         store,
       );
-      expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.reason).toContain("/tmp/compare.py");
+      expect(r).toEqual({ ok: true });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("config-allowed concrete read stops too (session base, not the manual bar)", async () => {
+  it("config-allowed concrete read is judgeable too (manual bar, not session base)", async () => {
     const r = await checkDspaGate(bashPd("cat /tmp/compare.py"), store);
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain("/tmp/compare.py");
+    expect(r).toEqual({ ok: true });
   });
 
-  it("a session write grant to the dir lifts the stop (D3-style escape hatch)", async () => {
-    store.addAllowed({ writeDirs: ["/tmp"] });
+  it("a truly outside concrete write stops, naming the dir (Q1: scope is the user's call)", async () => {
+    const r = await checkDspaGate(bashPd("cat > /data/out.log <<'EOF'\nx\nEOF"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("/data/out.log");
+    if (!r.ok) expect(r.advisory).toBe(true);
+  });
+
+  it("a session write grant keeps the path judgeable (D3-style escape hatch)", async () => {
+    store.addAllowed({ writeDirs: ["/data"] });
     const r = await checkDspaGate(
-      bashPd("cat > /tmp/compare.py <<'EOF'\nprint(1)\nEOF"),
+      bashPd("cat > /data/out.log <<'EOF'\nx\nEOF"),
       store,
     );
     expect(r).toEqual({ ok: true });
@@ -615,13 +618,12 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
 
   it("blocks outside-base targets that were not self-written", async () => {
     for (const cmd of [
-      "rm -rf /tmp",
       "rm -f /etc/hosts",
       "rm -rf /home/other/data",
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
-      if (!r.ok) expect(r.reason).toContain("outside session base");
+      if (!r.ok) expect(r.reason).toContain("outside base");
     }
   });
 
@@ -636,16 +638,24 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
     }
   });
 
-  it("keeps recursive, bare-/tmp, and computed /tmp rm on the floor", async () => {
+  it("keeps computed and glob /tmp rm on the floor (non-explicit targets)", async () => {
     for (const cmd of [
-      "rm -rf /tmp/ocrtest-work",
-      "rm -rf /tmp",
-      "rm /tmp",
       "rm -f /tmp/$x",
       "rm -f /tmp/*",
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
+    }
+  });
+
+  it("concrete recursive/bare /tmp rm is judgeable (D11 — /tmp is in the manual bar, like in-cwd rm; the judge gates mass deletion)", async () => {
+    for (const cmd of [
+      "rm -rf /tmp/ocrtest-work",
+      "rm -rf /tmp",
+      "rm /tmp",
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(true);
     }
   });
 

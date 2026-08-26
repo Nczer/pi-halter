@@ -115,7 +115,7 @@ describe("File: Write outside cwd", () => {
 	});
 });
 
-describe("File: D3 judgeDirGrants (dspa)", () => {
+describe("File: D3/D11 judgeWriteAutoAllows (dspa)", () => {
 	const granted = path.join(home, "granted-dir");
 
 	it("write into a granted dir: auto-allow by default (manual/dspat)", async () => {
@@ -126,11 +126,11 @@ describe("File: D3 judgeDirGrants (dspa)", () => {
 		expect(d.kind).toBe("auto-allow");
 	});
 
-	it("write into a granted dir with judgeDirGrants: judgeable prompt, content carried", async () => {
+	it("write into a granted dir with judgeWriteAutoAllows: judgeable prompt, content carried", async () => {
 		const store = createStore();
 		store.addAllowed({ writeDirs: [realPath(granted)] });
 		const req: FileRequest = { type: "file", toolName: "write", filePath: path.join(granted, "out.txt"), cwd, content: "hello" };
-		const d = await decide(req, store, { judgeDirGrants: true });
+		const d = await decide(req, store, { judgeWriteAutoAllows: true });
 		expect(d.kind).toBe("prompt");
 		if (d.kind === "prompt") {
 			expect(d.promptData.type).toBe("file");
@@ -141,18 +141,55 @@ describe("File: D3 judgeDirGrants (dspa)", () => {
 		}
 	});
 
-	it("read into a granted dir with judgeDirGrants: still auto-allow", async () => {
+	it("read into a granted dir with judgeWriteAutoAllows: still auto-allow (reads are never judged)", async () => {
 		const store = createStore();
 		store.addAllowed({ writeDirs: [realPath(granted)] });
 		const req: FileRequest = { type: "file", toolName: "read", filePath: path.join(granted, "out.txt"), cwd };
-		const d = await decide(req, store, { judgeDirGrants: true });
+		const d = await decide(req, store, { judgeWriteAutoAllows: true });
 		expect(d.kind).toBe("auto-allow");
 	});
 
-	it("static /tmp write with judgeDirGrants: still auto-allow (static allow, not a dir grant)", async () => {
+	// D11: the extension — every manual write auto-allow is judged, not just
+	// session-granted dirs. Config-allowed (/tmp), file-level grants, and
+	// project-pi locations all convert; content rides on the prompt.
+	it("static /tmp write with judgeWriteAutoAllows: judgeable prompt (D11 — config-allowed writes are judged)", async () => {
+		const store = createStore();
+		const req: FileRequest = { type: "file", toolName: "write", filePath: "/tmp/d3-test-out.txt", cwd, content: "scratch" };
+		const d = await decide(req, store, { judgeWriteAutoAllows: true });
+		expect(d.kind).toBe("prompt");
+		if (d.kind === "prompt") {
+			const pd = d.promptData as FilePromptData;
+			expect(pd.content).toBe("scratch");
+		}
+	});
+
+	it("static /tmp write WITHOUT the flag: auto-allow (manual/dspat unchanged)", async () => {
 		const store = createStore();
 		const req: FileRequest = { type: "file", toolName: "write", filePath: "/tmp/d3-test-out.txt", cwd };
-		const d = await decide(req, store, { judgeDirGrants: true });
+		const d = await decide(req, store);
+		expect(d.kind).toBe("auto-allow");
+	});
+
+	it("file-level granted write with judgeWriteAutoAllows: judgeable prompt (D11)", async () => {
+		const store = createStore();
+		const target = path.join(home, "granted-file.txt");
+		store.addAllowed({ writePaths: [realPath(target)] });
+		const req: FileRequest = { type: "file", toolName: "write", filePath: target, cwd, content: "x" };
+		const d = await decide(req, store, { judgeWriteAutoAllows: true });
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("project-pi write with judgeWriteAutoAllows: judgeable prompt (D11)", async () => {
+		const store = createStore();
+		const req: FileRequest = { type: "file", toolName: "write", filePath: ".pi/session-note.txt", cwd, content: "y" };
+		const d = await decide(req, store, { judgeWriteAutoAllows: true });
+		expect(d.kind).toBe("prompt");
+	});
+
+	it("project-pi write WITHOUT the flag: auto-allow (manual/dspat unchanged)", async () => {
+		const store = createStore();
+		const req: FileRequest = { type: "file", toolName: "write", filePath: ".pi/session-note.txt", cwd };
+		const d = await decide(req, store);
 		expect(d.kind).toBe("auto-allow");
 	});
 });
