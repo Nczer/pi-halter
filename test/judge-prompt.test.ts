@@ -242,7 +242,7 @@ describe("getJudgeVerdict", () => {
     });
     expect(r?.explanation).toBe(VERDICT.explanation);
     const packet = String(calls[0].context.messages[0].content);
-    expect(packet).toContain("## Script: " + path.join(tmp, "job.py") + " (untrusted,");
+    expect(packet).toContain("## Script: " + path.join(tmp, "job.py") + " (untrusted)");
     expect(packet).toContain("import os");
   });
 

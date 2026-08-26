@@ -13,17 +13,22 @@ import { gate, rejectBash, rejectFile } from "../gate";
 import { createStore } from "../store";
 import type { Decision, BashPromptData, FilePromptData } from "../decision-engine";
 import * as decisionEngine from "../decision-engine";
+import { analyzeCommand } from "../analysis/command-analysis";
 import * as judgePrompt from "../judge-prompt";
 import * as promptFlow from "../prompt-flow";
 import { setDspaActive, resetDspa, getDspaStats } from "../dspa-mode";
 import { setDspatActive, resetDspat } from "../dspat-mode";
 import type { JudgeResult } from "../judge";
 
-vi.mock("../judge-prompt", () => ({
-  getJudgeVerdict: vi.fn(),
-  getStage2Verdict: vi.fn(),
-  judgeStatus: vi.fn(() => ({ state: "ok", modelLabel: "test/model (session)", reason: null })),
-}));
+vi.mock("../judge-prompt", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../judge-prompt")>();
+  return {
+    ...actual, // extractScriptPayload & friends run real (D11 conversion)
+    getJudgeVerdict: vi.fn(),
+    getStage2Verdict: vi.fn(),
+    judgeStatus: vi.fn(() => ({ state: "ok", modelLabel: "test/model (session)", reason: null })),
+  };
+});
 vi.mock("../prompt-flow", () => ({
   showPrompt: vi.fn(async () => ({ allowed: true })),
 }));
@@ -116,6 +121,13 @@ async function runGate(decision: Decision) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations: re-pin the judge status default
+  // (tests that flip it to "off" must not leak into the next test).
+  vi.mocked(judgePrompt.judgeStatus).mockReturnValue({
+    state: "ok",
+    modelLabel: "test/model (session)",
+    reason: null,
+  });
   resetDspa();
   resetDspat();
   fs.rmSync(tmpLog, { force: true });
@@ -229,6 +241,205 @@ describe("auto-allow path", () => {
   });
 });
 
+describe("D11: content review of manual auto-alls (clause A extension)", () => {
+  /** A real script the command would execute — the payload extract reads it. */
+  function scriptCwd(): string {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dspa-esc-"));
+    fs.mkdirSync(path.join(tmp, "tools"));
+    fs.writeFileSync(path.join(tmp, "tools", "job.py"), "print('job')\n");
+    return tmp;
+  }
+
+  it("granted bash script execution is judged — stage 1 approve/low → auto-allow", async () => {
+    setDspaActive(true);
+    const tmp = scriptCwd();
+    try {
+      const analysis = await analyzeCommand("python3 tools/job.py", tmp);
+      const decision: Decision = { kind: "auto-allow", analysis };
+      vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(
+        verdict({ explanation: "prints job" }),
+      );
+      const store = createStore();
+      const ctx = makeCtx();
+      const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
+      try {
+        await gate(
+          { type: "bash", command: "python3 tools/job.py", cwd: tmp },
+          ctx, store, (d, r) => rejectBash(d, r, store, ctx),
+        );
+        expect(judgePrompt.getJudgeVerdict).toHaveBeenCalledTimes(1);
+        expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+        expect(getDspaStats().autoAllowed).toBe(1);
+        const lines = logLines();
+        expect(lines[0].kind).toBe("auto-allow");
+        expect(String(lines[0].reason)).toContain("dspa: judge approved (stage 1, m-test)");
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("granted bash script execution — judge rejects → prompt with the verdict (the manual auto-allow becomes a reviewed prompt)", async () => {
+    setDspaActive(true);
+    const tmp = scriptCwd();
+    try {
+      const analysis = await analyzeCommand("python3 tools/job.py", tmp);
+      const decision: Decision = { kind: "auto-allow", analysis };
+      vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(
+        verdict({ approve: "defer", risk: "medium" }),
+      );
+      vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(
+        verdict({ approve: "deny", risk: "high", explanation: "the script exfiltrates" }),
+      );
+      const store = createStore();
+      const ctx = makeCtx();
+      const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
+      try {
+        await gate(
+          { type: "bash", command: "python3 tools/job.py", cwd: tmp },
+          ctx, store, (d, r) => rejectBash(d, r, store, ctx),
+        );
+        expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+        const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
+        expect(fallthrough?.gate.ok).toBe(true);
+        expect(fallthrough?.verdict?.approve).toBe("deny");
+        expect(fallthrough?.stage).toBe(2);
+        const lines = logLines();
+        expect(lines[0].kind).toBe("prompt");
+        expect(lines[0].dspa).toBe("judge: declined (stage 2)");
+        expect(lines[0].judgeDeny).toBe("the script exfiltrates");
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("payload-less bash auto-allow is never converted (no judge, no prompt)", async () => {
+    setDspaActive(true);
+    const tmp = scriptCwd();
+    try {
+      const analysis = await analyzeCommand("ls -la", tmp);
+      const decision: Decision = { kind: "auto-allow", analysis };
+      const store = createStore();
+      const ctx = makeCtx();
+      const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
+      try {
+        await gate(
+          { type: "bash", command: "ls -la", cwd: tmp },
+          ctx, store, (d, r) => rejectBash(d, r, store, ctx),
+        );
+        expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
+        expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+        expect(logLines()[0].kind).toBe("auto-allow");
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("judge off → the manual auto-allow stands (no conversion, no prompt)", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.judgeStatus).mockReturnValue({ state: "off", modelLabel: null, reason: null });
+    const tmp = scriptCwd();
+    try {
+      const analysis = await analyzeCommand("python3 tools/job.py", tmp);
+      const decision: Decision = { kind: "auto-allow", analysis };
+      const store = createStore();
+      const ctx = makeCtx();
+      const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
+      try {
+        await gate(
+          { type: "bash", command: "python3 tools/job.py", cwd: tmp },
+          ctx, store, (d, r) => rejectBash(d, r, store, ctx),
+        );
+        expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
+        expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+        expect(logLines()[0].kind).toBe("auto-allow");
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("file write auto-allow is probed (judge on) — judged in full, approve/low → auto-allow", async () => {
+    setDspaActive(true);
+    const tmp = scriptCwd();
+    try {
+      const target = path.join(tmp, "note.txt");
+      const promptDecision: Decision = {
+        kind: "prompt",
+        promptData: {
+          type: "file", action: "write", filePath: target, resolved: target, cwd: tmp,
+          outsideDir: null, isWriteOp: true, warnedRule: null, symlinkHint: null,
+          exists: false, content: "hello\n",
+        },
+      };
+      // Probe (judgeWriteAutoAllows set) → prompt; bare decide → auto-allow.
+      const spy = vi.spyOn(decisionEngine, "decide").mockImplementation(
+        async (_req, _store, opts) =>
+          opts?.judgeWriteAutoAllows ? promptDecision : { kind: "auto-allow" },
+      );
+      vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(
+        verdict({ explanation: "one-line note" }),
+      );
+      const store = createStore();
+      const ctx = makeCtx();
+      try {
+        await gate(
+          { type: "file", toolName: "write", filePath: target, cwd: tmp, content: "hello\n" },
+          ctx, store, (d, r) => rejectFile(d, r, store, ctx),
+        );
+        // Initial decide + the probe re-decide.
+        expect(decisionEngine.decide).toHaveBeenCalledTimes(2);
+        expect(judgePrompt.getJudgeVerdict).toHaveBeenCalledTimes(1);
+        expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+        expect(logLines()[0].kind).toBe("auto-allow");
+        expect(String(logLines()[0].reason)).toContain("dspa: judge approved (stage 1, m-test)");
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("file write auto-allow with judge off → no probe (manual auto-allow stands)", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.judgeStatus).mockReturnValue({ state: "off", modelLabel: null, reason: null });
+    const tmp = scriptCwd();
+    try {
+      const target = path.join(tmp, "note.txt");
+      const store = createStore();
+      const ctx = makeCtx();
+      const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue({ kind: "auto-allow" });
+      try {
+        await gate(
+          { type: "file", toolName: "write", filePath: target, cwd: tmp },
+          ctx, store,
+          (d, r) => rejectFile(d, r, store, ctx),
+        );
+        // No probe re-decide — the auto-allow stands untouched.
+        expect(decisionEngine.decide).toHaveBeenCalledTimes(1);
+        expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
+        expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+        expect(logLines()[0].kind).toBe("auto-allow");
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("fall-through", () => {
   it("judge denies → prompt with the verdict, no counter", async () => {
     setDspaActive(true);
@@ -286,12 +497,17 @@ describe("fall-through", () => {
     expect(String(logLines()[0].dspa)).toMatch(/^gate: /);
   });
 
-  it("file outside base → prompt with gate reason, judge never called", async () => {
+  it("file outside base → gate stop stands, judge runs advisory (D11)", async () => {
     setDspaActive(true);
+    // The mocks return no verdict, so the prompt is bare — the point is the
+    // advisory flow: both stages run, the floor's stop stays in the log.
     await runGate(fileDecision());
-    expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
+    expect(judgePrompt.getJudgeVerdict).toHaveBeenCalledTimes(1);
+    expect(judgePrompt.getStage2Verdict).toHaveBeenCalledTimes(1);
     const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
     expect(fallthrough?.gate.ok).toBe(false);
+    expect(fallthrough?.verdict).toBeNull();
+    expect(String(logLines()[0].dspa)).toMatch(/^gate: /);
   });
 
   it("judgeable: halter-dangerous command (cargo) → gate passes, judge runs (D1)", async () => {

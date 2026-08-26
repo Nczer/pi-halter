@@ -10,6 +10,9 @@
  *   list      filtered entries, one compact line each
  *   blocks    every block + internal-error entry, full reason
  *   dspa      every judge-regime entry (dspa/dspat) with stop tag
+ *   dspa --reasons   why judge-regime entries auto-allowed / stopped — the
+ *             reason rollup (auto-allow reasons, stop tags, judge denials,
+ *             each with counts + a first-seen example)
  *   stats     per-target aggregation — who prompts repeatedly, who auto-allows
  *   audit     anomaly scan: known bug classes (test-fixture pollution,
  *             contradictions, phantom root paths, misleading outside-base
@@ -209,6 +212,37 @@ function dspaCmd() {
   }
 }
 
+/** The reason rollup: WHY judge-regime entries auto-allowed or stopped.
+ *  Groups auto-allow reasons ("dspa: judge approved (stage N, model)"),
+ *  stop tags, and the judge's rejection words — each with a count and the
+ *  first-seen example. "What did the judge do, and why?" in one view. */
+function dspaReasons() {
+  const ds = F.filter((e) => e.mode === "dspa" || e.mode === "dspat");
+  console.log(`# dspa --reasons — ${ds.length} judge-regime entries`);
+  const group = (arr, keyFn) => {
+    const g = new Map();
+    for (const e of arr) {
+      const k = keyFn(e);
+      if (!k) continue;
+      const r = g.get(k) ?? { n: 0, ex: e };
+      r.n++;
+      g.set(k, r);
+    }
+    return [...g.entries()].sort((a, b) => b[1].n - a[1].n);
+  };
+  const section = (title, arr, keyFn) => {
+    const g = group(arr, keyFn);
+    console.log(`\n## ${title} (${arr.length})`);
+    if (!g.length) console.log("  (none)");
+    for (const [k, r] of g) {
+      console.log(`  ${String(r.n).padStart(4)}  ${trunc(k, 90)}   e.g. [@${r.ex.__idx}] ${trunc(firstLine(r.ex.target), 50)}`);
+    }
+  };
+  section("auto-allow reasons", ds.filter((e) => e.kind === "auto-allow"), (e) => e.reason ?? "(no reason)");
+  section("stop tags (fall-through prompts)", ds.filter((e) => e.kind === "prompt"), (e) => e.dspa ?? "(no stop tag)");
+  section("judge denials (the LLM's words)", ds, (e) => e.judgeDeny);
+}
+
 function stats() {
   console.log(`# per-target stats (${F.length} filtered entries)`);
   for (const kind of ["prompt", "auto-allow"]) {
@@ -263,13 +297,16 @@ const PHANTOM_ROOT_DSPA_RE = new RegExp("gate: outside base \\(/\\)");
  *  7  duplicate entries       identical consecutive lines
  *  8  internal-error blocks   live fail-closed crashes (fixtures excluded)
  *  9  trust learning          untrusted-package stop → later judge-approve
+ * 10  resolution mismatch     file prompt whose offered grant dir (promptDir)
+ *                             does not contain the resolved target — a
+ *                             path-resolution bug (the "@356 phantom" class)
  *
- *  10-13 invariants (should NEVER fire — a hit means the gate or the
+ *  11-14 invariants (should NEVER fire — a hit means the gate or the
  *      logger is broken, whatever the cause):
  *      auto-allow with a stop tag, risk:high auto-allowed, silent prompt
  *      (no reason, no stop tag), block without a reason
  *
- *  14 novelty (only with --since): vs the file history before the window,
+ *  15 novelty (only with --since): vs the file history before the window,
  *      new prompt-reason verdicts, new stop tags, new auto-allowed
  *      first-words, new file target dirs — "what did the gate start doing
  *      since I changed the code?" Uses the full file, other filters ignored.
@@ -298,6 +335,27 @@ function runAudit(scope) {  const out = [];
     const m = `${e.reason ?? ""} ${e.dspa ?? ""}`.match(/outside (?:base \()?(\/[^\s()]+)/);
     return !!m && e.target.startsWith(m[1] + "/");
   }).map((e) => `[@${e.__idx}] ${trunc(e.target, 100)}`));
+
+  // Resolution mismatch: the prompt offers "always write <promptDir>", so
+  // promptDir must CONTAIN the resolved target. A containment miss means the
+  // grant offer and the actual write location disagree — a resolution bug
+  // (the "@356 phantom" class: a target resolved to a dir the prompt never
+  // named). Targets log in display form (absolute, relative, or ~-prefixed).
+  {
+    const home = process.env.HOME ?? "/root";
+    const resolveTarget = (e) => {
+      const t = e.target ?? "";
+      if (t.startsWith("~/")) return path.join(home, t.slice(2));
+      if (path.isAbsolute(t)) return t;
+      return e.cwd ? path.resolve(e.cwd, t) : null;
+    };
+    add("resolution mismatch (promptDir ⊉ target)", scope.filter((e) => {
+      if (e.tool !== "file" || !e.promptDir) return false;
+      const t = resolveTarget(e);
+      if (!t) return false;
+      return t !== e.promptDir && !t.startsWith(e.promptDir + "/");
+    }).map((e) => `[@${e.__idx}] target=${trunc(e.target, 70)}  promptDir=${trunc(e.promptDir, 70)}`));
+  }
 
   add("dspa: /tmp write passed floor", scope.filter((e) =>
     e.mode === "dspa" && e.kind === "auto-allow" && e.tool === "bash"
@@ -348,7 +406,7 @@ function runAudit(scope) {  const out = [];
     add("trust learning (stop → later approve)", items);
   }
 
-  // 10-13. Invariants — structural rules a correct gate+logger can never
+  // 11-14. Invariants — structural rules a correct gate+logger can never
   //  violate. Unlike the checks above (known bug classes), these catch
   //  whatever bug breaks the log's own contract.
   add("invariant: auto-allow with stop tag", scope.filter((e) => e.kind === "auto-allow" && e.dspa)
@@ -426,7 +484,7 @@ switch (cmd) {
   case "summary": summary(); break;
   case "list": listCmd(); break;
   case "blocks": blocksCmd(); break;
-  case "dspa": dspaCmd(); break;
+  case "dspa": flags.reasons ? dspaReasons() : dspaCmd(); break;
   case "stats": stats(); break;
   case "audit": audit(); break;
   case "show": show(); break;

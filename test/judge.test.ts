@@ -192,7 +192,7 @@ describe("judgment packet", () => {
     expect(status).toContain("network: none");
   });
 
-  it("head-cuts long commands with a truncation marker and note", () => {
+  it("carries long commands in full, untrimmed (D11 — the heredoc body IS the write content)", () => {
     const long = "echo " + "x".repeat(10_000);
     const p = buildJudgmentPacket({
       command: long,
@@ -201,12 +201,11 @@ describe("judgment packet", () => {
       riskReasons: [],
       hasUnsafePattern: false,
     });
-    expect(p).toContain("x".repeat(100));
-    expect(p).not.toContain("x".repeat(5000));
-    expect(p).toContain(`showing first 4000 of ${long.length} chars`);
+    expect(p).toContain("x".repeat(10_000));
+    expect(p).not.toContain("truncated");
   });
 
-  it("includes a fenced untrusted script with line caps", () => {
+  it("includes a fenced untrusted script in full, untrimmed (D11)", () => {
     const content = Array.from({ length: 200 }, (_, i) => `line${i} = ${i}`).join("\n");
     const p = buildJudgmentPacket({
       command: "python3 tools/job.py",
@@ -216,11 +215,10 @@ describe("judgment packet", () => {
       hasUnsafePattern: false,
       script: { path: "/w/tools/job.py", content },
     });
-    expect(p).toContain("## Script: /w/tools/job.py (untrusted, first 150 of 200 lines)");
+    expect(p).toContain("## Script: /w/tools/job.py (untrusted)");
     expect(p).toContain("line0 = 0");
-    expect(p).toContain("line149 = 149");
-    expect(p).not.toContain("line150 = 150");
-    expect(p).toContain("Script truncated: showing first 150 of 200 lines.");
+    expect(p).toContain("line199 = 199");
+    expect(p).not.toContain("truncated");
   });
 
   it("lengthens the fence when the script itself contains triple backticks", () => {
@@ -605,7 +603,7 @@ describe("buildJudgmentPacket: file content", () => {
     expect(p).toContain("hello world");
   });
 
-  it("truncates long content with an explicit marker", () => {
+  it("carries long file content in full, untrimmed (D11 — a safe long write must not force a defer)", () => {
     const content = "x".repeat(20000);
     const p = buildJudgmentPacket({
       type: "file",
@@ -617,8 +615,8 @@ describe("buildJudgmentPacket: file content", () => {
       exists: false,
       content,
     });
-    expect(p).toContain("(content truncated: first 8000 of 20000 chars)");
-    expect(p).not.toContain("x".repeat(9000));
+    expect(p).toContain("x".repeat(20000));
+    expect(p).not.toContain("truncated");
   });
 
   it("no content section for reads", () => {
