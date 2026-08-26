@@ -76,10 +76,14 @@ describe("mcp", () => {
 });
 
 describe("file", () => {
-  it("blocks outside-base", async () => {
+  it("blocks outside-base, naming the violated base (session cwd), not the target's parent dir", async () => {
+    // 2026-08-26 audit: the old tag `outside base (/etc)` named the target's
+    // own parent (the grant-offer unit) and read as though /etc/hosts were
+    // outside /etc. The stop tag names the violated base instead; the grant
+    // dir stays visible in the log line (promptDir/target).
     const r = await checkDspaGate(filePd({ resolved: "/etc/hosts", outsideDir: "/etc" }), store);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain("outside base");
+    if (!r.ok) expect(r.reason).toBe(`outside base (session ${BASE})`);
   });
 
   it("blocks credential patterns", async () => {
@@ -231,7 +235,9 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
     const a: any = await analyzeCommand("ls", BASE, {
       isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
     });
-    a.prompt.outsidePaths = ["<unresolved-cwd>/f.txt", "<unresolved-cwd>/g.txt"];
+    // The floor reads the FULL path set (a.paths), not prompt.outsidePaths
+    // (the manual bar) — hand-craft it the way the parser would.
+    a.paths = ["<unresolved-cwd>/f.txt", "<unresolved-cwd>/g.txt"];
     const r = await checkDspaGate(bashPd("ls", { analysis: a }), store);
     expect(r).toEqual({ ok: true });
   });
@@ -240,7 +246,7 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
     const a: any = await analyzeCommand("ls", BASE, {
       isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
     });
-    a.prompt.outsidePaths = ["/etc/shadow", "<unresolved-cwd>/f.txt"];
+    a.paths = ["/etc/shadow", "<unresolved-cwd>/f.txt"];
     const r = await checkDspaGate(bashPd("ls", { analysis: a }), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("/etc/shadow");
@@ -250,6 +256,41 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
     const r = await checkDspaGate(bashPd("rm -rf $X"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("rm target");
+  });
+});
+
+describe("floor bar for concrete paths (D7 consistency — 2026-08-25 log)", () => {
+  it("config-allowed concrete write stops at the floor (log: cd … && cat > /tmp/compare.py)", async () => {
+    // /tmp is config-allowed (allowedReadPaths/WritePaths): the manual bar
+    // drops it from prompt.outsidePaths, and the old floor trusted that bar
+    // for concrete paths — the judge auto-allowed it (3 instances in the
+    // 2026-08-25 log). The floor is session-base only: it must stop here.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halter-floor-"));
+    try {
+      const r = await checkDspaGate(
+        bashPd(`cd ${dir} && cat > /tmp/compare.py <<'EOF'\nprint(1)\nEOF`),
+        store,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("/tmp/compare.py");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("config-allowed concrete read stops too (session base, not the manual bar)", async () => {
+    const r = await checkDspaGate(bashPd("cat /tmp/compare.py"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("/tmp/compare.py");
+  });
+
+  it("a session write grant to the dir lifts the stop (D3-style escape hatch)", async () => {
+    store.addAllowed({ writeDirs: ["/tmp"] });
+    const r = await checkDspaGate(
+      bashPd("cat > /tmp/compare.py <<'EOF'\nprint(1)\nEOF"),
+      store,
+    );
+    expect(r).toEqual({ ok: true });
   });
 });
 

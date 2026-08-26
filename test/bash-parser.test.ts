@@ -224,6 +224,54 @@ describe("parseCommand: opaque var markers (log FPs)", () => {
 	});
 });
 
+describe("parseCommand: grep PATTERN position is data, never a file (2026-08-26 log)", () => {
+	it("a // pattern is data, not a network-prefix absolute path — no phantom root child (@356)", async () => {
+		// (Bare relative names like f.ts are never path candidates — pre-existing.)
+		const r = await parseCommand('grep -vE "//|\\*" ./f.ts', cwd);
+		expect(r.paths.some(p => p.includes("|") || path.dirname(p) === "/")).toBe(false);
+		expect(r.paths.some(p => p.endsWith("/f.ts"))).toBe(true);
+		expect(r.opaque).toEqual([]);
+	});
+
+	it("a path-looking pattern is still data (PATTERN position, unlike sed's script FILE)", async () => {
+		const r = await parseCommand('grep "/etc/passwd" ./f', cwd);
+		expect(r.paths.some(p => p.endsWith("/etc/passwd"))).toBe(false);
+		expect(r.paths.some(p => p.endsWith("/f"))).toBe(true);
+	});
+
+	it("-e PATTERN is data too", async () => {
+		const r = await parseCommand('grep -e "//|\\*" f', cwd);
+		expect(r.paths.some(p => p.includes("|"))).toBe(false);
+	});
+
+	it("the full @356 pipeline: no direct-root-child path anywhere", async () => {
+		const r = await parseCommand(
+			'grep -rn "renderResult\\|renderCall" memory/index.ts consult/index.ts 2>/dev/null | grep -vE "//|\\*" | head -20',
+			cwd,
+		);
+		for (const p of r.paths) expect(path.dirname(p)).not.toBe("/");
+		expect(r.paths.some(p => p.includes("|"))).toBe(false);
+	});
+
+	it("file-position args stay path-checked (the pattern is skipped, files are not)", async () => {
+		const r = await parseCommand("grep pattern /home/other/file", cwd);
+		expect(r.paths).toContain("/home/other/file");
+	});
+
+	it("-f / --file switches the grammar: the pattern FILE stays path-checked", async () => {
+		for (const cmd of ["grep -f /etc/patterns f", "grep --file=/etc/patterns f", "grep -ef /etc/patterns f"]) {
+			const r = await parseCommand(cmd, cwd);
+			expect(r.paths, cmd).toContain("/etc/patterns");
+		}
+	});
+
+	it("a pattern-position var is not an opaque ref (it would floor-stop the command)", async () => {
+		const r = await parseCommand('grep -vE "$re" f', cwd);
+		expect(r.opaque).toEqual([]);
+		expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
+	});
+});
+
 describe("parseCommand: loop in-list roots (symlink verification)", () => {
 	const dirs: string[] = [];
 

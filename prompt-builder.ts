@@ -76,7 +76,9 @@ export function summarizePrompt(decision: PromptDecision): string {
   }
   if (p.type === "file") {
     let s = p.isWriteOp ? "file write" : "file read";
-    if (p.outsideDir) s += ` outside ${p.outsideDir}`;
+    // outsideDir is the target's own parent (the grant-offer unit) — name
+    // it as the location, not as the thing the file is outside of.
+    if (p.outsideDir) s += ` outside cwd (${p.outsideDir})`;
     if (p.warnedRule) s += ` warn ${p.warnedRule}`;
     return s;
   }

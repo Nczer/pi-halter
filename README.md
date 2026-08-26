@@ -170,7 +170,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 - **Store** — injected into `decide()` and `showPrompt()`. Runtime singleton
 - **Decision Engine** — async pure function, no UI dependency. All policy logic concentrated here
 - **Rule Generator** (`rule-generator.ts`) — derives auto-allow rules from `PromptData` on-demand. Decouples policy decision from rule specifics
-- **Bash Parser** — lazy-loaded tree-sitter WASM. Public API: `parseCommand(command, cwd) → ParseResult` returns `{ segments, paths, hasSubshell }` in one call
+- **Bash Parser** — lazy-loaded tree-sitter WASM. Public API: `parseCommand(command, cwd)` returns `{ segments, paths, opaque, assignments, hasParseError }` in one call
 - **Evaluators** — modular risk evaluators in `analysis/evaluators/`. Each implements `RiskEvaluator` interface. Adding new analyzers is a drop-in file
 - **Segment Helpers** (`segment-helpers.ts`) — shared utilities: `checkStageDanger()`, `isGitDangerous()`, `isWrapperRunningWrite()`, `getCommandSignature()`, `hasWriteRedirect()`, `isFindExecWrite()`, `isFdExecWrite()`, `isRgPreWrite()`
 - **Prompt Builder** — pure function. All prompt wording lives in one module (prompt labels + the decision-log why-summary). Truncates long commands to 20 lines
@@ -248,7 +248,9 @@ Config is split across focused modules in `config/`:
 - The log reflects the gate code that was *running* when each line was written. After a `/reload` of changed gate code (or a crash/reload loop), delete `.log/decisions.jsonl` before aggregating — decisions made by the old code would pollute top-N prompt reasons and auto-allow diffs
 - Logging is fire-and-forget: disk problems never affect a decision (and a throw here would surface as a fail-closed block)
 
-**Debugging judge modes from the log** — the `mode` tag splits each regime out of the manual noise:
+**Debugging judge modes from the log** — the `mode` tag splits each regime out of the manual noise. `tools/log-inspect.mjs` (zero-dep, node ≥ 18) does the recurring extractions without jq: `node tools/log-inspect.mjs summary` (counts, top prompt reasons, all blocks, anomaly counts), `audit` (test-fixture pollution, mixed-kind same target, phantom root paths, outside-base labels that name the target's own dir, config-allowed writes the dspa floor never saw, repeated prompts, duplicate lines), `list --grep X --kind K --mode M --tool T`, `dspa` (judge-regime entries with stop tags), `stats` (per-target counts + span), `show N` (full JSON). `--all` includes the rotated `.1`.
+
+The raw jq one-liners, for ad-hoc shapes:
 
 ```
 # what /dspa auto-allowed (the approving model is in .reason)
