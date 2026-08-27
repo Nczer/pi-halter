@@ -18,9 +18,13 @@ import { store } from "../store";
  */
 function makeCtx(scripted: (number | string | null)[]): any {
   let idx = 0;
-  return {
-    ui: {
+  const ctx: any = {
+    /** Options arrays passed to each ui.select call (assert on displayed options). */
+    __selects: [] as string[][],
+  };
+  ctx.ui = {
       select: async (_title: string, options: string[]): Promise<string | undefined> => {
+        ctx.__selects.push(options);
         const val = scripted[idx++];
         if (val === null || val === undefined) return undefined;
         return typeof val === "number" ? options[val] : val;
@@ -29,8 +33,8 @@ function makeCtx(scripted: (number | string | null)[]): any {
         const val = scripted[idx++];
         return val === null || val === undefined ? undefined : String(val);
       },
-    },
   };
+  return ctx;
 }
 
 // ── Prompt builder ─────────────────────────────────────────────────────
@@ -408,6 +412,57 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
     );
     // Empty/whitespace reason → trimmed → empty → "No reason provided"
     expect(result).toEqual({ kind: "no", reason: "No reason provided" });
+  });
+});
+
+// ── Decoupled paths tier (unsafe command: paths still grantable) ───────
+
+describe("twoTierAlwaysPrompt: paths tier decoupled from unsafe command", () => {
+  // includeAlwaysOption: false (unsafe pattern) + includePathsOption: true →
+  // choices = ["Yes", "Always (paths): /path/*", "No (reason)", "No"]
+  // indices:     0                   1                     2           3
+  // The command tiers (primary, broader) stay suppressed; the dir grant
+  // can never auto-allow the unsafe command, so it remains offerable.
+
+  const prompt = makePrompt({ includeAlwaysOption: false, includePathsOption: true });
+
+  it("offers the paths option at index 1, not the command tiers", async () => {
+    const ctx = makeCtx([1]);
+    await twoTierAlwaysPrompt(
+      prompt, store, ctx, () => {}, () => {}, () => {},
+    );
+    const shown = ctx.__selects[0];
+    expect(shown).toEqual(["Yes", "Always (paths): /path/*", "No (with reason)", "No"]);
+  });
+
+  it("calls onAlwaysPaths when Always(paths) → Confirm", async () => {
+    const cb = makeCallbacks();
+    const result = await twoTierAlwaysPrompt(
+      prompt, store, makeCtx([1, 0]),
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+    );
+    expect(result).toBe("alwaysPaths");
+    expect(cb.onAlwaysPaths).toHaveBeenCalledTimes(1);
+    expect(cb.onAlways).not.toHaveBeenCalled();
+  });
+
+  it("Back from tier-2 loops back to tier-1, then No", async () => {
+    const cb = makeCallbacks();
+    const result = await twoTierAlwaysPrompt(
+      prompt, store, makeCtx([1, 1, 3]),
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+    );
+    expect(result).toBe("no");
+    expect(cb.onAlwaysPaths).not.toHaveBeenCalled();
+  });
+
+  it("broader alone (no paths) is still fully suppressed", async () => {
+    const suppressed = makePrompt({ includeAlwaysOption: false, includeBroaderOption: true });
+    const ctx = makeCtx([2]);
+    await twoTierAlwaysPrompt(
+      suppressed, store, ctx, () => {}, () => {}, () => {},
+    );
+    expect(ctx.__selects[0]).toEqual(["Yes", "No (with reason)", "No"]);
   });
 });
 

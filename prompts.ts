@@ -78,7 +78,11 @@ function confirmOpt(
  * no index arithmetic to keep in sync.
  */
 function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOption[] {
-  if (!prompt.includeAlwaysOption && !prompt.trustPackages?.length) return [];
+  // The paths-only tier is independent of includeAlwaysOption: a dir grant
+  // can never auto-allow an unsafe/credential command (canBeAutoAllowed
+  // stays false), so it stays offered even when the command tier is
+  // suppressed. The command tiers (primary, broader) are not.
+  if (!prompt.includeAlwaysOption && !prompt.includePathsOption && !prompt.trustPackages?.length) return [];
 
   const { broaderPaths } = prompt;
   const hasBroaderPaths = !!(prompt.includeBroaderOption && broaderPaths && broaderPaths.length > 0);
@@ -132,13 +136,15 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
         () => { cb.onAlways(); return "always"; },
       ),
     );
+    if (prompt.includeBroaderOption) {
+      // Bash: broader package-manager prefix (e.g. "npm *") — a command
+      // grant, so it stays suppressed with the primary when the command
+      // tier is off (unsafe pattern / credential rule).
+      options.push(confirmOpt(`Always: ${prompt.alwaysBroaderLabel}`, prompt.tier2Broader ?? prompt.tier2Everything, () => { cb.onAlwaysBroader?.(); return "always"; }));
+    }
   }
   if (prompt.includeFileOption) {
     options.push(confirmOpt(`Always (file): ${prompt.alwaysFileLabel}`, prompt.tier2File!, () => { cb.onAlwaysFile(); return "alwaysFile"; }));
-  }
-  if (prompt.includeBroaderOption) {
-    // Bash: broader package-manager prefix (e.g. "npm *")
-    options.push(confirmOpt(`Always: ${prompt.alwaysBroaderLabel}`, prompt.tier2Broader ?? prompt.tier2Everything, () => { cb.onAlwaysBroader?.(); return "always"; }));
   }
   if (prompt.includePathsOption) {
     options.push(confirmOpt(`Always (paths): ${prompt.alwaysPathsLabel}`, prompt.tier2Paths ?? prompt.tier2Everything, () => { cb.onAlwaysPaths(); return "alwaysPaths"; }));

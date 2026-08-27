@@ -61,7 +61,7 @@ Before any session grants exist, every bash command resolves to exactly one outc
 2. **Read inside cwd → auto-allow**
 3. **Code execution → prompt** (unless trusted script)
 4. **Outside cwd → prompt (first time), remembered → auto-allow**
-5. **Unsafe patterns → always prompt** — no session grant can override them
+5. **Unsafe patterns → always prompt** — no session grant can override them (the prompt's command tiers are suppressed; dir grants stay offerable — they can't auto-allow the command)
 
 **Command substitution: a read-only body is data, not code (2026-08).** A `$(…)`/backtick/process-substitution (`<(...)`, `>(...)`) body made of read-only commands (the unconditionally-safe set + `grep`/`rg`/`fd`/`ag`) with no write redirect (null redirects like `> /dev/null` aren't writes — pre-existing gate convention), backgrounding, or multi-line list is pure data production — it no longer counts as code execution, so `sed -n "$(grep -n x f | cut -d: -f1),+5p" f` and `cat <(ls)` auto-allow. Guards: the body's own paths get the same path checks (a `$(cat /etc/shadow)` inside a read-only body still prompts the outside path), nested substitutions are classified individually, and any other body keeps the always-prompt flag (principle 5). `find` is excluded from the body set (`-exec`/`-delete`), and so are wrappers — the delegated command isn't visible at this level. Quote-aware throughout (`grep "a\|b" f` inside a body does not mis-split).
 
