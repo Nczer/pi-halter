@@ -17,7 +17,7 @@ import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 let cwd: string;
 
 beforeAll(() => {
-	cwd = createContractCwd();
+  cwd = createContractCwd();
 });
 afterAll(() => removeContractCwd(cwd));
 
