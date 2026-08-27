@@ -10,10 +10,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const handlersMock = vi.hoisted(() => ({
-	handleMcp: vi.fn(),
-	handleMcpDirectTool: vi.fn(),
-	handleBash: vi.fn(),
-	handleFile: vi.fn(),
+  handleMcp: vi.fn(),
+  handleMcpDirectTool: vi.fn(),
+  handleBash: vi.fn(),
+  handleFile: vi.fn(),
 }));
 vi.mock("../handlers", () => handlersMock);
 
@@ -21,70 +21,70 @@ import halterExtension from "../index";
 
 /** Minimal ExtensionAPI stub capturing registered event handlers. */
 function makePi() {
-	const events = new Map<string, unknown[]>();
-	return {
-		events,
-		default: halterExtension,
-		api: {
-			on: (event: string, handler: unknown) => {
-				if (!events.has(event)) events.set(event, []);
-				events.get(event)!.push(handler);
-			},
-			registerCommand: () => {},
-		},
-	};
+  const events = new Map<string, unknown[]>();
+  return {
+    events,
+    default: halterExtension,
+    api: {
+      on: (event: string, handler: unknown) => {
+        if (!events.has(event)) events.set(event, []);
+        events.get(event)!.push(handler);
+      },
+      registerCommand: () => {},
+    },
+  };
 }
 
 type ToolCallHandler = (e: unknown, c: unknown) => Promise<unknown>;
 
 const event = {
-	type: "tool_call" as const,
-	toolName: "bash",
-	toolCallId: "t1",
-	input: { command: "ls" },
+  type: "tool_call" as const,
+  toolName: "bash",
+  toolCallId: "t1",
+  input: { command: "ls" },
 };
 
 describe("tool_call fail-closed boundary", () => {
-	beforeEach(() => {
-		for (const fn of Object.values(handlersMock)) {
-			fn.mockReset();
-			fn.mockResolvedValue(undefined);
-		}
-	});
+  beforeEach(() => {
+    for (const fn of Object.values(handlersMock)) {
+      fn.mockReset();
+      fn.mockResolvedValue(undefined);
+    }
+  });
 
-	it("a throwing handler blocks with a gate-error reason (never silent)", async () => {
-		handlersMock.handleBash.mockRejectedValue(new Error("synthetic analysis crash"));
-		const { api, events } = makePi();
-		await halterExtension(api as never);
-		const handler = (events.get("tool_call") as ToolCallHandler[])[0];
-		const result = (await handler(event, {})) as { block?: boolean; reason?: string };
-		expect(result?.block).toBe(true);
-		expect(result?.reason).toMatch(/halter gate error: synthetic analysis crash/);
-	});
+  it("a throwing handler blocks with a gate-error reason (never silent)", async () => {
+    handlersMock.handleBash.mockRejectedValue(new Error("synthetic analysis crash"));
+    const { api, events } = makePi();
+    await halterExtension(api as never);
+    const handler = (events.get("tool_call") as ToolCallHandler[])[0];
+    const result = (await handler(event, {})) as { block?: boolean; reason?: string };
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toMatch(/halter gate error: synthetic analysis crash/);
+  });
 
-	it("a non-Error throw is still blocked (stringified)", async () => {
-		handlersMock.handleBash.mockRejectedValue("boom");
-		const { api, events } = makePi();
-		await halterExtension(api as never);
-		const handler = (events.get("tool_call") as ToolCallHandler[])[0];
-		const result = (await handler(event, {})) as { block?: boolean; reason?: string };
-		expect(result?.block).toBe(true);
-		expect(result?.reason).toMatch(/halter gate error: boom/);
-	});
+  it("a non-Error throw is still blocked (stringified)", async () => {
+    handlersMock.handleBash.mockRejectedValue("boom");
+    const { api, events } = makePi();
+    await halterExtension(api as never);
+    const handler = (events.get("tool_call") as ToolCallHandler[])[0];
+    const result = (await handler(event, {})) as { block?: boolean; reason?: string };
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toMatch(/halter gate error: boom/);
+  });
 
-	it("a normal block result passes through unmodified", async () => {
-		handlersMock.handleBash.mockResolvedValue({ block: true, reason: "Denied: credential" });
-		const { api, events } = makePi();
-		await halterExtension(api as never);
-		const handler = (events.get("tool_call") as ToolCallHandler[])[0];
-		const result = await handler(event, {});
-		expect(result).toEqual({ block: true, reason: "Denied: credential" });
-	});
+  it("a normal block result passes through unmodified", async () => {
+    handlersMock.handleBash.mockResolvedValue({ block: true, reason: "Denied: credential" });
+    const { api, events } = makePi();
+    await halterExtension(api as never);
+    const handler = (events.get("tool_call") as ToolCallHandler[])[0];
+    const result = await handler(event, {});
+    expect(result).toEqual({ block: true, reason: "Denied: credential" });
+  });
 
-	it("pass-through (all handlers undefined) stays undefined — no false block", async () => {
-		const { api, events } = makePi();
-		await halterExtension(api as never);
-		const handler = (events.get("tool_call") as ToolCallHandler[])[0];
-		expect(await handler(event, {})).toBeUndefined();
-	});
+  it("pass-through (all handlers undefined) stays undefined — no false block", async () => {
+    const { api, events } = makePi();
+    await halterExtension(api as never);
+    const handler = (events.get("tool_call") as ToolCallHandler[])[0];
+    expect(await handler(event, {})).toBeUndefined();
+  });
 });

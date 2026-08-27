@@ -24,9 +24,9 @@ import os from "node:os";
 import path from "node:path";
 
 export function createContractCwd(): string {
-	return fs.mkdtempSync(path.join(os.homedir(), ".halter-cwd-"));
+  return fs.mkdtempSync(path.join(os.homedir(), ".halter-cwd-"));
 }
 
 export function removeContractCwd(dir: string): void {
-	fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
 }

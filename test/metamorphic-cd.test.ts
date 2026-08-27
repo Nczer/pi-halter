@@ -31,36 +31,36 @@ const SUB = "sub";
 let cwd: string;
 
 beforeAll(() => {
-	cwd = fs.mkdtempSync(path.join(os.tmpdir(), "halter-metamorphic-"));
-	fs.mkdirSync(path.join(cwd, SUB));
+  cwd = fs.mkdtempSync(path.join(os.tmpdir(), "halter-metamorphic-"));
+  fs.mkdirSync(path.join(cwd, SUB));
 });
 afterAll(() => {
-	fs.rmSync(cwd, { recursive: true, force: true });
+  fs.rmSync(cwd, { recursive: true, force: true });
 });
 
 // Known-legitimate divergences (cmd → why the prefix changes semantics).
 const EXCEPTIONS: Record<string, string> = {
-	// `cd sub && ls || cat a || echo ok` = `((cd sub && ls) || cat a) || echo ok`:
-	// a cd now sits LEFT of `||`, so `cat a`'s runtime cwd is genuinely
-	// ambiguous (old dir if cd/ls failed, sub if ls failed). Halter's ||-model
-	// makes such a base unknown → prompt. Conservative, not a bypass — the
-	// base row (no cd anywhere) keeps a known base and allows.
-	"ls || cat a || echo ok": "cd left of || makes the branch cwd genuinely ambiguous (unknown base → prompt)",
+  // `cd sub && ls || cat a || echo ok` = `((cd sub && ls) || cat a) || echo ok`:
+  // a cd now sits LEFT of `||`, so `cat a`'s runtime cwd is genuinely
+  // ambiguous (old dir if cd/ls failed, sub if ls failed). Halter's ||-model
+  // makes such a base unknown → prompt. Conservative, not a bypass — the
+  // base row (no cd anywhere) keeps a known base and allows.
+  "ls || cat a || echo ok": "cd left of || makes the branch cwd genuinely ambiguous (unknown base → prompt)",
 };
 
 describe(`metamorphic: cd ${SUB} && <cmd> keeps the decision kind`, () => {
-	it.each(cases.filter((c) => c.decision))("%s", async (c) => {
-		const base = await decide({ type: "bash", command: c.cmd, cwd }, createStore());
-		const prefixed = await decide({ type: "bash", command: `cd ${SUB} && ${c.cmd}`, cwd }, createStore());
-		const baseWhy = "reason" in base ? base.reason : "";
-		const prefWhy = "reason" in prefixed ? prefixed.reason : "";
-		const ctx = `cd ${SUB} && ${JSON.stringify(c.cmd)}\n  base:     ${base.kind} ${baseWhy}\n  prefixed: ${prefixed.kind} ${prefWhy}`;
-		if (EXCEPTIONS[c.cmd]) {
-			// Divergence must go toward prompt (more conservative), never allow.
-			expect(base.kind, ctx).toBe("auto-allow");
-			expect(prefixed.kind, `${ctx}\n  why: ${EXCEPTIONS[c.cmd]}`).toBe("prompt");
-		} else {
-			expect(prefixed.kind, ctx).toBe(base.kind);
-		}
-	});
+  it.each(cases.filter((c) => c.decision))("%s", async (c) => {
+    const base = await decide({ type: "bash", command: c.cmd, cwd }, createStore());
+    const prefixed = await decide({ type: "bash", command: `cd ${SUB} && ${c.cmd}`, cwd }, createStore());
+    const baseWhy = "reason" in base ? base.reason : "";
+    const prefWhy = "reason" in prefixed ? prefixed.reason : "";
+    const ctx = `cd ${SUB} && ${JSON.stringify(c.cmd)}\n  base:     ${base.kind} ${baseWhy}\n  prefixed: ${prefixed.kind} ${prefWhy}`;
+    if (EXCEPTIONS[c.cmd]) {
+      // Divergence must go toward prompt (more conservative), never allow.
+      expect(base.kind, ctx).toBe("auto-allow");
+      expect(prefixed.kind, `${ctx}\n  why: ${EXCEPTIONS[c.cmd]}`).toBe("prompt");
+    } else {
+      expect(prefixed.kind, ctx).toBe(base.kind);
+    }
+  });
 });
