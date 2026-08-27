@@ -298,6 +298,20 @@ describe("bash includeAlwaysOption logic", () => {
     expect(prompt.includeAlwaysOption).toBe(false);
   });
 
+  it("hasUnsafePattern disables command tier but keeps paths tier (decoupled)", () => {
+    // The heredoc-to-interpreter class: unsafe command + outside-base dir.
+    // A dir grant can never auto-allow the unsafe command, so the paths-only
+    // tier stays offerable even though the command tier is suppressed.
+    const prompt = buildPrompt(bashDecision({
+      command: "uv run --with pymupdf python - <<'EOF'\n...\nEOF",
+      signatures: ["uv run"], needsCommandApproval: true, hasUnsafePattern: true,
+      outsideDirs: ["/mnt/Ndr/Samples/Handbook"], needsPathApproval: true,
+    }));
+    expect(prompt.includeAlwaysOption).toBe(false);
+    expect(prompt.includePathsOption).toBe(true);
+    expect(prompt.alwaysPathsLabel).toBe("Read /mnt/Ndr/Samples/Handbook/*");
+  });
+
   it("credentialRule non-null disables Always option", () => {
     const prompt = buildPrompt(bashDecision({
       signatures: ["cat"], needsCommandApproval: true, credentialRule: ".env",
