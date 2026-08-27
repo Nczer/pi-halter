@@ -15,8 +15,8 @@
  * If an entry drifts (e.g. `sort` loses its exclusion reason, or loses its
  * allowlist membership, or grows a danger flag), this fails.
  */
-import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { unconditionallySafeCommands, isAllowedCommand } from "../config";
@@ -26,7 +26,13 @@ import { createStore } from "../store";
 import type { BashRequest } from "../decision-engine";
 
 describe("unconditionallySafeCommands invariant", () => {
-  const cwd = mkdtempSync(path.join(tmpdir(), "halter-allow-invariant-"));
+  let cwd: string;
+  beforeAll(() => {
+    cwd = mkdtempSync(path.join(tmpdir(), "halter-allow-invariant-"));
+  });
+  afterAll(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
   const store = createStore();
   const req = (cmd: string): BashRequest => ({ type: "bash", command: cmd, cwd });
 
