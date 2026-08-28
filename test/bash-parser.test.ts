@@ -787,3 +787,89 @@ describe("parseCommand: heredoc inside compound", () => {
     expect(r.segments.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+
+describe("parseCommand: pinned tail form (prefix/$var/tail)", () => {
+  const tmp = os.tmpdir();
+
+  it("loop-bound var with a glob tail pins to the prefix dir", async () => {
+    const r = await parseCommand(`for e in a b; do grep x ${tmp}/root/$e/*.ts; done`, cwd);
+    expect(r.opaque).toHaveLength(1);
+    expect(r.opaque[0].kind).toBe("pinned");
+    expect(r.opaque[0].prefixDir).toBe(realPath(`${tmp}/root`));
+  });
+
+  it("loop-bound var with a literal tail pins to the prefix dir", async () => {
+    const r = await parseCommand(`for e in a b; do grep x ${tmp}/root/$e/index.ts; done`, cwd);
+    expect(r.opaque).toHaveLength(1);
+    expect(r.opaque[0].kind).toBe("pinned");
+    expect(r.opaque[0].prefixDir).toBe(realPath(`${tmp}/root`));
+  });
+
+  it("multi-segment glob tail stays pinned", async () => {
+    const r = await parseCommand(`for e in a b; do grep x ${tmp}/root/$e/sub/*.log; done`, cwd);
+    expect(r.opaque).toHaveLength(1);
+    expect(r.opaque[0].kind).toBe("pinned");
+  });
+
+  it("a tail containing a .. segment is not pinned (it could escape)", async () => {
+    const r = await parseCommand(`for e in a b; do grep x ${tmp}/root/$e/../y/*.ts; done`, cwd);
+    expect(r.opaque.length).toBeGreaterThan(0);
+    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+
+  it("a tail containing another expansion is not pinned", async () => {
+    const r = await parseCommand(`for e in a b; do grep x ${tmp}/root/$e/\${f}/*.ts; done`, cwd);
+    expect(r.opaque.length).toBeGreaterThan(0);
+    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+
+  it("a relative prefix is not pinned (base-dependent)", async () => {
+    const r = await parseCommand("for e in a b; do grep x rel/$e/*.ts; done", cwd);
+    expect(r.opaque.length).toBeGreaterThan(0);
+    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+
+  it("an in-list with a runtime expansion is not pinned", async () => {
+    const r = await parseCommand(`for e in $(seq 3); do grep x ${tmp}/root/$e/*.ts; done`, cwd);
+    expect(r.opaque.length).toBeGreaterThan(0);
+    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+});
+
+describe("parseCommand: multi-line literal args are script bodies, not paths", () => {
+  it("node -e with a multi-line single-quoted script: no opaque ref, no path", async () => {
+    const script = [
+      'const fs = require("fs");',
+      'const re = /description: [^\\n]+/g;',
+      'console.log(`' + '${name}: ` + "m[0].trim());',
+    ].join("\n");
+    const r = await parseCommand(`node -e '${script}'`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths).toEqual([]);
+  });
+
+  it("python3 -c with a multi-line double-quoted literal: excluded too", async () => {
+    const r = await parseCommand('python3 -c "import os\nprint(os.getcwd())"', cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths).toEqual([]);
+  });
+
+  it("a multi-line arg WITH a runtime expansion stays opaque (fail closed)", async () => {
+    const r = await parseCommand('cat "a\n$X/b"', cwd);
+    expect(r.opaque.length).toBeGreaterThan(0);
+    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+
+  it("a multi-line literal redirect target is not a path", async () => {
+    const r = await parseCommand('cat file > "a\nb.txt"', cwd);
+    expect(r.paths).toEqual([]);
+    expect(r.opaque).toEqual([]);
+  });
+
+  it("single-line args are unaffected", async () => {
+    const r = await parseCommand("cat /tmp/foo.txt", cwd);
+    expect(r.paths).toContain("/tmp/foo.txt");
+    expect(r.opaque).toEqual([]);
+  });
+});

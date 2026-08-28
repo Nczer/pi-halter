@@ -755,3 +755,117 @@ describe("buildPrompt: unresolved references", () => {
     expect(b.alwaysLabel).not.toContain("<");
   });
 });
+
+describe("bash prompt: LLM/confirmed token resolutions", () => {
+  const token = "/home/u/ext/$e/*.ts";
+
+  it("renders a `→ LLM:` line under a resolved token (first 3 dirs + N more)", () => {
+    const prompt = buildPrompt(
+      bashDecision({
+        needsPathApproval: true,
+        outsideDirs: ["/home/u/ext/$e"],
+        unresolved: [{ token, reason: "var" }],
+      }),
+      new Map([[token, ["/home/u/ext/a", "/home/u/ext/b", "/home/u/ext/c", "/home/u/ext/d", "/home/u/ext/e"]]]),
+    );
+    expect(prompt.body).toContain("→ LLM: /home/u/ext/a, /home/u/ext/b, /home/u/ext/c (+2 more)");
+  });
+
+  it("renders `→ confirmed:` for user-confirmed resolutions", () => {
+    const prompt = buildPrompt(
+      bashDecision({
+        needsPathApproval: true,
+        outsideDirs: ["/home/u/ext/$e"],
+        unresolved: [{ token, reason: "var" }],
+      }),
+      new Map([[token, ["/home/u/ext/a"]]]),
+      new Set([token]),
+    );
+    expect(prompt.body).toContain("→ confirmed: /home/u/ext/a");
+    expect(prompt.body).not.toContain("→ LLM:");
+  });
+
+  it("unresolved tokens render shortened when long", () => {
+    const long = "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z/$e/file.txt";
+    const prompt = buildPrompt(
+      bashDecision({
+        needsPathApproval: true,
+        outsideDirs: [],
+        unresolved: [{ token: long, reason: "var" }],
+      }),
+    );
+    expect(prompt.body).toContain(long.slice(0, 59) + "…");
+    expect(prompt.body).not.toContain(long);
+  });
+
+  it("resolver dirs join the paths grant (pathGrantDirs, labels, option)", () => {
+    const prompt = buildPrompt(
+      bashDecision({
+        needsCommandApproval: true,
+        needsPathApproval: true,
+        signatures: ["grep"],
+        outsideDirs: ["/home/u/ext/$e"],
+        unresolved: [{ token, reason: "var" }],
+      }),
+      new Map([[token, ["/home/u/ext/a", "/home/u/ext/b"]]]),
+    );
+    expect(prompt.pathGrantDirs).toEqual(["/home/u/ext/$e", "/home/u/ext/a", "/home/u/ext/b"]);
+    expect(prompt.resolverDirs).toEqual(["/home/u/ext/a", "/home/u/ext/b"]);
+    expect(prompt.includePathsOption).toBe(true);
+    expect(prompt.alwaysPathsLabel).toContain("Read /home/u/ext/a/*");
+    expect(prompt.alwaysPathsLabel).toContain("Read /home/u/ext/b/*");
+    expect(prompt.tier2Paths?.body).toContain("/home/u/ext/a/*");
+  });
+
+  it("resolver dirs alone enable the paths option (no concrete dirs)", () => {
+    const prompt = buildPrompt(
+      bashDecision({
+        needsCommandApproval: true,
+        needsPathApproval: true,
+        signatures: ["grep"],
+        outsideDirs: [],
+        unresolved: [{ token, reason: "var" }],
+      }),
+      new Map([[token, ["/home/u/ext/a"]]]),
+    );
+    expect(prompt.pathGrantDirs).toEqual(["/home/u/ext/a"]);
+    expect(prompt.includePathsOption).toBe(true);
+    // Without resolutions the same prompt has nothing to grant.
+    const bare = buildPrompt(
+      bashDecision({
+        needsCommandApproval: true,
+        needsPathApproval: true,
+        signatures: ["grep"],
+        outsideDirs: [],
+        unresolved: [{ token, reason: "var" }],
+      }),
+    );
+    expect(bare.pathGrantDirs).toEqual([]);
+    expect(bare.includePathsOption).toBe(false);
+  });
+
+  it("filters root and sentinel dirs from resolutions", () => {
+    const prompt = buildPrompt(
+      bashDecision({
+        needsPathApproval: true,
+        outsideDirs: [],
+        unresolved: [{ token, reason: "var" }],
+      }),
+      new Map([[token, ["/", "<unresolved-cwd>", "/ok/dir"]]]),
+    );
+    expect(prompt.pathGrantDirs).toEqual(["/ok/dir"]);
+    expect(prompt.resolverDirs).toEqual(["/ok/dir"]);
+  });
+
+  it("summarizePrompt shortens unresolved tokens", () => {
+    const long = "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z/$e/file.txt";
+    const decision = bashDecision({
+      needsPathApproval: true,
+      outsideDirs: ["/x"],
+      unresolved: [{ token: long, reason: "var" }],
+    });
+    const s = summarizePrompt(decision);
+    expect(s).toContain(long.slice(0, 59) + "…");
+    expect(s).not.toContain(long);
+  });
+});

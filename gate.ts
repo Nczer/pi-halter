@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PermissionRequest, Decision, PromptData, DecideOptions } from "./decision-engine";
 import { decide } from "./decision-engine";
 import { pdTargetLabel } from "./prompt-builder";
-import { logDecision, type DspModeTag } from "./decision-log";
+import { logDecision, logUnresolved, type DspModeTag } from "./decision-log";
 import { showPrompt, type DspaFallthrough } from "./prompt-flow";
 import type { Store } from "./store";
 import { isDspaActive, recordDspaAutoAllowed, updateDspaWidget } from "./dspa-mode";
@@ -88,10 +88,27 @@ function dspaAutoAllowed(
   request: PermissionRequest,
   pd: PromptData,
   ctx: ExtensionContext,
+  store: Store,
   verdict: JudgeResult,
   stage: 1 | 2,
 ): void {
   logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (stage ${stage}, ${verdict.model})` }, "dspa");
+  // Unresolved-token log: an auto-allow of a command WITH unresolved tokens
+  // means their resolutions were already user-confirmed — the convergence
+  // end-state (no prompt, no LLM call for the scope).
+  if (pd.type === "bash" && pd.unresolved?.length) {
+    for (const u of pd.unresolved) {
+      logUnresolved({
+        cmd: pd.command,
+        cwd: pd.cwd,
+        token: u.token,
+        llm: store.getConfirmedResolution(u.token) ?? undefined,
+        persisted: true,
+        outcome: "auto-allowed",
+        decision: "auto-allow",
+      });
+    }
+  }
   try {
     ctx.ui.notify(`✓ Judge auto-allowed (stage ${stage}): ${verdict.explanation}`, "info");
   } catch {
@@ -145,13 +162,13 @@ async function tryDspaAutoAllow(
   // Stage 1 — stateless (the packet's static analysis is the whole input).
   const v1 = await getJudgeVerdict(pd, ctx, store);
   if (v1 && v1.approve === "approve" && v1.risk === "low") {
-    dspaAutoAllowed(request, pd, ctx, v1, 1);
+    dspaAutoAllowed(request, pd, ctx, store, v1, 1);
     return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v1, stage: 1 } };
   }
   // Stage 2 — intent pass (session context, uncached, final verdict).
   const v2 = await getStage2Verdict(pd, ctx, store);
   if (v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium")) {
-    dspaAutoAllowed(request, pd, ctx, v2, 2);
+    dspaAutoAllowed(request, pd, ctx, store, v2, 2);
     return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v2, stage: 2 } };
   }
   // Gate passed but neither stage auto-allowed. The fall-through prompt

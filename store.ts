@@ -38,6 +38,17 @@ export interface Store {
   trustPackage(pkg: string): void;
   /** Check if a resolved path is inside a session-auto-allowed dir (no Set copy). */
   isInsideAllowedDir(resolved: string, kind: "read" | "write"): boolean;
+  /**
+   * User-confirmed resolution of an unresolved token (the LLM suggested the
+   * token's runtime dirs in a prompt and the user accepted): token → absolute
+   * dirs. The dspa gate consults this DETERMINISTICALLY (never an LLM call):
+   * all dirs inside the manual bar → the sentinel is judgeable; any dir
+   * outside → a concrete outside stop for exactly those dirs. Null =
+   * unconfirmed — the sentinel stops as before.
+   */
+  getConfirmedResolution(token: string): string[] | null;
+  /** Persist a user-confirmed token → dirs resolution for the session. */
+  confirmResolution(token: string, dirs: string[]): void;
   addAllowed(rules: AllowRules): void;
   recordAbort(command: string): void;
   getLastAbort(command: string): number | null;
@@ -75,6 +86,7 @@ export function createStore(nowFn = Date.now): Store {
   const writePaths = new Set<string>();
   const mcpServers = new Set<string>();
   const trustedPackages = new Set<string>();
+  const confirmedResolutions = new Map<string, string[]>();
   const aborted = new Map<string, number>();
   let pcount = 0;
 
@@ -108,6 +120,11 @@ export function createStore(nowFn = Date.now): Store {
     hasAllowedMcpServer(s) { return mcpServers.has(s); },
     hasTrustedPackage(pkg) { return trustedPackages.has(pkg); },
     trustPackage(pkg) { trustedPackages.add(pkg); },
+    getConfirmedResolution(token) { return confirmedResolutions.get(token) ?? null; },
+    confirmResolution(token, dirs) {
+      const deduped = [...new Set(dirs)];
+      if (deduped.length > 0) confirmedResolutions.set(token, deduped);
+    },
     isInsideAllowedDir(resolved, kind) {
       // Write dirs imply read, so "read" checks both sets.
       const sets = kind === "read" ? [readDirs, writeDirs] : [writeDirs];
@@ -169,6 +186,7 @@ export function createStore(nowFn = Date.now): Store {
       writePaths.clear();
       mcpServers.clear();
       trustedPackages.clear();
+      confirmedResolutions.clear();
       aborted.clear();
       pcount = 0;
     },

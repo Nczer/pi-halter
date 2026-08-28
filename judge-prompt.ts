@@ -123,6 +123,7 @@ async function buildJudgmentInput(
       pd.analysis ??
       (await analyzeCommand(pd.command, pd.cwd, {
         isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+        getConfirmedResolution: (t) => store.getConfirmedResolution(t),
       }));
     const script = extractScriptPayload(analysis, pd.cwd);
     const input: JudgmentBashInput = {

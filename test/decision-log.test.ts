@@ -21,6 +21,7 @@ import {
   writeToggleSetting,
   setDecisionLogEnabled,
   isDecisionLogEnabled,
+  logUnresolved,
   MAX_LOG_BYTES,
   DEFAULT_LOG_FILE,
   type DecisionLogEntry,
@@ -284,5 +285,92 @@ describe("decision log", () => {
     expect(fs.statSync(logFile + ".1").size).toBe(MAX_LOG_BYTES);
     const [entry] = lines(logFile);
     expect(entry.kind).toBe("auto-allow");
+  });
+});
+
+describe("unresolved-token log (logUnresolved)", () => {
+  let tmp: string;
+  let unresolvedFile: string;
+  let settingsFile: string;
+  const savedEnv = process.env.HALTER_UNRESOLVED_LOG;
+
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-unres-"));
+    unresolvedFile = path.join(tmp, "unresolved.jsonl");
+    settingsFile = path.join(tmp, "halter.json");
+  });
+  afterAll(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  beforeEach(() => {
+    process.env.HALTER_UNRESOLVED_LOG = unresolvedFile;
+    // Anything but "off" — the decision log is redirected to a scratch path
+    // so the hermeticity guard does not disable the unresolved log.
+    process.env.HALTER_DECISION_LOG = path.join(tmp, "decisions.jsonl");
+    setDecisionLogEnabled(true, settingsFile);
+  });
+  afterEach(() => {
+    setDecisionLogEnabled(false, settingsFile);
+    if (savedEnv === undefined) delete process.env.HALTER_UNRESOLVED_LOG;
+    else process.env.HALTER_UNRESOLVED_LOG = savedEnv;
+    process.env.HALTER_DECISION_LOG = "off";
+    for (const f of [unresolvedFile, unresolvedFile + ".1"]) {
+      try {
+        fs.unlinkSync(f);
+      } catch {
+        /* not created */
+      }
+    }
+  });
+
+  it("writes one entry per call (ts, full token, cmd truncated to 200)", () => {
+    logUnresolved({
+      cmd: "x".repeat(300),
+      cwd: "/c",
+      token: "/x/$e/f",
+      llm: ["/a"],
+      persisted: true,
+      outcome: "prompted",
+      decision: "yes",
+    });
+    const [entry] = fs.readFileSync(unresolvedFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(entry).toMatchObject({
+      cmd: "x".repeat(200),
+      cwd: "/c",
+      token: "/x/$e/f",
+      llm: ["/a"],
+      persisted: true,
+      outcome: "prompted",
+      decision: "yes",
+    });
+    expect(new Date(entry.ts).toString()).not.toBe("Invalid Date");
+  });
+
+  it("omits the llm key when the resolver found nothing", () => {
+    logUnresolved({ cmd: "ls", cwd: "/c", token: "$FOO", persisted: false, outcome: "gate-stop" });
+    const entry = JSON.parse(fs.readFileSync(unresolvedFile, "utf8").trim());
+    expect("llm" in entry).toBe(false);
+    expect(entry.outcome).toBe("gate-stop");
+  });
+
+  it("stays silent when the toggle is off", () => {
+    setDecisionLogEnabled(false, settingsFile);
+    logUnresolved({ cmd: "ls", cwd: "/c", token: "$FOO", persisted: false, outcome: "prompted" });
+    expect(fs.existsSync(unresolvedFile)).toBe(false);
+  });
+
+  it("stays silent under HALTER_DECISION_LOG=off (test hermeticity guard)", () => {
+    process.env.HALTER_DECISION_LOG = "off";
+    logUnresolved({ cmd: "ls", cwd: "/c", token: "$FOO", persisted: false, outcome: "prompted" });
+    expect(fs.existsSync(unresolvedFile)).toBe(false);
+  });
+
+  it("never throws when the log path is impossible", () => {
+    const blocker = path.join(tmp, "blocker");
+    fs.writeFileSync(blocker, "i am a file");
+    process.env.HALTER_UNRESOLVED_LOG = path.join(blocker, "sub", "unresolved.jsonl");
+    expect(() =>
+      logUnresolved({ cmd: "ls", cwd: "/c", token: "$FOO", persisted: false, outcome: "auto-allowed" }),
+    ).not.toThrow();
   });
 });

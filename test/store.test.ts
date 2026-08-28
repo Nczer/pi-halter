@@ -257,3 +257,37 @@ describe("trusted packages (D10)", () => {
     expect(store.hasTrustedPackage("tsc")).toBe(false);
   });
 });
+
+describe("Store: confirmed resolutions (LLM-suggested token dirs)", () => {
+  it("starts with none", () => {
+    const store = createStore();
+    expect(store.getConfirmedResolution("/x/$e/f")).toBeNull();
+  });
+
+  it("confirm/get round-trips and dedupes dirs", () => {
+    const store = createStore();
+    store.confirmResolution("/x/$e/f", ["/a", "/b", "/a"]);
+    expect(store.getConfirmedResolution("/x/$e/f")).toEqual(["/a", "/b"]);
+    expect(store.getConfirmedResolution("/y/$f")).toBeNull();
+  });
+
+  it("an empty dir list is a no-op (nothing known ≠ confirmed)", () => {
+    const store = createStore();
+    store.confirmResolution("/x/$e/f", []);
+    expect(store.getConfirmedResolution("/x/$e/f")).toBeNull();
+  });
+
+  it("re-confirm replaces the previous dirs", () => {
+    const store = createStore();
+    store.confirmResolution("/x/$e/f", ["/a"]);
+    store.confirmResolution("/x/$e/f", ["/b", "/c"]);
+    expect(store.getConfirmedResolution("/x/$e/f")).toEqual(["/b", "/c"]);
+  });
+
+  it("reset clears all resolutions", () => {
+    const store = createStore();
+    store.confirmResolution("/x/$e/f", ["/a"]);
+    store.reset();
+    expect(store.getConfirmedResolution("/x/$e/f")).toBeNull();
+  });
+});

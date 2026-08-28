@@ -55,6 +55,7 @@ function makePrompt(overrides: Partial<BuiltPrompt> = {}): BuiltPrompt {
     alwaysBroaderLabel: "test broader *",
     alwaysPathsLabel: "/path/*",
     alwaysFileLabel: "file.txt",
+    pathGrantDirs: [],
     ...overrides,
   };
 }

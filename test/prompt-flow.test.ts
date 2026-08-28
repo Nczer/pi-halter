@@ -10,10 +10,12 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Decision } from "../decision-engine";
 
-const { judgeStatusMock, verdictMock, promptSpy } = vi.hoisted(() => ({
+const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn(),
   verdictMock: vi.fn(),
   promptSpy: vi.fn(),
+  resolverMock: vi.fn(),
+  pathsRulesMock: vi.fn(),
 }));
 
 vi.mock("../judge-prompt", async (importOriginal) => ({
@@ -23,21 +25,23 @@ vi.mock("../judge-prompt", async (importOriginal) => ({
   judgeVerdictBlock: (await importOriginal<typeof import("../judge-prompt")>()).judgeVerdictBlock,
 }));
 vi.mock("../prompts", () => ({ twoTierAlwaysPrompt: promptSpy }));
+vi.mock("../path-resolver", () => ({ resolveUnresolvedPaths: resolverMock }));
 vi.mock("../prompt-builder", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../prompt-builder")>()),
-  buildPrompt: () => ({ title: "T", body: "B" }),
+  buildPrompt: () => ({ title: "T", body: "B", pathGrantDirs: ["/x/a", "/x/b"], resolverDirs: ["/x/a", "/x/b"] }),
 }));
 vi.mock("../widget", () => ({ updateWidget: () => {} }));
 vi.mock("../rule-generator", () => ({
   RuleGenerator: {
     generatePrimaryRules: () => [],
-    generatePathsOnlyRules: () => null,
+    generatePathsOnlyRules: pathsRulesMock,
     generateFileOnlyRules: () => null,
     generateBroaderRules: () => null,
   },
 }));
 
 import { showPrompt, type DspaFallthrough } from "../prompt-flow";
+import { createStore } from "../store";
 import { setDspatActive, resetDspat } from "../dspat-mode";
 
 beforeEach(() => {
@@ -46,6 +50,8 @@ beforeEach(() => {
   judgeStatusMock.mockReturnValue({ state: "ok", modelLabel: "llama-cpp/qwen (session)", reason: null });
   verdictMock.mockResolvedValue(null);
   promptSpy.mockResolvedValue("yes");
+  resolverMock.mockResolvedValue(null);
+  pathsRulesMock.mockReturnValue(null);
 });
 
 function bashDecision(): Decision {
@@ -209,5 +215,108 @@ describe("/dspa fall-through", () => {
     expect(body).toContain("→ suggests: APPROVE (low) — advisory (floor stop stands)");
     // the prompt offers the Trust option for the stopped packages
     expect((shownPrompt() as any).trustPackages).toEqual(["evil-pkg"]);
+  });
+});
+
+// ── Resolution persistence (path resolver → confirmed resolutions) ──────
+
+describe("resolution persistence", () => {
+  const IN_BAR = "/home/user/project/sub"; // under the decision's cwd
+  const OUT_BAR = "/elsewhere/dir";
+
+  function unresolvedDecision(): Decision {
+    return {
+      kind: "prompt",
+      promptData: {
+        type: "bash",
+        command: "cat /x/$e/f",
+        cwd: "/home/user/project",
+        outsideDirs: ["/x/$e"],
+        segments: ["cat /x/$e/f"],
+        signatures: ["cat"],
+        relativeToolIds: [],
+        nonAllowedSegmentIndices: [0],
+        riskDangerous: false,
+        riskSeverity: null,
+        riskReasons: [],
+        hasUnsafePattern: false,
+        credentialRule: null,
+        needsCommandApproval: false,
+        needsPathApproval: true,
+        unresolved: [
+          { token: "/x/$e/f", reason: "var" },
+          { token: "/y/$f/f", reason: "var" },
+        ],
+      },
+    };
+  }
+
+  it("asks the resolver only for bash prompts with unresolved tokens", async () => {
+    await showPrompt(unresolvedDecision(), ctx, createStore());
+    expect(resolverMock).toHaveBeenCalledTimes(1);
+    // A plain command prompt (no unresolved) never resolves.
+    resolverMock.mockClear();
+    await showPrompt(bashDecision(), ctx, createStore());
+    expect(resolverMock).not.toHaveBeenCalled();
+  });
+
+  it("yes persists only all-in-bar resolutions", async () => {
+    const store = createStore();
+    resolverMock.mockResolvedValue(
+      new Map([
+        ["/x/$e/f", [IN_BAR]],
+        ["/y/$f/f", [OUT_BAR]],
+      ]),
+    );
+    promptSpy.mockResolvedValue("yes");
+    await showPrompt(unresolvedDecision(), ctx, store);
+    expect(store.getConfirmedResolution("/x/$e/f")).toEqual([IN_BAR]);
+    expect(store.getConfirmedResolution("/y/$f/f")).toBeNull();
+  });
+
+  it("yes persists nothing when the resolver found nothing", async () => {
+    const store = createStore();
+    resolverMock.mockResolvedValue(null);
+    await showPrompt(unresolvedDecision(), ctx, store);
+    expect(store.getConfirmedResolution("/x/$e/f")).toBeNull();
+  });
+
+  it("always grants the resolver dirs and persists every resolution", async () => {
+    const store = createStore();
+    resolverMock.mockResolvedValue(
+      new Map([
+        ["/x/$e/f", [IN_BAR]],
+        ["/y/$f/f", [OUT_BAR]],
+      ]),
+    );
+    promptSpy.mockImplementation(async (_p: unknown, _s: unknown, _c: unknown, onAlways?: () => void) => {
+      onAlways?.();
+      return "always";
+    });
+    await showPrompt(unresolvedDecision(), ctx, store);
+    // The grant covers the (mocked) resolver dirs the prompt named.
+    expect([...store.listAllowedReadDirs()].sort()).toEqual(["/x/a", "/x/b"]);
+    // Every resolution is confirmed — the user granted what it suggested.
+    expect(store.getConfirmedResolution("/x/$e/f")).toEqual([IN_BAR]);
+    expect(store.getConfirmedResolution("/y/$f/f")).toEqual([OUT_BAR]);
+  });
+
+  it("alwaysPaths grants concrete ∪ resolver dirs and persists every resolution", async () => {
+    const store = createStore();
+    resolverMock.mockResolvedValue(
+      new Map([
+        ["/x/$e/f", [IN_BAR]],
+        ["/y/$f/f", [OUT_BAR]],
+      ]),
+    );
+    pathsRulesMock.mockReturnValue({ readDirs: ["/x"] });
+    promptSpy.mockImplementation(async (_p: unknown, _s: unknown, _c: unknown, onAlways?: () => void, onAlwaysPaths?: () => void) => {
+      onAlwaysPaths?.();
+      return "alwaysPaths";
+    });
+    await showPrompt(unresolvedDecision(), ctx, store);
+    expect([...store.listAllowedReadDirs()].sort()).toEqual(["/x", "/x/a", "/x/b"]);
+    expect(store.getConfirmedResolution("/x/$e/f")).toEqual([IN_BAR]);
+    expect(store.getConfirmedResolution("/y/$f/f")).toEqual([OUT_BAR]);
   });
 });

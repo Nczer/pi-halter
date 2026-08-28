@@ -19,6 +19,14 @@
  * when it exceeds 5 MiB (older backup overwritten).
  * Transient override: HALTER_DECISION_LOG=<path> (enables at that path) or
  * HALTER_DECISION_LOG=off (forces off).
+ *
+ * A second, independent file records unresolved-token outcomes
+ * (logUnresolved): <extension dir>/.log/unresolved.jsonl, same rotation,
+ * same module toggle (/halter-decision-log). The env switch only REDIRECTS
+ * the decision log to a scratch path (it is not an override for the
+ * unresolved log's location) — except `off`, which disables BOTH (test
+ * hermeticity: the vitest setup forces off so fixture lines never reach the
+ * live logs).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -59,6 +67,13 @@ export function isDecisionLogEnabled(): boolean {
 }
 
 export const DEFAULT_LOG_FILE = path.join(here, ".log", "decisions.jsonl");
+export const UNRESOLVED_LOG_FILE = path.join(here, ".log", "unresolved.jsonl");
+
+/** Resolve the unresolved-token log path. `HALTER_UNRESOLVED_LOG` is a
+ * test seam (point the log at a scratch path); production never sets it. */
+export function resolveUnresolvedLogPath(): string {
+  return process.env.HALTER_UNRESOLVED_LOG || UNRESOLVED_LOG_FILE;
+}
 export const MAX_LOG_BYTES = 5 * 1024 * 1024;
 const MAX_TARGET_LEN = 1000;
 
@@ -199,22 +214,81 @@ export function logDecision(
       cwd: "cwd" in request ? request.cwd : undefined,
     };
     const line = JSON.stringify(entry) + "\n";
+    appendJsonl(file, line);
+  } catch {
+    /* never throw */
+  }
+}
 
-    let size = 0;
+/**
+ * Append one line to a JSONL log with size-based rotation. Shared by the
+ * decision log and the unresolved-token log.
+ */
+function appendJsonl(file: string, line: string): void {
+  let size = 0;
+  try {
+    size = fs.statSync(file).size;
+  } catch {
+    /* new file */
+  }
+  if (size + line.length > MAX_LOG_BYTES) {
     try {
-      size = fs.statSync(file).size;
+      fs.renameSync(file, file + ".1");
     } catch {
-      /* new file */
+      /* keep logging even if the backup fails */
     }
-    if (size + line.length > MAX_LOG_BYTES) {
-      try {
-        fs.renameSync(file, file + ".1");
-      } catch {
-        /* keep logging even if the backup fails */
-      }
-    }
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, line);
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, line);
+}
+
+// ── Unresolved-token log ─────────────────────────────────────────────────
+
+export interface UnresolvedLogEntry {
+  /** ISO timestamp (set by logUnresolved when absent). */
+  ts?: string;
+  /** The bash command (truncated). */
+  cmd: string;
+  /** The tool call's working directory. */
+  cwd?: string;
+  /** The unresolved token (full — this is the debug file, not the UI). */
+  token: string;
+  /** Dirs the path resolver (LLM) reported for the token, if any. */
+  llm?: string[];
+  /** Whether a confirmed resolution was stored for the token by this run's
+   *  user decision (or, for auto-allowed runs: was in effect). */
+  persisted: boolean;
+  /**
+   * `prompted` — a permission prompt was shown (the `decision` field names
+   * the user's choice); `gate-stop` — the dspa gate stopped the
+   * auto-allow on an unresolved/confirmed-outside sentinel, then the
+   * prompt's `decision` followed; `auto-allowed` — no prompt: the gate
+   * passed because the token's resolution was already confirmed.
+   */
+  outcome: "prompted" | "gate-stop" | "auto-allowed";
+  /** The prompt outcome ("yes" | "no" | "always" | "alwaysPaths" | …); "auto-allow" for auto-allowed. */
+  decision?: string;
+}
+
+/**
+ * Record one unresolved token's fate (see UnresolvedLogEntry). The point
+ * of this log: watching the convergence loop — first run prompts with an
+ * LLM suggestion, the user's choice confirms, later runs auto-allow
+ * (outcome flips from "prompted" to "auto-allowed" for the same token).
+ * Never throws.
+ */
+export function logUnresolved(e: UnresolvedLogEntry): void {
+  try {
+    if (!decisionLogEnabled) return;
+    // `off` disables both logs — the vitest setup forces this so fixture
+    // lines never reach the live .log/ dir.
+    if (process.env.HALTER_DECISION_LOG === "off") return;
+    const entry: UnresolvedLogEntry = {
+      ts: new Date().toISOString(),
+      ...e,
+      cmd: e.cmd.slice(0, 200),
+    };
+    appendJsonl(resolveUnresolvedLogPath(), JSON.stringify(entry) + "\n");
   } catch {
     /* never throw */
   }
