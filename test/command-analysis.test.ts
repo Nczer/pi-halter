@@ -12,6 +12,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { analyzeCommand, type CommandAnalysis } from "../analysis/command-analysis";
+import { OPAQUE_VAR_DIR } from "../analysis/path-util";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 // Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /etc → /private/etc)
@@ -487,5 +488,79 @@ describe("Paths: outside cwd detection for root filesystem", () => {
     // canBeAutoAllowed is about unsafe patterns only. Outside path gating
     // happens in SafetyRule via needsPathApproval.
     expect(a.prompt.needsPathApproval).toBe(true);
+  });
+});
+
+describe("outsideDirs: unbound-token locations are not grantable", () => {
+  const prefix = fs.mkdtempSync(path.join(home, ".halter-od-"));
+  afterAll(() => fs.rmSync(prefix, { recursive: true, force: true }));
+
+  it("a lone unbound token leaves no grantable dir (marker forces approval)", async () => {
+    const a = await analyzeCommand(`grep -rn x ${prefix}/$e/*.ts`, cwd, {
+      isInsideAllowedDir: () => false,
+    });
+    // The token's raw text is not a location (D12): it is excluded from the
+    // approval bar, so neither its dirname nor its static prefix is offered
+    // as a grant (both would be dead — the marker still stops, and an unbound
+    // value can contain `..`). The marker keeps forcing approval.
+    expect(a.prompt.outsideDirs).toEqual([]);
+    expect(a.prompt.needsPathApproval).toBe(true);
+  });
+
+  it("keeps only dirs backed by concrete outside paths", async () => {
+    const a = await analyzeCommand(`cat ${prefix}/$e/*.ts ${prefix}/real.txt`, cwd, {
+      isInsideAllowedDir: () => false,
+    });
+    // real.txt is a concrete outside path → its dir is a live grant. The
+    // token's dirname is not (its raw text is excluded from the bar).
+    expect(a.prompt.outsideDirs).toContain(prefix);
+    expect(a.prompt.outsideDirs).not.toContain(`${prefix}/$e`);
+  });
+
+  it("keeps the unknown-cwd marker (display of an unresolvable base)", async () => {
+    // A var-target cd nulls the base → the || side emits <unresolved-cwd>
+    // paths. The marker is display-only (never grantable) but must stay in
+    // outsideDirs — the prompt shows the base could be anywhere.
+    const a = await analyzeCommand(`cd $D && ls f || cat x`, cwd, {
+      isInsideAllowedDir: () => false,
+    });
+    expect(a.prompt.outsideDirs).toContain("<unresolved-cwd>");
+  });
+});
+
+describe("confirmed resolutions converge the approval bar (D12)", () => {
+  const prefix = fs.mkdtempSync(path.join(home, ".halter-cf-"));
+  afterAll(() => fs.rmSync(prefix, { recursive: true, force: true }));
+  const token = `${prefix}/$e/f.txt`;
+  const opts = (confirmed: Map<string, string[]> | null) => ({
+    isInsideAllowedDir: () => false,
+    getConfirmedResolution: confirmed
+      ? (t: string) => confirmed.get(t) ?? null
+      : undefined,
+  });
+
+  it("unconfirmed → the marker keeps the token outside (approval forced)", async () => {
+    const a = await analyzeCommand(`cat ${token}`, cwd, opts(null));
+    expect(a.prompt.needsPathApproval).toBe(true);
+    expect(a.prompt.outsidePaths?.some((p) => p.startsWith(`${OPAQUE_VAR_DIR}/`))).toBe(true);
+    // The raw token text is not a location — it never joins the approval bar.
+    expect(a.prompt.outsidePaths).not.toContain(token);
+  });
+
+  it("confirmed all-in-bar → no outside paths (auto-allowable, no LLM)", async () => {
+    const a = await analyzeCommand(`cat ${token}`, cwd, opts(new Map([[token, [`${cwd}/sub`]]])));
+    expect(a.prompt.outsidePaths).toEqual([]);
+    expect(a.prompt.needsPathApproval).toBe(false);
+  });
+
+  it("confirmed one-out-of-bar → exactly the outside dir is named (grantable)", async () => {
+    const a = await analyzeCommand(
+      `cat ${token}`, cwd, opts(new Map([[token, [`${cwd}/sub`, prefix]]])),
+    );
+    expect(a.prompt.needsPathApproval).toBe(true);
+    expect(a.prompt.outsidePaths).toEqual([prefix]);
+    expect(a.prompt.outsidePaths).not.toContain(token);
+    // The outside dir is a live grant for "Always (paths)" — one click converges.
+    expect(a.prompt.outsideDirs).toContain(prefix);
   });
 });

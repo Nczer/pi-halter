@@ -7,6 +7,7 @@ import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./v
 import { getTmuxSubcommand, extractTmuxSendKeys } from "./tmux-helpers";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs, checkCommandForCredentialPaths } from "./path-analysis";
+import { UNKNOWN_CWD_MARKER } from "./cwd-tracking";
 import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
 
@@ -84,6 +85,14 @@ export interface CommandAnalysis {
 export interface AnalyzeCommandOptions {
   /** Predicate: is this resolved path inside a session-auto-allowed dir (read or write)? */
   isInsideAllowedDir?: (path: string) => boolean;
+  /**
+   * Confirmed resolution for an unresolved-var token (store.getConfirmedResolution
+   * — the user-accepted dirs from the LLM path resolver, D12). When present the
+   * sentinel is made concrete: only the confirmed dirs outside the manual bar
+   * join the path set. Shared by the manual bar and the dspa gate (D7), so the
+   * two agree on whether a resolved token still needs approval.
+   */
+  getConfirmedResolution?: (token: string) => string[] | null;
 }
 
 const TMUX_PAYLOAD_MAX_DEPTH = 3;
@@ -225,7 +234,30 @@ export async function analyzeCommand(
     (p) => getOutsideCwdPaths([p], cwd, options?.isInsideAllowedDir).length === 0,
   );
   paths.push(...opaqueResolution.paths);
-  for (const u of opaqueResolution.unresolved) paths.push(u.marker);
+  for (const u of opaqueResolution.unresolved) {
+    // A confirmed resolution makes the sentinel concrete (D12): push only the
+    // confirmed dirs outside the manual bar (all in-bar → push nothing — the
+    // runtime location is proven in-base, no approval needed). Unconfirmed
+    // refs keep the marker sentinel: it forces approval and no dead grant can
+    // be recorded for it. This is the same predicate the dspa gate's D7
+    // sentinel pass applies (docs/dspa-redesign.md) — one derivation, so the
+    // manual bar and the gate converge on a confirmed token identically.
+    const confirmed = options?.getConfirmedResolution?.(u.token) ?? null;
+    if (confirmed && confirmed.length > 0) {
+      for (const d of confirmed) {
+        const outside = getOutsideCwdPaths([d], cwd, options?.isInsideAllowedDir);
+        if (outside.length > 0) paths.push(d);
+      }
+    } else {
+      paths.push(u.marker);
+    }
+  }
+  // The raw text of an unbound ref is not a location (its value is unknown or
+  // confirmed) — the marker (unconfirmed) or the confirmed dirs are the
+  // authority. Exclude the raw tokens from the approval bar so a confirmed
+  // in-bar token leaves no phantom outside path (D12 convergence: the manual
+  // bar and the gate agree on a resolved token).
+  const unresolvedRawTokens = new Set(opaqueResolution.unresolved.map((u) => u.token));
 
   // Unified segment analysis: one call per segment replaces
   // hasKnownDanger + isSimpleAllowedCommand + isSegmentUnsafe + analyzeSegmentRisk.
@@ -300,16 +332,32 @@ export async function analyzeCommand(
   let outsideDirs: string[] | undefined;
   let needsPathApproval: boolean | undefined;
   if (options?.isInsideAllowedDir) {
-    outsidePaths = getOutsideCwdPaths(
-      paths,
+    const op = getOutsideCwdPaths(
+      paths.filter((p) => !unresolvedRawTokens.has(p)),
       cwd,
       options.isInsideAllowedDir,
     );
+    outsidePaths = op;
     // The bare unresolved-var sentinel names no directory — the prompt shows
     // it via the unresolved list instead (the unknown-cwd marker stays: it is
-    // the display of a base the cd chain could not resolve).
-    outsideDirs = (await resolvePathsToDirs(outsidePaths)).filter(d => d !== OPAQUE_VAR_DIR);
-    needsPathApproval = outsidePaths.length > 0;
+    // the display of a base the cd chain could not resolve, and is never
+    // grantable — the prompt filters "<" dirs from Always options).
+    outsideDirs = (await resolvePathsToDirs(op)).filter(d => {
+      if (d === OPAQUE_VAR_DIR) return false;
+      if (d === UNKNOWN_CWD_MARKER) return true;
+      // A directory backed ONLY by unresolved-var marker paths is the static
+      // prefix of an unbound token (e.g. ~/.pi/agent/extensions from
+      // <unresolved-var>/~/.pi/agent/extensions/$e/*.ts). The marker keeps
+      // forcing approval (a var value can contain `..`), so a grant of the
+      // prefix could never satisfy it — offering "Always: Read prefix/*" for
+      // it would be a dead, misleading grant. Concrete-path dirs stay.
+      return op.some(p =>
+        !p.startsWith(OPAQUE_VAR_DIR + "/") &&
+        !p.includes(UNKNOWN_CWD_MARKER) &&
+        (p === d || p.startsWith(d + "/")),
+      );
+    });
+    needsPathApproval = op.length > 0;
   }
 
   // Credential path check — denies are blocked earlier by CredentialDenyRule,

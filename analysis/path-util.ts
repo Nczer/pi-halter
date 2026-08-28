@@ -14,3 +14,15 @@ export function expandTilde(p: string): string {
  * dir, so the outside-cwd check can never drop a path carrying it.
  */
 export const OPAQUE_VAR_DIR = "<unresolved-var>";
+
+/**
+ * Display form of an unresolved token for prompts/reasons: first line,
+ * truncated to `max` chars with an ellipsis. Tokens can be whole glob
+ * expansions of a long base — one short line is all the operator needs to
+ * recognize the reference (the full token stays in the unresolved log).
+ */
+export function shortenToken(token: string, max = 60): string {
+  const line = token.split("\n")[0].trim();
+  if (line.length <= max) return line;
+  return line.slice(0, max - 1) + "…";
+}

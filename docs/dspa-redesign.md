@@ -418,6 +418,78 @@ from. Six decisions (implemented the same day; reverts fix (a) of
 6. **The floor keeps**: unresolvable-location stops (now with advisory
    verdict), full-filesystem scans, and rm targets outside the bar.
 
+### D12. Converge: unresolved tokens resolve to determinism (2026-08-27)
+
+The 2026-08-27 session (dspa): the same unbound-token command prompted
+repeatedly — each run paid a prompt (and an LLM verdict) for the same
+unresolvable location, and the prompt offered a dead grant (the token's
+static prefix, which a marker can never satisfy). Target: a repeated
+operation reaches steady state where the gate is deterministic and no LLM
+call is needed.
+
+**Tier 0 — deterministic, no prompt at all.** The parser now handles two
+shapes that used to fall into opaque markers:
+
+1. **Pinned-tail references** — `prefix/$var/tail` (any number of static
+   segments around one unbound variable, no `$`/backtick/backslash/`..` in
+   the tail). If the static prefix sits inside the read bar, the reference
+   can only read inside it → the marker is dropped entirely (no prompt,
+   no unresolved entry). `grep … ~/.pi/agent/extensions/$e/*.ts` is the
+   canonical case: `~/.pi` is read-allowed → auto-allow.
+2. **Multi-line literal arguments are script bodies, not paths.** A
+   literal argument containing a newline and no runtime expansion (`node
+   -e '<17-line script>'`, `python3 -c "…"`) is excluded from path
+   extraction — it is executed content, and the judge already sees it in
+   the command text. It no longer emits an opaque ref or a bogus outside
+   dir; the command prompts (or doesn't) on its own risk.
+
+**Tier 1 — LLM path resolver (first run only).** When a prompt still
+unresolves a token, the judge model (same settings as the judge — a second
+use, not a new one) reports the runtime dirs for each token, grounded only
+in the command text (assignments, loop in-lists, tool semantics). Display:
+`→ LLM: dir1, dir2` under the token in the prompt. The gate never
+auto-allows on it (Q1 stands) — it becomes binding only when the user
+accepts a grant.
+
+**Steady state — confirmed resolutions.** `store.confirmResolution(
+token, dirs)` (session-scoped) records a user-accepted token → dirs:
+
+- **Always / Always (paths)**: the option grants exactly the union of
+  concrete outside dirs and the LLM/confirmed dirs (`pathGrantDirs`);
+  every resolution is persisted.
+- **One-shot Yes / non-paths Always**: only tokens whose dirs are ALL
+  inside the manual bar are persisted (Yes vouches for this exact run;
+  in-bar dirs never needed a grant, so confirming them only makes the
+  next run judgeable).
+
+Confirmed resolutions are consulted at the **analysis layer** (one
+derivation, deterministic — no LLM), so the manual bar and the dspa gate
+agree on a resolved token:
+
+- The raw text of an unbound token is **not a location** — it never joins
+  the approval bar (its value is unknown or confirmed). Previously it
+  sat in `outsidePaths` as a phantom: it kept `needsPathApproval` true
+  even after an in-bar confirmation, so the manual bar re-prompted a
+  resolved token forever. Only the marker (unconfirmed) or the confirmed
+  dirs are the location authority.
+- All confirmed dirs in the manual bar → the token leaves the bar
+  entirely (no marker, no raw text) → the command auto-allows like any
+  in-bar one.
+- Any confirmed dir outside the bar → it is named as a concrete outside
+  path: the gate stops `touches paths outside base (…)` carrying
+  `confirmedOutside`, and the manual bar's "Always (paths)" grants
+  exactly it — one click converges the token (the next run finds it
+  in-bar).
+
+The gate's D7 sentinel pass is kept as a defensive twin of the analysis
+layer (it resolves any sentinel that reaches the floor).
+
+**Observability — unresolved log.** `.log/unresolved.jsonl` (same toggle
+and rotation as the decision log) records each token's fate:
+`outcome: prompted | gate-stop | auto-allowed`, the LLM's suggestion, the
+user's decision, and whether it was confirmed. Convergence is visible as
+the same token flipping from `prompted` to `auto-allowed` across runs.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -452,6 +524,11 @@ class"). Suite 3229.
   executions; advisory verdicts on scope-class floor stops; reverts
   `5ef1f0f` (a); log-inspect gains the resolution-mismatch audit check
   and `dspa --reasons`). Suite 3404.
+- **Phase 3h — done** (2026-08-27): D12 (convergence — pinned-tail refs
+  and multi-line literal args resolve at the parser (Tier 0); LLM path
+  resolver with `→ LLM:` prompt lines; confirmed resolutions make the
+  gate's sentinel pass deterministic; `pathGrantDirs` union grant;
+  `.log/unresolved.jsonl`). Suite 3464.
 
 ## 5. Open questions (grill order)
 

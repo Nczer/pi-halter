@@ -245,6 +245,7 @@ Config is split across focused modules in `config/`:
 - Enable: `/halter-decision-log [on|off]` (bare = toggle) — persisted in `~/.pi/agent/halter.json` (halter's own settings file, like gallop's `gallop.json`; pi owns `settings.json`). Compile-time default: `DECISION_LOG_ENABLED` in `config/logging.ts` (false)
 - Transient override: `HALTER_DECISION_LOG=<path>` (enables at that path); `HALTER_DECISION_LOG=off` forces off
 - Path: `<extension dir>/.log/decisions.jsonl` (gitignored); rotates to `decisions.jsonl.1` at 5 MiB — a few KB per day, SSD wear negligible (writes coalesce into 16 KiB pages)
+- A companion log, `.log/unresolved.jsonl` (same toggle, same rotation; `HALTER_DECISION_LOG=off` disables it too), records the fate of each path token static analysis couldn't bind: `outcome: prompted | gate-stop | auto-allowed`, the LLM resolver's suggested dirs, the user's decision, and whether the token became a confirmed resolution (dspa-gate.ts then resolves it deterministically — no LLM). Convergence is visible as the same token flipping from `prompted` to `auto-allowed` across runs (docs/dspa-redesign.md, D12)
 - The log reflects the gate code that was *running* when each line was written. After a `/reload` of changed gate code (or a crash/reload loop), delete `.log/decisions.jsonl` before aggregating — decisions made by the old code would pollute top-N prompt reasons and auto-allow diffs
 - Logging is fire-and-forget: disk problems never affect a decision (and a throw here would surface as a fail-closed block)
 
@@ -308,6 +309,8 @@ One line per command:
 - `PROMPT <cmd>` — plus the why: `outsideDirs` (dirs the prompt would ask for), `sigs` (signatures the prompt shows), `unsafe` / `risk` / `danger` flags
 - `BLOCK <cmd>` — plus the matched rule's `reason`
 - `ALLOW <cmd>`
+
+`tools/converge-probe.mts` exercises the D12 steady state for an unbound path token across three fresh stores — `run1` unconfirmed (PROMPT + gate stop `runtime location unresolvable`), `run2` confirmed all-in-bar (AUTO-ALLOW), `run3` confirmed one-out-of-bar (PROMPT naming exactly that dir, grantable by "Always (paths)"). It discovers the token from run1 (no hardcoding) and defaults both dirs to fresh temp dirs under `$HOME`; pass `[outsidePrefix] [cwd]` to use your own (caller dirs are never deleted).
 
 For a one-off script instead of the harness, call `decide()` directly:
 

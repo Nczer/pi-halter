@@ -2,6 +2,8 @@ import path from "node:path";
 import type { PromptDecision, PromptData, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
 import { PACKAGE_MANAGERS } from "./config";
 import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./renderers/tmux";
+import { shortenToken } from "./analysis/path-util";
+import type { ResolutionMap } from "./path-resolver";
 
 // ── Output types (match twoTierAlwaysPrompt's expected inputs) ──
 
@@ -28,6 +30,14 @@ export interface BuiltPrompt {
   /** D10: bare package names from a dspa untrusted-package stop — tier-1
    *  offers a "Trust" option (session grant) when set. */
   trustPackages?: string[];
+  /** Directories the "Always (paths)" option would grant — the concrete
+   *  outside-cwd dirs plus any LLM-resolved token dirs (bash prompts only;
+   *  empty elsewhere). The prompt flow grants EXACTLY these on that option. */
+  pathGrantDirs: string[];
+  /** The LLM-resolved token dirs included in pathGrantDirs (absent when the
+   *  resolver ran nothing or found nothing) — persisted as confirmed
+   *  resolutions when the user accepts a paths grant. */
+  resolverDirs?: string[];
 }
 
 /**
@@ -67,7 +77,7 @@ export function summarizePrompt(decision: PromptDecision): string {
     }
     if (p.needsPathApproval) {
       const dirs = p.outsideDirs.slice(0, 3).join(",");
-      const unres = (p.unresolved ?? []).slice(0, 3).map(u => u.token).join(",");
+      const unres = (p.unresolved ?? []).slice(0, 3).map(u => shortenToken(u.token)).join(",");
       if (dirs && unres) parts.push(`outside ${dirs}; unresolved ${unres}`);
       else if (dirs) parts.push(`outside ${dirs}`);
       else if (unres) parts.push(`unresolved ${unres}`);
@@ -89,12 +99,22 @@ export function summarizePrompt(decision: PromptDecision): string {
  * Format a PromptDecision's structured data into title/body strings
  * for the two-tier prompt flow. All prompt wording lives here.
  */
-export function buildPrompt(decision: PromptDecision): BuiltPrompt {
+/**
+ * `resolutions` — token → runtime dirs from the path resolver (LLM) and/or
+ * the gate's confirmed resolutions; `confirmedTokens` marks which of them
+ * are user-confirmed (deterministic) rather than LLM-suggested — the body
+ * labels them differently.
+ */
+export function buildPrompt(
+  decision: PromptDecision,
+  resolutions?: ResolutionMap,
+  confirmedTokens?: Set<string>,
+): BuiltPrompt {
   const { promptData } = decision;
 
   switch (promptData.type) {
     case "bash":
-      return buildBashPrompt(promptData);
+      return buildBashPrompt(promptData, resolutions, confirmedTokens);
     case "file":
       return buildFilePrompt(promptData);
     case "mcp":
@@ -127,12 +147,20 @@ function truncateLongCommand(command: string): string {
 
 function buildBashPrompt(
   data: BashPromptData,
+  resolutions?: ResolutionMap,
+  confirmedTokens?: Set<string>,
 ): BuiltPrompt {
   const { command, cwd, outsideDirs, segments, signatures,
           riskDangerous, riskSeverity, riskReasons, hasUnsafePattern,
           needsCommandApproval, needsPathApproval, nonAllowedSegmentIndices,
           credentialRule, relativeToolIds } = data;
   const unresolved = data.unresolved ?? [];
+  // LLM/confirmed token dirs join the concrete outside dirs as grantable —
+  // the "Always (paths)" option offers exactly this union (see
+  // pathGrantDirs). Sanitized the same way: no root, no sentinels.
+  const resolverDirs = [...new Set([...(resolutions?.values() ?? [])].flat())]
+    .filter((d) => d !== "/" && !d.startsWith("<"))
+    .sort();
   const nonAllowedSet = new Set(nonAllowedSegmentIndices);
 
   // Pre-compute aligned risk reasons (reused in body and tier2)
@@ -154,6 +182,7 @@ function buildBashPrompt(
   // sentinel can never match, and one for a token's static prefix would be
   // escapable (an unbound value could contain `..`).
   const grantableDirs = outsideDirs.filter((d) => d !== "/" && !d.startsWith("<"));
+  const pathGrantDirs = [...new Set([...grantableDirs, ...resolverDirs])].sort();
   // Relative-path tool identities (../node_modules/.bin/tsc …) with the base
   // they resolve against. Deduped against uniqueSigs — a relative tool whose
   // basename is NOT allowlisted appears in both lists. Granted base-bound
@@ -161,11 +190,11 @@ function buildBashPrompt(
   const relToolIds = (relativeToolIds ?? []).filter(r => !uniqueSigs.includes(r.sig));
 
   // Compute prompt options from data
-  const includePathsOption = hasBoth && grantableDirs.length > 0;
+  const includePathsOption = hasBoth && pathGrantDirs.length > 0;
   const pmSigs = uniqueSigs.filter(sig => PACKAGE_MANAGERS.has(sig.split(/\s+/)[0]));
   const broaderSigs = [...new Set(pmSigs.map(sig => sig.split(/\s+/)[0]))];
   const includeBroaderOption = broaderSigs.some(s => !uniqueSigs.includes(s));
-  const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (uniqueSigs.length > 0 || grantableDirs.length > 0 || relToolIds.length > 0);
+  const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (uniqueSigs.length > 0 || pathGrantDirs.length > 0 || relToolIds.length > 0);
   const cmdBullets = [
     ...uniqueSigs.map(s => `  \u2022 ${s} *`),
     ...relToolIds.map(r => `  \u2022 ${r.sig} (this cwd)`),
@@ -194,7 +223,18 @@ function buildBashPrompt(
       body += `\n\u26a0\ufe0f Paths outside cwd:\n${outsideDirs.map(d => `  \u2022 ${d}`).join("\n")}`;
     }
     if (unresolved.length > 0) {
-      body += `\n\u26a0\ufe0f Unresolved references (runtime location not statically provable):\n${unresolved.map(u => `  \u2022 ${u.token}${u.reason === "base" ? " \u2014 working directory not statically known" : ""}`).join("\n")}`;
+      const lines = unresolved.map((u) => {
+        let line = `  \u2022 ${shortenToken(u.token)}`;
+        if (u.reason === "base") line += ` \u2014 working directory not statically known`;
+        const dirs = resolutions?.get(u.token);
+        if (dirs && dirs.length > 0) {
+          const source = confirmedTokens?.has(u.token) ? "confirmed" : "LLM";
+          const shown = dirs.slice(0, 3).join(", ");
+          line += `\n    \u2192 ${source}: ${shown}${dirs.length > 3 ? ` (+${dirs.length - 3} more)` : ""}`;
+        }
+        return line;
+      });
+      body += `\n\u26a0\ufe0f Unresolved references (runtime location not statically provable):\n${lines.join("\n")}`;
     }
   }
   if (riskDangerous) {
@@ -238,11 +278,11 @@ function buildBashPrompt(
     const aligned = alignedReasons.map(({ tag, rest }) => `  \u2022 ${tag.padEnd(tagWidth)} ${rest}`);
     dangerWarning = `\n\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n${aligned.join("\n")}`;
   }
-  const pathBullets = grantableDirs.map(d => `  \u2022 ${d}/*`).join("\n");
+  const pathBullets = pathGrantDirs.map(d => `  \u2022 ${d}/*`).join("\n");
   const tier2Everything = hasBoth
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow:\n\nCommands:\n${cmdBullets}${grantableDirs.length ? `\n\nPaths:\n${pathBullets}` : ""}${dangerWarning}`,
+        body: `"Always Yes" will auto-allow:\n\nCommands:\n${cmdBullets}${pathGrantDirs.length ? `\n\nPaths:\n${pathBullets}` : ""}${dangerWarning}`,
       }
     : needsPathApproval
     ? {
@@ -255,7 +295,7 @@ function buildBashPrompt(
       };
 
   // Tier 2 — "always (paths only)" confirmation
-  const tier2Paths = hasBoth && grantableDirs.length > 0
+  const tier2Paths = hasBoth && pathGrantDirs.length > 0
     ? {
         title: `Confirm Always (paths only)`,
         body: `"Always Yes" will auto-allow read for these directories this session:\n\n${pathBullets}\n\nThe command will still prompt next time`,
@@ -264,12 +304,12 @@ function buildBashPrompt(
 
   const alwaysLabel = (needsCommandApproval && (uniqueSigs.length > 0 || relToolIds.length > 0))
     ? [...uniqueSigs.map(s => s + " *"), ...relToolIds.map(r => r.sig + " (this cwd)")].join(", ")
-    : (needsPathApproval ? grantableDirs.map(d => `Read ${d}/*`).join(", ") : "");
+    : (needsPathApproval ? pathGrantDirs.map(d => `Read ${d}/*`).join(", ") : "");
   const alwaysBroaderLabel = includeBroaderOption
     ? uniqueSigs.map(s => s.split(" ")[0] + " *").join(", ")
     : undefined;
-  const alwaysPathsLabel = hasBoth && grantableDirs.length > 0
-    ? grantableDirs.map(d => `Read ${d}/*`).join(", ")
+  const alwaysPathsLabel = hasBoth && pathGrantDirs.length > 0
+    ? pathGrantDirs.map(d => `Read ${d}/*`).join(", ")
     : undefined;
 
   // Tier 2 — broader (package manager prefix only, e.g. "npm *")
@@ -280,7 +320,7 @@ function buildBashPrompt(
       }
     : undefined;
 
-  return { title, body, tier2Everything, tier2Paths, tier2Broader, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel };
+  return { title, body, tier2Everything, tier2Paths, tier2Broader, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, pathGrantDirs, resolverDirs: resolverDirs.length > 0 ? resolverDirs : undefined };
 }
 
 // ── File prompt ──
@@ -346,6 +386,7 @@ function buildFilePrompt(
       alwaysLabel: `${action} ${fileName}`,
       alwaysBroaderLabel: broaderPaths.length > 0 ? broaderPaths[0].label : undefined,
       broaderPaths: broaderPaths.length > 0 ? broaderPaths : undefined,
+      pathGrantDirs: [],
     };
   }
 
@@ -399,6 +440,7 @@ function buildFilePrompt(
     alwaysFileLabel: `${action} ${fileName}`,
     alwaysBroaderLabel: broaderPaths.length > 0 ? broaderPaths[0].label : undefined,
     broaderPaths: broaderPaths.length > 0 ? broaderPaths : undefined,
+    pathGrantDirs: [],
   };
 }
 
@@ -431,5 +473,6 @@ function buildMcpPrompt(
     includeBroaderOption: false,
     includeAlwaysOption: true,
     alwaysLabel: `${server}:*`,
+    pathGrantDirs: [],
   };
 }

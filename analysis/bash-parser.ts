@@ -124,9 +124,11 @@ function resolveNodeText(node: TSNode): string {
   }
 }
 
-/** Extract argument text from a command node (skip command name). */
-function extractCommandArgs(node: TSNode): string[] {
-  const args: string[] = [];
+/** Extract arguments (text + source node) from a command node (skip command
+ *  name). The node is kept so the caller can tell a multi-line LITERAL
+ *  argument (a script body) apart from one that expands at runtime. */
+function extractCommandArgPairs(node: TSNode): { text: string; node: TSNode }[] {
+  const args: { text: string; node: TSNode }[] = [];
   if (node.type !== "command") return args;
 
   let seenName = false;
@@ -147,17 +149,23 @@ function extractCommandArgs(node: TSNode): string[] {
     }
 
     if (WORD_TYPES.has(child.type)) {
-      args.push(resolveNodeText(child));
+      args.push({ text: resolveNodeText(child), node: child });
       continue;
     }
 
-    // Recurse (e.g., command substitution in args)
+    // Recurse (e.g., command substitution in args) — the pair keeps the
+    // subtree root as its node (runtime-expansion checks walk the subtree).
     for (let j = 0; j < child.childCount; j++) {
       const gc = child.child(j);
-      if (gc) args.push(...extractFromNode(gc));
+      if (gc) for (const text of extractFromNode(gc)) args.push({ text, node: gc });
     }
   }
   return args;
+}
+
+/** Extract argument text from a command node (skip command name). */
+function extractCommandArgs(node: TSNode): string[] {
+  return extractCommandArgPairs(node).map(p => p.text);
 }
 
 /** Extract redirect destinations from a file_redirect node. */
@@ -249,6 +257,45 @@ function isOpaqueValue(val: string): boolean {
   if (val.includes("`")) return true; // command substitution — runtime value
   if (HOME_TOKEN_RE.test(val)) return false;
   return DOLLAR_EXPANSION_RE.test(val);
+}
+
+/** Node types whose presence in an argument subtree means the value is
+ *  computed at runtime (a literal word/raw_string/ansi_c_string has none). */
+const RUNTIME_EXPANSION_TYPES = new Set([
+  "simple_expansion",
+  "expansion",
+  "array_expansion",
+  "command_substitution",
+  "process_substitution",
+]);
+
+/** True when the argument node's subtree contains a runtime shell expansion. */
+function nodeHasRuntimeExpansion(n: TSNode): boolean {
+  if (RUNTIME_EXPANSION_TYPES.has(n.type)) return true;
+  for (let i = 0; i < n.childCount; i++) {
+    const c = n.child(i);
+    if (c && nodeHasRuntimeExpansion(c)) return true;
+  }
+  return false;
+}
+
+/**
+ * A multi-line LITERAL argument — a script or data body (`node -e '…'`,
+ * `python3 -c "…"`), never a path: it contains newlines but no runtime
+ * expansion anywhere in its AST subtree, so its text is fixed at parse
+ * time. Text-level checks can't tell a JS template literal's backticks from
+ * a shell backtick substitution — the AST can. A multi-line argument that
+ * DOES expand at runtime stays opaque (fail closed).
+ */
+function isMultiLineLiteralArg(text: string, node: TSNode): boolean {
+  return text.includes("\n") && !nodeHasRuntimeExpansion(node);
+}
+
+/** Text-level variant for redirect targets (no node available): a newline
+ *  with no `$`/backtick/backslash in the text is a literal script/data body.
+ *  Any expansion char keeps the opaque classification (fail closed). */
+function isMultiLineLiteralText(text: string): boolean {
+  return text.includes("\n") && !/[`$\\]/.test(text);
 }
 
 /** A cwd-local bare name: no path separator, ~, expansion, or backtick, and not
@@ -415,8 +462,9 @@ function loopBoundRef(val: string): { name: string; rest: string | null } | null
  * roots — base-independent, every expansion needs no path approval).
  *
  * Kinds (the parser only proves what the token text + loop binding show):
- *  - "pinned": `prefix/$var` (or `${var}`) where the in-list is bounded —
- *    every expansion lands under prefixDir (see isBoundedInListWord).
+ *  - "pinned": `prefix/$var` (or `${var}`, with an expansion-free tail such
+ *    as `prefix/$var/*.ts`) where the in-list is bounded — every expansion
+ *    lands under prefixDir (see isBoundedInListWord).
  *  - "cwdLocal": a loop-bound reference whose in-list is cwd-local (bare
  *    names, globs, `$(find …)` words) — the value is relative to the
  *    RUNTIME cwd; the resolver must bound it against the tracked effective
@@ -442,13 +490,20 @@ export interface OpaqueRef {
 }
 
 /**
- * A trailing loop reference: `staticPrefix/$var` or `staticPrefix/${var}` —
- * one reference, everything before it static.
+ * A trailing loop reference: `staticPrefix/$var`, `staticPrefix/${var}`, or
+ * the same with a tail (`staticPrefix/$var/*.ts`): one reference, everything
+ * before it static. The tail (when present) must have no `$`, backtick, or
+ * backslash (runtime expansion / escape) and no `..` segment — glob chars
+ * and literal segments never cross `/`, so every expansion still lands under
+ * the prefix.
  */
 function trailingLoopRef(val: string): { prefix: string; name: string } | null {
-  const m = val.match(/^(.+)\/\$(\w+)$/)
-    ?? val.match(/^(.+)\/\$\{(\w+)\}$/);
+  const m = val.match(/^(.+)\/\$(\w+)(?:\/(.+))?$/)
+    ?? val.match(/^(.+)\/\$\{(\w+)\}(?:\/(.+))?$/);
   if (!m) return null;
+  if (m[3] !== undefined && (/[\\`$]/.test(m[3]) || /(^|\/)\.\.(\/|$)/.test(m[3]))) {
+    return null; // tail could escape the pin — keep the token opaque
+  }
   return { prefix: m[1], name: m[2] };
 }
 
@@ -531,7 +586,8 @@ function opaqueRef(node: TSNode, arg: string, cwd: string, segIdx: number, segme
       // bases — opaque (the resolver may still bind a prefixed form below).
     }
   }
-  // Trailing form: static prefix + loop-bound reference — pinned.
+  // Trailing form: static prefix + loop-bound reference (+ expansion-free
+  // tail) — pinned.
   const trail = trailingLoopRef(val);
   if (trail !== null) {
     const inList = enclosingLoopInList(node, trail.name);
@@ -1193,20 +1249,24 @@ export async function parseCommand(
 
     for (const cmdNode of commandNodes) {
       const cmdName = getCommandName(cmdNode);
-      const args = extractCommandArgs(cmdNode);
+      const args = extractCommandArgPairs(cmdNode);
 
       if (cmdName && pathAwareCommands.has(cmdName)) {
         // Sed: the script argument is not a file (sed [flags] script [files…])
         // — the `sed -n "$(grep … | cut …),+12p" f` line-range idiom must not
         // produce <unresolved-var>. File-position args keep the opaque marker.
-        const sedScripts = cmdName === "sed" ? sedScriptArgIndices(args) : null;
+        const sedScripts = cmdName === "sed" ? sedScriptArgIndices(args.map(a => a.text)) : null;
         // Grep: the PATTERN position is data, never a file (see
         // grepPatternArgIndices) — skipping it also keeps pattern-position
         // vars ($re in `grep -vE "$re" f`) out of the opaque ref set, where
         // they would floor-stop the command.
-        const grepPatterns = cmdName === "grep" ? grepPatternArgIndices(args) : null;
+        const grepPatterns = cmdName === "grep" ? grepPatternArgIndices(args.map(a => a.text)) : null;
         for (let ai = 0; ai < args.length; ai++) {
-          const arg = args[ai];
+          const { text: arg, node: argNode } = args[ai];
+          // A multi-line LITERAL argument is a script/data body (`node -e '…'`),
+          // not a path: classifying it would mint an opaque ref whose "token"
+          // is the whole script, bloating the prompt and the decision log.
+          if (isMultiLineLiteralArg(arg, argNode)) continue;
           // Skip inline script/pattern expressions that look like paths but aren't:
           //   sed: script position, /pattern/p, /describe(...)/,/^});/p, s/foo/bar/
           //   awk: /pattern/ {print}, /foo/ {action}
@@ -1242,10 +1302,10 @@ export async function parseCommand(
       // would escape outside-cwd checks. Extract it explicitly.
       if (cmdName === "sort") {
         for (let i = 0; i < args.length; i++) {
-          const arg = args[i];
+          const arg = args[i].text;
           let target: string | null = null;
           if (arg === "-o" || arg === "--output") {
-            target = args[i + 1] ?? null;
+            target = args[i + 1]?.text ?? null;
           } else if (arg.startsWith("--output=")) {
             target = arg.slice("--output=".length);
           } else if (/^-[a-zA-Z]*o/.test(arg)) {
@@ -1253,7 +1313,7 @@ export async function parseCommand(
             // token as its argument (-ox → x); if it's the last char, the
             // argument is the next token (-ro FILE → FILE).
             const oIdx = arg.indexOf("o");
-            target = oIdx === arg.length - 1 ? (args[i + 1] ?? null) : arg.slice(oIdx + 1);
+            target = oIdx === arg.length - 1 ? (args[i + 1]?.text ?? null) : arg.slice(oIdx + 1);
           }
           // `-` means stdout; skip it and bare flags (e.g. `sort -o -k 1`).
           if (target && target !== "-" && !target.startsWith("-")) {
@@ -1271,6 +1331,7 @@ export async function parseCommand(
       if (SKIP_TYPES.has(node.type)) return;
       if (node.type === "file_redirect") {
         for (const p of extractRedirectPaths(node)) {
+          if (isMultiLineLiteralText(p)) continue; // script/data body, not a path
           if (isPathCandidate(p)) {
             redirectPaths.push(resolvePathReal(expandHomeToken(expandTilde(p)), cwd));
           } else {

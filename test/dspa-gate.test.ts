@@ -7,7 +7,7 @@
  * carve-out must block; everything else (inline scripts, redirects, pipes,
  * risk reasons) is judgeable and passes to the judge.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -708,6 +708,67 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
       if (!r.ok) expect(r.reason).toContain("dangerous:");
+    }
+  });
+});
+
+// ── Confirmed resolutions (user-accepted token → dirs) ──────────────────
+
+describe("confirmed resolutions (deterministic sentinel resolution)", () => {
+  const home = os.homedir();
+  const base = fs.mkdtempSync(path.join(home, ".halter-d7-c-"));
+  const granted = fs.mkdtempSync(path.join(home, ".halter-d7-c-"));
+  const token = `${base}/$e/f.txt`;
+
+  afterAll(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+    fs.rmSync(granted, { recursive: true, force: true });
+  });
+
+  it("unconfirmed opaque ref stops (raw ref text no longer double-stops)", async () => {
+    const r = await checkDspaGate(bashPd(`cat ${token}`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("runtime location unresolvable");
+  });
+
+  it("confirmed, all dirs inside the manual bar → judgeable (gate passes)", async () => {
+    store.confirmResolution(token, [`${BASE}/sub`, `${BASE}/other`]);
+    const r = await checkDspaGate(bashPd(`cat ${token}`), store);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("confirmed, one dir outside the bar → stop naming exactly that dir", async () => {
+    store.confirmResolution(token, [`${BASE}/sub`, base]);
+    const r = await checkDspaGate(bashPd(`cat ${token}`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain(base);
+      expect(r.reason).not.toContain(`${BASE}/sub`);
+      expect(r.confirmedOutside).toEqual([{ token, dirs: [base] }]);
+    }
+  });
+
+  it("confirmed, all dirs outside the bar → stop naming all", async () => {
+    store.confirmResolution(token, [base, granted]);
+    const r = await checkDspaGate(bashPd(`cat ${token}`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain(base);
+      expect(r.reason).toContain(granted);
+      expect(r.confirmedOutside).toEqual([{ token, dirs: [base, granted] }]);
+    }
+  });
+
+  it("a session read grant moves a confirmed dir into the bar", async () => {
+    store.addAllowed({ readDirs: [granted] });
+    store.confirmResolution(token, [base, granted]);
+    const r = await checkDspaGate(bashPd(`cat ${token}`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      // Only base remains outside — granted is now inside the bar.
+      expect(r.reason).toContain(base);
+      expect(r.reason).not.toContain(granted + "/");
+      expect(r.confirmedOutside).toEqual([{ token, dirs: [base] }]);
     }
   });
 });
