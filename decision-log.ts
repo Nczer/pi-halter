@@ -128,6 +128,22 @@ export interface DecisionLogEntry {
    */
   judgeDeny?: string;
 
+  /**
+   * D13: the stage-2 judge's report of the paths the operation touches
+   * (sanitized absolute paths, capped) — only when the final stage-2
+   * verdict reported any. A second NOTE debug exception, and a parser-gap
+   * probe: paired with `judgePathMisses`, `log-inspect.mjs dspa --paths`
+   * lists every path the judge saw that the static floor never did.
+   */
+  judgePaths?: string[];
+  /**
+   * D13: reported paths NOT covered by the floor's knowledge (analysis
+   * paths, outside list, confirmed dirs, cwd) — the parser-gap diagnostic
+   * (a miss is either a real static-analysis hole or a judge
+   * hallucination; both are worth mining). Only when non-empty.
+   */
+  judgePathMisses?: string[];
+
   /** Block reason, or a one-line summary of why a prompt was needed; null for auto-allow. */
   reason: string | null;
   /** Bash command (truncated), file path, or "server/tool". */
@@ -158,7 +174,12 @@ export interface DecisionLogEntry {
  * declined/failed) — still no verdict content, with one exception:
  * `judgeDeny` carries a dspa REJECT verdict's explanation verbatim — a
  * raw debug aid for judge behavior, read by a human inspecting the log,
- * never aggregated into stats.
+ * never aggregated into stats. Second exception (D13): `judgePaths` /
+ * `judgePathMisses` carry the stage-2 judge's path report and its
+ * cross-check against the floor's own knowledge — model output, but
+ * sanitized, capped, and diagnostic-only: nothing in the gate reads these
+ * fields back (the floor is never fed LLM output), they exist purely to be
+ * mined by a human (log-inspect.mjs dspa --paths).
  */
 
 /** Resolve the active log file. null = logging disabled. */
@@ -181,6 +202,11 @@ export function resolveLogPath(): string | null {
  * @param judgeDeny - the LLM's reject explanation (see
  *   DecisionLogEntry.judgeDeny); omit unless the fall-through verdict is
  *   a REJECT.
+ * @param judgePaths - D13: the stage-2 judge's path report (see
+ *   DecisionLogEntry.judgePaths); omit unless a stage-2 verdict reported
+ *   paths.
+ * @param judgePathMisses - D13: reported paths the floor never saw (see
+ *   DecisionLogEntry.judgePathMisses); omit when empty.
  */
 export function logDecision(
   request: PermissionRequest,
@@ -188,6 +214,8 @@ export function logDecision(
   mode?: DspModeTag,
   dspaStop?: string,
   judgeDeny?: string,
+  judgePaths?: string[],
+  judgePathMisses?: string[],
 ): void {
   try {
     const file = resolveLogPath();
@@ -200,6 +228,8 @@ export function logDecision(
       mode,
       dspa: dspaStop,
       judgeDeny,
+      judgePaths,
+      judgePathMisses,
       reason:
         decision.kind === "block"
           ? decision.reason

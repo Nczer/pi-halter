@@ -67,8 +67,8 @@ describe("single-mode machine", () => {
     expect(isDspaActive()).toBe(true);
     expect(isDspatActive()).toBe(false);
     expect(getDspatStats().total).toBe(0);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("dspa ON"), "info");
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("(dspat off)"), "info");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("DSPA ON"), "info");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("(DSPAT off)"), "info");
   });
 
   it("enabling dsp while dspa is active switches (confirmed); dspa state + stats are reset", async () => {
@@ -81,7 +81,7 @@ describe("single-mode machine", () => {
     expect(isDspActive()).toBe(true);
     expect(isDspaActive()).toBe(false);
     expect(getDspaStats().autoAllowed).toBe(0);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("(dspa off)"), "warning");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("(DSPA off)"), "warning");
   });
 
   it("a cancelled DSP confirmation keeps the current mode", async () => {
@@ -99,6 +99,6 @@ describe("single-mode machine", () => {
     expect(isDspaActive()).toBe(false);
     expect(isDspatActive()).toBe(false);
     expect(isDspActive()).toBe(false);
-    expect(ctx.ui.notify).toHaveBeenCalledWith("dspa OFF — all prompts restored", "info");
+    expect(ctx.ui.notify).toHaveBeenCalledWith("DSPA OFF — all prompts restored", "info");
   });
 });

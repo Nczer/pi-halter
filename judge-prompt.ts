@@ -40,6 +40,8 @@ import {
   type JudgmentScript,
 } from "./judge";
 import { buildSessionContext } from "./session-context";
+import { isDspaActive, setDspaJudging } from "./dspa-mode";
+import { isDspatActive, setDspatJudging } from "./dspat-mode";
 
 // ── Script payload extraction ──
 
@@ -256,6 +258,12 @@ async function runJudgeStage(
   deps: JudgePromptDeps,
   stage: 1 | 2,
 ): Promise<JudgeResult | null> {
+  // The in-flight state folds into the active judge mode's widget line
+  // ("» DSPA … — judging…" / "◎ DSPAT … — judging…"); only manual mode
+  // (on-demand Explain) gets the standalone widget. Captured at call start
+  // so a mid-call mode toggle cannot route cleanup to the wrong widget.
+  const dspaMode = isDspaActive();
+  const dspatMode = !dspaMode && isDspatActive();
   let widgetShown = false;
   try {
     const settings = deps.settings ?? readJudgeSettings();
@@ -269,13 +277,17 @@ async function runJudgeStage(
     const input = await buildJudgmentInput(pd, store);
 
     try {
-      ctx.ui.setWidget("judge", (_tui, theme) => ({
-        render: (width: number) => [
-          truncateToWidth(theme.fg("muted", "⏳ Judge: explaining…"), width),
-        ],
-        invalidate: () => {},
-      }), { placement: "belowEditor" });
-      widgetShown = true;
+      if (dspaMode) setDspaJudging(true, ctx);
+      else if (dspatMode) setDspatJudging(true, ctx);
+      else {
+        ctx.ui.setWidget("judge", (_tui, theme) => ({
+          render: (width: number) => [
+            truncateToWidth(theme.fg("muted", "⏳ Judge: explaining…"), width),
+          ],
+          invalidate: () => {},
+        }), { placement: "belowEditor" });
+        widgetShown = true;
+      }
     } catch {
       /* the explanation still works without a widget */
     }
@@ -295,12 +307,12 @@ async function runJudgeStage(
   } catch {
     return null;
   } finally {
-    if (widgetShown) {
-      try {
-        ctx.ui.setWidget("judge", undefined);
-      } catch {
-        /* widget cleanup must never mask the result */
-      }
+    try {
+      if (dspaMode) setDspaJudging(false, ctx);
+      else if (dspatMode) setDspatJudging(false, ctx);
+      else if (widgetShown) ctx.ui.setWidget("judge", undefined);
+    } catch {
+      /* widget cleanup must never mask the result */
     }
   }
 }

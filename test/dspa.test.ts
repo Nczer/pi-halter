@@ -647,3 +647,104 @@ describe("D3: granted-dir file writes are judged (dspa)", () => {
     expect(line.mode).toBeUndefined();
   });
 });
+
+// ── D13 — stage-2 judge path report (diagnostic log) ───────────────────
+
+describe("D13 — stage-2 path report (diagnostic log)", () => {
+  /**
+   * Like runGate, but the prompt data carries its analysis (the single-
+   * analysis-per-decision invariant) so the D13 log fields can derive the
+   * floor's path knowledge. The hard gate still runs real analysis.
+   */
+  async function runAnalyzedGate(
+    command: string,
+    v1: JudgeResult | null,
+    v2: JudgeResult | null,
+  ) {
+    const store = createStore();
+    const decision = bashDecision(command) as { kind: "prompt"; promptData: BashPromptData };
+    const pd = decision.promptData;
+    pd.analysis = await analyzeCommand(command, pd.cwd, {
+      isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+      getConfirmedResolution: (t) => store.getConfirmedResolution(t),
+    });
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(v1);
+    vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(v2);
+    setDspaActive(true);
+    const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
+    try {
+      return await gate(
+        { type: "bash", command: "placeholder", cwd: "/home/u/project" },
+        makeCtx(),
+        store,
+        (d, r) => rejectBash(d, r, store, makeCtx()),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("stage-2 auto-allow logs judgePaths + judgePathMisses", async () => {
+    await runAnalyzedGate(
+      "ls /home/u/project/target",
+      verdict({ risk: "medium" }), // stage 1: no auto-allow
+      verdict({ paths: ["/home/u/project/target", "/etc/hostname"] }),
+    );
+    const line = logLines().find((l) => l.kind === "auto-allow");
+    expect(line).toBeDefined();
+    if (!line) return;
+    expect(line.judgePaths).toEqual(["/home/u/project/target", "/etc/hostname"]);
+    expect(line.judgePathMisses).toEqual(["/etc/hostname"]);
+  });
+
+  it("stage-1 auto-allow carries no path fields (stage 1 never reports)", async () => {
+    await runAnalyzedGate("ls /home/u/project/target", verdict({ risk: "low" }), null);
+    const line = logLines().find((l) => l.kind === "auto-allow");
+    expect(line).toBeDefined();
+    if (!line) return;
+    expect(line.judgePaths).toBeUndefined();
+    expect(line.judgePathMisses).toBeUndefined();
+  });
+
+  it("floor-covered report logs paths without misses", async () => {
+    await runAnalyzedGate(
+      "ls /home/u/project/target",
+      verdict({ risk: "medium" }),
+      verdict({ paths: ["/home/u/project/target/release"] }), // under a floor path
+    );
+    const line = logLines().find((l) => l.kind === "auto-allow");
+    expect(line).toBeDefined();
+    if (!line) return;
+    expect(line.judgePaths).toEqual(["/home/u/project/target/release"]);
+    expect(line.judgePathMisses).toBeUndefined();
+  });
+
+  it("judge-declined fall-through logs the stage-2 report", async () => {
+    await runAnalyzedGate(
+      "ls /home/u/project/target",
+      verdict({ risk: "medium" }),
+      verdict({ approve: "deny", paths: ["/home/u/project/target", "/var/log/syslog"] }),
+    );
+    const line = logLines()[0];
+    expect(line.kind).toBe("prompt");
+    expect(line.dspa).toBe("judge: declined (stage 2)");
+    expect(line.judgePaths).toEqual(["/home/u/project/target", "/var/log/syslog"]);
+    expect(line.judgePathMisses).toEqual(["/var/log/syslog"]);
+  });
+
+  it("floor-stop fall-through logs misses (the parser-gap mining case)", async () => {
+    // The floor saw /etc/hostname (concrete outside base — advisory stop);
+    // the judge additionally reports /etc/shadow, which the static analysis
+    // never surfaced for this command.
+    await runAnalyzedGate(
+      "cat /etc/hostname",
+      verdict(),
+      verdict({ approve: "deny", paths: ["/etc/hostname", "/etc/shadow"] }),
+    );
+    const line = logLines()[0];
+    expect(line.kind).toBe("prompt");
+    expect(String(line.dspa)).toContain("gate:");
+    expect(line.judgePaths).toEqual(["/etc/hostname", "/etc/shadow"]);
+    expect(line.judgePathMisses).toEqual(["/etc/shadow"]);
+  });
+});

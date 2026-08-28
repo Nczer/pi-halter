@@ -19,6 +19,9 @@ let active = false;
 let model: string | null = null;
 let autoAllowed = 0;
 let lastTarget: string | null = null;
+/** True while a judge call is in flight — rendered inline on this widget's
+ *  line ("… — judging…") instead of a separate in-flight widget. */
+let judging = false;
 
 export function setDspaActive(on: boolean): void {
   active = on;
@@ -38,6 +41,18 @@ function resetCounters(): void {
   model = null;
   autoAllowed = 0;
   lastTarget = null;
+  judging = false;
+}
+
+/**
+ * Flip the inline judging state (judge-prompt.ts calls it at the start and
+ * end of every judge stage while /dspa is active). Re-sets the widget so
+ * the change paints immediately (setWidget forces a TUI repaint).
+ */
+export function setDspaJudging(on: boolean, ctx: ExtensionContext): void {
+  if (judging === on) return;
+  judging = on;
+  updateDspaWidget(ctx);
 }
 
 /** Record one auto-allowed operation. A model change resets the counters. */
@@ -68,11 +83,14 @@ export function updateDspaWidget(ctx: ExtensionContext): void {
     ctx.ui.setWidget("dspa", undefined);
     return;
   }
+  // `»` is a text-default glyph (monochrome in every terminal) — the mode
+  // follows the DSP widget's style: no color emoji, all-caps name.
+  const judgingTag = judging ? " — judging…" : "";
   const modelTag = model ? ` (${model})` : "";
   const main =
     autoAllowed > 0
-      ? `⚡ dspa${modelTag}: auto-allowed ${autoAllowed} this session`
-      : `⚡ dspa${modelTag}: auto-allowing gate+judge-approved operations`;
+      ? `» DSPA${modelTag}: auto-allowed ${autoAllowed} this session${judgingTag}`
+      : `» DSPA${modelTag}: auto-allowing gate+judge-approved operations${judgingTag}`;
   const last = lastTarget;
   ctx.ui.setWidget(
     "dspa",

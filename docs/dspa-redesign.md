@@ -490,6 +490,58 @@ and rotation as the decision log) records each token's fate:
 user's decision, and whether it was confirmed. Convergence is visible as
 the same token flipping from `prompted` to `auto-allowed` across runs.
 
+### D13. Judge path report: the floor cross-check, logged not enforced (2026-08-27)
+
+The question after D12: should every dspa call also have the LLM report
+the paths the command touches, cross-checked against the floor? Verdict:
+**diagnostic, not enforcement**.
+
+- **The floor is never fed LLM output.** The floor's value is that it is
+  deterministic and untrusting. LLM path reports hallucinate (that is
+  exactly the D12 cmd2 probe class) — making a report a stop factor
+  reintroduces prompt noise and makes the floor probabilistic.
+- **The dynamic class is already floor-stopped.** A path the static
+  analysis cannot see must be constructed at runtime (`eval`, `$f`,
+  `$(…)`); those hit the obscured/sentinel stops before any path question
+  arises.
+- **The judge already reviews the content-bearing class.** Stage 2 (D2/
+  D11) sees the full command and script payload; a path the floor misses
+  in there is already judge-visible as a reject/defer (advisory → prompt).
+
+So D13 folds the path report into the **existing stage-2 call** (no new
+LLM call) and mines the diff:
+
+- **Stage-2 prompt** asks the judge to additionally report `paths`
+  (optional tool-call field): every filesystem path the operation reads,
+  writes, creates, or deletes — absolute, as the shell will expand it,
+  including paths inside a script payload. A reported path the static
+  path list does not cover and the judge cannot explain is a hidden
+  effect — deny/defer per the judge's own rules (advisory, as always).
+  Stage 1 is unchanged (its prompt is eval-locked).
+- **Cross-check** (judge-paths.ts, deterministic code): the report is
+  sanitized (sentinels dropped, ~ expanded, relatives resolved against
+  cwd, deduped, capped at 8). A path is COVERED by the floor's own
+  knowledge — the analysis's paths, the outside list, confirmed
+  resolution dirs, the cwd — when it equals a floor path or lies under
+  one, or lies under a GLOB floor path. Uncovered = a **miss**.
+- **Logged only** (decision log, final stage-2 verdict — auto-allow and
+  fall-through lines alike): `judgePaths` (sanitized report, capped) and
+  `judgePathMisses` (capped at 5). Nothing in the gate reads these fields
+  back — the runtime decision is untouched.
+- **View**: `log-inspect.mjs dspa --paths` lists the mismatch entries
+  (the summary and `dspa --reasons` count them).
+
+The durable value: every miss line is either a real static-parser gap —
+the exact workflow that produced D7–D12 — or a hallucination (a
+reliability datum for the field). The enforcement floor is unchanged;
+the only live effect is the judge's own handling of unexplained paths
+(deny/defer → prompt), which is advisory like all judge output.
+
+Coverage note: pure read-only commands without content never reach the
+judge, so their paths are not reported — acceptable, because a read can
+only hide a path behind a sentinel/obscured stop, where the floor already
+stops.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -529,6 +581,10 @@ class"). Suite 3229.
   resolver with `→ LLM:` prompt lines; confirmed resolutions make the
   gate's sentinel pass deterministic; `pathGrantDirs` union grant;
   `.log/unresolved.jsonl`). Suite 3464.
+- **Phase 3i — done** (2026-08-27): D13 (judge path report — the stage-2
+  verdict carries an optional `paths` report; deterministic cross-check
+  against the floor's own knowledge; `judgePaths` / `judgePathMisses`
+  decision-log fields; `log-inspect.mjs dspa --paths` view). Suite 3486.
 
 ## 5. Open questions (grill order)
 

@@ -167,14 +167,14 @@ describe("/dspa fall-through", () => {
     const dspa: DspaFallthrough = { gate: { ok: false, reason: "dangerous: rm" }, verdict: null, stage: null };
     await showPrompt(bashDecision(), ctx, store, dspa);
     const body = shownPrompt().body;
-    expect(body).toContain("🚧 dspa: not auto-allowed — dangerous: rm");
+    expect(body).toContain("🚧 DSPA: not auto-allowed — dangerous: rm");
     expect(body).not.toContain("Judge invalid");
   });
 
   it("gate ok, judge unavailable → 🚧 note line", async () => {
     const dspa: DspaFallthrough = { gate: { ok: true }, verdict: null, stage: null, note: "judge invalid: session model not resolvable" };
     await showPrompt(bashDecision(), ctx, store, dspa);
-    expect(shownPrompt().body).toContain("🚧 dspa: not auto-allowed — judge invalid: session model not resolvable");
+    expect(shownPrompt().body).toContain("🚧 DSPA: not auto-allowed — judge invalid: session model not resolvable");
   });
 
   it("gate ok, verdict present → 💭 Judge line (unchanged)", async () => {
@@ -210,7 +210,7 @@ describe("/dspa fall-through", () => {
     };
     await showPrompt(bashDecision(), ctx, store, dspa);
     const body = shownPrompt().body;
-    expect(body).toContain("🚧 dspa: not auto-allowed — untrusted package (npx evil-pkg)");
+    expect(body).toContain("🚧 DSPA: not auto-allowed — untrusted package (npx evil-pkg)");
     expect(body).toContain("💭 Judge: Dev tool in use this session.");
     expect(body).toContain("→ suggests: APPROVE (low) — advisory (floor stop stands)");
     // the prompt offers the Trust option for the stopped packages
