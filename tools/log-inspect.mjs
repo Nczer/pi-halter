@@ -10,6 +10,10 @@
  *   list      filtered entries, one compact line each
  *   blocks    every block + internal-error entry, full reason
  *   dspa      every judge-regime entry (dspa/dspat) with stop tag
+ *   dspa --paths   D13 parser-gap view: judge-regime entries whose stage-2
+ *             path report has paths the static floor never saw
+ *             (judgePathMisses) — each miss is a parser hole or a judge
+ *             hallucination; both worth mining
  *   dspa --reasons   why judge-regime entries auto-allowed / stopped — the
  *             reason rollup (auto-allow reasons, stop tags, judge denials,
  *             each with counts + a first-seen example)
@@ -163,6 +167,8 @@ function summary() {
   const stops = F.filter((e) => e.kind === "prompt" && e.dspa);
   if (!stops.length) console.log("  (none)");
   for (const [r, n] of counts(stops, (e) => e.dspa)) console.log(`  ${String(n).padStart(4)}  ${trunc(r, 100)}`);
+  const pathMissN = F.filter((e) => e.judgePathMisses?.length).length;
+  console.log(`  judge path misses (dspa --paths): ${pathMissN}`);
   console.log("");
 
   const blocks = F.filter((e) => e.kind === "block");
@@ -208,7 +214,34 @@ function dspaCmd() {
     if (e.dspa) console.log(`  stop:   ${e.dspa}`);
     if (e.reason) console.log(`  reason: ${trunc(e.reason, 160)}`);
     if (e.judgeDeny) console.log(`  judgeDeny: ${trunc(e.judgeDeny, 160)}`);
+    if (e.judgePaths?.length) console.log(`  judgePaths: ${e.judgePaths.join(", ")}`);
+    if (e.judgePathMisses?.length) console.log(`  pathMisses: ${e.judgePathMisses.join(", ")}`);
     console.log(`  target: ${trunc(firstLine(e.target), 160)}`);
+  }
+}
+
+/** D13 parser-gap view: judge-regime entries with stage-2 path reports,
+ *  flagged where the report contains paths the static floor never saw.
+ *  The misses are the mining target — a miss is either a real
+ *  static-analysis hole (fix the parser) or a judge hallucination (a
+ *  reliability data point for the report field). */
+function dspaPaths() {
+  const ds = F.filter(
+    (e) => (e.mode === "dspa" || e.mode === "dspat") && (e.judgePaths?.length || e.judgePathMisses?.length),
+  );
+  const withMisses = ds.filter((e) => e.judgePathMisses?.length);
+  console.log(`# dspa --paths — ${withMisses.length} entries with floor mismatches, ${ds.length} with any stage-2 path report`);
+  if (!ds.length) {
+    console.log("(none — the judge reported no paths in this window)");
+    return;
+  }
+  for (const e of ds) {
+    console.log(`\n[@${e.__idx}] ${e.ts}  ${e.mode}  ${e.kind}  ${e.tool}`);
+    if (e.dspa) console.log(`  stop:   ${e.dspa}`);
+    if (e.reason) console.log(`  reason: ${trunc(e.reason, 160)}`);
+    console.log(`  target: ${trunc(firstLine(e.target), 160)}`);
+    if (e.judgePaths?.length) console.log(`  judge:  ${e.judgePaths.join(", ")}`);
+    for (const m of e.judgePathMisses ?? []) console.log(`  MISS:   ${m}`);
   }
 }
 
@@ -241,6 +274,7 @@ function dspaReasons() {
   section("auto-allow reasons", ds.filter((e) => e.kind === "auto-allow"), (e) => e.reason ?? "(no reason)");
   section("stop tags (fall-through prompts)", ds.filter((e) => e.kind === "prompt"), (e) => e.dspa ?? "(no stop tag)");
   section("judge denials (the LLM's words)", ds, (e) => e.judgeDeny);
+  section("D13 judge path misses (parser gaps)", ds, (e) => e.judgePathMisses?.join(", "));
 }
 
 function stats() {
@@ -484,7 +518,7 @@ switch (cmd) {
   case "summary": summary(); break;
   case "list": listCmd(); break;
   case "blocks": blocksCmd(); break;
-  case "dspa": flags.reasons ? dspaReasons() : dspaCmd(); break;
+  case "dspa": flags.reasons ? dspaReasons() : flags.paths ? dspaPaths() : dspaCmd(); break;
   case "stats": stats(); break;
   case "audit": audit(); break;
   case "show": show(); break;

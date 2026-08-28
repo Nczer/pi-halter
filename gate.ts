@@ -9,6 +9,7 @@ import { isDspaActive, recordDspaAutoAllowed, updateDspaWidget } from "./dspa-mo
 import { isDspatActive } from "./dspat-mode";
 import { checkDspaGate } from "./dspa-gate";
 import { getJudgeVerdict, getStage2Verdict, judgeStatus, extractScriptPayload } from "./judge-prompt";
+import { judgePathLogFields } from "./judge-paths";
 import { PromptFallbackRule } from "./policies/bash-rules";
 import type { JudgeResult } from "./judge";
 
@@ -92,7 +93,10 @@ function dspaAutoAllowed(
   verdict: JudgeResult,
   stage: 1 | 2,
 ): void {
-  logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (stage ${stage}, ${verdict.model})` }, "dspa");
+  // D13: a stage-2 auto-allow logs the judge's path report (and any path
+  // the floor never saw) — the parser-gap probe. Stage 1 never reports.
+  const jp = stage === 2 ? judgePathLogFields(pd, store, verdict.paths) : {};
+  logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (stage ${stage}, ${verdict.model})` }, "dspa", undefined, undefined, jp.judgePaths, jp.judgePathMisses);
   // Unresolved-token log: an auto-allow of a command WITH unresolved tokens
   // means their resolutions were already user-confirmed — the convergence
   // end-state (no prompt, no LLM call for the scope).
@@ -265,7 +269,22 @@ export async function gate(
 
   // Decision log (JSONL): one line per tool call, including fail-closed
   // synthetic blocks. Fire-and-forget — logDecision never throws.
-  logDecision(request, decision, dspModeTag(decision, ctx), dspaStopTag(dspaFallthrough), dspaJudgeDeny(dspaFallthrough));
+  // D13: a dspa fall-through whose FINAL verdict is stage 2 logs the judge's
+  // path report + floor mismatches — the richest parser-gap case is a floor
+  // stop where the judge saw paths the static analysis never did.
+  const judgePathFields =
+    decision.kind === "prompt" && dspaFallthrough?.stage === 2
+      ? judgePathLogFields(decision.promptData, store, dspaFallthrough.verdict?.paths)
+      : {};
+  logDecision(
+    request,
+    decision,
+    dspModeTag(decision, ctx),
+    dspaStopTag(dspaFallthrough),
+    dspaJudgeDeny(dspaFallthrough),
+    judgePathFields.judgePaths,
+    judgePathFields.judgePathMisses,
+  );
 
   if (decision.kind === "auto-allow") return;
 

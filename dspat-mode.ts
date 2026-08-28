@@ -11,13 +11,16 @@ import { judgeStatus } from "./judge-prompt";
  * never changes the gate's decision.
  *
  * The widget is a mode indicator plus an agreement counter line
- * (`👁 12/14 agreed — last: <target>`) once the first verdict is in. The
+ * (`◎ 12/14 agreed — last: <target>`) once the first verdict is in. The
  * stats are session-scoped and model-scoped (never persisted — judge
  * quality is model-dependent and a model change resets the counters);
  * the decision log keeps the durable history.
  */
 
 let dspatActive = false;
+/** True while a judge call is in flight — rendered inline on this widget's
+ *  line ("… — judging…") instead of a separate in-flight widget. */
+let judging = false;
 
 interface DspatStats {
   /** The model that produced the counted verdicts (null = none yet). */
@@ -37,6 +40,18 @@ function resetStats(): void {
   stats.total = 0;
   stats.agreed = 0;
   stats.lastDisagreement = null;
+  judging = false;
+}
+
+/**
+ * Flip the inline judging state (judge-prompt.ts calls it at the start and
+ * end of every judge stage while /dspat is active). Re-sets the widget so
+ * the change paints immediately (setWidget forces a TUI repaint).
+ */
+export function setDspatJudging(on: boolean, ctx: ExtensionContext): void {
+  if (judging === on) return;
+  judging = on;
+  updateDspatWidget(ctx);
 }
 
 export function isDspatActive(): boolean {
@@ -86,7 +101,9 @@ export function updateDspatWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
 
   if (dspatActive) {
-    const main = `👁 dspat: judge advises on every permission prompt`;
+    // `◎` is a text-default glyph (monochrome in every terminal) — the mode
+    // follows the DSP widget's style: no color emoji, all-caps name.
+    const main = `◎ DSPAT${judging ? " — judging…" : ""}: judge advises on every permission prompt`;
     ctx.ui.setWidget("dspat", (_tui, theme) => {
       const render = (width: number) => {
         // Live judge state: the widget stays up when the judge is off
@@ -105,7 +122,7 @@ export function updateDspatWidget(ctx: ExtensionContext): void {
         // updateDspatWidget is re-run after every recorded outcome, so the
         // numbers are live.
         if (stats.total > 0) {
-          const stat = `👁 ${stats.agreed}/${stats.total} agreed` +
+          const stat = `◎ ${stats.agreed}/${stats.total} agreed` +
             (stats.lastDisagreement ? ` — last: ${stats.lastDisagreement}` : "");
           lines.push(truncateToWidth(theme.fg("muted", stat), width));
         }

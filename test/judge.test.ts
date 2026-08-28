@@ -21,6 +21,8 @@ import {
   resolveJudgeAuth,
   resetJudgeCache,
   DEFAULT_JUDGE_SETTINGS,
+  JUDGE_SYSTEM_PROMPT,
+  JUDGE_STAGE2_SYSTEM_PROMPT,
   type JudgmentInput,
   type JudgeOptions,
   type CompleteFn,
@@ -630,5 +632,45 @@ describe("buildJudgmentPacket: file content", () => {
       exists: true,
     });
     expect(p).not.toContain("New content");
+  });
+});
+
+describe("D13 — stage-2 path report", () => {
+  it("stage 2 asks for paths; stage 1 does not (its prompt is eval-locked)", () => {
+    expect(JUDGE_STAGE2_SYSTEM_PROMPT).toContain("report `paths`");
+    expect(JUDGE_SYSTEM_PROMPT).not.toContain("report `paths`");
+  });
+
+  it("parses a paths array (strings only, trimmed, non-empty kept)", async () => {
+    const r = await judge(
+      baseInput,
+      {
+        ...baseOpts,
+        uncached: true,
+        complete: fixedComplete(
+          () => toolCallReply({ ...VERDICT, paths: ["/a/b", "  /a/c  ", 42, ""] }),
+          [],
+        ),
+      },
+    );
+    expect(r.paths).toEqual(["/a/b", "/a/c"]);
+  });
+
+  it("tolerates missing or malformed paths — the verdict still stands", async () => {
+    const r1 = await judge(
+      baseInput,
+      { ...baseOpts, uncached: true, complete: fixedComplete(() => toolCallReply(VERDICT), []) },
+    );
+    expect(r1.paths).toBeUndefined();
+    const r2 = await judge(
+      baseInput,
+      {
+        ...baseOpts,
+        uncached: true,
+        complete: fixedComplete(() => toolCallReply({ ...VERDICT, paths: "nope" }), []),
+      },
+    );
+    expect(r2.paths).toBeUndefined();
+    expect(r2.approve).toBe("approve");
   });
 });

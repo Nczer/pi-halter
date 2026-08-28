@@ -1,5 +1,40 @@
 # Changelog
 
+## 3.9.0 — 2026-08-27
+
+Judge path report: the stage-2 verdict now reports the paths the operation
+touches, cross-checked against the deterministic floor — logged, not
+enforced (docs/dspa-redesign.md, D13).
+
+- **Stage-2 path report (no new LLM calls).** The existing stage-2 judge
+call additionally reports `paths` — every filesystem path the operation
+reads, writes, creates, or deletes (absolute, shell-expanded, including
+script payloads). A reported path the static list doesn't cover and the
+judge can't explain is a hidden effect → deny/defer per the judge's own
+rules (advisory, as always). Stage 1 is unchanged (eval-locked prompt).
+- **Deterministic cross-check (`judge-paths.ts`).** The report is
+sanitized (sentinels dropped, ~ expanded, relatives resolved against
+cwd, deduped, capped at 8); a path is covered by the floor's own
+knowledge — analysis paths, outside list, confirmed dirs, cwd — when it
+equals or lies under a floor path (or under a GLOB floor path).
+Uncovered = a miss. The floor is never fed LLM output — a hallucinated
+path cannot stop an auto-allow.
+- **Decision log.** Lines whose final verdict is stage 2 (auto-allow and
+fall-through alike) carry `judgePaths` (sanitized report) and
+`judgePathMisses` (capped at 5). Nothing in the gate reads them back —
+each miss is a static-parser gap to fix (the D7–D12 mining workflow) or
+a hallucination (reliability data for the field).
+- **`log-inspect.mjs dspa --paths`** — lists mismatch entries (report,
+misses, stop tag, target); the summary and `dspa --reasons` count them.
+- **Mode widgets: the DSP style.** The dspa/dspat widgets drop the color
+emoji (⚡/👁) for text-default glyphs — `» DSPA` (auto-pass-through) and
+`◎ DSPAT` (advisory watcher) — and the names go all-caps like `DSP`
+(widgets, toasts, prompt note lines). While a judge call is in flight the
+separate "⏳ Judge: explaining…" widget is gone: the status folds into
+the active mode's own line (`» DSPA (model): auto-allowed N this session
+— judging…` / `◎ DSPAT — judging…: judge advises …`). Manual mode's
+on-demand Explain keeps the standalone widget.
+
 ## 3.8.0 — 2026-08-27
 
 Converge: repeated operations with unresolvable path tokens reach a

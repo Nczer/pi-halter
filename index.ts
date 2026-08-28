@@ -22,7 +22,7 @@ import { store } from "./store";
  *   for the "(X off)" note in the toast.
  */
 function applyMode(ctx: ExtensionContext, next: "manual" | "dsp" | "dspa" | "dspat"): string | null {
-  const displaced = isDspActive() ? "dsp" : isDspaActive() ? "dspa" : isDspatActive() ? "dspat" : null;
+  const displaced = isDspActive() ? "DSP" : isDspaActive() ? "DSPA" : isDspatActive() ? "DSPAT" : null;
   const wasDsp = isDspActive();
   setDspActive(false);
   resetDspa();
@@ -83,8 +83,8 @@ export default async function halterExtension(pi: ExtensionAPI) {
       const displaced = applyMode(ctx, isDspatActive() ? "manual" : "dspat");
       ctx.ui.notify(
         isDspatActive()
-          ? `dspat ON — judge advises on every bash prompt (you decide)${displaced ? ` (${displaced} off)` : ""}`
-          : "dspat OFF — judge suggestions disabled",
+          ? `DSPAT ON — judge advises on every bash prompt (you decide)${displaced ? ` (${displaced} off)` : ""}`
+          : "DSPAT OFF — judge suggestions disabled",
         "info",
       );
     },
@@ -98,8 +98,8 @@ export default async function halterExtension(pi: ExtensionAPI) {
       const displaced = applyMode(ctx, isDspaActive() ? "manual" : "dspa");
       ctx.ui.notify(
         isDspaActive()
-          ? `dspa ON — gate+judge-approved operations auto-allow (toast per allow)${displaced ? ` (${displaced} off)` : ""}`
-          : "dspa OFF — all prompts restored",
+          ? `DSPA ON — gate+judge-approved operations auto-allow (toast per allow)${displaced ? ` (${displaced} off)` : ""}`
+          : "DSPA OFF — all prompts restored",
         "info",
       );
     },

@@ -100,7 +100,7 @@ export async function showPrompt(
     if (!dspa.gate.ok) {
       prompt = {
         ...prompt,
-        body: prompt.body + `\n🚧 dspa: not auto-allowed — ${dspa.gate.reason}`,
+        body: prompt.body + `\n🚧 DSPA: not auto-allowed — ${dspa.gate.reason}`,
       };
       if (dspa.verdict) {
         // D10: untrusted-package stop — the judge ran anyway; its verdict is
@@ -113,7 +113,7 @@ export async function showPrompt(
       if (dspa.note) {
         prompt = {
           ...prompt,
-          body: prompt.body + `\n🚧 dspa: ${dspa.note}`,
+          body: prompt.body + `\n🚧 DSPA: ${dspa.note}`,
         };
       }
     } else if (dspa.verdict) {
@@ -128,12 +128,12 @@ export async function showPrompt(
         : undefined;
       prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(dspa.verdict, note) };
       if (dspa.note) {
-        prompt = { ...prompt, body: prompt.body + `\n🚧 dspa: ${dspa.note}` };
+        prompt = { ...prompt, body: prompt.body + `\n🚧 DSPA: ${dspa.note}` };
       }
     } else if (dspa.note) {
       prompt = {
         ...prompt,
-        body: prompt.body + `\n🚧 dspa: not auto-allowed — ${dspa.note}`,
+        body: prompt.body + `\n🚧 DSPA: not auto-allowed — ${dspa.note}`,
       };
     }
   }

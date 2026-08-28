@@ -11,6 +11,7 @@ import {
   recordDspaAutoAllowed,
   getDspaStats,
   updateDspaWidget,
+  setDspaJudging,
 } from "../dspa-mode";
 
 const { judgeStatusMock } = vi.hoisted(() => ({
@@ -132,6 +133,30 @@ describe("widget", () => {
         expect(visibleWidth(line), `line exceeds width ${width}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(width);
       }
     }
+  });
+
+  it("renders judging… inline on the mode line while a call is in flight", () => {
+    judgeStatusMock.mockReturnValue({
+      state: "ok",
+      modelLabel: "llama-cpp/Qwen3.8-27B (session)",
+      reason: null,
+    });
+    setDspaActive(true);
+    recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", "cargo build");
+    const { ctx, widgets, theme } = makeCtx();
+    updateDspaWidget(ctx);
+    const render = (i: number) =>
+      (widgets[i].fn as (t: unknown, th: unknown) => {
+        render: (width: number) => string[];
+      })(null, theme).render(200)[0];
+    expect(render(widgets.length - 1)).toContain("» DSPA");
+    setDspaJudging(true, ctx); // re-sets the widget (forces a repaint)
+    const judgingLine = render(widgets.length - 1);
+    expect(judgingLine).toContain("auto-allowed 1 this session — judging…");
+    setDspaJudging(true, ctx); // no-op (already judging — no extra widget)
+    expect(widgets.length).toBe(2);
+    setDspaJudging(false, ctx);
+    expect(render(widgets.length - 1)).not.toContain("judging…");
   });
 
   it("hides while the judge is not ok, reappears when it is ok again", () => {

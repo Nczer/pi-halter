@@ -11,6 +11,7 @@ import {
   recordDspatOutcome,
   getDspatStats,
   updateDspatWidget,
+  setDspatJudging,
 } from "../dspat-mode";
 
 const { judgeStatusMock } = vi.hoisted(() => ({
@@ -119,9 +120,30 @@ describe("widget", () => {
     })(null, theme);
     const lines = w.render(200);
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("👁 dspat: judge advises on every permission prompt");
+    expect(lines[0]).toContain("◎ DSPAT: judge advises on every permission prompt");
     expect(lines[1]).toContain("1/2 agreed");
+    expect(lines[1]).toContain("◎ 1/2 agreed");
     expect(lines[1]).toContain("curl evil"); // last disagreement target
+  });
+
+  it("renders judging… inline on the mode line while a call is in flight", () => {
+    judgeStatusMock.mockReturnValue({
+      state: "ok",
+      modelLabel: "m (session)",
+      reason: null,
+    });
+    setDspatActive(true);
+    const { ctx, widgets, theme } = makeCtx();
+    updateDspatWidget(ctx);
+    const render = (i: number) =>
+      (widgets[i].fn as (t: unknown, th: unknown) => {
+        render: (width: number) => string[];
+      })(null, theme).render(200)[0];
+    expect(render(widgets.length - 1)).toContain("◎ DSPAT: judge advises");
+    setDspatJudging(true, ctx);
+    expect(render(widgets.length - 1)).toContain("◎ DSPAT — judging…");
+    setDspatJudging(false, ctx);
+    expect(render(widgets.length - 1)).not.toContain("judging…");
   });
 
   it("fits narrow terminals (render width = live terminal width)", () => {
