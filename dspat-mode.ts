@@ -6,7 +6,7 @@ import { judgeStatus } from "./judge-prompt";
  * /dspat — judge advisory mode (session-scoped).
  *
  * When ON, the judge runs automatically on every permission prompt (bash,
- * file, MCP) and the prompt shows the full verdict (explanation +
+ * file) and the prompt shows the full verdict (explanation +
  * approve/reject suggestion). The human always takes the call — this mode
  * never changes the gate's decision.
  *

@@ -541,7 +541,7 @@ describe("model resolution", () => {
   });
 });
 
-describe("buildJudgmentPacket: file & mcp operations", () => {
+describe("buildJudgmentPacket: file operations", () => {
   it("file write outside base — path, classification, replace warning", () => {
     const p = buildJudgmentPacket({
       type: "file",
@@ -575,18 +575,6 @@ describe("buildJudgmentPacket: file & mcp operations", () => {
     expect(p).not.toContain("REPLACE");
   });
 
-  it("mcp call with arguments", () => {
-    const p = buildJudgmentPacket({
-      type: "mcp",
-      server: "exa",
-      tool: "web_search_exa",
-      op: "search",
-      argsPreview: '{"query":"hello"}',
-    });
-    expect(p).toContain("mcp: exa/web_search_exa");
-    expect(p).toContain('{"query":"hello"}');
-    expect(p).toContain("exfiltration surface");
-  });
 });
 
 describe("buildJudgmentPacket: file content", () => {

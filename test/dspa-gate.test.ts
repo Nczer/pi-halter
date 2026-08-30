@@ -17,7 +17,6 @@ import { createStore } from "../store";
 import type {
   BashPromptData,
   FilePromptData,
-  McpPromptData,
 } from "../decision-engine";
 
 const BASE = "/home/u/project";
@@ -63,17 +62,6 @@ function filePd(overrides: Partial<FilePromptData> = {}): FilePromptData {
     ...overrides,
   };
 }
-
-function mcpPd(): McpPromptData {
-  return { type: "mcp", server: "exa", tool: "web_search_exa", op: "search" };
-}
-
-describe("mcp", () => {
-  it("never auto-allowed", async () => {
-    const r = await checkDspaGate(mcpPd(), store);
-    expect(r.ok).toBe(false);
-  });
-});
 
 describe("file", () => {
   it("blocks outside-base, naming the violated base (session cwd), not the target's parent dir", async () => {

@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { PromptDecision, PromptData, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
+import type { PromptDecision, PromptData, BashPromptData, FilePromptData } from "./decision-engine";
 import { PACKAGE_MANAGERS } from "./config";
 import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./renderers/tmux";
 import { shortenToken } from "./analysis/path-util";
@@ -49,9 +49,7 @@ export interface BuiltPrompt {
 export function pdTargetLabel(pd: PromptData): string {
   return pd.type === "bash"
     ? pd.command
-    : pd.type === "file"
-      ? `${pd.action} ${pd.resolved}`
-      : `${pd.server}/${pd.tool}`;
+    : `${pd.action} ${pd.resolved}`;
 }
 
 /**
@@ -84,15 +82,13 @@ export function summarizePrompt(decision: PromptDecision): string {
     }
     return parts.join("; ") || "unclassified";
   }
-  if (p.type === "file") {
-    let s = p.isWriteOp ? "file write" : "file read";
-    // outsideDir is the target's own parent (the grant-offer unit) — name
-    // it as the location, not as the thing the file is outside of.
-    if (p.outsideDir) s += ` outside cwd (${p.outsideDir})`;
-    if (p.warnedRule) s += ` warn ${p.warnedRule}`;
-    return s;
-  }
-  return `mcp ${p.op}`;
+  // p is a file prompt (the only remaining type)
+  let s = p.isWriteOp ? "file write" : "file read";
+  // outsideDir is the target's own parent (the grant-offer unit) — name
+  // it as the location, not as the thing the file is outside of.
+  if (p.outsideDir) s += ` outside cwd (${p.outsideDir})`;
+  if (p.warnedRule) s += ` warn ${p.warnedRule}`;
+  return s;
 }
 
 /**
@@ -117,8 +113,6 @@ export function buildPrompt(
       return buildBashPrompt(promptData, resolutions, confirmedTokens);
     case "file":
       return buildFilePrompt(promptData);
-    case "mcp":
-      return buildMcpPrompt(promptData);
   }
 }
 
@@ -444,35 +438,3 @@ function buildFilePrompt(
   };
 }
 
-// ── MCP prompt ────────────────────────────────────────────────────────────
-
-function buildMcpPrompt(
-  data: McpPromptData,
-): BuiltPrompt {
-  const { server, tool, argsPreview } = data;
-
-  let body = `Server: ${server}\nTool: ${tool}`;
-  if (argsPreview) {
-    // Strip outer braces for a cleaner inline look
-    const inner = argsPreview.replace(/^\{\n/, "").replace(/\n\}$/, "").trimEnd();
-    if (inner && inner !== "{}") {
-      body += `\nArguments: \n${inner}`;
-    }
-  }
-  body += `\n\n\u26a0\ufe0f Calling an external MCP tool.\n`;
-
-  return {
-    title: `\u26a0\ufe0f MCP`,
-    body,
-    tier2Everything: {
-      title: `Confirm Always Allow`,
-      body: `"Always Yes" will auto-allow all tools from MCP server '${server}' this session:\n\n  ${server}:*`,
-    },
-    includePathsOption: false,
-    includeFileOption: false,
-    includeBroaderOption: false,
-    includeAlwaysOption: true,
-    alwaysLabel: `${server}:*`,
-    pathGrantDirs: [],
-  };
-}

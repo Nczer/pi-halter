@@ -412,7 +412,7 @@ describe("judgeAvailable", () => {
 
 // ── Non-bash dispatch ──
 
-describe("getJudgeVerdict: file & mcp prompts", () => {
+describe("getJudgeVerdict: file prompts", () => {
   it("file prompts get a file operation packet", async () => {
     const pd = {
       type: "file",
@@ -438,25 +438,6 @@ describe("getJudgeVerdict: file & mcp prompts", () => {
     expect(packet).toContain("OUTSIDE base");
   });
 
-  it("mcp prompts get an mcp operation packet", async () => {
-    const pd = {
-      type: "mcp",
-      server: "exa",
-      tool: "web_search_exa",
-      op: "search",
-      argsPreview: '{"query":"hello"}',
-    } as never;
-    const calls: CapturedCall[] = [];
-    const { ctx } = makeCtx(fakeModel());
-    const r = await getJudgeVerdict(pd, ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
-      settings: ON,
-    });
-    expect(r?.explanation).toBe(VERDICT.explanation);
-    const packet = String(calls[0].context.messages[0].content);
-    expect(packet).toContain("mcp: exa/web_search_exa");
-    expect(packet).toContain('{"query":"hello"}');
-  });
 });
 
 describe("getJudgeVerdict: file content threading", () => {

@@ -1,12 +1,11 @@
 # Halter (pi extension)
 
-A halter for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, and `mcp` calls, auto-allowing safe operations and prompting the user for anything risky.
+A halter for pi tool calls. Intercepts `bash` and `read`/`write`/`edit` calls, auto-allowing safe operations and prompting the user for anything risky.
 
 ## Features
 
 - **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.); blocks denied credential paths (`.ssh`, `.gnupg`, etc.) and prompts for warned paths (`.env`, `.aws`, etc.) even via `cat`/`grep`
 - **File access** — auto-allows reads inside cwd and trusted paths; prompts for paths outside cwd, denied names (`.env`, `.ssh`, etc.)
-- **MCP tool calls** — intercepts both proxy tool calls (`mcp({tool: "..."})`) and direct tools (e.g., `exa_web_search_exa`); auto-allows metadata operations; prompts for tool invocations showing server, tool, and argument preview; server-level "Always" approval (e.g., `exa:*`)
 - **Auto-allow** — "Always" option grants session-scoped permission; status widget shows active allowances
 - **Retry-loop prevention** — recently-aborted commands are auto-blocked for 60 seconds
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
@@ -26,7 +25,7 @@ Handler → Gate → Decision Engine → Prompt Flow → Rule Generator
 
 1. **Handler** — validates the event, builds a request, passes it to `gate()`
 2. **Gate** — shared flow: calls `decide()`, handles auto-allow / block / prompt routing, manages UI expand/collapse, and formats rejections
-3. **Decision Engine** — async policy function. Routes to the right policy (bash, file, mcp). Returns `auto-allow`, `block`, or `prompt` with `PromptData`
+3. **Decision Engine** — async policy function. Routes to the right policy (bash, file). Returns `auto-allow`, `block`, or `prompt` with `PromptData`
 4. **Prompt Flow** — on `prompt` decisions, builds and displays the two-tier confirmation UI. On "Always", generates rules and saves them
 5. **Rule Generator** — derives auto-allow rules from `PromptData` (on-demand, only when user picks "Always")
 
@@ -50,7 +49,6 @@ The judge is a stateless one-shot model call at the permission prompt: its entir
 | Bash signatures | Command + flags (e.g. `git -am`) | "Always" on bash prompt |
 | Paths (R) | Read access to dirs/files | "Always" on read prompt |
 | Paths (R/W) | Read+write access to dirs/files | "Always" on write prompt (implies read) |
-| MCP servers | All tools from a server (e.g. `exa:*`) | "Always" on MCP prompt |
 | Trusted packages | One package across fetchable run forms (`npx/uvx/dlx …`, any args) | "Trust" on dspa untrusted-package prompt (D10) |
 
 ### Decisions: pass, prompt, block
@@ -108,8 +106,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── handlers/                     Thin adapters (all call gate())
 │   ├── index.ts                  Re-exports for handlers
 │   ├── bash.ts                   Bash command interceptor
-│   ├── file.ts                   File operation interceptor
-│   └── mcp.ts                    MCP tool call interceptor (proxy + direct tools)
+│   └── file.ts                   File operation interceptor
 ├── analysis/                     Command analysis and risk assessment
 │   ├── bash-parser.ts            tree-sitter-bash wrapper — lazy WASM load, parseCommand() API
 │   ├── tokenizer.ts              Command tokenization
@@ -120,7 +117,6 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 │   ├── risk-analyzer.ts          Whole-command risk assessment (merge segment risks + operator checks)
 │   ├── path-analysis.ts          Pure path utilities (resolve, deny rules, cwd checks, outside-path detection)
 │   ├── path-util.ts              Path helpers (tilde expansion)
-│   ├── mcp-resolver.ts           MCP server resolution from tool names, proxy target derivation
 │   ├── tmux-helpers.ts           Tmux-specific analysis
 │   ├── obfuscation.ts            Obfuscation detection (variable indirection, base64, xargs tricks, etc.)
 │   └── evaluators/               Per-domain risk evaluators (modular, pluggable)
@@ -136,8 +132,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── policies/                     Request-specific decision logic
 │   ├── bash.ts                   Bash policy (runs bash-rules.ts pipeline)
 │   ├── bash-rules.ts             Composable bash rules: RetryLoop → CredentialDeny → FastAllow → Safety → PromptFallback
-│   ├── file.ts                   File policy
-│   └── mcp.ts                    MCP policy
+│   └── file.ts                   File policy
 ├── prompt-flow.ts                UI interaction loop — showPrompt(decision, ctx, store)
 ├── prompt-builder.ts             Pure formatter — PromptData → BuiltPrompt (title/body/options/labels)
 ├── prompts.ts                    Two-tier confirmation flow — native select + rejection-reason input
@@ -153,7 +148,6 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── decision-log.ts               JSONL decision log (off by default)
 ├── halter-settings.ts            Owner of the halter namespace in settings-ext.json (stat-cached reads, corrupt → .bak + defaults)
 ├── renderers/                    Display formatting helpers
-│   ├── mcp.ts                    MCP tool call formatting (proxy + direct, args preview, truncation)
 │   └── tmux.ts                   Tmux command formatting (strips boilerplate flags, structures output)
 └── config/                       Focused configuration modules
     ├── index.ts                  Config re-exports, thresholds (ABORT_REMEMBER_MS, PROMPT_WARNING_THRESHOLD)
@@ -206,7 +200,6 @@ Follow a bash command (`ls -la`) through the system:
 |------|---|
 | `handlers/bash.ts` | Intercept bash commands |
 | `handlers/file.ts` | Intercept file operations |
-| `handlers/mcp.ts` | Intercept MCP tool calls (proxy + direct) |
 | `gate.ts` | Shared decide → prompt → reject flow |
 | `rule-generator.ts` | Derive auto-allow rules from data |
 | `prompt-flow.ts` | Prompt orchestration |
@@ -216,7 +209,6 @@ Follow a bash command (`ls -la`) through the system:
 | `analysis/segment-analysis.ts` | Segment safety analysis |
 | `analysis/segment-helpers.ts` | Shared analysis utilities |
 | `analysis/bash-parser.ts` | tree-sitter parser wrapper, `parseCommand()` API |
-| `analysis/mcp-resolver.ts` | MCP server/tool resolution |
 | `prompt-builder.ts` | Build prompt content |
 | `prompts.ts` | Two-tier confirmation UI |
 | `dspa-gate.ts` | Deterministic hard floor for /dspa auto-allow |
@@ -292,7 +284,6 @@ The log is the *input* to a log-driven fix loop, not just a measurement: the sui
 - **Bash parser** — lazy WASM loading. Verify path extraction across heredocs, comments, quotes, subshells
 - **Path utilities** — pure functions. Verify path resolution, deny rules, cwd checks
 - **Obfuscation detection** — pure function. Verify each technique regex
-- **MCP renderer** — pure functions. Verify formatting, truncation, edge cases
 - **Round-trip tests** — verify prompt → rules → auto-allow cycle works end-to-end
 - **Hermetic cwd** — the contract suites (`cases-data.ts`, the bypass suites, `decision-engine`, `cwd-threading`, …) run `decide()` against a per-file temp cwd (`test/hermetic-cwd.ts`), under `$HOME` but out of any path-allowlisted zone (tmp/`/tmp` are write-allowed scratch, `.pi` is auto-allowed by location), so no row's decision depends on what happens to live in the user's real tree. Typecheck: `npm run typecheck` covers `test/**` too.
 

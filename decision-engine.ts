@@ -1,6 +1,5 @@
 import { decideBash } from "./policies/bash";
 import { decideFile } from "./policies/file";
-import { decideMcp } from "./policies/mcp";
 import type { CommandAnalysis } from "./analysis/command-analysis";
 import type { Store, AllowRules } from "./store";
 export type { Store, AllowRules };
@@ -28,15 +27,7 @@ export interface FileRequest {
   content?: string;
 }
 
-export interface McpRequest {
-  type: "mcp";
-  server: string;
-  tool: string;
-  /** Truncated tool arguments for display in permission prompts. */
-  argsPreview?: string;
-}
-
-export type PermissionRequest = BashRequest | FileRequest | McpRequest;
+export type PermissionRequest = BashRequest | FileRequest;
 
 // ── Decision types (discriminated union) ──
 
@@ -128,16 +119,7 @@ export interface FilePromptData {
   content?: string;
 }
 
-export interface McpPromptData {
-  type: "mcp";
-  server: string;
-  tool: string;
-  op: string;
-  /** Truncated tool arguments for display in permission prompts. */
-  argsPreview?: string;
-}
-
-export type PromptData = BashPromptData | FilePromptData | McpPromptData;
+export type PromptData = BashPromptData | FilePromptData;
 
 // ── Decision engine ──
 
@@ -165,7 +147,5 @@ export async function decide(request: PermissionRequest, store: Store, opts?: De
       return decideBash(request, store);
     case "file":
       return decideFile(request, store, opts);
-    case "mcp":
-      return decideMcp(request, store);
   }
 }

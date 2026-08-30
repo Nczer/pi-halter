@@ -1,7 +1,7 @@
 import path from "node:path";
 import { PACKAGE_MANAGERS } from "./config";
 import type { AllowRules } from "./store";
-import type { PromptData, BashPromptData, FilePromptData, McpPromptData } from "./decision-engine";
+import type { PromptData, BashPromptData, FilePromptData } from "./decision-engine";
 
 /**
  * The filesystem root is never part of an Always grant: one click must not
@@ -31,8 +31,6 @@ export class RuleGenerator {
         return this.generateBashPrimaryRules(data);
       case "file":
         return this.generateFilePrimaryRules(data);
-      case "mcp":
-        return this.generateMcpPrimaryRules(data);
     }
   }
 
@@ -150,9 +148,4 @@ export class RuleGenerator {
       : { readDirs: [dir] };
   }
 
-  // ── MCP Internal ──
-
-  private static generateMcpPrimaryRules(data: McpPromptData): AllowRules {
-    return { mcpServers: [data.server] };
-  }
 }

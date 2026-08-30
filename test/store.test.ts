@@ -7,7 +7,6 @@ describe("Store: Fresh state", () => {
     expect(store.hasAllowedBash("ls")).toBe(false);
     expect(store.hasAllowedReadPath("/foo")).toBe(false);
     expect(store.hasAllowedWritePath("/foo")).toBe(false);
-    expect(store.hasAllowedMcpServer("exa")).toBe(false);
     expect(store.getLastAbort("ls")).toBeNull();
   });
 });
@@ -52,14 +51,6 @@ describe("Store: addAllowed", () => {
     expect(store.hasAllowedWritePath("/tmp/other.txt")).toBe(false);
   });
 
-  it("adds MCP servers", () => {
-    const store = createStore();
-    store.addAllowed({ mcpServers: ["exa", "context7"] });
-    expect(store.hasAllowedMcpServer("exa")).toBe(true);
-    expect(store.hasAllowedMcpServer("context7")).toBe(true);
-    expect(store.hasAllowedMcpServer("blender")).toBe(false);
-  });
-
   it("adds all categories at once", () => {
     const store = createStore();
     store.addAllowed({
@@ -68,14 +59,12 @@ describe("Store: addAllowed", () => {
       writeDirs: ["/tmp"],
       readPaths: ["/a"],
       writePaths: ["/b"],
-      mcpServers: ["exa"],
     });
     expect(store.hasAllowedBash("ls")).toBe(true);
     expect(store.listAllowedReadDirs()).toContain("/opt");
     expect(store.listAllowedWriteDirs()).toContain("/tmp");
     expect(store.hasAllowedReadPath("/a")).toBe(true);
     expect(store.hasAllowedWritePath("/b")).toBe(true);
-    expect(store.hasAllowedMcpServer("exa")).toBe(true);
   });
 
   it("handles partial allowances", () => {
@@ -150,7 +139,6 @@ describe("Store: Reset", () => {
     expect(store.listAllowedWriteDirs().size).toBe(0);
     expect(store.listAllowedReadPaths().size).toBe(0);
     expect(store.listAllowedWritePaths().size).toBe(0);
-    expect(store.hasAllowedMcpServer("exa")).toBe(false);
     expect(store.getLastAbort("rm")).toBeNull();
     expect(store.incrementPromptCount().count).toBe(1);
   });

@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { updateWidget } from "./widget";
-import { handleBash, handleFile, handleMcp, handleMcpDirectTool } from "./handlers";
+import { handleBash, handleFile } from "./handlers";
 import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
 import { isDspatActive, resetDspat, setDspatActive, updateDspatWidget } from "./dspat-mode";
 import { isDspaActive, resetDspa, setDspaActive, updateDspaWidget } from "./dspa-mode";
@@ -195,9 +195,7 @@ export default async function halterExtension(pi: ExtensionAPI) {
     if (isDspActive()) return;
 
     try {
-      return await handleMcp(event, ctx)
-        ?? await handleMcpDirectTool(event, ctx)
-        ?? await handleBash(event, ctx)
+      return await handleBash(event, ctx)
         ?? await handleFile(event, ctx);
     } catch (err) {
       // Fail closed (defense in depth): an internal gate error must never
