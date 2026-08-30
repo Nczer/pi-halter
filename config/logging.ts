@@ -3,7 +3,7 @@
  * decision-log.ts).
  *
  * OFF by default. The live toggle is /halter-decision-log [on|off],
- * persisted in ~/.pi/agent/halter.json (halter's own settings file). When
+ * persisted in the halter namespace of ~/.pi/agent/settings-ext.json. When
  * enabled, every gated decision (auto-allow / prompt / block) is appended as
  * one JSON line to <extension dir>/.log/decisions.jsonl (5 MiB rotation).
  * Useful after changing gate code: diff what now prompts vs. what used to

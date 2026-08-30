@@ -5,7 +5,7 @@
  *
  * The model call is exercised through the injected `complete` seam — no real
  * model, no network. Settings tests run against a tmp file; the real
- * ~/.pi/agent/halter.json is never touched.
+ * ~/.pi/agent/settings-ext.json is never touched.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -451,7 +451,7 @@ describe("judge settings", () => {
   });
 
   it("per-key merge: partial judge object fills in defaults", () => {
-    fs.writeFileSync(file, JSON.stringify({ decisionLogEnabled: true, judge: { thinking: "xhigh" } }) + "\n");
+    fs.writeFileSync(file, JSON.stringify({ halter: { decisionLog: true, judge: { thinking: "xhigh" } } }) + "\n");
     expect(readJudgeSettings(file)).toEqual({
       enabled: true,
       provider: null,
@@ -462,13 +462,13 @@ describe("judge settings", () => {
   });
 
   it("invalid keys fall back per-key without breaking valid ones", () => {
-    fs.writeFileSync(file, JSON.stringify({ judge: {
+    fs.writeFileSync(file, JSON.stringify({ halter: { judge: {
       enabled: "yes",
       provider: 42,
       thinking: "nope",
       timeoutMs: -5,
       model: "good-model",
-    } }) + "\n");
+    } } }) + "\n");
     expect(readJudgeSettings(file)).toEqual({
       enabled: true,
       provider: null,
@@ -486,13 +486,13 @@ describe("judge settings", () => {
   });
 
   it("writeJudgeSettings round-trips and preserves unrelated keys", () => {
-    fs.writeFileSync(file, JSON.stringify({ decisionLogEnabled: true }) + "\n");
+    fs.writeFileSync(file, JSON.stringify({ halter: { decisionLog: true } }) + "\n");
     const out = writeJudgeSettings({ enabled: false, provider: "llama-cpp", model: "other" }, file);
     expect(out).toMatchObject({ enabled: false, provider: "llama-cpp", model: "other", thinking: "low" });
     const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
-    expect(saved.decisionLogEnabled).toBe(true);
-    // Only patched keys are persisted; defaults apply in memory at read time.
-    expect(saved.judge).toEqual({ enabled: false, provider: "llama-cpp", model: "other" });
+    expect(saved.halter.decisionLog).toBe(true);
+    // The namespace is materialized: the full judge object is visible in the file.
+    expect(saved.halter.judge).toEqual({ enabled: false, provider: "llama-cpp", model: "other", thinking: "low", timeoutMs: 8000 });
     // A later patch keeps earlier keys.
     writeJudgeSettings({ thinking: "xhigh" }, file);
     expect(readJudgeSettings(file)).toMatchObject({ provider: "llama-cpp", model: "other", thinking: "xhigh", enabled: false });

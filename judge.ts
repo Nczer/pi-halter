@@ -29,15 +29,15 @@ import type {
   ToolCall,
   TextContent,
 } from "@earendil-works/pi-ai";
-import { SETTINGS_PATH, readSettingsFile, writeSettings } from "./halter-settings";
+import { SETTINGS_PATH, readSettingsFile, writeSettings, JUDGE_DEFAULTS } from "./halter-settings";
 import { findNetworkEgress } from "./config";
 
 // ── Settings ──
 
 /**
- * Judge configuration, persisted as the `judge` object in
- * ~/.pi/agent/halter.json (per-key merged over DEFAULT_JUDGE_SETTINGS;
- * see readJudgeSettings / writeJudgeSettings).
+ * Judge configuration, persisted as the `judge` object in the `halter`
+ * namespace of ~/.pi/agent/settings-ext.json (per-key merged over
+ * DEFAULT_JUDGE_SETTINGS; see readJudgeSettings / writeJudgeSettings).
  */
 export interface JudgeSettings {
   /** Master switch. Off → no model call, prompts exactly as before. */
@@ -52,15 +52,9 @@ export interface JudgeSettings {
   timeoutMs: number;
 }
 
-export const DEFAULT_JUDGE_SETTINGS: JudgeSettings = {
-  enabled: true,
-  provider: null,
-  model: null,
-  // Eval 2026-08-22 (Qwen3 27B, 16-case matrix incl. 10 hard traps):
-  // `low` matched xhigh's 10/10 on the hard set with no 34s-style tail.
-  thinking: "low",
-  timeoutMs: 8000,
-};
+/** Judge settings defaults (defined in halter-settings.ts, where they are
+ * also materialized into settings-ext.json on first read). */
+export const DEFAULT_JUDGE_SETTINGS: JudgeSettings = JUDGE_DEFAULTS;
 
 /** Valid thinking levels ("off" or a pi thinking level forwarded as reasoning). */
 export const THINKING_VALUES: ReadonlySet<string> = new Set([

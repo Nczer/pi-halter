@@ -115,7 +115,7 @@ function cacheKey(modelId: string, pd: BashPromptData, tokens: string[]): string
 
 /** Test seam: `complete` (the model call) and settings are injectable —
  * production uses the real `complete` from @earendil-works/pi-ai and
- * ~/.pi/agent/halter.json. */
+ * ~/.pi/agent/settings-ext.json. */
 export interface PathResolverDeps {
   complete?: CompleteFn;
   settings?: JudgeSettings;

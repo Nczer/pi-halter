@@ -107,7 +107,7 @@ export function updateDspatWidget(ctx: ExtensionContext): void {
     ctx.ui.setWidget("dspat", (_tui, theme) => {
       const render = (width: number) => {
         // Live judge state: the widget stays up when the judge is off
-        // (the user's own choice, visible in halter.json), but DISAPPEARS
+        // (the user's own choice, visible in settings-ext.json), but DISAPPEARS
         // when the judge is invalid (e.g. session model switched to
         // something unresolvable); the prompt body carries the "⚠️ Judge
         // invalid" line there. ctx.model is a live getter, so a switch is

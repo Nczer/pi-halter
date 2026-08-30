@@ -181,7 +181,7 @@ async function buildJudgmentInput(
  *   judge output would have appeared.
  *
  * Never throws. `settings` is a test seam (production reads
- * ~/.pi/agent/halter.json). ctx.model is a live getter, so calling this
+ * ~/.pi/agent/settings-ext.json). ctx.model is a live getter, so calling this
  * per render tracks session model switches.
  */
 export interface JudgeStatus {
@@ -234,7 +234,7 @@ export function judgeAvailable(
 /**
  * Test seam: `complete` (the model call) and settings are injectable.
  * Production uses the real `complete` from @earendil-works/pi-ai and
- * ~/.pi/agent/halter.json.
+ * ~/.pi/agent/settings-ext.json.
  */
 export interface JudgePromptDeps {
   complete?: CompleteFn;

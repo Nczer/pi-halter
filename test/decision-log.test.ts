@@ -3,7 +3,7 @@
  *
  * The log is the blast-radius measurement: one line per gated tool call.
  * Tests run against an env-redirected path (logging is off by default via
- * ~/.pi/agent/halter.json, which the tests never touch — the toggle state is
+ * ~/.pi/agent/settings-ext.json, which the tests never touch — the toggle state is
  * driven through setDecisionLogEnabled with a tmp settings file); the
  * off-by-default toggle, settings round-trip, rotation, and the never-throw
  * guarantee are pinned here.
@@ -261,11 +261,12 @@ describe("decision log", () => {
   });
 
   it("settings round-trip: write → read, merge with other keys, missing file → default", () => {
-    fs.writeFileSync(settingsFile, JSON.stringify({ otherHalterKey: 1 }) + "\n");
+    fs.writeFileSync(settingsFile, JSON.stringify({ halter: { otherHalterKey: 1 } }) + "\n");
     writeToggleSetting(true, settingsFile);
     expect(readToggleSetting(settingsFile)).toBe(true);
     const saved = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-    expect(saved).toEqual({ otherHalterKey: 1, decisionLogEnabled: true });
+    expect(saved.halter.otherHalterKey).toBe(1);
+    expect(saved.halter.decisionLog).toBe(true);
     expect(readToggleSetting(path.join(tmp, "missing.json"))).toBe(DECISION_LOG_ENABLED);
   });
 
