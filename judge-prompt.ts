@@ -1,7 +1,7 @@
 /**
  * Judge wiring — the LLM judge's verdict inside the permission prompts.
  *
- * Display-only (manual/dspat): when a prompt (bash / file / MCP) is about to
+ * Display-only (manual/dspat): when a prompt (bash / file) is about to
  * be shown, a one-shot model call (judge.ts) explains what the operation will
  * actually do, and the verdict block is appended to the prompt body. The
  * verdict never reaches the agent's context, never pre-fills the rejection
@@ -111,8 +111,8 @@ function readScriptFile(resolved: string): JudgmentScript | null {
  * Build the judgment input for a prompt, per type. Bash uses the analysis
  * carried on the prompt (single analysis per decision — re-run only for
  * hand-constructed prompt data) so the packet shows exactly what the gate
- * decided on; file and MCP map straight from the prompt data (file
- * writes/edits carry the new content, fenced as untrusted).
+ * decided on; file maps straight from the prompt data (writes/edits carry
+ * the new content, fenced as untrusted).
  */
 async function buildJudgmentInput(
   pd: PromptData,
@@ -142,26 +142,17 @@ async function buildJudgmentInput(
     };
     return input;
   }
-  if (pd.type === "file") {
-    return {
-      type: "file",
-      action: pd.action,
-      resolved: pd.resolved,
-      cwd: pd.cwd,
-      outsideDir: pd.outsideDir,
-      isWriteOp: pd.isWriteOp,
-      exists: pd.exists,
-      warnedRule: pd.warnedRule,
-      symlinkHint: pd.symlinkHint,
-      content: pd.content,
-    };
-  }
   return {
-    type: "mcp",
-    server: pd.server,
-    tool: pd.tool,
-    op: pd.op,
-    argsPreview: pd.argsPreview,
+    type: "file",
+    action: pd.action,
+    resolved: pd.resolved,
+    cwd: pd.cwd,
+    outsideDir: pd.outsideDir,
+    isWriteOp: pd.isWriteOp,
+    exists: pd.exists,
+    warnedRule: pd.warnedRule,
+    symlinkHint: pd.symlinkHint,
+    content: pd.content,
   };
 }
 
@@ -242,7 +233,7 @@ export interface JudgePromptDeps {
 }
 
 /**
- * One judge stage for a prompt (bash / file / mcp), or null (never throws).
+ * One judge stage for a prompt (bash / file), or null (never throws).
  * Shows a status widget while the model call is in flight. A verdict that
  * failed to produce an explanation (defer) is treated as "no verdict".
  *

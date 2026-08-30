@@ -306,21 +306,21 @@ describe("twoTierAlwaysPrompt: file outside cwd layout", () => {
   });
 });
 
-// ── MCP ────────────────────────────────────────────────────────────────
+// ── Single Always option (no paths/file options) ───────────────────────
 
-describe("twoTierAlwaysPrompt: MCP layout", () => {
-  // choices = ["Yes", "Always: exa:*", "No (with reason)", "No"]
-  // indices:     0          1               2                3
+describe("twoTierAlwaysPrompt: single Always option layout", () => {
+  // choices = ["Yes", "Always: example", "No (with reason)", "No"]
+  // indices:     0          1                2                3
 
-  const mcpPrompt = makePrompt({
+  const singleAlwaysPrompt = makePrompt({
     includeAlwaysOption: true,
-    alwaysLabel: "exa:*",
+    alwaysLabel: "example",
   });
 
   it("calls onAlways and returns 'always' when Always → Confirm", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      mcpPrompt, store, makeCtx([1, 0]),
+      singleAlwaysPrompt, store, makeCtx([1, 0]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
     expect(result).toBe("always");
@@ -331,7 +331,7 @@ describe("twoTierAlwaysPrompt: MCP layout", () => {
     const cb = makeCallbacks();
     // tier-1: index 2 = "No with reason", editor: "reason"
     const result = await twoTierAlwaysPrompt(
-      mcpPrompt, store, makeCtx([2, "because unsafe"]),
+      singleAlwaysPrompt, store, makeCtx([2, "because unsafe"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
     expect(result).toEqual({ kind: "no", reason: "because unsafe" });
@@ -341,7 +341,7 @@ describe("twoTierAlwaysPrompt: MCP layout", () => {
   it("returns 'no' when index 3 (No) is selected", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      mcpPrompt, store, makeCtx([3]),
+      singleAlwaysPrompt, store, makeCtx([3]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
     expect(result).toBe("no");
@@ -350,7 +350,7 @@ describe("twoTierAlwaysPrompt: MCP layout", () => {
   it("cancel (null) returns 'no'", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      mcpPrompt, store, makeCtx([null]),
+      singleAlwaysPrompt, store, makeCtx([null]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
     expect(result).toBe("no");

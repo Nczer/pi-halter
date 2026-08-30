@@ -45,8 +45,6 @@
  *    JUDGEABLE (D3, extended by D11) — the location is user-trusted, the
  *    content is judged in full; truly outside-base writes stop (Q1: scope is
  *    the user's call). Reads are never judged.
- *  - mcp: never auto-allowed — the gate has no model of server behavior, so
- *    the judge's word alone is not enough for automatic execution.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -271,10 +269,6 @@ export async function checkDspaGate(
   pd: PromptData,
   store: Store,
 ): Promise<DspaGateResult> {
-  if (pd.type === "mcp") {
-    return { ok: false, reason: "MCP calls are never auto-allowed (server behavior is outside the gate's model)" };
-  }
-
   if (pd.type === "file") {
     // D3 (docs/dspa-redesign.md): a write into a session-granted dir is
     // judgeable — the user trusted the dir, so the outside-base stop does

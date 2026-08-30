@@ -27,7 +27,7 @@ import {
   type DecisionLogEntry,
 } from "../decision-log";
 import { DECISION_LOG_ENABLED } from "../config/logging";
-import type { BashRequest, Decision, FileRequest, McpRequest } from "../decision-engine";
+import type { BashRequest, Decision, FileRequest } from "../decision-engine";
 
 const noUiCtx = { hasUI: false } as never;
 const noReject = (() => {
@@ -218,14 +218,10 @@ describe("decision log", () => {
     expect(entry.reason).toContain("(unlisted)");
   });
 
-  it("logs file and mcp decisions with their target shapes", async () => {
+  it("logs file decisions with their target shape", async () => {
     await gate({ type: "file", toolName: "read", filePath: "/etc/passwd", cwd: tmp } as FileRequest, noUiCtx, createStore(), noReject);
-    const req: McpRequest = { type: "mcp", server: "exa", tool: "search" };
-    await gate(req, noUiCtx, createStore(), noReject);
-    const [fileEntry, mcpEntry] = lines(logFile);
+    const [fileEntry] = lines(logFile);
     expect(fileEntry).toMatchObject({ tool: "file", target: "/etc/passwd", cwd: tmp });
-    expect(mcpEntry).toMatchObject({ tool: "mcp", target: "exa/search", kind: "prompt", reason: "mcp call" });
-    expect(mcpEntry.cwd).toBeUndefined();
   });
 
   it("truncates long bash commands", async () => {

@@ -15,7 +15,6 @@ export interface AllowRules {
   writeDirs?: string[];
   readPaths?: string[];
   writePaths?: string[];
-  mcpServers?: string[];
 }
 
 // ── Store (volatile, in-memory) ──
@@ -31,7 +30,6 @@ export interface Store {
   hasAllowedBashCwd(signature: string, cwd: string): boolean;
   hasAllowedReadPath(path: string): boolean;
   hasAllowedWritePath(path: string): boolean;
-  hasAllowedMcpServer(server: string): boolean;
   /** D10: bare package name trusted for fetchable run forms (npx tsc, uvx …). */
   hasTrustedPackage(pkg: string): boolean;
   /** D10: trust a bare package name for the session (prompt's "Trust" option). */
@@ -61,7 +59,6 @@ export interface Store {
   listAllowedWriteDirs(): Set<string>;
   listAllowedReadPaths(): Set<string>;
   listAllowedWritePaths(): Set<string>;
-  listAllowedMcpServers(): Set<string>;
   /** D10: trusted package names (widget renders these alongside bash grants). */
   listTrustedPackages(): Set<string>;
 
@@ -84,7 +81,6 @@ export function createStore(nowFn = Date.now): Store {
   const writeDirs = new Set<string>();
   const readPaths = new Set<string>();
   const writePaths = new Set<string>();
-  const mcpServers = new Set<string>();
   const trustedPackages = new Set<string>();
   const confirmedResolutions = new Map<string, string[]>();
   const aborted = new Map<string, number>();
@@ -117,7 +113,6 @@ export function createStore(nowFn = Date.now): Store {
     },
     hasAllowedReadPath(p) { return readPaths.has(p); },
     hasAllowedWritePath(p) { return writePaths.has(p); },
-    hasAllowedMcpServer(s) { return mcpServers.has(s); },
     hasTrustedPackage(pkg) { return trustedPackages.has(pkg); },
     trustPackage(pkg) { trustedPackages.add(pkg); },
     getConfirmedResolution(token) { return confirmedResolutions.get(token) ?? null; },
@@ -147,7 +142,6 @@ export function createStore(nowFn = Date.now): Store {
       rules.writeDirs?.forEach(d => writeDirs.add(d));
       rules.readPaths?.forEach(p => readPaths.add(p));
       rules.writePaths?.forEach(p => writePaths.add(p));
-      rules.mcpServers?.forEach(s => mcpServers.add(s));
     },
 
     recordAbort(cmd) {
@@ -169,7 +163,6 @@ export function createStore(nowFn = Date.now): Store {
     listAllowedWriteDirs() { return new Set(writeDirs); },
     listAllowedReadPaths() { return new Set(readPaths); },
     listAllowedWritePaths() { return new Set(writePaths); },
-    listAllowedMcpServers() { return new Set(mcpServers); },
     listTrustedPackages() { return new Set(trustedPackages); },
 
     incrementPromptCount() {
@@ -184,7 +177,6 @@ export function createStore(nowFn = Date.now): Store {
       writeDirs.clear();
       readPaths.clear();
       writePaths.clear();
-      mcpServers.clear();
       trustedPackages.clear();
       confirmedResolutions.clear();
       aborted.clear();

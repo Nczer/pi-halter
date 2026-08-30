@@ -15,7 +15,7 @@
 import path from "node:path";
 import os from "node:os";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { decide, BashRequest, FileRequest, McpRequest, type BashPromptData } from "../decision-engine";
+import { decide, BashRequest, FileRequest, type BashPromptData } from "../decision-engine";
 import { createStore } from "../store";
 import { RuleGenerator } from "../rule-generator";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
@@ -250,55 +250,6 @@ describe("Round-trip: File write outside cwd", () => {
       const d3 = await decide(req2, store);
       expect(d3.kind).toBe("prompt");
     }
-  });
-});
-
-// ─── MCP round-trip ───
-
-describe("Round-trip: MCP server approval", () => {
-  it("context7 → prompt → rules → auto-allow", async () => {
-    const store = createStore();
-
-    const req: McpRequest = { type: "mcp", server: "context7", tool: "resolve-library-id" };
-    const d1 = await decide(req, store);
-    expect(d1.kind).toBe("prompt");
-    if (d1.kind !== "prompt") throw new Error("expected prompt");
-
-    store.addAllowed(RuleGenerator.generatePrimaryRules(d1.promptData));
-    const d2 = await decide(req, store);
-    expect(d2.kind).toBe("auto-allow");
-  });
-
-  it("server approval covers all tools on that server", async () => {
-    const store = createStore();
-
-    const req1: McpRequest = { type: "mcp", server: "blender", tool: "render" };
-    const d1 = await decide(req1, store);
-    expect(d1.kind).toBe("prompt");
-    if (d1.kind !== "prompt") throw new Error("expected prompt");
-
-    store.addAllowed(RuleGenerator.generatePrimaryRules(d1.promptData));
-
-    // Different tool, same server → auto-allow
-    const req2: McpRequest = { type: "mcp", server: "blender", tool: "scene_objects" };
-    const d2 = await decide(req2, store);
-    expect(d2.kind).toBe("auto-allow");
-  });
-
-  it("server approval → rules → auto-allow", async () => {
-    const store = createStore();
-
-    const req: McpRequest = { type: "mcp", server: "joplin", tool: "joplin:get_notes" };
-    const d1 = await decide(req, store);
-    expect(d1.kind).toBe("prompt");
-    if (d1.kind !== "prompt") throw new Error("expected prompt");
-
-    store.addAllowed(RuleGenerator.generatePrimaryRules(d1.promptData));
-
-    // Same server via explicit field → auto-allow
-    const req2: McpRequest = { type: "mcp", server: "joplin", tool: "get_notes" };
-    const d2 = await decide(req2, store);
-    expect(d2.kind).toBe("auto-allow");
   });
 });
 

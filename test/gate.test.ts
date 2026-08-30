@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { gate, rejectBash, rejectFile, rejectMcp } from "../gate";
+import { gate, rejectBash, rejectFile } from "../gate";
 import { createStore } from "../store";
 import type { Decision } from "../decision-engine";
 import * as decisionEngine from "../decision-engine";
@@ -52,19 +52,6 @@ function filePrompt(overrides: Partial<Extract<Extract<Decision, { kind: "prompt
       warnedRule: null,
       symlinkHint: null,
       exists: false,
-      ...overrides,
-    },
-  };
-}
-
-function mcpPrompt(overrides: Partial<Extract<Extract<Decision, { kind: "prompt" }>["promptData"], { type: "mcp" }>> = {}): Decision {
-  return {
-    kind: "prompt",
-    promptData: {
-      type: "mcp",
-      server: "exa",
-      tool: "exa_web_search",
-      op: "call",
       ...overrides,
     },
   };
@@ -148,7 +135,7 @@ describe("rejectBash", () => {
     const store = createStore();
     const ctx = fakeCtx();
     const result = rejectBash(
-      mcpPrompt(),
+      filePrompt(),
       fakeResult(false),
       store,
       ctx,
@@ -222,62 +209,6 @@ describe("rejectFile", () => {
   it("returns block for non-file prompt data (defensive)", () => {
     const ctx = fakeCtx();
     const result = rejectFile(
-      bashPrompt() as any,
-      fakeResult(false),
-      createStore(), ctx,
-    );
-    expect(result.block).toBe(true);
-    expect(result.reason).toBe("Permission denied");
-  });
-});
-
-// ── rejectMcp ──────────────────────────────────────────────────────────
-
-describe("rejectMcp", () => {
-  it("sends error notification with tool name", () => {
-    const ctx = fakeCtx();
-    rejectMcp(mcpPrompt(), fakeResult(false), createStore(), ctx);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("exa_web_search"),
-      "error",
-    );
-  });
-
-  it("includes server name in reason", () => {
-    const ctx = fakeCtx();
-    const result = rejectMcp(
-      mcpPrompt({ server: "context7", tool: "resolve-library-id" }),
-      fakeResult(false),
-      createStore(), ctx,
-    );
-    expect(result.reason).toContain("context7");
-    expect(result.reason).toContain("resolve-library-id");
-  });
-
-  it("includes user-provided reason", () => {
-    const ctx = fakeCtx();
-    const result = rejectMcp(
-      mcpPrompt(),
-      fakeResult(false, "Don't trust this server"),
-      createStore(), ctx,
-    );
-    expect(result.reason).toContain("Don't trust this server");
-  });
-
-  it("returns block for non-prompt decision (defensive)", () => {
-    const ctx = fakeCtx();
-    const result = rejectMcp(
-      { kind: "auto-allow" } as Decision,
-      fakeResult(false),
-      createStore(), ctx,
-    );
-    expect(result.block).toBe(true);
-    expect(result.reason).toBe("Permission denied");
-  });
-
-  it("returns block for non-mcp prompt data (defensive)", () => {
-    const ctx = fakeCtx();
-    const result = rejectMcp(
       bashPrompt() as any,
       fakeResult(false),
       createStore(), ctx,

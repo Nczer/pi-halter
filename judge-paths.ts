@@ -119,7 +119,7 @@ export function judgePathReport(
 /**
  * Decision-log fields for a judged operation (gate.ts calls this with the
  * FINAL stage-2 verdict). `{}` unless a stage-2 bash verdict reported
- * paths — stage 1 never asks for them, file/MCP ops have no path list.
+ * paths — stage 1 never asks for them, file ops have no path list.
  */
 export function judgePathLogFields(
   pd: PromptData,

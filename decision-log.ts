@@ -89,7 +89,7 @@ export type DspModeTag = "dspa" | "dspat";
 export interface DecisionLogEntry {
   /** ISO timestamp. */
   ts: string;
-  tool: "bash" | "file" | "mcp";
+  tool: "bash" | "file";
   /**
    * `deny` is the phase-3 dspa denial flow (D4): a judge-rejected
    * operation returned to the AGENT instead of a user prompt. It is a
@@ -146,7 +146,7 @@ export interface DecisionLogEntry {
 
   /** Block reason, or a one-line summary of why a prompt was needed; null for auto-allow. */
   reason: string | null;
-  /** Bash command (truncated), file path, or "server/tool". */
+  /** Bash command (truncated), or file path. */
   target: string;
   /**
    * File prompt only: the directory the prompt offers to grant — the
@@ -328,8 +328,7 @@ export function logUnresolved(e: UnresolvedLogEntry): void {
 // targetOf stays here — it covers the REQUEST shape, including blocks.
 function targetOf(request: PermissionRequest): string {
   if (request.type === "bash") return request.command;
-  if (request.type === "file") return request.filePath;
-  return `${request.server}/${request.tool}`;
+  return request.filePath;
 }
 
 // The directory a file prompt offers to grant (see promptDir): the

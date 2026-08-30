@@ -67,7 +67,6 @@ the full command + analysis + content and decides.
 
 | Check | Rationale |
 |---|---|
-| MCP calls (all) | no model of server behavior (unchanged) |
 | credential-pattern paths/rules | secrets are a class, not a judgment |
 | parse errors | unverifiable |
 | obscured command position (`$f`, `$( )` as the command) | cannot verify what runs |
@@ -282,9 +281,8 @@ concrete recursive/bare `/tmp` rm moved with the bar — /tmp is
 config-allowed, i.e. in the manual bar — so it is judgeable like in-cwd
 recursive rm; the judge's deny rule gates mass deletion.)
 
-What did NOT change: outside-base reads stay user-only (Q1); MCP stays
-never-auto-allowed; the single `rm target not explicit ($d)` stop is by
-design.
+What did NOT change: outside-base reads stay user-only (Q1); the single
+`rm target not explicit ($d)` stop is by design.
 
 ### D9. Root scans get a dedicated stop; the root is never an Always grant (2026-08-24)
 
@@ -391,8 +389,8 @@ from. Six decisions (implemented the same day; reverts fix (a) of
    three: file content (8000-char cap removed), command text incl.
    heredoc bodies (4000-char cap removed), script payloads (150-line/
    64KB slice removed). Overflow is the existing judge-failure mode:
-   the call fails → defer → prompt. MCP args and the segment digest
-   keep their head-cuts — they are digests, not write content.
+   the call fails → defer → prompt. The segment digest keeps its
+   head-cut — it is a digest, not write content.
 3. **Clause A extended: the judge reviews ALL content-bearing manual
    auto-allows.** Every file-write auto-allow (dir/file grant,
    config-allowed, project-pi) converts to a judged prompt (the D3 probe

@@ -1,5 +1,5 @@
 /**
- * Decision engine tests — file and MCP requests.
+ * Decision engine tests — file requests.
  *
  * Governing principles (see cases.test.ts for full bash matrix):
  *   1. Write → prompt (mkdir/touch are safe creation, auto-allow)
@@ -13,7 +13,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { describe, expect, it, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
-import { decide, FileRequest, McpRequest, type BashPromptData, type FilePromptData, type McpPromptData } from "../decision-engine";
+import { decide, FileRequest, type BashPromptData, type FilePromptData } from "../decision-engine";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 import { createStore } from "../store";
 import { buildPrompt } from "../prompt-builder";
@@ -290,82 +290,6 @@ describe("File: rules", () => {
         // macOS: /var/log/out.txt resolves to /private/var/log/out.txt
         expect(fileOnlyRules.writePaths?.[0]).toBe(realPath("/var/log/out.txt"));
       }
-    }
-  });
-});
-
-describe("MCP: First time", () => {
-  it("prompts on first use", async () => {
-    const store = createStore();
-    const req: McpRequest = { type: "mcp", server: "context7", tool: "resolve-library-id" };
-    const d = await decide(req, store);
-    expect(d.kind).toBe("prompt");
-    if (d.kind === "prompt") {
-      expect(d.promptData.type).toBe("mcp");
-      const pd = d.promptData as McpPromptData;
-      expect(pd.server).toBe("context7");
-      expect(pd.tool).toBe("resolve-library-id");
-    }
-  });
-});
-
-describe("MCP: Auto-allow after approval", () => {
-  it("auto-allows approved server", async () => {
-    const store = createStore();
-    store.addAllowed({ mcpServers: ["context7"] });
-    const req: McpRequest = { type: "mcp", server: "context7", tool: "resolve-library-id" };
-    const d = await decide(req, store);
-    expect(d.kind).toBe("auto-allow");
-  });
-});
-
-describe("MCP: With argsPreview", () => {
-  it("passes through argsPreview", async () => {
-    const store = createStore();
-    const req: McpRequest = {
-      type: "mcp",
-      server: "exa",
-      tool: "web_search",
-      argsPreview: "how to build a tree",
-    };
-    const d = await decide(req, store);
-    if (d.kind === "prompt") {
-      expect((d.promptData as McpPromptData).argsPreview).toBe("how to build a tree");
-    }
-  });
-});
-
-describe("MCP: Server in prompt data", () => {
-  it("uses provided server in prompt data", async () => {
-    const store = createStore();
-    const req: McpRequest = { type: "mcp", server: "joplin", tool: "joplin:get_notes" };
-    const d = await decide(req, store);
-    if (d.kind === "prompt") {
-      expect((d.promptData as McpPromptData).server).toBe("joplin");
-    }
-  });
-});
-
-describe("MCP: rules", () => {
-  it("includes server in rules", async () => {
-    const store = createStore();
-    const req: McpRequest = { type: "mcp", server: "blender", tool: "render" };
-    const d = await decide(req, store);
-    if (d.kind === "prompt") {
-      const rules = RuleGenerator.generatePrimaryRules(d.promptData);
-      expect(rules.mcpServers?.[0]).toBe("blender");
-    }
-  });
-});
-
-describe("MCP: unknown server blocked", () => {
-  it("blocks unknown server", async () => {
-    const store = createStore();
-    const req: McpRequest = { type: "mcp", server: "unknown", tool: "some_tool" };
-    const d = await decide(req, store);
-    expect(d.kind).toBe("block");
-    if (d.kind === "block") {
-      expect(d.reason).toContain("unresolvable");
     }
   });
 });

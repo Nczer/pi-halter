@@ -60,7 +60,6 @@ export function updateWidget(ctx: ExtensionContext): void {
   const writePathItems = filterSubPaths([...store.listAllowedWritePaths()]);
   const readDirItems = filterSubPaths([...store.listAllowedReadDirs()]);
   const writeDirItems = filterSubPaths([...store.listAllowedWriteDirs()]);
-  const mcpServerItems = [...store.listAllowedMcpServers()];
   const pkgItems = [...store.listTrustedPackages()];
   const cwdItems = store
     .listAllowedBashCwds()
@@ -75,7 +74,6 @@ export function updateWidget(ctx: ExtensionContext): void {
     bashItems.length > 0 ||
     readOnlyPaths.length > 0 ||
     allWritePaths.length > 0 ||
-    mcpServerItems.length > 0 ||
     cwdItems.length > 0 ||
     pkgItems.length > 0;
 
@@ -97,9 +95,6 @@ export function updateWidget(ctx: ExtensionContext): void {
       }
       if (allWritePaths.length > 0) {
         baseLines.push(theme.fg("muted", "R/W:") + " " + theme.fg("dim", allWritePaths.join(" ")));
-      }
-      if (mcpServerItems.length > 0) {
-        baseLines.push(theme.fg("muted", "MCP:") + " " + theme.fg("dim", mcpServerItems.map(s => `${s}:*`).join(", ")));
       }
       if (pkgItems.length > 0) {
         // D10: trusted packages (fetchable run forms — npx/uvx/dlx …)

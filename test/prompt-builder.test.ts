@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPrompt, pdTargetLabel, summarizePrompt } from "../prompt-builder";
-import type { PromptDecision, BashPromptData, FilePromptData, McpPromptData } from "../decision-engine";
+import type { PromptDecision, BashPromptData, FilePromptData } from "../decision-engine";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -42,20 +42,6 @@ function fileDecision(overrides: Partial<FilePromptData> = {}): PromptDecision {
       warnedRule: null,
       symlinkHint: null,
       exists: false,
-      ...overrides,
-    },
-  };
-}
-
-function mcpDecision(overrides: Partial<McpPromptData> = {}): PromptDecision {
-  return {
-    kind: "prompt",
-    promptData: {
-      type: "mcp",
-      server: "exa",
-      tool: "exa_web_search",
-      op: "call",
-      argsPreview: undefined,
       ...overrides,
     },
   };
@@ -578,45 +564,6 @@ describe("file labels and tier2", () => {
   });
 });
 
-// ── MCP ────────────────────────────────────────────────────────────────────
-
-describe("mcp", () => {
-  it("produces title with warning emoji", () => {
-    const prompt = buildPrompt(mcpDecision());
-    expect(prompt.title).toBe("\u26a0\ufe0f MCP");
-  });
-
-  it("shows server, tool, and operation", () => {
-    const prompt = buildPrompt(mcpDecision({ server: "exa", tool: "exa_web_search" }));
-    expect(prompt.body).toContain("exa");
-    expect(prompt.body).toContain("exa_web_search");
-    expect(prompt.body).toContain("Calling");
-  });
-
-  it("shows args preview when provided", () => {
-    const prompt = buildPrompt(mcpDecision({ argsPreview: '{\n  "query": "hello"\n}' }));
-    expect(prompt.body).toContain("query");
-    expect(prompt.body).toContain("hello");
-  });
-
-  it("preserves indent on first args key after stripping braces", () => {
-    const prompt = buildPrompt(mcpDecision({ argsPreview: '{\n  "query": "test",\n  "numResults": 10\n}' }));
-    const argsSection = prompt.body.split("Arguments:")[1]?.split("\n⚠")[0] ?? "";
-    expect(argsSection).toContain('  "query"');
-    expect(argsSection).toContain('  "numResults"');
-  });
-
-  it("generates server-level tier2 confirmation", () => {
-    const prompt = buildPrompt(mcpDecision({ server: "exa" }));
-    expect(prompt.tier2Everything.body).toContain("exa:*");
-  });
-
-  it("alwaysLabel shows server wildcard", () => {
-    const prompt = buildPrompt(mcpDecision({ server: "exa" }));
-    expect(prompt.alwaysLabel).toBe("exa:*");
-  });
-});
-
 // ── Edge cases ─────────────────────────────────────────────────────────────
 
 describe("edge cases", () => {
@@ -690,11 +637,6 @@ describe("pdTargetLabel", () => {
       },
     };
     expect(pdTargetLabel(file.promptData)).toBe("Write /home/u/p/a.md");
-    const mcp = {
-      kind: "prompt" as const,
-      promptData: { type: "mcp" as const, server: "exa", tool: "web_search_exa", op: "search" },
-    };
-    expect(pdTargetLabel(mcp.promptData)).toBe("exa/web_search_exa");
   });
 });
 

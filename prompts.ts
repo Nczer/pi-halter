@@ -116,7 +116,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
     return options;
   }
 
-  // Standard layout: primary + optional variants (bash, MCP, outside-cwd file without parents)
+  // Standard layout: primary + optional variants (bash, outside-cwd file without parents)
   const hasVariants = prompt.includeBroaderOption || prompt.includePathsOption || prompt.includeFileOption;
   const primaryConfig = hasVariants
     ? prompt.tier2Everything

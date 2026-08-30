@@ -417,27 +417,3 @@ export function rejectFile(
   };
 }
 
-/**
- * Common reject handler for MCP tool calls.
- * Formats reason with server/tool info, sends notification.
- */
-export function rejectMcp(
-  decision: Decision,
-  result: PromptResult,
-  store: Store,
-  ctx: ExtensionContext,
-): { block: true; reason: string } {
-  if (decision.kind !== "prompt") return { block: true, reason: "Permission denied" };
-
-  const pd = decision.promptData;
-  if (pd.type !== "mcp") return { block: true, reason: "Permission denied" };
-
-  const reasonDetail = result.reason ? ` Reason: ${result.reason}.` : "";
-
-  ctx.ui.notify(`Permission denied: MCP tool '${pd.tool}'`, "error");
-
-  return {
-    block: true,
-    reason: `[USER REJECTED] MCP tool '${pd.tool}' from server '${pd.server}' rejected.${reasonDetail}`,
-  };
-}
