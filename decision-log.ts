@@ -10,10 +10,9 @@
  * Fire-and-forget: a logging failure must never affect the gate decision
  * (this runs inside the gate; a throw would become a fail-closed block).
  *
- * OFF by default. Toggle: /halter-decision-log [on|off] — persisted in
- * halter's own settings file ~/.pi/agent/halter.json (pi owns settings.json
- * and writes it under a lock, so extensions keep their own file; the
- * setting never lived in settings.json, so no legacy fallback). The
+ * OFF by default. Toggle: /halter-decision-log [on|off] — persisted in the
+ * halter namespace of ~/.pi/agent/settings-ext.json (the shared extension
+ * settings file; pi owns settings.json and writes it under a lock). The
  * compile-time default is config/logging.ts DECISION_LOG_ENABLED.
  * Path: <extension dir>/.log/decisions.jsonl, rotated to decisions.jsonl.1
  * when it exceeds 5 MiB (older backup overwritten).
@@ -38,9 +37,10 @@ import type { Decision, FilePromptData, PermissionRequest } from "./decision-eng
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-// ── Persisted toggle (~/.pi/agent/halter.json, gallop pattern) ──
+// ── Persisted toggle ("decisionLog" in the halter namespace of
+ // settings-ext.json, shared with the judge settings) ──
 
-const SETTING_KEY = "decisionLogEnabled";
+const SETTING_KEY = "decisionLog";
 
 /** Read the toggle from a settings file (missing file → compile-time default). */
 export function readToggleSetting(filePath: string = SETTINGS_PATH): boolean {

@@ -114,7 +114,7 @@ export default async function halterExtension(pi: ExtensionAPI) {
       const show = (s = readJudgeSettings()): void => {
         const js = judgeStatus(ctx);
         ctx.ui.notify(
-          `Judge: ${s.enabled ? "on" : "off"} — model: ${js.modelLabel ?? "(unresolvable)"} — thinking: ${s.thinking} — timeout: ${s.timeoutMs}ms (${js.state === "invalid" ? `⚠ ${js.reason}` : "~/.pi/agent/halter.json"})`,
+          `Judge: ${s.enabled ? "on" : "off"} — model: ${js.modelLabel ?? "(unresolvable)"} — thinking: ${s.thinking} — timeout: ${s.timeoutMs}ms (${js.state === "invalid" ? `⚠ ${js.reason}` : "~/.pi/agent/settings-ext.json"})`,
           js.state === "invalid" ? "warning" : "info",
         );
       };
@@ -176,7 +176,7 @@ export default async function halterExtension(pi: ExtensionAPI) {
 
   // ── /halter-decision-log command ──
   pi.registerCommand("halter-decision-log", {
-    description: "Toggle the JSONL decision log on/off. Pass 'on', 'off', or nothing to toggle. Saved in ~/.pi/agent/halter.json.",
+    description: "Toggle the JSONL decision log on/off. Pass 'on', 'off', or nothing to toggle. Saved in ~/.pi/agent/settings-ext.json.",
     handler: async (args, ctx) => {
       const arg = (args ?? "").trim().toLowerCase();
       const next =

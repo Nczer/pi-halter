@@ -3,7 +3,7 @@
  * (setupFiles in vitest.config.ts; globalSetup would NOT work: it runs in
  * the main process, not the workers).
  *
- * On dev machines the user's ~/.pi/agent/halter.json has the decision log
+ * On dev machines the user's ~/.pi/agent/settings-ext.json has the decision log
  * enabled, and module state (decision-log.ts) picks that up on import.
  * Without this guard, every test that runs the real gate flow appends
  * fixture lines to the live .log/decisions.jsonl — the 2026-08-25 log

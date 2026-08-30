@@ -13,7 +13,7 @@ A halter for pi tool calls. Intercepts `bash`, `read`/`write`/`edit`, and `mcp` 
 - **No-UI fallback** — auto-blocks when no UI is available
 - **DSP mode** — `/dsp` command toggles "Dangerously Skip Permissions" to bypass all checks (with persistent warning widget)
 - **Judge modes** — `/dspa` auto-allows operations that pass a deterministic hard floor *and* a two-stage LLM-judge verdict (stateless pass, then an intent pass with reasoning-blind session context) (visible toast); `/dspat` shows the judge's verdict in every bash prompt and records agreement stats; both fail toward the prompt. The modes are one machine — **manual / dspa / dspat / dsp**: enabling one leaves the others off (switching resets the left judge mode's session stats)
-- **Judge settings** — `/judge` (bare = show; `on|off`, `model <provider/id|session>`, `thinking <level>`, `timeout <ms>`) — persisted in `~/.pi/agent/halter.json`
+- **Judge settings** — `/judge` (bare = show; `on|off`, `model <provider/id|session>`, `thinking <level>`, `timeout <ms>`) — persisted in the `halter` namespace of `~/.pi/agent/settings-ext.json`
 - **Decision log** — `/halter-decision-log` records every gate decision to a JSONL file (see *Configuration → Decision log*)
 
 ## How It Works
@@ -151,7 +151,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── session-context.ts            Reasoning-blind session context for the stage-2 intent pass
 ├── dspat-mode.ts                 /dspat toggle + agreement-stats widget
 ├── decision-log.ts               JSONL decision log (off by default)
-├── halter-settings.ts            Owner of ~/.pi/agent/halter.json (stat-cached reads, corrupt → .bak + defaults)
+├── halter-settings.ts            Owner of the halter namespace in settings-ext.json (stat-cached reads, corrupt → .bak + defaults)
 ├── renderers/                    Display formatting helpers
 │   ├── mcp.ts                    MCP tool call formatting (proxy + direct, args preview, truncation)
 │   └── tmux.ts                   Tmux command formatting (strips boilerplate flags, structures output)
@@ -178,7 +178,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 - **Judge** (`judge.ts`, `judge-prompt.ts`) — one-shot model call, two dspa stages: stage 1 stateless (LRU-cached on the operation); stage 2 adds the session context and runs uncached (its context includes the just-blocked op → a hit is impossible). Verdicts are advisory: display-only by default, auto-allow only behind `/dspa`'s hard floor
 - **DSP floor** (`dspa-gate.ts`) — deterministic hard floor for `/dspa`: parse errors, obscured command positions, credential patterns, untrusted fetchable package run forms (`npx <pkg>`, `uvx`, `bunx`, `npm exec`, `pnpm dlx`, `bun x` — stop with `untrusted package (…)`; the judge's verdict is shown advisory and the prompt offers a session `Trust: <pkg>` grant, D10), network egress (fetch forms + raw egress; local run forms like `npm run`/`uv run`/`bun <script>` are judgeable — D8), full-filesystem scans (`find /`, `grep -rn x /` — dedicated reason, D9), paths outside the manual bar (the bar manual mode auto-allows — D11; unbound paths are resolved from the command when possible; unresolvable locations stop, with the verdict advisory — D7/D11), the rm carve-out (explicit `/tmp` scratch rm is judgeable — D8/D11). Everything else is judgeable — including all content-bearing file-write auto-alls and granted script executions (D3/D11: the location is user-trusted, the content is not). Judges the analysis carried on the prompt — one tree-sitter parse per decision
 - **Session context** (`session-context.ts`) — the reasoning-blind `## Session context` section for stage 2 (user messages + tool-call digest + grants; never agent prose or tool outputs — a compromised agent can't talk the approver into compliance)
-- **Settings** (`halter-settings.ts`) — sole owner of `~/.pi/agent/halter.json` (judge settings + log toggle): mtime+size stat cache, corrupt file → `.bak` + defaults, top-level merge writes
+- **Settings** (`halter-settings.ts`) — sole owner of the `halter` namespace in `~/.pi/agent/settings-ext.json` (judge settings + log toggle): mtime+size stat cache, corrupt file → `.bak` + defaults, namespace merge writes, defaults materialized on first read
 - **Decision log** (`decision-log.ts`) — fire-and-forget JSONL of gate decisions (off by default; see *Configuration*)
 
 ## Reading the Code (Beginner's Guide)
@@ -242,7 +242,7 @@ Config is split across focused modules in `config/`:
 
 **Off by default.** When enabled, every decision the gate makes is appended to a JSONL log — one line per tool call, `auto-allow`, `prompt` (with a one-line why), and `block` (with the reason), plus the command/path and cwd. (`deny` is a reserved kind for the planned judge-denial flow — an op the judge rejects returned to the agent instead of a prompt; not emitted yet.) It exists to measure blast radius: after changing gate code, diff what now prompts vs. what used to auto-allow; or mine repeatedly-prompting commands into contract rows. The log records what the *gate* decided — user approvals/rejections of prompts are not logged. Lines made under a judge mode carry a `mode` tag — `dspa` (a prompt that fell through the judge auto-allow, or the judge auto-allow itself) or `dspat` (a prompt shown with the verdict) — so judge-mode decisions can be debugged separately from the manual regime; untagged lines are manual. (A regime marker, not verdict content: verdicts stay session-scoped, and the dsp bypass regime never reaches the log — the gate is skipped.)
 
-- Enable: `/halter-decision-log [on|off]` (bare = toggle) — persisted in `~/.pi/agent/halter.json` (halter's own settings file, like gallop's `gallop.json`; pi owns `settings.json`). Compile-time default: `DECISION_LOG_ENABLED` in `config/logging.ts` (false)
+- Enable: `/halter-decision-log [on|off]` (bare = toggle) — persisted in the `halter` namespace of `~/.pi/agent/settings-ext.json` (the shared extension settings file; pi owns `settings.json`). Compile-time default: `DECISION_LOG_ENABLED` in `config/logging.ts` (false)
 - Transient override: `HALTER_DECISION_LOG=<path>` (enables at that path); `HALTER_DECISION_LOG=off` forces off
 - Path: `<extension dir>/.log/decisions.jsonl` (gitignored); rotates to `decisions.jsonl.1` at 5 MiB — a few KB per day, SSD wear negligible (writes coalesce into 16 KiB pages)
 - A companion log, `.log/unresolved.jsonl` (same toggle, same rotation; `HALTER_DECISION_LOG=off` disables it too), records the fate of each path token static analysis couldn't bind: `outcome: prompted | gate-stop | auto-allowed`, the LLM resolver's suggested dirs, the user's decision, and whether the token became a confirmed resolution (dspa-gate.ts then resolves it deterministically — no LLM). Convergence is visible as the same token flipping from `prompted` to `auto-allowed` across runs (docs/dspa-redesign.md, D12)
