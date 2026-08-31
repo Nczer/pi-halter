@@ -353,6 +353,28 @@ describe("parseCommand: loop in-list roots (symlink verification)", () => {
   });
 });
 
+describe("parseCommand: relative-glob loop in-lists (2026-08-31 log case)", () => {
+  it("classifies a relative-glob in-list as cwdLocal (the glob cannot cross /)", async () => {
+    const r = await parseCommand("for f in */x.ts; do cat \"$f\"; done", cwd);
+    expect(r.opaque).toEqual([{ raw: "$f", segIdx: 0, kind: "cwdLocal" }]);
+  });
+
+  it("a mixed bare + relative-glob in-list is cwdLocal too", async () => {
+    const r = await parseCommand("for f in dir/*.ts notes.txt; do cat \"$f\"; done", cwd);
+    expect(r.opaque).toEqual([{ raw: "$f", segIdx: 0, kind: "cwdLocal" }]);
+  });
+
+  it("an absolute glob in-list stays opaque (the expansion leaves the cwd)", async () => {
+    const r = await parseCommand("for f in /a/*/x; do cat \"$f\"; done", cwd);
+    expect(r.opaque).toEqual([{ raw: "$f", segIdx: 0, kind: "opaque" }]);
+  });
+
+  it("a .. in-list word stays opaque", async () => {
+    const r = await parseCommand("for f in ../x; do cat \"$f\"; done", cwd);
+    expect(r.opaque).toEqual([{ raw: "$f", segIdx: 0, kind: "opaque" }]);
+  });
+});
+
 describe("parseCommand: per-segment hasSubshell", () => {
   it("detects subshell in command", async () => {
     const r = await parseCommand("cat $(echo /etc/hosts)", cwd);

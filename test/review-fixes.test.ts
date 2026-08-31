@@ -7,6 +7,8 @@
  *   B1: quoted glob tokens are never expanded — no false credential match
  *   B2: tmux safe subcommand aliases (ls, has, show, …)
  *   B4: `python3 --version` / `node --help` / `uv --version` fast path
+ *   C1: sed line-address range endings (/pat/,$p) (2026-08-31 log review)
+ *   C2: grep -l cwd-local substitution (2026-08-31 log review)
  *
  * Each fix has a prompt/block regression AND a control proving the
  * previously-working auto-allow (or block) was not broken.
@@ -306,6 +308,36 @@ describe("A4: bare-token symlinks in cwd", () => {
 
   it("cat data.txt → auto-allow (regular file)", async () => {
     const d = await bash("cat data.txt", tmp);
+    expect(d.kind).toBe("auto-allow");
+  });
+});
+
+describe("C1: sed line-address range endings (2026-08-31 log review)", () => {
+  it.each([
+    `sed -n '/foo/,$p' file.txt`,
+    `sed -n '/foo/,$' file.txt`,
+    `sed -n '/foo/,/bar/p' file.txt`,
+    `sed -n '/foo/,25p' file.txt`,
+    `sed -n '/foo/,+12p' file.txt`,
+  ])("%s → auto-allow (the range address is a script, not a path)", async (cmd) => {
+    const d = await bash(cmd);
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: the file argument of the same command is still path-checked", async () => {
+    const d = await bash(`sed -n '/foo/,$p' /etc/passwd`);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("control: a bare path in script position is still path-checked (fail closed)", async () => {
+    const d = await bash(`sed /etc/passwd file.txt`);
+    expect(d.kind).toBe("prompt");
+  });
+});
+
+describe("C2: grep -l cwd-local substitution (2026-08-31 log review)", () => {
+  it("sed with a grep -l line-number substitution is bounded to the cwd → auto-allow", async () => {
+    const d = await bash(`sed -n "$(grep -rln 'pat' config/ | head -1),+16p" file.txt`);
     expect(d.kind).toBe("auto-allow");
   });
 });
