@@ -86,7 +86,7 @@ describe("counters", () => {
   });
 });
 
-describe("widget", () => {
+describe("widget (unified halter widget — see widget.ts)", () => {
   function makeCtx(hasUI = true) {
     const widgets: Array<{ id: string; fn: unknown }> = [];
     const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
@@ -97,7 +97,15 @@ describe("widget", () => {
     return { ctx, widgets, theme };
   }
 
-  it("shows counters when active", () => {
+  type Renderable = { render: (width: number) => string[] };
+  // The update re-sets the legacy ids (undefined) first, then "halter".
+  const halterLine = (widgets: Array<{ id: string; fn: unknown }>, theme: unknown) => {
+    const w = widgets.filter(x => x.id === "halter").pop();
+    if (!w || !w.fn) return null;
+    return (w.fn as (tui: unknown, theme: unknown) => Renderable)(null, theme);
+  };
+
+  it("renders the counter + last target on ONE line, pinned in the widget", () => {
     judgeStatusMock.mockReturnValue({
       state: "ok",
       modelLabel: "llama-cpp/Qwen3.8-27B (session)",
@@ -107,32 +115,33 @@ describe("widget", () => {
     recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", "cargo build");
     const { ctx, widgets, theme } = makeCtx();
     updateDspaWidget(ctx);
-    expect(widgets).toHaveLength(1);
-    expect(widgets[0].id).toBe("dspa");
-    const w = (widgets[0].fn as (tui: unknown, theme: unknown) => {
-      render: (width: number) => string[];
-    })(null, theme);
-    const lines = w.render(200);
-    expect(lines[0]).toContain("auto-allowed 1");
+    const w = halterLine(widgets, theme);
+    expect(w).not.toBeNull();
+    const lines = w!.render(200);
+    expect(lines).toHaveLength(1); // one line, not two
+    expect(lines[0]).toContain("» DSPA");
+    expect(lines[0]).toContain("auto-allowed 1 this session");
     expect(lines[0]).toContain("llama-cpp/Qwen3.8-27B");
-    expect(lines[1]).toContain("last: cargo build");
+    expect(lines[0]).toContain("— last: cargo build");
+    expect(lines[0].indexOf("auto-allowed")).toBeLessThan(lines[0].indexOf("last: cargo build"));
   });
 
-  it("fits narrow terminals (render width = live terminal width)", () => {
+  it("drops the last-target before truncating the line (narrow terminals)", () => {
     // Regression: the lines were truncated to a hardcoded 160, so a long
     // target rendered over-width lines and crashed pi (doRender width check).
     setDspaActive(true);
     recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", "x".repeat(120));
     const { ctx, widgets, theme } = makeCtx();
     updateDspaWidget(ctx);
-    const w = (widgets[0].fn as (t: unknown, th: unknown) => {
-      render: (width: number) => string[];
-    })(null, theme);
+    const w = halterLine(widgets, theme)!;
+    expect(w.render(200)[0]).toContain("— last:");
     for (const width of [95, 80, 40]) {
       for (const line of w.render(width)) {
         expect(visibleWidth(line), `line exceeds width ${width}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(width);
       }
     }
+    // Main (~60 cols) still doesn't fit 40 → truncated main, detail gone.
+    expect(w.render(40)[0]).not.toContain("last:");
   });
 
   it("renders judging… inline on the mode line while a call is in flight", () => {
@@ -145,18 +154,15 @@ describe("widget", () => {
     recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", "cargo build");
     const { ctx, widgets, theme } = makeCtx();
     updateDspaWidget(ctx);
-    const render = (i: number) =>
-      (widgets[i].fn as (t: unknown, th: unknown) => {
-        render: (width: number) => string[];
-      })(null, theme).render(200)[0];
-    expect(render(widgets.length - 1)).toContain("» DSPA");
-    setDspaJudging(true, ctx); // re-sets the widget (forces a repaint)
-    const judgingLine = render(widgets.length - 1);
-    expect(judgingLine).toContain("auto-allowed 1 this session — judging…");
-    setDspaJudging(true, ctx); // no-op (already judging — no extra widget)
-    expect(widgets.length).toBe(2);
+    const line = () => halterLine(widgets, theme)!.render(200)[0];
+    expect(line()).toContain("» DSPA");
+    setDspaJudging(true, ctx); // re-renders the widget (forces a repaint)
+    expect(line()).toContain("auto-allowed 1 this session — judging…");
+    expect(line()).toContain("— last: cargo build");
+    setDspaJudging(true, ctx); // no-op (already judging — no extra set)
+    expect(widgets.filter(x => x.id === "halter")).toHaveLength(2); // initial + judging toggle
     setDspaJudging(false, ctx);
-    expect(render(widgets.length - 1)).not.toContain("judging…");
+    expect(line()).not.toContain("judging…");
   });
 
   it("hides while the judge is not ok, reappears when it is ok again", () => {
@@ -168,23 +174,23 @@ describe("widget", () => {
     setDspaActive(true);
     const { ctx, widgets, theme } = makeCtx();
     updateDspaWidget(ctx);
-    const w = (widgets[0].fn as (t: unknown, th: unknown) => {
-      render: (width: number) => string[];
-    })(null, theme);
-    expect(w.render(200)).toEqual([]);
+    const w = halterLine(widgets, theme);
+    expect(w).not.toBeNull(); // widget registered (mode active)…
+    expect(w!.render(200)).toEqual([]); // …but the line hides (no rules either)
     judgeStatusMock.mockReturnValue({
       state: "ok",
       modelLabel: "llama-cpp/Qwen3.8-27B (session)",
       reason: null,
     });
-    expect(w.render(200).length).toBeGreaterThan(0);
+    expect(w!.render(200).length).toBeGreaterThan(0);
   });
 
   it("clears when inactive", () => {
     const { ctx, widgets } = makeCtx();
     updateDspaWidget(ctx);
-    expect(widgets).toHaveLength(1);
-    expect(widgets[0].fn).toBeUndefined();
+    const w = widgets.filter(x => x.id === "halter").pop();
+    expect(w).toBeDefined();
+    expect(w!.fn).toBeUndefined();
   });
 
   it("no-op without UI", () => {

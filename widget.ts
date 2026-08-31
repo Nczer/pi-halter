@@ -1,6 +1,10 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { store } from "./store";
+import { isDspActive } from "./dsp-mode";
+import { isDspaActive, isDspaJudging, getDspaStats } from "./dspa-mode";
+import { isDspatActive, isDspatJudging, getDspatStats } from "./dspat-mode";
+import { judgeStatus } from "./judge-prompt";
 
 // ── Path deduplication ──
 
@@ -21,7 +25,7 @@ export function filterSubPaths(paths: string[]): string[] {
   return result;
 }
 
-// ── Widget rendering ──
+// ── Command grouping ──
 
 /** Group command signature variants for compact display (e.g. "git(-am, -m)" or "ls(-a)"). */
 export function groupCommandVariants(items: string[]): string[] {
@@ -50,9 +54,39 @@ export function groupCommandVariants(items: string[]): string[] {
   return result;
 }
 
+// ── Widget rendering ──
+
 /**
- * Update the halter status widget based on current store state.
- * Hides the widget when no halter rules are active.
+ * One mode line = main (accent, bold) + details (muted), merged into ONE
+ * screen row to keep the bottom bar compact. When the merged line exceeds
+ * width, details are dropped from the tail first (the last-target, then the
+ * counter) before the main itself is truncated — the detail is the
+ * dispensable part.
+ */
+function modeLine(width: number, theme: Pick<Theme, "fg" | "bold">, main: string, details: string[]): string {
+  const parts = [main, ...details];
+  while (parts.length > 1 && visibleWidth(parts.join(" — ")) > width) parts.pop();
+  if (parts.length === 1) {
+    return truncateToWidth(theme.fg("accent", theme.bold(main)), width);
+  }
+  const styled =
+    theme.fg("accent", theme.bold(main)) +
+    theme.fg("muted", " — " + parts.slice(1).join(" — "));
+  return truncateToWidth(styled, width);
+}
+
+/**
+ * The single halter status widget (below the editor):
+ *
+ *   ⚠ DSP MODE — all permissions bypassed ⚠        (DSP active — alone)
+ *   » DSPA (model): auto-allowed N — last: <target> (DSPA active)
+ *   ◎ DSPAT: judge advises… — M/N agreed — last: …  (DSPAT active)
+ *   Bash: …  R: …  R/W: …  Pkg: …  Cwd: …  Tools: … (session rules)
+ *
+ * ONE widget, because pi renders same-placement widgets in set order and a
+ * re-set moves the widget to the end — with separate "dspa"/"dspat" widgets
+ * the mode lines floated below the rule lines after every rules update.
+ * Merged here, the mode lines are pinned on top and each is one line.
  */
 export function updateWidget(ctx: ExtensionContext): void {
   const bashItems = [...store.listAllowedBash()];
@@ -79,40 +113,90 @@ export function updateWidget(ctx: ExtensionContext): void {
     pkgItems.length > 0 ||
     toolGrantItems.length > 0;
 
-  if (!hasSessionRules) {
+  // Legacy per-mode widget ids (pre-merge): clear them so a same-process
+  // /reload cannot leave stale duplicates above or below this one.
+  ctx.ui.setWidget("dsp-warning", undefined);
+  ctx.ui.setWidget("dspa", undefined);
+  ctx.ui.setWidget("dspat", undefined);
+
+  if (!hasSessionRules && !isDspActive() && !isDspaActive() && !isDspatActive()) {
     ctx.ui.setWidget("halter", undefined);
     return;
   }
 
   ctx.ui.setWidget("halter", (_tui, theme) => {
-    const baseLines: string[] = [];
+    const render = (width: number) => {
+      const lines: string[] = [];
 
-    if (hasSessionRules) {
-      if (bashItems.length > 0) {
-        const grouped = groupCommandVariants(bashItems);
-        baseLines.push(theme.fg("muted", "Bash:") + " " + theme.fg("dim", grouped.join(" ")));
+      if (isDspActive()) {
+        // DSP bypasses the whole gate — the session rules are noise, so the
+        // widget shows the warning line alone (pre-merge: "halter" was
+        // cleared and a separate "dsp-warning" widget showed the same line).
+        lines.push(
+          truncateToWidth(theme.fg("error", theme.bold("⚠ DSP MODE — all permissions bypassed ⚠")), width),
+        );
+        return lines;
       }
-      if (readOnlyPaths.length > 0) {
-        baseLines.push(theme.fg("muted", "R:") + " " + theme.fg("dim", readOnlyPaths.join(" ")));
-      }
-      if (allWritePaths.length > 0) {
-        baseLines.push(theme.fg("muted", "R/W:") + " " + theme.fg("dim", allWritePaths.join(" ")));
-      }
-      if (pkgItems.length > 0) {
-        // D10: trusted packages (fetchable run forms — npx/uvx/dlx …)
-        baseLines.push(theme.fg("muted", "Pkg:") + " " + theme.fg("dim", pkgItems.join(" ")));
-      }
-      if (cwdItems.length > 0) {
-        // Cwd-bound bash grants (relative-path tools): shown with the cwd
-        // they bind to, since the same sig is a different grant elsewhere.
-        baseLines.push(theme.fg("muted", "Cwd:") + " " + theme.fg("dim", cwdItems.join(" ")));
-      }
-      if (toolGrantItems.length > 0) {
-        // Tool-plugin grants: `blender` (whole tool) or `blender:kind:read`.
-        baseLines.push(theme.fg("muted", "Tools:") + " " + theme.fg("dim", toolGrantItems.join(" ")));
-      }
-    }
 
-    return { render: (width: number) => baseLines.map(l => truncateToWidth(l, width)), invalidate: () => {} };
+      // Judge-mode lines: hidden only while the judge is invalid (the prompt
+      // body carries the "⚠️ Judge invalid" line there). judgeStatus is a
+      // live read (settings + session model), so a model switch is picked up
+      // on the next repaint.
+      const judgeOk = judgeStatus(ctx).state !== "invalid";
+
+      if (isDspaActive() && judgeOk) {
+        const s = getDspaStats();
+        // `»` is a text-default glyph (monochrome in every terminal) — the
+        // mode follows the DSP widget's style: no color emoji, all-caps name.
+        const modelTag = s.model ? ` (${s.model})` : "";
+        const main =
+          (s.autoAllowed > 0
+            ? `» DSPA${modelTag}: auto-allowed ${s.autoAllowed} this session`
+            : `» DSPA${modelTag}: auto-allowing gate+judge-approved operations`) +
+          (isDspaJudging() ? " — judging…" : "");
+        lines.push(modeLine(width, theme, main, s.lastTarget ? [`last: ${s.lastTarget}`] : []));
+      }
+
+      if (isDspatActive() && judgeOk) {
+        const s = getDspatStats();
+        const main = `◎ DSPAT${isDspatJudging() ? " — judging…" : ""}: judge advises on every permission prompt`;
+        // Agreement counter + last disagreement, merged onto the mode line.
+        // updateWidget is re-run after every recorded outcome, so live.
+        const details =
+          s.total > 0
+            ? [`${s.agreed}/${s.total} agreed`, ...(s.lastDisagreement ? [`last: ${s.lastDisagreement}`] : [])]
+            : [];
+        lines.push(modeLine(width, theme, main, details));
+      }
+
+      if (hasSessionRules) {
+        if (bashItems.length > 0) {
+          const grouped = groupCommandVariants(bashItems);
+          lines.push(theme.fg("muted", "Bash:") + " " + theme.fg("dim", grouped.join(" ")));
+        }
+        if (readOnlyPaths.length > 0) {
+          lines.push(theme.fg("muted", "R:") + " " + theme.fg("dim", readOnlyPaths.join(" ")));
+        }
+        if (allWritePaths.length > 0) {
+          lines.push(theme.fg("muted", "R/W:") + " " + theme.fg("dim", allWritePaths.join(" ")));
+        }
+        if (pkgItems.length > 0) {
+          // D10: trusted packages (fetchable run forms — npx/uvx/dlx …)
+          lines.push(theme.fg("muted", "Pkg:") + " " + theme.fg("dim", pkgItems.join(" ")));
+        }
+        if (cwdItems.length > 0) {
+          // Cwd-bound bash grants (relative-path tools): shown with the cwd
+          // they bind to, since the same sig is a different grant elsewhere.
+          lines.push(theme.fg("muted", "Cwd:") + " " + theme.fg("dim", cwdItems.join(" ")));
+        }
+        if (toolGrantItems.length > 0) {
+          // Tool-plugin grants: `blender` (whole tool) or `blender:kind:read`.
+          lines.push(theme.fg("muted", "Tools:") + " " + theme.fg("dim", toolGrantItems.join(" ")));
+        }
+      }
+
+      return lines.map(l => truncateToWidth(l, width));
+    };
+    return { render, invalidate: () => {} };
   }, { placement: "belowEditor" });
 }

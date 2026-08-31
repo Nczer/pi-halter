@@ -11,7 +11,7 @@ A halter for pi tool calls. Intercepts `bash` and `read`/`write`/`edit` calls, a
 - **Retry-loop prevention** — recently-aborted commands are auto-blocked for 60 seconds
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
 - **No-UI fallback** — auto-blocks when no UI is available
-- **DSP mode** — `/dsp` command toggles "Dangerously Skip Permissions" to bypass all checks (with persistent warning widget)
+- **DSP mode** — `/dsp` command toggles "Dangerously Skip Permissions" to bypass all checks (with a persistent warning line pinned on top of the status widget)
 - **Judge modes** — `/dspa` auto-allows operations that pass a deterministic hard floor *and* a two-stage LLM-judge verdict (stateless pass, then an intent pass with reasoning-blind session context) (visible toast); `/dspat` shows the judge's verdict in every bash prompt and records agreement stats; both fail toward the prompt. The modes are one machine — **manual / dspa / dspat / dsp**: enabling one leaves the others off (switching resets the left judge mode's session stats)
 - **Judge settings** — `/judge` (bare = show; `on|off`, `model <provider/id|session>`, `thinking <level>`, `timeout <ms>`) — persisted in the `halter` namespace of `~/.pi/agent/settings-ext.json`
 - **Decision log** — `/halter-decision-log` records every gate decision to a JSONL file (see *Configuration → Decision log*)
@@ -168,14 +168,14 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── prompt-builder.ts             Pure formatter — PromptData → BuiltPrompt (title/body/options/labels)
 ├── prompts.ts                    Two-tier confirmation flow — native select + rejection-reason input
 ├── store.ts                      Auto-allow state — Store interface + singleton
-├── widget.ts                     TUI rendering — halter status bar
-├── dsp-mode.ts                   DSP mode toggle — bypass all halter checks with warning widget
+├── widget.ts                     TUI rendering — the single halter status widget (mode lines pinned on top, one line each, + session rules)
+├── dsp-mode.ts                   DSP mode toggle — bypass all halter checks (warning line on the status widget)
 ├── judge.ts                      Judge settings + the one-shot model call (stateless)
-├── judge-prompt.ts               Judge packet, verdict, widget, on-demand explanation
-├── dspa-mode.ts                  /dspa toggle + auto-allow audit widget
+├── judge-prompt.ts               Judge packet, verdict, on-demand explanation
+├── dspa-mode.ts                  /dspa toggle + auto-allow counter (status-widget line)
 ├── dspa-gate.ts                  Deterministic hard floor for /dspa auto-allow
 ├── session-context.ts            Reasoning-blind session context for the stage-2 intent pass
-├── dspat-mode.ts                 /dspat toggle + agreement-stats widget
+├── dspat-mode.ts                 /dspat toggle + agreement stats (status-widget line)
 ├── decision-log.ts               JSONL decision log (off by default)
 ├── halter-settings.ts            Owner of the halter namespace in settings-ext.json (stat-cached reads, corrupt → .bak + defaults)
 ├── renderers/                    Display formatting helpers

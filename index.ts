@@ -2,9 +2,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { updateWidget } from "./widget";
 import { handleBash, handleFile, handleTool } from "./handlers";
 import { loadPlugins, setLoadedPlugins } from "./plugins/loader";
-import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
-import { isDspatActive, resetDspat, setDspatActive, updateDspatWidget } from "./dspat-mode";
-import { isDspaActive, resetDspa, setDspaActive, updateDspaWidget } from "./dspa-mode";
+import { isDspActive, setDspActive } from "./dsp-mode";
+import { isDspatActive, resetDspat, setDspatActive } from "./dspat-mode";
+import { isDspaActive, resetDspa, setDspaActive } from "./dspa-mode";
 import { isDecisionLogEnabled, setDecisionLogEnabled } from "./decision-log";
 import { readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, type JudgeSettings } from "./judge";
 import { judgeStatus } from "./judge-prompt";
@@ -24,21 +24,16 @@ import { store } from "./store";
  */
 function applyMode(ctx: ExtensionContext, next: "manual" | "dsp" | "dspa" | "dspat"): string | null {
   const displaced = isDspActive() ? "DSP" : isDspaActive() ? "DSPA" : isDspatActive() ? "DSPAT" : null;
-  const wasDsp = isDspActive();
   setDspActive(false);
   resetDspa();
   resetDspat();
   if (next === "dsp") setDspActive(true);
   else if (next === "dspa") setDspaActive(true);
   else if (next === "dspat") setDspatActive(true);
-  // Each update fn syncs its own widget (render when active, clear when not).
-  updateDspWidget(ctx);
-  updateDspaWidget(ctx);
-  updateDspatWidget(ctx);
-  // The normal halter widget is hidden while DSP bypasses the gate —
-  // restored only when LEAVING dsp (matching the pre-switch behavior).
-  if (isDspActive()) ctx.ui.setWidget("halter", undefined);
-  else if (wasDsp) updateWidget(ctx);
+  // The unified widget (widget.ts) renders the active mode line pinned on
+  // top of the session rules; while DSP bypasses the gate it shows the
+  // warning line alone (rules restored on leaving DSP).
+  updateWidget(ctx);
   return displaced;
 }
 
@@ -57,6 +52,7 @@ export default async function halterExtension(pi: ExtensionAPI) {
     resetJudgeCache();
     ctx.ui.setWidget("halter", undefined);
     ctx.ui.setWidget("dsp-warning", undefined);
+    ctx.ui.setWidget("dspa", undefined);
     ctx.ui.setWidget("dspat", undefined);
     ctx.ui.setWidget("dspa", undefined);
     ctx.ui.setWidget("judge", undefined);

@@ -12,8 +12,7 @@
  * is model-dependent, so a model change resets the stats.
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
-import { judgeStatus } from "./judge-prompt";
+import { updateWidget } from "./widget";
 
 let active = false;
 let model: string | null = null;
@@ -44,9 +43,15 @@ function resetCounters(): void {
   judging = false;
 }
 
+/** True while a judge call is in flight (the unified widget renders the
+ *  "… — judging…" tag inline on the DSPA line). */
+export function isDspaJudging(): boolean {
+  return judging;
+}
+
 /**
  * Flip the inline judging state (judge-prompt.ts calls it at the start and
- * end of every judge stage while /dspa is active). Re-sets the widget so
+ * end of every judge stage while /dspa is active). Re-renders the widget so
  * the change paints immediately (setWidget forces a TUI repaint).
  */
 export function setDspaJudging(on: boolean, ctx: ExtensionContext): void {
@@ -76,39 +81,13 @@ export function getDspaStats(): {
   return { model, autoAllowed, lastTarget };
 }
 
-/** Update (or clear) the status-bar widget. */
+/**
+ * Re-render the unified halter widget (widget.ts): the DSPA line is pinned
+ * on top of it, ONE line (counter + `last: <target>` merged — the detail is
+ * dropped from the tail before the line itself truncates). Hidden only while
+ * the judge is invalid (see the unified widget's render).
+ */
 export function updateDspaWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
-  if (!active) {
-    ctx.ui.setWidget("dspa", undefined);
-    return;
-  }
-  // `»` is a text-default glyph (monochrome in every terminal) — the mode
-  // follows the DSP widget's style: no color emoji, all-caps name.
-  const judgingTag = judging ? " — judging…" : "";
-  const modelTag = model ? ` (${model})` : "";
-  const main =
-    autoAllowed > 0
-      ? `» DSPA${modelTag}: auto-allowed ${autoAllowed} this session${judgingTag}`
-      : `» DSPA${modelTag}: auto-allowing gate+judge-approved operations${judgingTag}`;
-  const last = lastTarget;
-  ctx.ui.setWidget(
-    "dspa",
-    (_tui, theme) => {
-      const render = (width: number) => {
-        // Hidden only while the judge is invalid (see the dspat widget).
-        const js = judgeStatus(ctx);
-        if (js.state === "invalid") return [];
-        // width is the live terminal width (terminal.columns) — the same
-        // value the TUI's render check enforces.
-        const lines = [truncateToWidth(theme.fg("accent", theme.bold(main)), width)];
-        if (last) {
-          lines.push(truncateToWidth(theme.fg("muted", `last: ${last}`), width));
-        }
-        return lines;
-      };
-      return { render, invalidate: () => {} };
-    },
-    { placement: "belowEditor" },
-  );
+  updateWidget(ctx);
 }

@@ -1,6 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
-import { judgeStatus } from "./judge-prompt";
+import { updateWidget } from "./widget";
 
 /**
  * /dspat — judge advisory mode (session-scoped).
@@ -10,15 +9,16 @@ import { judgeStatus } from "./judge-prompt";
  * approve/reject suggestion). The human always takes the call — this mode
  * never changes the gate's decision.
  *
- * The widget is a mode indicator plus an agreement counter line
- * (`◎ 12/14 agreed — last: <target>`) once the first verdict is in. The
+ * The widget is the unified halter widget's mode line: an indicator plus
+ * the agreement counter merged onto ONE line (`… — 12/14 agreed — last:
+ * <target>`) once the first verdict is in. The
  * stats are session-scoped and model-scoped (never persisted — judge
  * quality is model-dependent and a model change resets the counters);
  * the decision log keeps the durable history.
  */
 
 let dspatActive = false;
-/** True while a judge call is in flight — rendered inline on this widget's
+/** True while a judge call is in flight — rendered inline on the widget
  *  line ("… — judging…") instead of a separate in-flight widget. */
 let judging = false;
 
@@ -56,6 +56,12 @@ export function setDspatJudging(on: boolean, ctx: ExtensionContext): void {
 
 export function isDspatActive(): boolean {
   return dspatActive;
+}
+
+/** True while a judge call is in flight (the unified widget renders the
+ *  "… — judging…" tag inline on the DSPAT line). */
+export function isDspatJudging(): boolean {
+  return judging;
 }
 
 export function setDspatActive(value: boolean): void {
@@ -96,41 +102,14 @@ export function getDspatStats(): DspatStats {
 
 // ── Widget ──
 
-/** Show or clear the dspat status widget below the editor. */
+/**
+ * Re-render the unified halter widget (widget.ts): the DSPAT line is pinned
+ * on top of it, ONE line (indicator + agreement counter + last disagreement
+ * merged — details drop from the tail before the line truncates). Stays up
+ * while the judge is off (the user's own choice), hidden only while the
+ * judge is invalid (see the unified widget's render).
+ */
 export function updateDspatWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
-
-  if (dspatActive) {
-    // `◎` is a text-default glyph (monochrome in every terminal) — the mode
-    // follows the DSP widget's style: no color emoji, all-caps name.
-    const main = `◎ DSPAT${judging ? " — judging…" : ""}: judge advises on every permission prompt`;
-    ctx.ui.setWidget("dspat", (_tui, theme) => {
-      const render = (width: number) => {
-        // Live judge state: the widget stays up when the judge is off
-        // (the user's own choice, visible in settings-ext.json), but DISAPPEARS
-        // when the judge is invalid (e.g. session model switched to
-        // something unresolvable); the prompt body carries the "⚠️ Judge
-        // invalid" line there. ctx.model is a live getter, so a switch is
-        // picked up on the next repaint.
-        const js = judgeStatus(ctx);
-        if (js.state === "invalid") return [];
-        // width is the live terminal width (terminal.columns) — the same
-        // value the TUI's render check enforces. Never hardcode a width:
-        // an untruncated line crashes pi with an uncaughtException.
-        const lines = [truncateToWidth(theme.fg("accent", theme.bold(main)), width)];
-        // Agreement counter (same muted second line as the /dspa widget).
-        // updateDspatWidget is re-run after every recorded outcome, so the
-        // numbers are live.
-        if (stats.total > 0) {
-          const stat = `◎ ${stats.agreed}/${stats.total} agreed` +
-            (stats.lastDisagreement ? ` — last: ${stats.lastDisagreement}` : "");
-          lines.push(truncateToWidth(theme.fg("muted", stat), width));
-        }
-        return lines;
-      };
-      return { render, invalidate: () => {} };
-    }, { placement: "belowEditor" });
-  } else {
-    ctx.ui.setWidget("dspat", undefined);
-  }
+  updateWidget(ctx);
 }
