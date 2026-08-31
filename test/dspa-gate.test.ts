@@ -321,6 +321,39 @@ describe("bash", () => {
     // either reason is the right block.
     const r = await checkDspaGate(bashPd("git push origin main"), store);
     expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.advisory).toBe(true);
+  });
+
+  it("loopback-only curl/wget egress is judgeable (D14 — a local call can't exfiltrate)", async () => {
+    for (const cmd of [
+      "curl -s http://127.0.0.1:41184/notes?fields=id",
+      "curl -s http://localhost:8080/health",
+      "PORT=41184; B=\"http://127.0.0.1:$PORT\"; curl -s \"$B/notes\" | head",
+      "wget http://127.0.0.1:8000/file -O /tmp/file",
+    ]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(true);
+    }
+  });
+
+  it("non-loopback or unprovable egress stays a floor stop, now advisory (D14)", async () => {
+    const cases: Array<[string, string]> = [
+      ["curl -s https://example.com/x", "external URL"],
+      ["curl -s http://127.0.0.1:1/ok http://evil.com/x", "mixed loopback + external"],
+      ['curl -s "$B/notes"', "variable-only target (no URL proves locality)"],
+      ["curl -s http://$HOST/x", "variable host"],
+      ["curl -s http://[::1]:41184/ping", "bracketed IPv6 (URL regex truncates — unprovable)"],
+      ["ssh 127.0.0.1", "non-URL egress form"],
+      ["rsync -a host::src /tmp", "non-curl/wget egress form"],
+    ];
+    for (const [cmd, what] of cases) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, what).toBe(false);
+      if (!r.ok) {
+        expect(r.reason, what).toContain("network egress");
+        expect(r.advisory, what).toBe(true);
+      }
+    }
   });
 
   it("git global flags and env prefixes do not hide network egress (flag-evasion audit)", async () => {

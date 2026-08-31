@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.10.0 — 2026-08-31
+
+Network egress is LLM-reviewed; prompt ergonomics (docs/dspa-redesign.md,
+D14).
+
+- **Loopback egress is judgeable (D14).** A curl/wget command whose every
+  URL in the text is loopback-hosted (127.0.0.0/8, ::1, localhost) is no
+  longer a floor stop — the two-stage judge decides on the full text. A
+  local call cannot exfiltrate off the machine; the 2026-08-31 log had 8
+  floor prompts for Joplin-API probes at 127.0.0.1. Fail-closed: no URL at
+  all (`curl "$B"`), a variable host (`http://$HOST/x`), a mixed loopback +
+  external list, bracketed IPv6, and every non-URL egress form (ssh/scp/nc,
+  git push, package fetch, docker/aws/…) keep the stop.
+- **Other egress stops are advisory (D14).** The judge runs both stages and
+  its verdict renders in the fall-through prompt ("— advisory (floor stop
+  stands)") — approve an informed verdict on intended egress. The stop
+  stands: egress is never auto-allowed. Credential/parse/obscured/rm stops
+  stay bare.
+- **The floor-stop line leads the prompt.** `🚧 DSPA: not auto-allowed —
+  <reason>` used to trail the body — off-screen on long prompts, so the
+  stop was guessed from latency. It now leads.
+- **Chain listings are capped.** Above 8 segments the prompt lists only the
+  ⚠️-flagged (approval-requiring) segments — a 30-echo chain no longer
+  renders 30 lines (a chain with none flagged gets a head/tail sample).
+- **Nonexistent reads auto-allow.** A read whose resolved path does not
+  exist can only ENOENT — nothing can leak — so it no longer prompts in any
+  mode. Warned (credential-pattern) paths keep prompting (no fs probe on
+  credential paths); writes are unaffected.
+
 ## 3.9.0 — 2026-08-27
 
 Judge path report: the stage-2 verdict now reports the paths the operation

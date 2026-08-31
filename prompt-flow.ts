@@ -98,9 +98,13 @@ export async function showPrompt(
   // the gate reason, and/or the judge verdict that declined to approve.
   if (dspa) {
     if (!dspa.gate.ok) {
+      // The floor-stop line leads the body: appended, it sat after the
+      // command, path lists, and chain listing — off-screen on long
+      // prompts, so "what stopped the auto-allow" was invisible (the
+      // latency heuristic existed because of this).
       prompt = {
         ...prompt,
-        body: prompt.body + `\n🚧 DSPA: not auto-allowed — ${dspa.gate.reason}`,
+        body: `🚧 DSPA: not auto-allowed — ${dspa.gate.reason}\n\n` + prompt.body,
       };
       if (dspa.verdict) {
         // D10: untrusted-package stop — the judge ran anyway; its verdict is
