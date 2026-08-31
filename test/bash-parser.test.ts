@@ -233,6 +233,30 @@ describe("parseCommand: opaque var markers (log FPs)", () => {
   });
 });
 
+describe("parseCommand: sed line-address range endings (2026-08-31 log case)", () => {
+  it.each([
+    "sed -n '/foo/,$p' file.txt",
+    "sed -n '/foo/,$'",
+    "sed -n '/foo/,/bar/p' file.txt",
+    "sed -n '/foo/,25p' file.txt",
+    "sed -n '/foo/,-3p' file.txt",
+  ])("%s → the range address is a script, not a path", async (cmd) => {
+    const r = await parseCommand(cmd, cwd);
+    expect(r.paths).toEqual([]);
+    expect(r.opaque).toEqual([]);
+  });
+
+  it("the file argument of the same command is still collected", async () => {
+    const r = await parseCommand("sed -n '/foo/,$p' /etc/hosts", cwd);
+    expect(r.paths).toContain(realPath("/etc/hosts"));
+  });
+
+  it("control: a bare path in script position stays path-checked", async () => {
+    const r = await parseCommand("sed /etc/hosts file.txt", cwd);
+    expect(r.paths).toContain(realPath("/etc/hosts"));
+  });
+});
+
 describe("parseCommand: grep PATTERN position is data, never a file (2026-08-26 log)", () => {
   it("a // pattern is data, not a network-prefix absolute path — no phantom root child (@356)", async () => {
     // (Bare relative names like f.ts are never path candidates — pre-existing.)

@@ -1116,7 +1116,14 @@ function isSedPatternArg(arg: string): boolean {
   // Range pattern: /pat1/,/pat2/action, /pat1/,/pat2/, or /pat1/,+NNN
   // (GNU sed line-offset range end: /pat/,+120p). A real path containing
   // ",/" or with a segment starting ",+digit" is unheard of.
-  if (/,,\//.test(arg) || /\/,\+\d/.test(arg)) return true;
+  if (/\,\//.test(arg) || /\/,\+\d/.test(arg)) return true;
+
+  // Range end by line address: /pat/,$p (to end of file), /pat/,$ (bare
+  // range = print), /pat/,25p (to line 25), /pat/,-3p (GNU offset). The
+  // second address is $ or a (signed) line number, followed by an optional
+  // ≤3-letter command. The 2026-08-31 log case (sed -n '/interface …/,$p'
+  // on a busctl pipe) floor-stopped on this shape as "unresolvable".
+  if (/\/,(?:\$|\+\d+|-\d+|\d+)[a-zA-Z]{0,3}$/.test(arg)) return true;
 
   // Single address: /pattern/ or /pattern/p
   // Find the last `/` — if what follows is a short letter sequence (sed command)
