@@ -181,6 +181,54 @@ describe("bash body content", () => {
     expect(chainLines[0]).not.toContain("line2");
   });
 
+  it("caps long chain listings to the flagged segments (no off-screen prompts)", () => {
+    const segs = Array.from({ length: 30 }, (_, i) => `echo part ${i}`);
+    segs[9] = 'head -30 ~/.config/joplin-desktop/userchrome.css';
+    const prompt = buildPrompt(bashDecision({
+      command: segs.join("\n"),
+      segments: segs,
+      nonAllowedSegmentIndices: [9],
+      needsPathApproval: true,
+      outsideDirs: ["/home/nczer/.config/joplin-desktop"],
+    }));
+    expect(prompt.body).toContain("This chains 30 commands");
+    expect(prompt.body).toContain("10. ⚠️ head -30 ~/.config/joplin-desktop/userchrome.css");
+    expect(prompt.body).toContain("29 unflagged segments omitted");
+    expect(prompt.body).not.toContain("1. echo part 0");
+    expect(prompt.body).not.toContain("30. echo part 29");
+  });
+
+  it("long unflagged chain shows a head/tail sample", () => {
+    const segs = Array.from({ length: 12 }, (_, i) => `echo part ${i}`);
+    const prompt = buildPrompt(bashDecision({
+      command: segs.join("\n"),
+      segments: segs,
+      nonAllowedSegmentIndices: [],
+      needsPathApproval: true,
+      outsideDirs: ["/etc"],
+    }));
+    expect(prompt.body).toContain("This chains 12 commands");
+    expect(prompt.body).toContain("1. echo part 0");
+    expect(prompt.body).toContain("4. echo part 3");
+    expect(prompt.body).toContain("(+6 more)");
+    expect(prompt.body).toContain("11. echo part 10");
+    expect(prompt.body).toContain("12. echo part 11");
+    expect(prompt.body).not.toContain("5. echo part 4");
+  });
+
+  it("short chains (≤8) still list every segment", () => {
+    const segs = Array.from({ length: 8 }, (_, i) => `echo part ${i}`);
+    const prompt = buildPrompt(bashDecision({
+      command: segs.join("\n"),
+      segments: segs,
+      nonAllowedSegmentIndices: [3],
+    }));
+    expect(prompt.body).toContain("This chains 8 commands");
+    expect(prompt.body).toContain("1. echo part 0");
+    expect(prompt.body).toContain("4. ⚠️ echo part 3");
+    expect(prompt.body).toContain("8. echo part 7");
+  });
+
   it("truncates long segment display in chain list", () => {
     const longSegment = "a".repeat(100);
     const prompt = buildPrompt(bashDecision({

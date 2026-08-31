@@ -337,7 +337,7 @@ export const GIT_NETWORK_SUBCOMMANDS = new Set(["push", "fetch", "pull", "clone"
 /** http(s) URL in command text (non-global). */
 export const NETWORK_URL_RE = /https?:\/\/[^\s"'`)\]]+/;
 
-const NETWORK_URL_RE_GLOBAL = new RegExp(NETWORK_URL_RE.source, "g");
+export const NETWORK_URL_RE_GLOBAL = new RegExp(NETWORK_URL_RE.source, "g");
 
 /**
  * All network egress in a command: per-segment OPERATIVE first words that can

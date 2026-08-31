@@ -48,6 +48,15 @@ export function decideFile(req: FileRequest, store: Store, opts?: DecideOptions)
   if (!isWriteOp && isAllowedReadPath(resolved)) return { kind: "auto-allow" };
   if (!judged && isAllowedWritePath(resolved)) return { kind: "auto-allow" };
 
+  // Read of a path that does not exist: nothing can be read (ENOENT) —
+  // auto-allow in every mode instead of a prompt. Warned (credential-
+  // pattern) paths keep prompting — no fs probes on credential paths.
+  // TOCTOU (file appears between check and read) is the same millisecond
+  // window the rm carve-out's fs.statSync already accepts.
+  if (!isWriteOp && !warnResult.warned && !fs.existsSync(resolved)) {
+    return { kind: "auto-allow" };
+  }
+
   // Inside cwd (read only, unless warned)
   const insideCwd = isInsideCwd(resolved, req.cwd);
   if (!isWriteOp && insideCwd && !warnResult.warned) return { kind: "auto-allow" };

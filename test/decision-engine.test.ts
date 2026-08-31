@@ -843,6 +843,27 @@ describe("File: Tilde expansion in paths", () => {
     const d = await decide(req, store);
     expect(d.kind).toBe("prompt");
   });
+
+  it("read of a nonexistent path → auto-allow (ENOENT — nothing can leak)", async () => {
+    const store = createStore();
+    const req: FileRequest = { type: "file", toolName: "read", filePath: "/definitely/not/a/real/path/xyz123", cwd };
+    const d = await decide(req, store);
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("read of a nonexistent WARNED path still prompts (no fs probe on credential paths)", async () => {
+    const store = createStore();
+    const req: FileRequest = { type: "file", toolName: "read", filePath: "/definitely/not/a/real/path/xyz123/.env", cwd };
+    const d = await decide(req, store);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("write to a nonexistent path still prompts", async () => {
+    const store = createStore();
+    const req: FileRequest = { type: "file", toolName: "write", filePath: "/definitely/not/a/real/path/xyz123/f.txt", content: "x", cwd };
+    const d = await decide(req, store);
+    expect(d.kind).toBe("prompt");
+  });
 });
 
 describe("File: Dir-based auto-allow for outside cwd", () => {
@@ -891,10 +912,22 @@ describe("File: Dir-based auto-allow for outside cwd", () => {
 
   it("read dir does NOT match sibling path", async () => {
     const store = createStore();
-    store.addAllowed({ readDirs: [realPath("/var/log")] });
-    const req: FileRequest = { type: "file", toolName: "read", filePath: "/var/cache/apt/pkg", cwd };
-    const d = await decide(req, store);
-    expect(d.kind).toBe("prompt");
+    // Hermetic siblings: a nonexistent target would auto-allow on its own
+    // (ENOENT — nothing can leak), so the target file must exist to isolate
+    // the dir-scope check under test. Under $HOME (not tmpdir — config-
+    // allowed, see hermetic-cwd.ts), dot-prefixed, removed in finally.
+    const base = fs.mkdtempSync(path.join(os.homedir(), ".halter-sib-"));
+    fs.mkdirSync(path.join(base, "granted"));
+    fs.mkdirSync(path.join(base, "other"));
+    fs.writeFileSync(path.join(base, "other", "pkg"), "x");
+    try {
+      store.addAllowed({ readDirs: [realPath(path.join(base, "granted"))] });
+      const req: FileRequest = { type: "file", toolName: "read", filePath: path.join(base, "other", "pkg"), cwd };
+      const d = await decide(req, store);
+      expect(d.kind).toBe("prompt");
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 

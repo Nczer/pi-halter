@@ -254,13 +254,36 @@ function buildBashPrompt(
       const formattedCommand = formatBashCommand(command, nonAllowedSet, segments);
       body += `\nSegments:\n${formattedCommand}\n`;
     } else {
-      // Non-tmux chain — plain numbered list
+      // Non-tmux chain — numbered list. Long chains bloat the prompt past
+      // the visible screen, so above the cap only the segments that require
+      // approval are shown (the ⚠️ ones); a chain with none flagged gets a
+      // head/tail sample. Indices stay true so the list matches the raw
+      // command above.
+      const SHOW_ALL_MAX = 8;
+      const flagged = segments
+        .map((s, i) => ({ s, i }))
+        .filter(({ i }) => nonAllowedSet.has(i));
       body += `\nThis chains ${segments.length} commands:\n`;
-      segments.forEach((s, i) => {
-        const marker = nonAllowedSet.has(i) ? " \u26a0\ufe0f" : "";
-        const display = truncateSegmentDisplay(s.trimEnd());
-        body += `  ${i + 1}.${marker} ${display}\n`;
-      });
+      if (segments.length <= SHOW_ALL_MAX) {
+        segments.forEach((s, i) => {
+          const marker = nonAllowedSet.has(i) ? " \u26a0\ufe0f" : "";
+          body += `  ${i + 1}.${marker} ${truncateSegmentDisplay(s.trimEnd())}\n`;
+        });
+      } else if (flagged.length > 0) {
+        for (const { s, i } of flagged) {
+          body += `  ${i + 1}. \u26a0\ufe0f ${truncateSegmentDisplay(s.trimEnd())}\n`;
+        }
+        const omitted = segments.length - flagged.length;
+        body += `  … ${omitted} unflagged segment${omitted === 1 ? "" : "s"} omitted\n`;
+      } else {
+        for (let i = 0; i < 4; i++) {
+          body += `  ${i + 1}. ${truncateSegmentDisplay(segments[i].trimEnd())}\n`;
+        }
+        body += `  … (+${segments.length - 6} more)…\n`;
+        for (let i = segments.length - 2; i < segments.length; i++) {
+          body += `  ${i + 1}. ${truncateSegmentDisplay(segments[i].trimEnd())}\n`;
+        }
+      }
     }
   }
   if (hasUnsafePattern) {

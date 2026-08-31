@@ -11,7 +11,10 @@
  * Hard floor (fail closed on any):
  *  - bash: parseable, no obscured command position (variable indirection —
  *    NOT flagged by halter's own analysis, checked here explicitly), no
- *    credential-pattern paths, no network egress, no paths outside the
+ *    credential-pattern paths, no network egress — except loopback-only
+ *    curl/wget (D14: every URL in the command is 127.0.0.0/8, ::1, or
+ *    localhost; a local call can't exfiltrate, the judge reviews the full
+ *    text) — no paths outside the
  *    MANUAL bar (cwd + session grants + config-allowed + trusted scripts —
  *    exactly what manual mode auto-allows, getOutsideCwdPaths) — INCLUDING
  *    paths whose location is statically unprovable (unbound variable,
@@ -68,6 +71,7 @@ import { tokenizeSegment, splitOnPipe } from "./analysis/tokenizer";
 import {
   NETWORK_COMMANDS,
   NETWORK_URL_RE,
+  NETWORK_URL_RE_GLOBAL,
   gitNetworkSubcommand,
   skipEnvPrefixes,
 } from "./config";
@@ -176,6 +180,53 @@ function networkHit(command: string, segments: string[]): string | null {
   }
   const m = command.match(NETWORK_URL_RE);
   return m ? m[0].slice(0, 60) : null;
+}
+
+/** Egress commands whose destination is a URL visible in the command text. */
+const LOOPBACK_EGRESS_CMDS = new Set(["curl", "wget"]);
+
+/** Host part of an http(s) URL match (scheme stripped, port/brackets kept). */
+function urlHost(url: string): string {
+  return url.replace(/^https?:\/\//, "").split("/")[0];
+}
+
+/** Loopback hosts: 127.0.0.0/8, ::1 (bare or [bracketed]), localhost. */
+function isLoopbackHost(hostWithPort: string): boolean {
+  const h = hostWithPort.startsWith("[")
+    ? hostWithPort.slice(1, hostWithPort.indexOf("]"))
+    : hostWithPort.split(":")[0];
+  return h === "localhost" || h === "::1" || h.startsWith("127.");
+}
+
+/**
+ * D14 (docs/dspa-redesign.md): the command's egress is provably loopback
+ * when every operative first word is curl/wget (no git egress subcommand,
+ * no ssh/scp/nc, no package form, no deploy CLI) and the command contains
+ * at least one URL, ALL of them loopback-hosted (127.0.0.0/8, ::1,
+ * localhost). A local call can't exfiltrate off the machine, so it is
+ * JUDGEABLE — the judge sees the full text and decides.
+ *
+ * Fail-closed: a variable host (`curl http://$HOST/x` → host "$HOST"), a
+ * URL-less target (`curl "$B"` — no URL proves locality), or any other
+ * egress form all return false and keep the floor stop. Any non-loopback
+ * destination reachable from this command text is a URL in the text (or an
+ * assignment into one), so "every URL is loopback" closes it; a host taken
+ * from the parent environment without appearing as a URL can't be built
+ * from this command alone (scheme://$VAR still surfaces as a URL here).
+ */
+export function isLoopbackEgress(command: string, segments: string[]): boolean {
+  for (const seg of segments) {
+    const words = seg.trim().split(/\s+/);
+    const oper = words.slice(skipEnvPrefixes(words));
+    const first = oper[0]?.toLowerCase();
+    if (!first) continue;
+    if (isPkgRunForm(first, oper)) continue; // D8 run forms — judged on their own rules
+    if (gitNetworkSubcommand(words)) return false; // remote destination, never loopback-provable
+    if (NETWORK_COMMANDS.has(first) && !LOOPBACK_EGRESS_CMDS.has(first)) return false;
+  }
+  const urls = command.match(NETWORK_URL_RE_GLOBAL) ?? [];
+  if (urls.length === 0) return false; // destination behind a bare variable — unprovable
+  return urls.every((u) => isLoopbackHost(urlHost(u)));
 }
 
 /**
@@ -384,8 +435,15 @@ export async function checkDspaGate(
     const scan = rootScanTarget(seg);
     if (scan) return { ok: false, reason: `full filesystem scan (${scan} /)` };
   }
+  // D14 (docs/dspa-redesign.md): network egress. Loopback-only curl/wget is
+  // judgeable (a local call can't exfiltrate; the judge reviews the full
+  // text). All other egress stays a floor stop — but advisory: the judge
+  // runs both stages and its verdict renders in the prompt as input to the
+  // user's allow/deny (the stop stands; egress is never auto-allowed).
   const net = networkHit(pd.command, analysis.segments);
-  if (net) return { ok: false, reason: `network egress (${net})` };
+  if (net && !isLoopbackEgress(pd.command, analysis.segments)) {
+    return { ok: false, reason: `network egress (${net})`, advisory: true };
+  }
   // prompt.outsidePaths already applied the manual bar (above): what's left
   // is exactly what manual mode would prompt for — the scope class (Q1:
   // the user's call, judgeable only after an Always-for-dir grant). The D7

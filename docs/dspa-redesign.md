@@ -540,6 +540,39 @@ judge, so their paths are not reported — acceptable, because a read can
 only hide a path behind a sentinel/obscured stop, where the floor already
 stops.
 
+### D14. Network egress: loopback judgeable, other egress advisory (2026-08-31)
+
+The 2026-08-31 log: 9 network-egress floor stops, 8 of them loopback
+Joplin-API probes (`curl http://127.0.0.1:41184/…`) — a local service
+cannot exfiltrate off the machine, and the user approves these every
+time. Egress was danger-class bare: no LLM review at all, pure click
+noise.
+
+- **Loopback carve-out (judgeable).** Egress whose operative first words
+  are only curl/wget, whose command text contains ≥1 URL, and whose URLs
+  are ALL loopback-hosted (127.0.0.0/8, ::1, localhost) is no longer a
+  floor stop — the two-stage judge decides on the full text. Fail-closed:
+  no URL at all (`curl "$B"` — a bare variable proves no locality), a
+  variable host (`http://$HOST/x` — the regex still surfaces it as a URL,
+  host "$HOST" is not loopback), a mixed list (one external URL poisons
+  it), bracketed IPv6 (the URL regex truncates at `]` — unprovable), and
+  every non-URL egress form (ssh/scp/nc, git remote subcommands, package
+  fetch, docker/aws/…) all keep the stop. A non-loopback destination
+  reachable from the command text always appears as a URL in the text (or
+  an assignment into one), so "every URL is loopback" closes it; values
+  taken from the parent environment without appearing as URLs cannot be
+  constructed by the command alone.
+- **Other egress is advisory, not bare.** The remaining egress stops gain
+  `advisory: true` — both judge stages run and the verdict renders in the
+  fall-through prompt ("— advisory (floor stop stands)"), so the user can
+  approve an informed verdict on intended egress (`git push` to a known
+  remote, a one-off fetch). The stop stands: egress is never auto-
+  allowed. (Credentials, parse failure, obscured positions, and rm-class
+  stops stay bare — a verdict there is noise.)
+- **Prompt visibility.** The `🚧 DSPA: not auto-allowed — <reason>` line
+  now LEADS the fall-through body (it used to trail it — off-screen on
+  long prompts, which is why the stop was guessed from latency).
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
