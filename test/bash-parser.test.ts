@@ -130,8 +130,17 @@ describe("parseCommand: paths", () => {
     expect(r.paths).toContain(realPath("/tmp/file with spaces.txt"));
   });
 
-  it("does not extract heredoc body as path", async () => {
+  it("extracts path-like literals from heredoc bodies (fail-closed: the script may touch them)", async () => {
+    // 2026-08-31 D13 mining: a heredoc open('/var/lib/…') was invisible to
+    // the static path set — only the judge saw it. Body paths now join the
+    // path set like any other (SAFE_SYSTEM_PATHS filter + dedup apply).
     const r = await parseCommand("cat << 'EOF'\n/etc/passwd\nEOF", cwd);
+    expect(r.paths).toContain("/etc/passwd");
+  });
+
+  it("heredoc body noise is not a path (URLs, single-segment tokens)", async () => {
+    const r = await parseCommand(
+      "python3 - << 'EOF'\nprint('http://x.io/y/z')\nprint(a / b)\nEOF", cwd);
     expect(r.paths).toHaveLength(0);
   });
 
@@ -299,11 +308,12 @@ describe("parseCommand: loop in-list roots (symlink verification)", () => {
     expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
   });
 
-  it("literal in-list token that is an escaping symlink keeps an opaque ref", async () => {
+  it("literal in-list token that is an escaping symlink is loopList (the resolver names the REAL target — still outside, never exempt)", async () => {
     const base = makeRoot(true);
     const r = await parseCommand(`for d in ${base}/esc; do cat "$d/passwd"; done`, cwd);
-    expect(r.opaque.length).toBeGreaterThan(0);
-    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+    expect(r.opaque.length).toBe(1);
+    expect(r.opaque[0].kind).toBe("loopList");
+    expect(r.opaque[0].words).toEqual([`${base}/esc`]);
   });
 
   it("glob in-list of real dirs under an allowed root is exempt", async () => {

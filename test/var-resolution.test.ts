@@ -230,3 +230,143 @@ describe("pinned in-lists (trailing static prefix)", () => {
     expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
   });
 });
+
+describe("assignment values with a glob tail (2026-08-31 log case)", () => {
+  it("$F/*.js with F bound resolves to F's directory (the glob cannot cross /)", async () => {
+    const r = await resolve('F=/var/lib/flatpak/x86_64/stable/1/app; grep -l "Notes" $F/*.js');
+    expect(r.paths).toEqual(["/var/lib/flatpak/x86_64/stable/1/app"]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("a single-quoted glob value resolves to its directory", async () => {
+    const r = await resolve("F='/a/b/*.js'; cat \"$F\"");
+    expect(r.paths).toEqual(["/a/b"]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("a bare-glob value resolves against the segment base (inside when bound)", async () => {
+    const r = await resolve("F=*.js; cat $F");
+    expect(r.paths).toEqual([]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("a brace-expansion value stays a sentinel (several names, one value)", async () => {
+    const r = await resolve("F='/a/{x,y}'; cat $F");
+    expect(r.unresolved.map(u => u.token)).toEqual(["$F"]);
+  });
+});
+
+describe("literal-path loop in-lists (2026-08-31 log case)", () => {
+  it("classifies an all-literal in-list as loopList with the words", async () => {
+    const r = await parseCommand('for d in /var/data/a /var/data/b; do ls "$d"; done', CWD);
+    expect(r.opaque).toEqual([
+      { raw: "$d", segIdx: 0, kind: "loopList", words: ["/var/data/a", "/var/data/b"] },
+    ]);
+  });
+
+  it("quoted words keep their spelling in the word list", async () => {
+    const r = await parseCommand("for d in '/var/data/a' \"/var/data/b\"; do ls \"$d\"; done", CWD);
+    expect(r.opaque[0]?.kind).toBe("loopList");
+    expect(r.opaque[0]?.words).toEqual(["'/var/data/a'", '"/var/data/b"']);
+  });
+
+  it("a tail ($d/sub) is loopList too — the sub stays under the word", async () => {
+    const r = await parseCommand('for d in /var/data/a; do ls "$d/sub"; done', CWD);
+    expect(r.opaque).toEqual([
+      { raw: "$d/sub", segIdx: 0, kind: "loopList", words: ["/var/data/a"] },
+    ]);
+  });
+
+  it("resolves every word to its concrete location (outside union)", async () => {
+    const r = await resolve('for d in /var/data/a /var/data/b; do ls "$d"; done');
+    expect(r.paths).toEqual(["/var/data/a", "/var/data/b"]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("~ words resolve against the real home", async () => {
+    const r = await resolve('for d in ~/.x/a ~/.x/b; do ls "$d"; done');
+    expect(r.paths).toEqual([path.join(home, ".x/a"), path.join(home, ".x/b")]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("a relative word resolves against the segment base; an outside word still names", async () => {
+    const r = await resolve('for d in notes /etc/hostname; do ls "$d"; done');
+    // notes → CWD/notes (inside, dropped); /etc/hostname → named.
+    expect(r.paths).toEqual(["/etc/hostname"]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("a word with $ stays opaque (expansion could name anything)", async () => {
+    const r = await resolve('for d in /a $x; do ls "$d"; done');
+    expect(r.unresolved.map(u => u.token)).toEqual(["$d"]);
+  });
+
+  it("a glob word stays opaque (the expansion set is filesystem-dependent)", async () => {
+    const r = await resolve('for d in /a/* /b; do ls "$d"; done');
+    expect(r.unresolved.map(u => u.token)).toEqual(["$d"]);
+  });
+
+  it("a .. word stays opaque (the value could escape the list)", async () => {
+    const r = await resolve('for d in /a/../b /c; do ls "$d"; done');
+    expect(r.unresolved.map(u => u.token)).toEqual(["$d"]);
+  });
+
+  it("a $-word in the list stays opaque even when the others are literal", async () => {
+    const r = await parseCommand('for d in /a \"$b\"; do ls "$d"; done', CWD);
+    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+
+  it("a mixed in-list (bare + literal path) is loopList — the bare word binds the base", async () => {
+    const r = await resolve('for d in notes /etc/hostname; do echo "$d"; ls "$d"; done');
+    expect(r.paths).toEqual(["/etc/hostname"]);
+    expect(r.unresolved).toEqual([]);
+  });
+});
+
+describe("decide level (the 2026-08-31 log shapes)", () => {
+  // Outside-cwd dirs must EXIST (hermetic temp dirs under $HOME — see
+  // hermetic-cwd.ts: tmpdir is config-allowed) so outsideDirs names the
+  // concrete dirs, not their non-existent parents.
+  let base: string;
+  beforeAll(() => {
+    base = fs.mkdtempSync(path.join(os.homedir(), ".halter-gaps-"));
+    fs.mkdirSync(path.join(base, "a"));
+    fs.mkdirSync(path.join(base, "b"));
+    fs.mkdirSync(path.join(base, "app"));
+    fs.mkdirSync(path.join(base, "scripts"));
+  });
+  afterAll(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  it("for-loop over literal outside dirs prompts with the CONCRETE dirs, not an unresolvable sentinel", async () => {
+    const d = await decide(
+      { type: "bash", command: `for d in ${base}/a ${base}/b; do ls "$d"; done`, cwd: sessionCwd },
+      createStore(),
+    );
+    expect(d.kind).toBe("prompt");
+    if (d.kind !== "prompt" || d.promptData.type !== "bash") return;
+    expect(d.promptData.outsideDirs).toContain(path.join(base, "a"));
+    expect(d.promptData.outsideDirs).toContain(path.join(base, "b"));
+  });
+
+  it("a depth-0 assignment + glob tail prompts for the assignment's directory", async () => {
+    const d = await decide(
+      { type: "bash", command: `F=${base}/app; grep -l "Notes" $F/*.js`, cwd: sessionCwd },
+      createStore(),
+    );
+    expect(d.kind).toBe("prompt");
+    if (d.kind !== "prompt" || d.promptData.type !== "bash") return;
+    expect(d.promptData.outsideDirs).toContain(path.join(base, "app"));
+  });
+
+  it("a heredoc script body's path joins the path set (fail-closed)", async () => {
+    const d = await decide(
+      { type: "bash", command: `python3 - << 'EOF'\nimport re\nopen('${base}/scripts/main.js').read()\nEOF`, cwd: sessionCwd },
+      createStore(),
+    );
+    expect(d.kind).toBe("prompt");
+    if (d.kind !== "prompt" || d.promptData.type !== "bash") return;
+    expect(d.promptData.outsideDirs).toContain(path.join(base, "scripts"));
+  });
+});
