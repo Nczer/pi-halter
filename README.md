@@ -38,8 +38,8 @@ A tool ext opts into halter by shipping a `halter/` subfolder that default-expor
 // <ext>/halter/index.ts — e.g. for a tool that can execute code
 import { actions } from "../registry.ts";
 export default {
-  name: "blender", // must equal the ext directory name (loader-enforced)
-  buildRequest: (event) => {
+  name: "blender", // the tool name this plugin gates (the loader keys slots on it)
+  buildRequest: (event, ctx) => {                   // ctx = session context (read-only)
     const a = actions.get(String(event.input?.action));
     if (!a || a.discovery) return null;             // discovery → ungated pass
     if (a.risk === "exec")  return { kind: "exec", label: a.name, script: a.finalize(event.input).code };
@@ -49,12 +49,12 @@ export default {
 };
 ```
 
-The loader (`plugins/loader.ts`) scans the extensions root at halter load; `handleTool` (`handlers/tool.ts`) dispatches by tool name. The plugin only CLASSIFIES — prompts, grants, judge, dspa, decision log, and widget all live in the core:
+The loader (`plugins/loader.ts`) scans the extensions root at halter load and keys slots by the GATED TOOL's name — a multi-tool ext can gate any of its tools (tool name ≠ ext dir is fine). `handleTool` (`handlers/tool.ts`) dispatches by tool name and passes `(event, ctx)` to the plugin; `ctx` is read-only session state the classifier may consult (e.g. `ctx.model` for a local-reader exemption). The plugin only CLASSIFIES — prompts, grants, judge, dspa, decision log, and widget all live in the core:
 
 - **Grant scopes** (session): `<tool>` = whole tool (the "Always" on an exec/file prompt — the tier-2 confirmation names the code-execution risk); `<tool>:kind:<kind>` = one consent kind (a read consent can never cover the tool's exec actions). Shown as the widget's `Tools:` line.
 - **Payload identity**: an `exec` request must carry the FINAL payload, byte-identical to what the tool will execute — plugins import the tool ext's own payload builder so the judge reviews exactly what runs (D11, untrimmed packet).
 - **dspa**: `exec` is judgeable (the payload IS the model); `file`/`consent` are never auto-allowed (session grants cover them).
-- **Fail-closed**: a plugin that fails to import or violates the contract blocks ALL calls to its tool (the tool name is known); a `buildRequest` throw blocks the call. A tool without a plugin is simply not gated.
+- **Fail-closed**: a plugin that fails to import or violates the contract blocks ALL calls to its tool — the loader recovers the tool name from the plugin file's `name:` literal (no literal → ext dir fallback); a `buildRequest` throw blocks the call. A tool without a plugin is simply not gated.
 
 ### Two-tier confirmation
 

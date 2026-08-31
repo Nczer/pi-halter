@@ -34,7 +34,7 @@ export async function handleTool(
 
   let req: ToolGateRequest | null;
   try {
-    req = slot.plugin.buildRequest(event);
+    req = slot.plugin.buildRequest(event, ctx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
