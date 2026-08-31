@@ -1,4 +1,4 @@
-import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 
 /**
  * What a tool plugin classifies a call as. The core routes each kind into
@@ -24,16 +24,24 @@ export type ToolGateRequest =
  * A gate plugin for one tool ext. Lives at <ext>/halter/index.ts and
  * default-exports an object with this shape; the loader (loader.ts) scans
  * the extensions root, validates the contract, and hands the slots to
- * handleTool (handlers/tool.ts). Plugins only CLASSIFY — all decisions,
- * prompts, grants, judging, and logging happen in the halter core.
+ * handleTool (handlers/tool.ts), keyed by the GATED TOOL's name — a
+ * multi-tool ext can gate any of its tools (tool name ≠ ext dir is fine).
+ * Plugins only CLASSIFY — all decisions, prompts, grants, judging, and
+ * logging happen in the halter core.
  *
  * The plugin may import the tool ext's own modules (same directory) — the
  * classification and the tool's payload building share one source of truth.
  */
 export interface HalterPlugin {
-  /** Must equal the tool ext's directory name (enforced by the loader). */
+  /** The tool name this plugin gates (the dispatch key; loader-enforced non-empty). */
   name: string;
-  buildRequest(event: ToolCallEvent): ToolGateRequest | null;
+  /**
+   * @param event the tool call (name + args).
+   * @param ctx the session context the classifier may READ (e.g. `ctx.model`
+   *            for a local-reader exemption). Read-only input — no decisions
+   *            or prompts here (the core owns those).
+   */
+  buildRequest(event: ToolCallEvent, ctx: ExtensionContext): ToolGateRequest | null;
 }
 
 /** Load state for one <ext>/halter plugin. */
