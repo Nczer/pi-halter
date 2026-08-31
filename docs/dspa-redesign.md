@@ -332,7 +332,8 @@ registry access, and a lenient local judge is no backstop for that.
 **Non-recursive /tmp scratch rm is judgeable** (rm carve-out, dspa mode).
 /tmp is the conventional world-scratch area; `rm -f /tmp/probe.log` is the
 normal cleanup pattern. An rm target directly under `/tmp/` that is
-explicit (the existing bar: no globs/vars/tilde) and non-recursive passes
+explicit (the bar: no globs/vars; a pure tilde is expanded first and its
+concrete path judged — tilde+glob still floors) and non-recursive passes
 the floor to the judge. Computed/glob targets stay on the floor. (D11:
 concrete recursive/bare `/tmp` rm moved with the bar — /tmp is
 config-allowed, i.e. in the manual bar — so it is judgeable like in-cwd
