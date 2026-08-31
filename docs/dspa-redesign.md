@@ -183,6 +183,47 @@ single fall-through point (`tryDspaAutoAllow`), model-scoped like the
 auto-allow count. Purely observational — the 3/20 escalation above remains
 unimplemented (Phase 3b).
 
+**Status (2026-09-01): HOLD — user wants more data before implementing.**
+Observed data (decision-log window 2026-08-28 15:11 → 08-31 05:53, 871
+decisions; the log is version-bound and wiped at each /reload, so earlier
+history is unrecoverable): **0 rejects, 0 defers, 0 declined, 177 approves**
+(stage 1: 150, stage 2: 27), 2 judge infra failures (→ prompt, the `d`
+bucket), 47 floor stops (all 49 dspa prompts decompose). Open questions:
+(a) the 177/177 approve rate is ambiguous — safe workload vs
+approval-biased local judge (llama-cpp Qwen3.8-27B); the log cannot tell.
+(b) The user recalls a judge stop on a *file edit with insufficient context*
+before the wipe — unverifiable from disk (TUI prompt text is not in session
+transcripts); the closest known behavior is the pre-D11-fix trim era, where
+the judge DEFERred on long writes ("truncated in a way that matters") —
+likely a defer, and that class is fixed (full-content packets).
+Data to collect before the decision: (1) the 3.14.0 `r`/`d`/`c`/`g`
+counters live for a few sessions (requires /reload); (2) an adversarial
+probe set (not built) — genuinely dangerous in-base content (e.g. writing
+secrets world-readable, mass `rm` of a real in-base dir, dangerous
+`python3 -c`) to check the judge actually rejects rather than rubber-stamps
+(egress-shaped probes test the floor, not the judge); (3) /dspat agreement
+stats over normal sessions.
+
+**Implementation plan (unapproved).** Counters in `dspa-mode.ts`,
+session-global — deliberately NOT model-scoped (a model switch must not
+reset protection; only /dspa off+on re-arms): `rejectStreak`,
+`rejectTotal`, `degraded`. At the classified final reject in
+`tryDspaAutoAllow` (gate.ts), in order: (1) `streak ≥ 3` → user prompt
+(the current fall-through, verdict rendered); (2) `rejectTotal` reaches 20 →
+block this op + **degrade** — the judge stops auto-allowing for the rest of
+the session (verdict still rendered, never auto-allows), toast, off+on
+re-arms; (3) else → agent block, no prompt (the D4 wording above; same
+block-return shape as user-No rejections). Resets: any completed success
+(auto-allow, or user approval at any dspa prompt) → `streak = 0`; floor
+stops, defers, user-No leave it unchanged. Judgment calls (defaults, each a
+one-line change if objected): while streaked ≥ 3 EVERY subsequent reject
+prompts (a floor, not a one-shot); degraded is visible on the widget line;
+the 3.14.0 widget counters stay separate (model-scoped, observational).
+Tests: counter units (increment / success-reset / 3-floor / 20-degrade /
+re-arm) + gate-level with the prompt spy (rejects 1–2 → block, prompt NOT
+shown; 3rd → prompt shown; 20th → degraded, auto-allows stop; floor stop
+and defer leave the streak untouched).
+
 ### D5. What does NOT change
 
 - `deniedPaths` hard blocks, credential warnings, fail-closed boundaries.
