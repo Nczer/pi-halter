@@ -159,6 +159,32 @@ describe("parseCommand: paths", () => {
     expect(r.paths).toHaveLength(0);
   });
 
+  describe("parseCommand: path-qualified command names (2026-08-31 log case)", () => {
+    it("collects the script arg of a path-qualified interpreter", async () => {
+      const r = await parseCommand("/usr/bin/python3 /tmp/x.py", cwd);
+      expect(r.paths).toContain(realPath("/tmp/x.py"));
+    });
+
+    it("collects the script arg of a ~-qualified .bin invocation (the logged tsx shape)", async () => {
+      const r = await parseCommand(
+        `NODE_PATH=${home}/.pi/agent/extensions/node_modules ${home}/.pi/agent/extensions/node_modules/.bin/tsx /tmp/y.ts`,
+        cwd,
+      );
+      expect(r.paths).toContain(realPath("/tmp/y.ts"));
+    });
+
+    it("applies the sed script-arg rule to a path-qualified sed", async () => {
+      const r = await parseCommand("/usr/bin/sed -n '/foo/,$p' file.txt", cwd);
+      expect(r.paths).toEqual([]);
+      expect(r.opaque).toEqual([]);
+    });
+
+    it("control: the bare name already worked", async () => {
+      const r = await parseCommand("python3 /tmp/x.py", cwd);
+      expect(r.paths).toContain(realPath("/tmp/x.py"));
+    });
+  });
+
   describe("parseCommand: backslash-escaped paths", () => {
     it("strips backslash before space (\\) in path", async () => {
       // find /tmp/foo\ bar → resolved path should not contain backslash

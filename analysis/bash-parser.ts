@@ -1349,7 +1349,14 @@ export async function parseCommand(
     const opaque: OpaqueRef[] = [];
 
     for (const cmdNode of commandNodes) {
-      const cmdName = getCommandName(cmdNode);
+      // Path-qualified invocations (`/usr/bin/python3`, `~/.pi/…/.bin/tsx`)
+      // name the same command by its basename — path collection and the
+      // sed/grep/sort positional-arg rules must apply identically, or the
+      // script args are invisible to the path set (2026-08-31 log case:
+      // `…/node_modules/.bin/tsx /tmp/…/analyze.ts` auto-allowed with the
+      // floor blind to /tmp).
+      const rawName = getCommandName(cmdNode);
+      const cmdName = rawName ? path.basename(rawName) : null;
       const args = extractCommandArgPairs(cmdNode);
 
       if (cmdName && pathAwareCommands.has(cmdName)) {
