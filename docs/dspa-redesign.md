@@ -311,8 +311,15 @@ registry access, and a lenient local judge is no backstop for that.
 - `npx …`, `uvx …`, `bunx …` — inherently run-a-package (fetches on miss;
   the judge sees the name).
 - `npm run|exec|x`, `pnpm run|dlx|exec|x`, `yarn run|dlx|x`,
-  `uv run|x` — explicit run forms only (the `npm test` shorthand and
-  `yarn <script>` stay on the floor, conservatively).
+  `uv run|x` — explicit run forms.
+- `npm|yarn|pnpm test|start|stop|restart` — lifecycle-script shorthands
+  (`npm test` ≡ `npm run test`; all three package managers document
+  `pm <script>` as script execution): run local package.json scripts
+  only, no registry fetch — run forms. (2026-08-31: moved off the floor
+  after dev-loop friction — `sed && npx tsc && npm test` floored on the
+  shorthand while its sibling segments were judgeable; D8's 0/26
+  judge-stop record was the tiebreaker. The original conservative
+  exclusion is superseded.)
 - `bun <anything-but-fetch>` — the interpreter form (`bun index.ts`,
   `bun x tsc`, `bun -e …`); the fetch verbs (`install`, `add`, `update`,
   `publish`, …) stay on the floor.
