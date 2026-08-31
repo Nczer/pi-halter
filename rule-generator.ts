@@ -1,7 +1,7 @@
 import path from "node:path";
 import { PACKAGE_MANAGERS } from "./config";
 import type { AllowRules } from "./store";
-import type { PromptData, BashPromptData, FilePromptData } from "./decision-engine";
+import type { PromptData, BashPromptData, FilePromptData, ToolPromptData } from "./decision-engine";
 
 /**
  * The filesystem root is never part of an Always grant: one click must not
@@ -31,7 +31,22 @@ export class RuleGenerator {
         return this.generateBashPrimaryRules(data);
       case "file":
         return this.generateFilePrimaryRules(data);
+      case "tool":
+        return this.generateToolPrimaryRules(data);
     }
+  }
+
+  /**
+   * Tool-plugin grants. Consent prompts grant the KIND only (a read consent
+   * can never cover the tool's exec actions); exec/file prompts grant the
+   * WHOLE tool (the tier-2 confirmation names the exec risk).
+   */
+  private static generateToolPrimaryRules(data: ToolPromptData): AllowRules {
+    const grant =
+      data.gate === "consent" && data.consentKind
+        ? `${data.tool}:kind:${data.consentKind}`
+        : data.tool;
+    return { toolGrants: [grant] };
   }
 
   /**

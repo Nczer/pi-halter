@@ -142,6 +142,19 @@ async function buildJudgmentInput(
     };
     return input;
   }
+  if (pd.type === "tool") {
+    return {
+      kind: "tool",
+      tool: pd.tool,
+      label: pd.label,
+      gate: pd.gate,
+      note: pd.note,
+      script: pd.script,
+      path: pd.resolved,
+      outsideDir: pd.outsideDir,
+      argsPreview: pd.argsPreview,
+    };
+  }
   return {
     type: "file",
     action: pd.action,

@@ -61,6 +61,7 @@ export function updateWidget(ctx: ExtensionContext): void {
   const readDirItems = filterSubPaths([...store.listAllowedReadDirs()]);
   const writeDirItems = filterSubPaths([...store.listAllowedWriteDirs()]);
   const pkgItems = [...store.listTrustedPackages()];
+  const toolGrantItems = [...store.listToolGrants()];
   const cwdItems = store
     .listAllowedBashCwds()
     .map(({ sig, cwd }) => `${sig} @ ${cwd}`);
@@ -75,7 +76,8 @@ export function updateWidget(ctx: ExtensionContext): void {
     readOnlyPaths.length > 0 ||
     allWritePaths.length > 0 ||
     cwdItems.length > 0 ||
-    pkgItems.length > 0;
+    pkgItems.length > 0 ||
+    toolGrantItems.length > 0;
 
   if (!hasSessionRules) {
     ctx.ui.setWidget("halter", undefined);
@@ -104,6 +106,10 @@ export function updateWidget(ctx: ExtensionContext): void {
         // Cwd-bound bash grants (relative-path tools): shown with the cwd
         // they bind to, since the same sig is a different grant elsewhere.
         baseLines.push(theme.fg("muted", "Cwd:") + " " + theme.fg("dim", cwdItems.join(" ")));
+      }
+      if (toolGrantItems.length > 0) {
+        // Tool-plugin grants: `blender` (whole tool) or `blender:kind:read`.
+        baseLines.push(theme.fg("muted", "Tools:") + " " + theme.fg("dim", toolGrantItems.join(" ")));
       }
     }
 

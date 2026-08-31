@@ -1,11 +1,12 @@
 # Halter (pi extension)
 
-A halter for pi tool calls. Intercepts `bash` and `read`/`write`/`edit` calls, auto-allowing safe operations and prompting the user for anything risky.
+A halter for pi tool calls. Intercepts `bash` and `read`/`write`/`edit` calls, auto-allowing safe operations and prompting the user for anything risky. Tool extensions can additionally opt in through a small **gate plugin** (`<ext>/halter/`) — halter then gates their calls with the same prompts, grants, judge, and dspa machinery.
 
 ## Features
 
 - **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.); blocks denied credential paths (`.ssh`, `.gnupg`, etc.) and prompts for warned paths (`.env`, `.aws`, etc.) even via `cat`/`grep`
 - **File access** — auto-allows reads inside cwd and trusted paths; prompts for paths outside cwd, denied names (`.env`, `.ssh`, etc.)
+- **Tool plugins** — any tool ext that ships `<ext>/halter/index.ts` is gated: the plugin classifies calls as `exec` (script payload → judge/dspa), `file` (target path → outside-cwd warning), or `consent` (per-kind session consent); discovery calls pass ungated; a broken plugin blocks its tool fail-closed
 - **Auto-allow** — "Always" option grants session-scoped permission; status widget shows active allowances
 - **Retry-loop prevention** — recently-aborted commands are auto-blocked for 60 seconds
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
@@ -25,9 +26,35 @@ Handler → Gate → Decision Engine → Prompt Flow → Rule Generator
 
 1. **Handler** — validates the event, builds a request, passes it to `gate()`
 2. **Gate** — shared flow: calls `decide()`, handles auto-allow / block / prompt routing, manages UI expand/collapse, and formats rejections
-3. **Decision Engine** — async policy function. Routes to the right policy (bash, file). Returns `auto-allow`, `block`, or `prompt` with `PromptData`
+3. **Decision Engine** — async policy function. Routes to the right policy (bash, file, tool). Returns `auto-allow`, `block`, or `prompt` with `PromptData`
 4. **Prompt Flow** — on `prompt` decisions, builds and displays the two-tier confirmation UI. On "Always", generates rules and saves them
 5. **Rule Generator** — derives auto-allow rules from `PromptData` (on-demand, only when user picks "Always")
+
+### Tool plugins
+
+A tool ext opts into halter by shipping a `halter/` subfolder that default-exports a plugin (`plugins/types.ts`):
+
+```ts
+// <ext>/halter/index.ts — e.g. for a tool that can execute code
+import { actions } from "../registry.ts";
+export default {
+  name: "blender", // must equal the ext directory name (loader-enforced)
+  buildRequest: (event) => {
+    const a = actions.get(String(event.input?.action));
+    if (!a || a.discovery) return null;             // discovery → ungated pass
+    if (a.risk === "exec")  return { kind: "exec", label: a.name, script: a.finalize(event.input).code };
+    if (a.risk === "write") return { kind: "file", label: a.name, path: event.input.path as string };
+    return { kind: "consent", label: a.name, consentKind: "read" };
+  },
+};
+```
+
+The loader (`plugins/loader.ts`) scans the extensions root at halter load; `handleTool` (`handlers/tool.ts`) dispatches by tool name. The plugin only CLASSIFIES — prompts, grants, judge, dspa, decision log, and widget all live in the core:
+
+- **Grant scopes** (session): `<tool>` = whole tool (the "Always" on an exec/file prompt — the tier-2 confirmation names the code-execution risk); `<tool>:kind:<kind>` = one consent kind (a read consent can never cover the tool's exec actions). Shown as the widget's `Tools:` line.
+- **Payload identity**: an `exec` request must carry the FINAL payload, byte-identical to what the tool will execute — plugins import the tool ext's own payload builder so the judge reviews exactly what runs (D11, untrimmed packet).
+- **dspa**: `exec` is judgeable (the payload IS the model); `file`/`consent` are never auto-allowed (session grants cover them).
+- **Fail-closed**: a plugin that fails to import or violates the contract blocks ALL calls to its tool (the tool name is known); a `buildRequest` throw blocks the call. A tool without a plugin is simply not gated.
 
 ### Two-tier confirmation
 
@@ -106,7 +133,8 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── handlers/                     Thin adapters (all call gate())
 │   ├── index.ts                  Re-exports for handlers
 │   ├── bash.ts                   Bash command interceptor
-│   └── file.ts                   File operation interceptor
+│   ├── file.ts                   File operation interceptor
+│   └── tool.ts                   Plugin-gated tool calls (fail-closed dispatch by tool name)
 ├── analysis/                     Command analysis and risk assessment
 │   ├── bash-parser.ts            tree-sitter-bash wrapper — lazy WASM load, parseCommand() API
 │   ├── tokenizer.ts              Command tokenization
@@ -133,6 +161,9 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 │   ├── bash.ts                   Bash policy (runs bash-rules.ts pipeline)
 │   ├── bash-rules.ts             Composable bash rules: RetryLoop → CredentialDeny → FastAllow → Safety → PromptFallback
 │   └── file.ts                   File policy
+├── plugins/                      Tool-plugin system (see *Tool plugins*)
+│   ├── types.ts                  HalterPlugin contract + ToolGateRequest (exec/file/consent)
+│   └── loader.ts                 Scans <ext>/halter/index.ts, validates, fail-closed slots
 ├── prompt-flow.ts                UI interaction loop — showPrompt(decision, ctx, store)
 ├── prompt-builder.ts             Pure formatter — PromptData → BuiltPrompt (title/body/options/labels)
 ├── prompts.ts                    Two-tier confirmation flow — native select + rejection-reason input

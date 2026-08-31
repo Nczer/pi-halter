@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { updateWidget } from "./widget";
-import { handleBash, handleFile } from "./handlers";
+import { handleBash, handleFile, handleTool } from "./handlers";
+import { loadPlugins, setLoadedPlugins } from "./plugins/loader";
 import { isDspActive, setDspActive, updateDspWidget } from "./dsp-mode";
 import { isDspatActive, resetDspat, setDspatActive, updateDspatWidget } from "./dspat-mode";
 import { isDspaActive, resetDspa, setDspaActive, updateDspaWidget } from "./dspa-mode";
@@ -42,6 +43,11 @@ function applyMode(ctx: ExtensionContext, next: "manual" | "dsp" | "dspa" | "dsp
 }
 
 export default async function halterExtension(pi: ExtensionAPI) {
+  // ── Tool-plugin load (fail-closed per tool, see plugins/loader.ts) ──
+  // Loaded before the tool_call handler can fire; a broken plugin blocks its
+  // tool rather than leaving it ungated.
+  setLoadedPlugins(await loadPlugins());
+
   // ── Session shutdown ──
   pi.on("session_shutdown", async (_event, ctx) => {
     store.reset();
@@ -196,7 +202,8 @@ export default async function halterExtension(pi: ExtensionAPI) {
 
     try {
       return await handleBash(event, ctx)
-        ?? await handleFile(event, ctx);
+        ?? await handleFile(event, ctx)
+        ?? await handleTool(event, ctx);
     } catch (err) {
       // Fail closed (defense in depth): an internal gate error must never
       // leave a command un-gated. The pi harness currently catches handler

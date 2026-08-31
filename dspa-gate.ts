@@ -45,6 +45,11 @@
  *    JUDGEABLE (D3, extended by D11) — the location is user-trusted, the
  *    content is judged in full; truly outside-base writes stop (Q1: scope is
  *    the user's call). Reads are never judged.
+ *  - tool (plugin-gated calls): the exec gate is fully JUDGEABLE — its
+ *    script payload is opaque to static analysis by construction (the
+ *    judge IS the model for it; D11 content review, untrimmed packet).
+ *    The file/consent gates are never auto-allowed: low-risk prompts whose
+ *    repetition session grants cover — the judge adds nothing to them.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -269,6 +274,15 @@ export async function checkDspaGate(
   pd: PromptData,
   store: Store,
 ): Promise<DspaGateResult> {
+  if (pd.type === "tool") {
+    if (pd.gate !== "exec") {
+      return { ok: false, reason: `tool ${pd.gate} is not judgeable (session grants, not the judge, cover it)` };
+    }
+    // exec: the payload is the whole model — no deterministic floor applies
+    // (it's opaque by construction); the two-stage judge decides (D11).
+    return { ok: true };
+  }
+
   if (pd.type === "file") {
     // D3 (docs/dspa-redesign.md): a write into a session-granted dir is
     // judgeable — the user trusted the dir, so the outside-base stop does

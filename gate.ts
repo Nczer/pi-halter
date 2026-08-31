@@ -417,3 +417,29 @@ export function rejectFile(
   };
 }
 
+/**
+ * Reject handler for plugin-gated tool calls. No abort record (tool calls
+ * are deterministic, like file ops — the abort tracker is a bash retry-loop
+ * guard).
+ */
+export function rejectTool(
+  decision: Decision,
+  result: PromptResult,
+  store: Store,
+  ctx: ExtensionContext,
+): { block: true; reason: string } {
+  if (decision.kind !== "prompt") return { block: true, reason: "Permission denied" };
+
+  const pd = decision.promptData;
+  if (pd.type !== "tool") return { block: true, reason: "Permission denied" };
+
+  const reasonDetail = result.reason ? ` Reason: ${result.reason}.` : "";
+
+  ctx.ui.notify(`Permission denied: ${pd.tool} ${pd.label}`, "error");
+
+  return {
+    block: true,
+    reason: `[USER REJECTED] ${pd.tool} '${pd.label}' rejected.${reasonDetail}`,
+  };
+}
+
