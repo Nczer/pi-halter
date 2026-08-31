@@ -1,0 +1,1 @@
+noplugin fixture (no halter/ subfolder — not gated)

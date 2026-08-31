@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { PromptDecision, PromptData, BashPromptData, FilePromptData } from "./decision-engine";
+import type { PromptDecision, PromptData, BashPromptData, FilePromptData, ToolPromptData } from "./decision-engine";
 import { PACKAGE_MANAGERS } from "./config";
 import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./renderers/tmux";
 import { shortenToken } from "./analysis/path-util";
@@ -47,9 +47,9 @@ export interface BuiltPrompt {
  * blocks; this is the prompt-shaped one.)
  */
 export function pdTargetLabel(pd: PromptData): string {
-  return pd.type === "bash"
-    ? pd.command
-    : `${pd.action} ${pd.resolved}`;
+  if (pd.type === "bash") return pd.command;
+  if (pd.type === "file") return `${pd.action} ${pd.resolved}`;
+  return `${pd.tool}/${pd.label}`;
 }
 
 /**
@@ -58,6 +58,9 @@ export function pdTargetLabel(pd: PromptData): string {
  */
 export function summarizePrompt(decision: PromptDecision): string {
   const p = decision.promptData;
+  if (p.type === "tool") {
+    return `tool ${p.gate}${p.consentKind ? ` (${p.consentKind})` : ""}`;
+  }
   if (p.type === "bash") {
     const parts: string[] = [];
     if (p.credentialRule) parts.push(`credential ${p.credentialRule}`);
@@ -82,7 +85,7 @@ export function summarizePrompt(decision: PromptDecision): string {
     }
     return parts.join("; ") || "unclassified";
   }
-  // p is a file prompt (the only remaining type)
+  // p is a file prompt (bash/tool returned above)
   let s = p.isWriteOp ? "file write" : "file read";
   // outsideDir is the target's own parent (the grant-offer unit) — name
   // it as the location, not as the thing the file is outside of.
@@ -113,6 +116,8 @@ export function buildPrompt(
       return buildBashPrompt(promptData, resolutions, confirmedTokens);
     case "file":
       return buildFilePrompt(promptData);
+    case "tool":
+      return buildToolPrompt(promptData);
   }
 }
 
@@ -436,5 +441,77 @@ function buildFilePrompt(
     broaderPaths: broaderPaths.length > 0 ? broaderPaths : undefined,
     pathGrantDirs: [],
   };
+}
+
+// ── Tool prompt (plugin-gated tool calls) ────────────────────────────
+
+/**
+ * Prompt for a gated tool call (ToolPromptData). Single "Always" option,
+ * the old MCP prompt's layout. Grant scope per gate:
+ *  - exec / file → the WHOLE tool (`<tool>:*`) — the tier-2 confirmation
+ *    names the code-execution risk explicitly;
+ *  - consent     → the consent kind only (`<tool> (<kind>)`) — a kind grant
+ *    can never cover the tool's exec actions.
+ */
+function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
+  const { tool, label, gate, note } = data;
+
+  if (gate === "consent") {
+    let body = `${label} (${data.consentKind})`;
+    const args = data.argsPreview ? stripBraces(data.argsPreview) : "";
+    if (args) body += `\nArguments:\n${args}`;
+    return {
+      title: tool,
+      body,
+      tier2Everything: {
+        title: `Confirm Always Allow`,
+        body: `"Always" will auto-allow ${data.consentKind} actions of ${tool} this session.\n\nOther ${tool} actions (including code execution) still prompt.`,
+      },
+      includePathsOption: false,
+      includeFileOption: false,
+      includeBroaderOption: false,
+      includeAlwaysOption: true,
+      alwaysLabel: `${tool} (${data.consentKind})`,
+      pathGrantDirs: [],
+    };
+  }
+
+  // exec / file — Always grants the whole tool.
+  let body = label;
+  if (gate === "exec") {
+    if (data.script) body += `\nScript:\n${truncateLongCommand(data.script)}`;
+    const args = data.argsPreview ? stripBraces(data.argsPreview) : "";
+    if (args) body += `\n\nArguments:\n${args}`;
+    body += `\n\n\u26a0\ufe0f ${note ?? "Executes code in an external tool."}`;
+  } else {
+    const target = data.resolved ?? "(unresolved)";
+    const outside = data.outsideDir ? `\n\n\u26a0\ufe0f Outside cwd: ${data.outsideDir}` : "";
+    const existsNote = data.exists
+      ? `\n\n\u2139\ufe0f File already exists at this path. The tool will overwrite it.`
+      : "";
+    body += `\nPath:\n  ${target}${outside}${existsNote}`;
+    if (note) body += `\n\n\u26a0\ufe0f ${note}`;
+  }
+
+  return {
+    title: `\u26a0\ufe0f ${tool}`,
+    body,
+    tier2Everything: {
+      title: `Confirm Always Allow`,
+      body: `"Always" will auto-allow ALL actions of ${tool} this session — including code execution.`,
+    },
+    includePathsOption: false,
+    includeFileOption: false,
+    includeBroaderOption: false,
+    includeAlwaysOption: true,
+    alwaysLabel: `${tool}:*`,
+    pathGrantDirs: [],
+  };
+}
+
+/** Strip outer JSON braces from an args preview (cleaner inline look). */
+function stripBraces(preview: string): string {
+  const inner = preview.replace(/^\{\n/, "").replace(/\n\}$/, "").trimEnd();
+  return inner && inner !== "{}" ? inner : "";
 }
 

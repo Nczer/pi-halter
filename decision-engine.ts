@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { decideBash } from "./policies/bash";
 import { decideFile } from "./policies/file";
 import type { CommandAnalysis } from "./analysis/command-analysis";
+import { resolvePathReal, isInsideCwd } from "./analysis/path-analysis";
+import { expandTilde } from "./analysis/path-util";
 import type { Store, AllowRules } from "./store";
 export type { Store, AllowRules };
 
@@ -27,7 +31,33 @@ export interface FileRequest {
   content?: string;
 }
 
-export type PermissionRequest = BashRequest | FileRequest;
+export type PermissionRequest = BashRequest | FileRequest | ToolRequest;
+
+/**
+ * A call to a gated tool ext (one that ships a <ext>/halter plugin).
+ * The plugin (plugins/types.ts) classifies the call; the core routes the
+ * `gate` kind: exec → script pipeline (judge/dspa), file → path prompt,
+ * consent → per-kind session consent.
+ */
+export interface ToolRequest {
+  type: "tool";
+  /** Tool ext name — equals the plugin name and the ext directory name. */
+  tool: string;
+  /** Short operation label (usually the action name). */
+  label: string;
+  gate: "exec" | "file" | "consent";
+  cwd: string;
+  /** exec: the FINAL script payload — byte-identical to what will run. */
+  script?: string;
+  /** file: the target path. */
+  path?: string;
+  /** consent: the consent kind (e.g. "read"). */
+  consentKind?: string;
+  /** Human-readable argument preview for the prompt. */
+  argsPreview?: string;
+  /** Context line, e.g. "Runs Python inside a running Blender instance". */
+  note?: string;
+}
 
 // ── Decision types (discriminated union) ──
 
@@ -119,7 +149,26 @@ export interface FilePromptData {
   content?: string;
 }
 
-export type PromptData = BashPromptData | FilePromptData;
+/**
+ * Prompt data for a gated tool call (ToolRequest, resolved). `file`-gated
+ * calls carry the resolved path facts (the prompt warns on outside-cwd).
+ */
+export interface ToolPromptData {
+  type: "tool";
+  tool: string;
+  label: string;
+  gate: "exec" | "file" | "consent";
+  script?: string;
+  argsPreview?: string;
+  consentKind?: string;
+  note?: string;
+  // file gate only:
+  resolved?: string;
+  outsideDir?: string | null;
+  exists?: boolean;
+}
+
+export type PromptData = BashPromptData | FilePromptData | ToolPromptData;
 
 // ── Decision engine ──
 
@@ -147,5 +196,40 @@ export async function decide(request: PermissionRequest, store: Store, opts?: De
       return decideBash(request, store);
     case "file":
       return decideFile(request, store, opts);
+    case "tool":
+      return decideTool(request, store);
   }
+}
+
+/**
+ * Tool-call decision (plugins). Grant model — two scopes, session-scoped:
+ *  - `<tool>` (whole tool; the "Always" on an exec/file prompt): covers
+ *    every action of the tool, INCLUDING code execution;
+ *  - `<tool>:kind:<consentKind>` (the "Always" on a consent prompt): covers
+ *    only that kind — a read consent can never cover an exec action.
+ * No grant → prompt. (Per-action grants are a later refinement.)
+ */
+function decideTool(req: ToolRequest, store: Store): Decision {
+  if (store.hasToolGrant(req.tool)) return { kind: "auto-allow" };
+  if (req.gate === "consent" && req.consentKind
+      && store.hasToolGrant(`${req.tool}:kind:${req.consentKind}`)) {
+    return { kind: "auto-allow" };
+  }
+  const pd: ToolPromptData = {
+    type: "tool",
+    tool: req.tool,
+    label: req.label,
+    gate: req.gate,
+    script: req.script,
+    argsPreview: req.argsPreview,
+    consentKind: req.consentKind,
+    note: req.note,
+  };
+  if (req.gate === "file" && req.path) {
+    const resolved = resolvePathReal(expandTilde(req.path), req.cwd);
+    pd.resolved = resolved;
+    pd.outsideDir = isInsideCwd(resolved, req.cwd) ? null : path.dirname(resolved);
+    pd.exists = fs.existsSync(resolved);
+  }
+  return { kind: "prompt", promptData: pd };
 }

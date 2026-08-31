@@ -89,7 +89,7 @@ export type DspModeTag = "dspa" | "dspat";
 export interface DecisionLogEntry {
   /** ISO timestamp. */
   ts: string;
-  tool: "bash" | "file";
+  tool: "bash" | "file" | "tool";
   /**
    * `deny` is the phase-3 dspa denial flow (D4): a judge-rejected
    * operation returned to the AGENT instead of a user prompt. It is a
@@ -328,6 +328,7 @@ export function logUnresolved(e: UnresolvedLogEntry): void {
 // targetOf stays here — it covers the REQUEST shape, including blocks.
 function targetOf(request: PermissionRequest): string {
   if (request.type === "bash") return request.command;
+  if (request.type === "tool") return `${request.tool}/${request.label}`;
   return request.filePath;
 }
 

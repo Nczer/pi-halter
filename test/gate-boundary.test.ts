@@ -12,6 +12,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 const handlersMock = vi.hoisted(() => ({
   handleBash: vi.fn(),
   handleFile: vi.fn(),
+  handleTool: vi.fn(),
 }));
 vi.mock("../handlers", () => handlersMock);
 
