@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.11.0 — 2026-08-31
+
+One status widget: mode lines pinned on top, one line each.
+
+- **Merged the mode widgets into the halter status widget.** pi renders
+  same-placement widgets in set order (a re-set moves a widget to the end),
+  so the separate `dspa`/`dspat`/`dsp-warning` widgets floated below the
+  session-rules lines after every rules update. All halter UI is now ONE
+  widget (`widget.ts`), top to bottom: the DSP warning (alone — rules are
+  noise while everything is bypassed), the DSPA line, the DSPAT line, then
+  the `Bash:`/`R:`/`R/W:`/`Pkg:`/`Cwd:`/`Tools:` rules. Legacy widget ids
+  are cleared on every update (a same-process /reload can't leave stale
+  duplicates).
+- **Each mode line is now ONE line.** `» DSPA (model): auto-allowed N this
+  session — last: <target>` and `◎ DSPAT: judge advises… — M/N agreed —
+  last: <disagreement>`. On narrow terminals the details drop from the tail
+  first (last-target, then counter) before the line itself truncates — no
+  over-width lines, the bottom bar is one row shorter per mode.
+
 ## 3.10.0 — 2026-08-31
 
 Network egress is LLM-reviewed; prompt ergonomics (docs/dspa-redesign.md,
