@@ -81,8 +81,6 @@ export type DspaGateResult =
   | {
       ok: false;
       reason: string;
-      /** D10: bare package names that stopped the command (prompt offers Trust). */
-      untrustedPackages?: string[];
       /** D11: the judge still runs both stages — its verdict renders in the
        *  fall-through prompt as advisory input (the stop stands). Set for
        *  scope-class stops (outside base, unresolvable location) and
@@ -424,7 +422,8 @@ export async function checkDspaGate(
     return {
       ok: false,
       reason: `untrusted package (${uniq.slice(0, 3).join(", ")})`,
-      untrustedPackages: uniq.map((s) => s.split(/\s+/)[1]),
+      // The prompt offers "Trust: <pkg> (session)" — computed from the
+      // same analysis (BashPromptData.fetchableForms), not carried here.
       advisory: true,
     };
   }

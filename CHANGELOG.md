@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.13.0 — 2026-09-01
+
+Package trust becomes the ONLY grant for fetchable run forms; the
+manager-prefix option is gone (docs/dspa-redesign.md, D10 addendum).
+
+- **Fetchable forms (`npx tsc`, `uvx tsc`, `npm exec tsc` …) are granted
+  by `Trust: <pkg> (session)` only** — in every mode. Their signatures
+  drop out of the command tier and its rules (a mix like `npx tsc &&
+  npm test` still offers `Always: npm test *` for the non-fetchable part),
+  and the Trust option now appears on plain manual prompts too, not just
+  the /dspa untrusted-package stop.
+- **Removed: `Always: npx <pkg> *` and the manager-prefix tier (`npx *`,
+  `npm *`, …)** from all prompts. The prefix tier would auto-allow ANY
+  registry package for the rest of the session, and signature grants
+  short-circuit `decide()` before the /dspa floor is consulted.
+- The /dspa untrusted-package stop carries no `untrustedPackages` field
+  anymore — the prompt derives its Trust option from the decision's own
+  analysis (`BashPromptData.fetchableForms`), the same one the gate saw.
+- Non-fetchable package-manager commands (`npm test`, `npm run …`) are
+  unchanged: exact-form `Always` grant, no broader tier.
+
 ## 3.12.0 — 2026-08-31
 
 Parser resolution of script bodies and loop in-lists — the three

@@ -376,15 +376,36 @@ describe("Bash: granular allow (subcommand vs broader)", () => {
     }
   });
 
-  it("rules have specific sigs, broader rules have parent command", async () => {
+  it("rules have specific sigs; bash has no broader (manager-prefix) tier", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "npm test", cwd }, store);
     if (d.kind === "prompt") {
       const rules = RuleGenerator.generatePrimaryRules(d.promptData);
       expect(rules.bashSigs).toContain("npm test");
-      const broaderRules = RuleGenerator.generateBroaderRules(d.promptData);
-      expect(broaderRules).toBeDefined();
-      expect(broaderRules!.bashSigs).toContain("npm");
+      // The manager-prefix tier ("npm *") was removed — fetchable run forms
+      // are granted by package trust, other commands by their signature.
+      expect(RuleGenerator.generateBroaderRules(d.promptData)).toBeUndefined();
+    }
+  });
+
+  it("fetchable run forms carry their package in the prompt data (D10 grant)", async () => {
+    const store = createStore();
+    const d = await decide({ type: "bash", command: "npx tsc", cwd }, store);
+    expect(d.kind).toBe("prompt");
+    if (d.kind === "prompt") {
+      expect((d.promptData as BashPromptData).fetchableForms).toEqual([{ sig: "npx tsc", pkg: "tsc" }]);
+      // the form sig is excluded from the primary rules — trust is the grant
+      expect(RuleGenerator.generatePrimaryRules(d.promptData).bashSigs).toBeUndefined();
+    }
+  });
+
+  it("a chain: only the untrusted fetchable form is offered as trust", async () => {
+    const store = createStore();
+    store.trustPackage("tsc");
+    const d = await decide({ type: "bash", command: "npx tsc && npx eslint .", cwd }, store);
+    expect(d.kind).toBe("prompt");
+    if (d.kind === "prompt") {
+      expect((d.promptData as BashPromptData).fetchableForms).toEqual([{ sig: "npx eslint", pkg: "eslint" }]);
     }
   });
 

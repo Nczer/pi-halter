@@ -206,10 +206,23 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
  * Final fallback: generate the prompt.
  * Thin mapper — all derived data comes from CommandAnalysis.
  */
-export const PromptFallbackRule: BashRule = (req, _store, analysis?: CommandAnalysis) => {
+export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnalysis) => {
   if (!analysis) return null;
 
   const prompt = analysis.prompt;
+  // Fetchable run forms (npx tsc, uvx tsc, …) are granted by per-package
+  // trust, not signature rules — offer Trust and exclude the form from the
+  // command tier (deduped by signature; one sig = one run form).
+  const fetchableForms: Array<{ sig: string; pkg: string }> = [];
+  const seenSigs = new Set<string>();
+  for (let i = 0; i < analysis.segments.length; i++) {
+    const ff = segmentFetchPackage(analysis.segments[i] ?? "");
+    const sig = analysis.signatures[i];
+    if (ff && !seenSigs.has(sig) && !store.hasTrustedPackage(ff.pkg)) {
+      seenSigs.add(sig);
+      fetchableForms.push({ sig, pkg: ff.pkg });
+    }
+  }
   return {
     kind: "prompt",
     promptData: {
@@ -237,6 +250,7 @@ export const PromptFallbackRule: BashRule = (req, _store, analysis?: CommandAnal
       needsCommandApproval: !analysis.safety.isSimple,
       needsPathApproval: prompt.needsPathApproval ?? false,
       unresolved: prompt.unresolved,
+      fetchableForms: fetchableForms.length > 0 ? fetchableForms : undefined,
       // Single analysis per decision: the /dspa gate and the judge packet
       // consume this instance instead of re-parsing (see BashPromptData).
       analysis,

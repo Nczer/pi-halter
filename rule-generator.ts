@@ -1,5 +1,4 @@
 import path from "node:path";
-import { PACKAGE_MANAGERS } from "./config";
 import type { AllowRules } from "./store";
 import type { PromptData, BashPromptData, FilePromptData, ToolPromptData } from "./decision-engine";
 
@@ -50,19 +49,15 @@ export class RuleGenerator {
   }
 
   /**
-   * Generate broader auto-allow rules (e.g. all commands from a package manager).
+   * Generate broader auto-allow rules (file prompts: the parent-directory
+   * umbrella; bash commands have no broader tier — fetchable run forms are
+   * granted by per-package trust, other commands by their signature).
    * @param data - The prompt data.
    * @param targetDir - For file prompts, the specific parent directory to allow (instead of one dirname up).
    */
   static generateBroaderRules(data: PromptData, targetDir?: string): AllowRules | undefined {
-    if (data.type !== "bash" && data.type !== "file") return undefined;
-
-    if (data.type === "bash") {
-      return this.generateBashBroaderRules(data);
-    }
-    if (data.type === "file") {
-      return this.generateFileBroaderRules(data, targetDir);
-    }
+    if (data.type !== "file") return undefined;
+    return this.generateFileBroaderRules(data, targetDir);
   }
 
   /**
@@ -107,7 +102,10 @@ export class RuleGenerator {
     // grant exists only as a cwd-bound entry; non-relative sigs are kept
     // unbound (a mixed command's other sigs still work).
     const relativeSigs = new Set(data.relativeToolIds.map((r) => r.sig));
-    const unboundSigs = data.signatures.filter((sig) => !relativeSigs.has(sig));
+    // Fetchable run forms are granted by package trust, not sig rules —
+    // a primary "Always" must not silently grant the form signature too.
+    const fetchableSigs = new Set((data.fetchableForms ?? []).map((f) => f.sig));
+    const unboundSigs = data.signatures.filter((sig) => !relativeSigs.has(sig) && !fetchableSigs.has(sig));
     if (unboundSigs.length > 0) {
       rules.bashSigs = unboundSigs;
     }
@@ -118,23 +116,6 @@ export class RuleGenerator {
       rules.bashSigCwds = data.relativeToolIds.map(({ sig, base }) => ({ sig, cwd: base }));
     }
     return rules;
-  }
-
-  private static generateBashBroaderRules(data: BashPromptData): AllowRules | undefined {
-    const signatures = data.signatures;
-    const pmSigs = signatures.filter(sig => {
-      const firstWord = sig.split(/\s+/)[0];
-      return PACKAGE_MANAGERS.has(firstWord);
-    });
-
-    if (pmSigs.length === 0) return undefined;
-
-    const broaderSigs = [...new Set(pmSigs.map(sig => sig.split(/\s+/)[0]))];
-    const readDirs = withoutRoot(data.outsideDirs);
-    return {
-      bashSigs: broaderSigs,
-      ...(readDirs.length > 0 ? { readDirs } : {}),
-    };
   }
 
   // ── File Internal ──

@@ -24,10 +24,6 @@ export interface DspaFallthrough {
   stage: 1 | 2 | null;
   /** Set when the gate passed but a judge stage produced no verdict — why. */
   note?: string;
-  /** D10: bare package names that stopped the command — the prompt offers a
-   *  "Trust" option for them (session grant), and the carried verdict is
-   *  advisory (the floor's stop stands). */
-  untrustedPackages?: string[];
 }
 
 /** Result of showing a permission prompt to the user. */
@@ -193,12 +189,6 @@ export async function showPrompt(
         }
       : undefined;
 
-  // D10: surface the untrusted packages as a tier-1 "Trust" option. The
-  // grant is per bare package name (npx/uvx/dlx run forms, any args).
-  if (dspa?.untrustedPackages && dspa.untrustedPackages.length > 0) {
-    prompt = { ...prompt, trustPackages: dspa.untrustedPackages };
-  }
-
   /**
    * Persist resolutions as user-confirmed (store.confirmResolution) so the
    * same command + tokens pass the dspa gate deterministically next run.
@@ -251,7 +241,10 @@ export async function showPrompt(
       updateWidget(ctx);
     }
   }, judge, () => {
-    for (const pkg of dspa!.untrustedPackages!) store.trustPackage(pkg);
+    // D10: package trust is the grant for fetchable run forms — offered on
+    // EVERY bash prompt that carries one (all modes), not just the /dspa
+    // untrusted-package stop. The store check is session-global.
+    for (const pkg of prompt.trustPackages ?? []) store.trustPackage(pkg);
     updateWidget(ctx);
   });
 

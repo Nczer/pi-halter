@@ -76,7 +76,7 @@ The judge is a stateless one-shot model call at the permission prompt: its entir
 | Bash signatures | Command + flags (e.g. `git -am`) | "Always" on bash prompt |
 | Paths (R) | Read access to dirs/files | "Always" on read prompt |
 | Paths (R/W) | Read+write access to dirs/files | "Always" on write prompt (implies read) |
-| Trusted packages | One package across fetchable run forms (`npx/uvx/dlx …`, any args) | "Trust" on dspa untrusted-package prompt (D10) |
+| Trusted packages | One package across fetchable run forms (`npx/uvx/dlx …`, any args) | "Trust" on any prompt with an untrusted fetchable form — the only grant for those forms (all modes, D10) |
 
 ### Decisions: pass, prompt, block
 

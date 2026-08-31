@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { PromptDecision, PromptData, BashPromptData, FilePromptData, ToolPromptData } from "./decision-engine";
-import { PACKAGE_MANAGERS } from "./config";
+
 import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./renderers/tmux";
 import { shortenToken } from "./analysis/path-util";
 import type { ResolutionMap } from "./path-resolver";
@@ -18,16 +18,15 @@ export interface BuiltPrompt {
   includeFileOption: boolean;
   includeBroaderOption: boolean;
   includeAlwaysOption: boolean;
-  /** Labels for "Always" choices (e.g. "npm test *", "npm *", "/path/*") */
+  /** Labels for "Always" choices (e.g. "npm test *", "/path/*") */
   alwaysLabel: string;
-  alwaysBroaderLabel?: string;
   alwaysPathsLabel?: string;
   alwaysFileLabel?: string;
   /** Broader parent-directory alternatives for file prompts (1–3 levels up). */
   broaderPaths?: { label: string; dir: string }[];
   /** Whether the operation is a write (vs read) — used for accurate prompt text. */
   isWriteOp?: boolean;
-  /** D10: bare package names from a dspa untrusted-package stop — tier-1
+  /** D10: bare package names of fetchable run forms in the command — tier-1
    *  offers a "Trust" option (session grant) when set. */
   trustPackages?: string[];
   /** Directories the "Always (paths)" option would grant — the concrete
@@ -190,12 +189,16 @@ function buildBashPrompt(
 
   // Compute prompt options from data
   const includePathsOption = hasBoth && pathGrantDirs.length > 0;
-  const pmSigs = uniqueSigs.filter(sig => PACKAGE_MANAGERS.has(sig.split(/\s+/)[0]));
-  const broaderSigs = [...new Set(pmSigs.map(sig => sig.split(/\s+/)[0]))];
-  const includeBroaderOption = broaderSigs.some(s => !uniqueSigs.includes(s));
-  const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (uniqueSigs.length > 0 || pathGrantDirs.length > 0 || relToolIds.length > 0);
+  // Fetchable run forms (npx tsc, uvx …) are granted by per-package trust,
+  // not signature rules: their sigs drop out of the command tier, and the
+  // prompt offers "Trust: <pkg> (session)" instead (deduped by package).
+  const fetchableForms = data.fetchableForms ?? [];
+  const fetchableSigSet = new Set(fetchableForms.map(f => f.sig));
+  const commandSigs = uniqueSigs.filter(s => !fetchableSigSet.has(s));
+  const trustPackages = [...new Set(fetchableForms.map(f => f.pkg))].sort();
+  const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (commandSigs.length > 0 || pathGrantDirs.length > 0 || relToolIds.length > 0);
   const cmdBullets = [
-    ...uniqueSigs.map(s => `  \u2022 ${s} *`),
+    ...commandSigs.map(s => `  \u2022 ${s} *`),
     ...relToolIds.map(r => `  \u2022 ${r.sig} (this cwd)`),
   ].join("\n");
 
@@ -324,25 +327,14 @@ function buildBashPrompt(
       }
     : undefined;
 
-  const alwaysLabel = (needsCommandApproval && (uniqueSigs.length > 0 || relToolIds.length > 0))
-    ? [...uniqueSigs.map(s => s + " *"), ...relToolIds.map(r => r.sig + " (this cwd)")].join(", ")
+  const alwaysLabel = (needsCommandApproval && (commandSigs.length > 0 || relToolIds.length > 0))
+    ? [...commandSigs.map(s => s + " *"), ...relToolIds.map(r => r.sig + " (this cwd)")].join(", ")
     : (needsPathApproval ? pathGrantDirs.map(d => `Read ${d}/*`).join(", ") : "");
-  const alwaysBroaderLabel = includeBroaderOption
-    ? uniqueSigs.map(s => s.split(" ")[0] + " *").join(", ")
-    : undefined;
   const alwaysPathsLabel = hasBoth && pathGrantDirs.length > 0
     ? pathGrantDirs.map(d => `Read ${d}/*`).join(", ")
     : undefined;
 
-  // Tier 2 — broader (package manager prefix only, e.g. "npm *")
-  const tier2Broader = includeBroaderOption
-    ? {
-        title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow all commands from these package managers this session:\n\n${broaderSigs.map(s => `  \u2022 ${s} *`).join("\n")}`,
-      }
-    : undefined;
-
-  return { title, body, tier2Everything, tier2Paths, tier2Broader, includePathsOption, includeFileOption: false, includeBroaderOption, includeAlwaysOption, alwaysLabel, alwaysBroaderLabel, alwaysPathsLabel, pathGrantDirs, resolverDirs: resolverDirs.length > 0 ? resolverDirs : undefined };
+  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption: false, includeAlwaysOption, alwaysLabel, alwaysPathsLabel, pathGrantDirs, trustPackages: trustPackages.length > 0 ? trustPackages : undefined, resolverDirs: resolverDirs.length > 0 ? resolverDirs : undefined };
 }
 
 // ── File prompt ──
@@ -406,7 +398,6 @@ function buildFilePrompt(
       includeBroaderOption: broaderPaths.length > 0,
       includeAlwaysOption: true,
       alwaysLabel: `${action} ${fileName}`,
-      alwaysBroaderLabel: broaderPaths.length > 0 ? broaderPaths[0].label : undefined,
       broaderPaths: broaderPaths.length > 0 ? broaderPaths : undefined,
       pathGrantDirs: [],
     };
@@ -460,7 +451,6 @@ function buildFilePrompt(
     includeAlwaysOption: true,
     alwaysLabel: tier2Label,
     alwaysFileLabel: `${action} ${fileName}`,
-    alwaysBroaderLabel: broaderPaths.length > 0 ? broaderPaths[0].label : undefined,
     broaderPaths: broaderPaths.length > 0 ? broaderPaths : undefined,
     pathGrantDirs: [],
   };

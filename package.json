@@ -1,6 +1,6 @@
 {
   "name": "pi-halter",
-  "version": "3.12.0",
+  "version": "3.13.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,6 +15,8 @@
     "vitest": "^4.1.9"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

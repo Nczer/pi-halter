@@ -123,6 +123,15 @@ export interface BashPromptData {
    */
   unresolved?: Array<{ token: string; reason: "var" | "base" }>;
   /**
+   * Fetchable run-form segments (npx tsc, uvx tsc, bunx …) whose package is
+   * NOT yet session-trusted, with the segment signature and bare package
+   * name. Package trust is the grant for these forms: their signatures are
+   * excluded from the command tier and its rules, and the prompt offers
+   * "Trust: <pkg> (session)" (deduped by package across run forms).
+   * Absent on hand-constructed PromptData.
+   */
+  fetchableForms?: Array<{ sig: string; pkg: string }>;
+  /**
    * The single analysis this decision was made from. Downstream consumers
    * (the /dspa hard gate, the judge packet) use it instead of re-parsing,
    * so they see exactly the analysis the decision was based on — one

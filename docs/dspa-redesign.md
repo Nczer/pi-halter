@@ -360,10 +360,26 @@ store, rendered in the widget (`Pkg:` line). A trusted package auto-allows
 deterministically in `decide()` (SafetyRule) — the judge never sees it
 again, and the dev loop no longer depends on judge availability. Trust
 covers the package across all fetchable forms (trust `tsc` → `npx tsc`,
-`bun x tsc`); it is deliberately the per-package version of the existing
-`Always: npx *` broader grant — same explicit-confirm bar, narrower blast
-radius. Trust does not cover unsafe shapes: pipes/redirects/subshells with
-them fail `canBeAutoAllowed` and still go to the judge.
+`bun x tsc`); it is deliberately the per-package version of the former
+`Always: npx *` broader grant (removed in 3.13.0) — same explicit-confirm
+bar, narrower blast radius. Trust does not cover unsafe shapes:
+pipes/redirects/subshells with them fail `canBeAutoAllowed` and still go
+to the judge.
+
+**3.13.0 — Trust is the ONLY grant for fetchable forms.** The fetchable-form
+prompt had grown a breadth ladder — exact form (`Always: npx tsc *`),
+manager prefix (`Always: npx *`), and `Trust: tsc` — three answers to one
+question ("is tsc OK to run from the registry?"). The form grants are
+gone everywhere (all modes): fetchable signatures are excluded from the
+command tier and its rules (`BashPromptData.fetchableForms` carries the
+forms + package names, computed in the prompt fallback from the same
+analysis the gate saw), and the `Trust: <pkg> (session)` option is offered
+on EVERY bash prompt that carries an untrusted fetchable form — previously
+only the /dspa untrusted-package stop surfaced it. The manager-prefix tier
+is removed entirely: `npx *` would auto-allow ANY registry package for the
+rest of the session, and a signature grant short-circuits `decide()`
+before the floor is ever consulted. Non-fetchable package-manager commands
+(`npm test`, `npm run …`) keep their exact-form grants.
 
 ### D11. Re-alignment: the floor's bar is the MANUAL bar; the judge reviews all content-bearing auto-alls (2026-08-26)
 
@@ -410,9 +426,9 @@ from. Six decisions (implemented the same day; reverts fix (a) of
 5. **The Trust option stays.** Grilled as possibly redundant vs Always —
    it is not: Trust is per bare package across ALL fetchable forms
    (npx/uvx/bun x/npm exec/pnpm dlx/yarn dlx/uv x) with version pins
-   stripped; an Always signature matches the exact form as typed; the
-   broader `Always: npx *` covers any package. All are deterministic
-   post-grant; none cover unsafe shapes.
+   stripped, and is the ONLY grant for those forms (3.13.0 removed the
+   exact-form and manager-prefix Always options). Deterministic
+   post-grant; covers no unsafe shapes.
 6. **The floor keeps**: unresolvable-location stops (now with advisory
    verdict), full-filesystem scans, and rm targets outside the bar.
 
