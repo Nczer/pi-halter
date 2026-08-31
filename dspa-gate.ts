@@ -123,13 +123,20 @@ function obscuredHit(segments: string[]): string | null {
  * arbitrary postinstall execution + registry access. The 2026-08-24 log:
  * the pre-D8 floor stopped 7 of 26 dspa prompts (`npx tsc`, `npx vitest`,
  * `uv run`) while the judge stopped zero.
+ *
+ * Lifecycle-script shorthands (`npm test` ≡ `npm run test`; the same
+ * shorthands exist in yarn/pnpm — all three document `pm <script>` as
+ * script execution) run local package.json scripts only, no registry
+ * fetch: run forms, not fetches. 2026-08-31: moved off the floor after
+ * dev-loop friction (`sed && npx tsc && npm test` flooring on the
+ * shorthand); D8's 0/26 judge-stop record was the tiebreaker.
  */
 const PKG_RUN_FORMS: Record<string, ReadonlySet<string> | "all" | "except-fetch"> = {
   npx: "all", // inherently run-a-package (fetches on miss — the judge sees the name)
   uvx: "all",
-  npm: new Set(["run", "exec", "x"]),
-  pnpm: new Set(["run", "dlx", "exec", "x"]),
-  yarn: new Set(["run", "dlx", "x"]),
+  npm: new Set(["run", "exec", "x", "test", "start", "stop", "restart"]),
+  pnpm: new Set(["run", "dlx", "exec", "x", "test", "start", "stop", "restart"]),
+  yarn: new Set(["run", "dlx", "x", "test", "start", "stop", "restart"]),
   uv: new Set(["run", "x"]),
   bun: "except-fetch", // `bun <script>` interpreter form: all but fetch verbs
 };

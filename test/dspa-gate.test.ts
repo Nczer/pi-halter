@@ -429,10 +429,22 @@ describe("bash", () => {
       "uv run extract.py",
       "bun index.ts",
       "bun -e 'console.log(1)'",
+      // lifecycle-script shorthands (2026-08-31): ≡ `run <script>`, local
+      // package.json execution only — no registry fetch
+      "npm test",
+      "npm start",
+      "yarn test",
+      "pnpm test",
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(true);
     }
+  });
+
+  it("user's dev loop: sed && npx tsc && npm test — no floor on the shorthand", async () => {
+    store.trustPackage("tsc"); // the point is the npm-test segment, not D10
+    const r = await checkDspaGate(bashPd("sed -i s/a/b/x.ts && npx tsc --noEmit && npm test"), store);
+    expect(r.ok).toBe(true);
   });
 
   it("passes trusted fetchable run forms (D10 — trust is per bare package name)", async () => {
