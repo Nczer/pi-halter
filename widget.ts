@@ -79,7 +79,10 @@ function modeLine(width: number, theme: Pick<Theme, "fg" | "bold">, main: string
  * The single halter status widget (below the editor):
  *
  *   ⚠ DSP MODE — all permissions bypassed ⚠        (DSP active — alone)
- *   » DSPA (model): auto-allowed N — last: <target> (DSPA active)
+ *   » DSPA (model): 79a 3g 2r 1c 2d — last: <target> (DSPA active)
+ *     (compact session-health counts, non-zero only: a auto-allowed,
+ *      g floor stop, r judge reject, c declined (approve, risk too high),
+ *      d defer/no verdict)
  *   ◎ DSPAT: judge advises… — M/N agreed — last: …  (DSPAT active)
  *   Bash: …  R: …  R/W: …  Pkg: …  Cwd: …  Tools: … (session rules)
  *
@@ -149,9 +152,18 @@ export function updateWidget(ctx: ExtensionContext): void {
         // `»` is a text-default glyph (monochrome in every terminal) — the
         // mode follows the DSP widget's style: no color emoji, all-caps name.
         const modelTag = s.model ? ` (${s.model})` : "";
+        // Session health as compact counts (only non-zero), in stop-source
+        // order: a = auto-allowed, g = floor stop, r = judge REJECT,
+        // c = approve-but-above-authority (declined), d = DEFER/no verdict.
+        const counts: string[] = [];
+        if (s.autoAllowed > 0) counts.push(`${s.autoAllowed}a`);
+        if (s.gate > 0) counts.push(`${s.gate}g`);
+        if (s.deny > 0) counts.push(`${s.deny}r`);
+        if (s.declined > 0) counts.push(`${s.declined}c`);
+        if (s.defer > 0) counts.push(`${s.defer}d`);
         const main =
-          (s.autoAllowed > 0
-            ? `» DSPA${modelTag}: auto-allowed ${s.autoAllowed} this session`
+          (counts.length > 0
+            ? `» DSPA${modelTag}: ${counts.join(" ")}`
             : `» DSPA${modelTag}: auto-allowing gate+judge-approved operations`) +
           (isDspaJudging() ? " — judging…" : "");
         lines.push(modeLine(width, theme, main, s.lastTarget ? [`last: ${s.lastTarget}`] : []));

@@ -9,6 +9,7 @@ import {
   setDspaActive,
   resetDspa,
   recordDspaAutoAllowed,
+  recordDspaStop,
   getDspaStats,
   updateDspaWidget,
   setDspaJudging,
@@ -49,7 +50,7 @@ describe("mode toggle", () => {
     recordDspaAutoAllowed("m1", "ls");
     resetDspa();
     expect(isDspaActive()).toBe(false);
-    expect(getDspaStats()).toEqual({ model: null, autoAllowed: 0, lastTarget: null });
+    expect(getDspaStats()).toEqual({ model: null, autoAllowed: 0, lastTarget: null, gate: 0, deny: 0, declined: 0, defer: 0 });
   });
 });
 
@@ -60,6 +61,10 @@ describe("counters", () => {
       model: "m1",
       autoAllowed: 1,
       lastTarget: "cargo build --release",
+      gate: 0,
+      deny: 0,
+      declined: 0,
+      defer: 0,
     });
   });
 
@@ -67,7 +72,34 @@ describe("counters", () => {
     recordDspaAutoAllowed("m1", "a");
     recordDspaAutoAllowed("m1", "b");
     recordDspaAutoAllowed("m2", "c");
-    expect(getDspaStats()).toEqual({ model: "m2", autoAllowed: 1, lastTarget: "c" });
+    expect(getDspaStats()).toEqual({ model: "m2", autoAllowed: 1, lastTarget: "c", gate: 0, deny: 0, declined: 0, defer: 0 });
+  });
+
+  it("stop counters: each kind increments its own bucket", () => {
+    // The first NON-NULL model establishes the model scope (a prior null-
+    // model stop would have been reset by it — covered below).
+    recordDspaStop("gate", "m1");
+    recordDspaStop("gate", null); // null model: counted, no reset
+    recordDspaStop("deny", "m1");
+    recordDspaStop("declined", "m1");
+    recordDspaStop("defer", "m1");
+    recordDspaStop("defer", null);
+    expect(getDspaStats()).toMatchObject({ model: "m1", gate: 2, deny: 1, declined: 1, defer: 2 });
+  });
+
+  it("a stop with a NEW model resets all counters (model-scoped)", () => {
+    recordDspaAutoAllowed("m1", "a");
+    recordDspaStop("deny", "m1");
+    recordDspaStop("gate", "m2");
+    expect(getDspaStats()).toEqual({ model: "m2", autoAllowed: 0, lastTarget: null, gate: 1, deny: 0, declined: 0, defer: 0 });
+  });
+
+  it("a gate stop with no verdict (model null) never resets the counters", () => {
+    recordDspaAutoAllowed("m1", "a");
+    recordDspaStop("gate", null);
+    expect(getDspaStats().autoAllowed).toBe(1);
+    expect(getDspaStats().model).toBe("m1");
+    expect(getDspaStats().gate).toBe(1);
   });
 
   it("truncates long targets", () => {
@@ -120,10 +152,27 @@ describe("widget (unified halter widget — see widget.ts)", () => {
     const lines = w!.render(200);
     expect(lines).toHaveLength(1); // one line, not two
     expect(lines[0]).toContain("» DSPA");
-    expect(lines[0]).toContain("auto-allowed 1 this session");
+    expect(lines[0]).toContain("1a");
     expect(lines[0]).toContain("llama-cpp/Qwen3.8-27B");
     expect(lines[0]).toContain("— last: cargo build");
-    expect(lines[0].indexOf("auto-allowed")).toBeLessThan(lines[0].indexOf("last: cargo build"));
+    expect(lines[0].indexOf("1a")).toBeLessThan(lines[0].indexOf("last: cargo build"));
+  });
+
+  it("renders stop counts compactly, non-zero only (a g r c d order)", () => {
+    judgeStatusMock.mockReturnValue({ state: "ok", modelLabel: null, reason: null });
+    setDspaActive(true);
+    recordDspaAutoAllowed("m1", "cargo build");
+    recordDspaAutoAllowed("m1", "ls");
+    recordDspaStop("gate", null);
+    recordDspaStop("deny", "m1");
+    recordDspaStop("defer", "m1");
+    // declined stays hidden (zero)
+    const { ctx, widgets, theme } = makeCtx();
+    updateDspaWidget(ctx);
+    const w = halterLine(widgets, theme);
+    const line = w!.render(200)[0];
+    // exact count run — a non-zero declined would break this ("…1r 1c 1d…")
+    expect(line).toContain("2a 1g 1r 1d — last:");
   });
 
   it("drops the last-target before truncating the line (narrow terminals)", () => {
@@ -157,7 +206,7 @@ describe("widget (unified halter widget — see widget.ts)", () => {
     const line = () => halterLine(widgets, theme)!.render(200)[0];
     expect(line()).toContain("» DSPA");
     setDspaJudging(true, ctx); // re-renders the widget (forces a repaint)
-    expect(line()).toContain("auto-allowed 1 this session — judging…");
+    expect(line()).toContain("1a — judging…");
     expect(line()).toContain("— last: cargo build");
     setDspaJudging(true, ctx); // no-op (already judging — no extra set)
     expect(widgets.filter(x => x.id === "halter")).toHaveLength(2); // initial + judging toggle

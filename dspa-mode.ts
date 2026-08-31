@@ -18,6 +18,14 @@ let active = false;
 let model: string | null = null;
 let autoAllowed = 0;
 let lastTarget: string | null = null;
+// Stop counters — what kept the floor or the judge from auto-allowing.
+// Model-scoped like autoAllowed (judge quality is model-dependent, so a
+// model change resets everything); the widget renders them compactly
+// (`2r 1d` …) next to the auto-allow count.
+let gateStops = 0;
+let denials = 0;
+let declines = 0;
+let defers = 0;
 /** True while a judge call is in flight — rendered inline on this widget's
  *  line ("… — judging…") instead of a separate in-flight widget. */
 let judging = false;
@@ -40,7 +48,48 @@ function resetCounters(): void {
   model = null;
   autoAllowed = 0;
   lastTarget = null;
+  gateStops = 0;
+  denials = 0;
+  declines = 0;
+  defers = 0;
   judging = false;
+}
+
+/** Judge quality is model-dependent — a model switch starts stats fresh. */
+function switchModel(m: string): void {
+  resetCounters();
+  model = m;
+}
+
+/**
+ * Why a dspa operation did NOT auto-allow (recorded at the single
+ * fall-through point, gate.ts tryDspaAutoAllow):
+ *  - `gate`     — the deterministic floor stopped it (danger-class or
+ *                 advisory: the stop stands, any verdict is advisory);
+ *  - `deny`     — the final judge verdict was REJECT;
+ *  - `declined` — the final verdict was approve, but the risk sat above
+ *                 the stage's authority (approve+high, or stage-1-only
+ *                 approve+medium) — the judge said yes, the bar said no;
+ *  - `defer`    — the final verdict was DEFER, or NO verdict at all
+ *                 (timeout / failed call / invalid judge — the fail-safe
+ *                 class; a defer means "I can't vouch", so both share the
+ *                 bucket for session health).
+ */
+export type DspaStopKind = "gate" | "deny" | "declined" | "defer";
+
+/**
+ * Record one non-auto-allowed dspa operation. `verdictModel` is the
+ * verdict's model; null when no verdict exists (a null model never resets
+ * the counters — the floor can stop before any judge call).
+ */
+export function recordDspaStop(kind: DspaStopKind, verdictModel: string | null): void {
+  if (verdictModel !== null && verdictModel !== model) switchModel(verdictModel);
+  switch (kind) {
+    case "gate": gateStops++; break;
+    case "deny": denials++; break;
+    case "declined": declines++; break;
+    case "defer": defers++; break;
+  }
 }
 
 /** True while a judge call is in flight (the unified widget renders the
@@ -62,11 +111,7 @@ export function setDspaJudging(on: boolean, ctx: ExtensionContext): void {
 
 /** Record one auto-allowed operation. A model change resets the counters. */
 export function recordDspaAutoAllowed(m: string, target: string): void {
-  if (model !== m) {
-    model = m;
-    autoAllowed = 0;
-    lastTarget = null;
-  }
+  if (model !== m) switchModel(m);
   autoAllowed++;
   // Flatten newlines: the widget line array is one element per screen row;
   // an embedded \n makes the terminal wrap mid-row and desyncs the TUI diff.
@@ -77,8 +122,16 @@ export function getDspaStats(): {
   model: string | null;
   autoAllowed: number;
   lastTarget: string | null;
+  /** Floor stops (gate) — the deterministic layer, not the judge. */
+  gate: number;
+  /** Final judge verdict REJECT. */
+  deny: number;
+  /** Final verdict approve, risk above the stage's authority. */
+  declined: number;
+  /** Final verdict DEFER, or no verdict at all (fail-safe). */
+  defer: number;
 } {
-  return { model, autoAllowed, lastTarget };
+  return { model, autoAllowed, lastTarget, gate: gateStops, deny: denials, declined: declines, defer: defers };
 }
 
 /**

@@ -174,6 +174,15 @@ reset. Counters are session-global.
 stays exclusive to explicit rejects, preserving fail-toward-prompting for
 uncertainty.
 
+**Live widget counters (3.14.0, observational precursor to the 3/20
+escalation).** The DSPA widget line now renders the session tally compactly
+— `79a 3g 2r 1c 2d` (non-zero only): `a` auto-allowed, `g` floor stop,
+`r` final verdict REJECT, `c` approve-but-above-authority (declined),
+`d` DEFER or no verdict at all (the fail-safe bucket). Recorded at the
+single fall-through point (`tryDspaAutoAllow`), model-scoped like the
+auto-allow count. Purely observational — the 3/20 escalation above remains
+unimplemented (Phase 3b).
+
 ### D5. What does NOT change
 
 - `deniedPaths` hard blocks, credential warnings, fail-closed boundaries.
