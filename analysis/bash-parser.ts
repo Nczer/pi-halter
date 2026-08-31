@@ -470,6 +470,11 @@ function loopBoundRef(val: string): { name: string; rest: string | null } | null
  *    RUNTIME cwd; the resolver must bound it against the tracked effective
  *    base (the old blanket exemption skipped that check entirely — the
  *    `cd /etc && for f in a b; do cat $f; done` hole).
+ *  - "loopList": a loop-bound reference whose in-list is all LITERAL paths
+ *    (no expansion, no glob, no `..`) — the value is exactly one of the
+ *    words; the resolver names the concrete words (a `for d in /a /b` over
+ *    outside dirs is two concrete outside locations, not an unresolvable
+ *    sentinel).
  *  - "opaque": everything else — the resolver may still bind it through the
  *    command's own assignments (`f=x; cat $f`).
  *
@@ -484,9 +489,11 @@ export interface OpaqueRef {
   /** segIdx -1: segments whose text contains the token's node text; the
    * resolver takes the worst case across them. */
   candidates?: number[];
-  kind: "opaque" | "cwdLocal" | "pinned";
+  kind: "opaque" | "cwdLocal" | "pinned" | "loopList";
   /** kind "pinned": the directory every expansion lands under (realpath'd). */
   prefixDir?: string;
+  /** kind "loopList": the literal in-list words (one expansion each). */
+  words?: string[];
 }
 
 /**
@@ -522,6 +529,34 @@ function isBoundedInListWord(w: string): boolean {
   }
   if (!t) return false;
   if (/[`$]/.test(t)) return false;
+  if (/(^|\/)\.\.(\/|$)/.test(t)) return false;
+  return true;
+}
+
+/** Strip one outer quote pair (the resolver re-strips; the word must not
+ *  carry an expansion inside double quotes). */
+function dequoteInListWord(w: string): string | null {
+  const q = w.match(/^(['"])(.*)\1$/);
+  if (q) {
+    if (q[1] === '"' && /[$`]/.test(q[2])) return null;
+    return q[2];
+  }
+  return w;
+}
+
+/**
+ * An in-list word that IS its own location: a literal path (absolute, ~/, or
+ * base-relative) with no expansion, no glob, no `..` segment — a loop over
+ * such words visits exactly these paths (the 2026-08-31 log case: `for d in
+ * ~/.var/… ~/.local/share/joplin …; do … "$d" …` stopped as "runtime
+ * location unresolvable" although every word was right there). Globs stay
+ * out: their expansion set is filesystem-dependent (the pinned proof and the
+ * allowed-root proof already cover the safe glob shapes).
+ */
+function isLiteralInListWord(w: string): boolean {
+  const t = dequoteInListWord(w);
+  if (!t) return false;
+  if (/[`$*?[[]/.test(t)) return false;
   if (/(^|\/)\.\.(\/|$)/.test(t)) return false;
   return true;
 }
@@ -562,9 +597,10 @@ function opaqueRef(node: TSNode, arg: string, cwd: string, segIdx: number, segme
   const val = flagValue(arg);
   if (!isOpaqueValue(val)) return null;
   const cands = segIdx < 0 ? containmentCandidates(node.text, segments) : undefined;
-  const mk = (kind: OpaqueRef["kind"], prefixDir?: string): OpaqueRef => {
+  const mk = (kind: OpaqueRef["kind"], prefixDir?: string, words?: string[]): OpaqueRef => {
     const r: OpaqueRef = { raw: val, segIdx, kind };
     if (prefixDir) r.prefixDir = prefixDir;
+    if (words) r.words = words;
     if (cands) r.candidates = cands;
     return r;
   };
@@ -581,6 +617,12 @@ function opaqueRef(node: TSNode, arg: string, cwd: string, segIdx: number, segme
       // tracked effective base.
       if (inList.every(w => isBareName(w) || isCwdLocalWord(w))) {
         return mk("cwdLocal");
+      }
+      // Literal-path in-list (absolute, ~/, or base-relative, no expansion,
+      // no glob, no ..): the value is exactly one of the words — concrete
+      // locations the resolver can name.
+      if (inList.every(isLiteralInListWord)) {
+        return mk("loopList", undefined, inList);
       }
       // Mixed (bare + root-pinned) or expanded in-list — the value set spans
       // bases — opaque (the resolver may still bind a prefixed form below).
@@ -1183,6 +1225,27 @@ function isAwkScriptArg(arg: string): boolean {
   return /[\s{}\(\)\$\^\*\+\?\|\\!=;]/.test(arg) || /,\//.test(arg);
 }
 
+/**
+ * A path-like literal inside SCRIPT BODY text (a heredoc body, a
+ * multi-line literal argument — `python3 - << 'EOF' … open('/var/lib/…')
+ * … EOF`). The shell never touches these paths, but the script does, and
+ * the floor must see them (2026-08-31 D13 mining: the heredoc's open()
+ * target was invisible to the static path set, so only the judge saw it).
+ *
+ * Shape: ~ or / start, ≥2 segments (one-segment tokens are almost always
+ * regex/division noise), word chars only. The lookbehind rejects URL tails
+ * (the second slash of http://…) and paths glued to a word char.
+ */
+const BODY_PATH_RE = /(?<![\w:/.-])(?:~\/)?\/[\w.-]+(?:\/[\w.-]+)+/g;
+
+/** Scan script body text for path-like literals, resolved like any other
+ *  extracted path (SAFE_SYSTEM_PATHS filter + dedup apply downstream). */
+function bodyPaths(text: string, cwd: string, out: string[]): void {
+  for (const m of text.matchAll(BODY_PATH_RE)) {
+    out.push(resolvePathReal(expandTilde(m[0]), cwd));
+  }
+}
+
 /** Detect operators within a command/redirect node. */
 function detectOpsInNode(node: TSNode): string[] {
   const ops = new Set<string>();
@@ -1266,7 +1329,12 @@ export async function parseCommand(
           // A multi-line LITERAL argument is a script/data body (`node -e '…'`),
           // not a path: classifying it would mint an opaque ref whose "token"
           // is the whole script, bloating the prompt and the decision log.
-          if (isMultiLineLiteralArg(arg, argNode)) continue;
+          // The shell never touches body paths — but the script does: scan
+          // them into the path set (fail-closed, like every other path).
+          if (isMultiLineLiteralArg(arg, argNode)) {
+            bodyPaths(arg, cwd, allPaths);
+            continue;
+          }
           // Skip inline script/pattern expressions that look like paths but aren't:
           //   sed: script position, /pattern/p, /describe(...)/,/^});/p, s/foo/bar/
           //   awk: /pattern/ {print}, /foo/ {action}
@@ -1324,6 +1392,21 @@ export async function parseCommand(
         }
       }
     }
+
+    // Script-body paths from heredocs (`python3 - << 'EOF' …`): the body is
+    // opaque to the shell (SKIP_TYPES), but the script it feeds touches real
+    // files — extract the path-like literals (fail-closed).
+    const collectHeredocBodies = (node: TSNode): void => {
+      if (node.type === "heredoc_body") {
+        bodyPaths(node.text, cwd, allPaths);
+        return;
+      }
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (child) collectHeredocBodies(child);
+      }
+    };
+    collectHeredocBodies(tree.rootNode);
 
     // Extract redirect paths
     const redirectPaths: string[] = [];

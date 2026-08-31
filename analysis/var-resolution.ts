@@ -70,9 +70,22 @@ export interface OpaqueResolution {
 /** What a value expression stands for. */
 type SubResult = { kind: "literal"; value: string } | { kind: "cwdLocal" } | null;
 
-/** A $-form that cannot be bounded (globs, array subscripts, other ${…}
- *  forms, a leftover $). */
-const UNRESOLVED_RE = /[?*$`\[{}]/;
+/** Strictly unbounded value characters: a leftover $ expansion, a backtick
+ *  substitution, or brace expansion (several names, one value). */
+const UNRESOLVED_RE = /[$`{}]/;
+
+/** Glob characters. A glob never matches `/`, so a value with a glob tail
+ *  is bounded to its directory prefix — the prefix is the location. */
+const GLOB_TAIL_RE = /[*?[[]/;
+
+/** The directory a glob value cannot escape: the value up to the last `/`
+ *  before the first glob char (`/a/*.js` → `/a`; `*` → `""` = the cwd). */
+function globBaseDir(v: string): string {
+  const g = v.search(GLOB_TAIL_RE);
+  const cut = v.slice(0, g);
+  const i = cut.lastIndexOf("/");
+  return i === -1 ? cut : cut.slice(0, i);
+}
 
 /** Parse a `${NAME}` / `${NAME:-default}` expression (balanced braces).
  *  Other ${…} forms (arithmetic, ${#x}, …) → null. */
@@ -131,6 +144,9 @@ function resolveValue(raw: string, depth: number, assignments: Map<string, strin
   if (sq || dq) val = val.slice(1, -1);
   if (sq) {
     if (UNRESOLVED_RE.test(val)) return null;
+    if (GLOB_TAIL_RE.test(val)) {
+      return { kind: "literal", value: expandTilde(globBaseDir(val)) };
+    }
     return { kind: "literal", value: expandTilde(val) };
   }
   if (val === "") return null;
@@ -142,6 +158,12 @@ function resolveValue(raw: string, depth: number, assignments: Map<string, strin
   if (sub === null) return null;
   if (sub.kind === "cwdLocal") return sub; // whole-string substitution (substitute guarantees it)
   if (UNRESOLVED_RE.test(sub.value)) return null;
+  // `cat $F/*.js` with F bound: the glob tail stays inside F's directory —
+  // the directory IS the location (the 2026-08-31 log case: the `*` in the
+  // token's own tail used to void the whole binding).
+  if (GLOB_TAIL_RE.test(sub.value)) {
+    return { kind: "literal", value: expandTilde(globBaseDir(sub.value)) };
+  }
   return { kind: "literal", value: expandTilde(sub.value) };
 }
 
@@ -229,6 +251,22 @@ function resolveAt(
   sessionCwd: string,
   isInside: (p: string) => boolean,
 ): OneRef {
+  const base = effectiveCwds[idx] ?? null;
+  // Literal-path in-list: the value is exactly one of the words — name every
+  // concrete word (all inside → inside; any outside → the union of those).
+  if (ref.kind === "loopList") {
+    const outside: string[] = [];
+    for (const w of ref.words ?? []) {
+      const q = w.match(/^(['"])(.*)\1$/);
+      const t = expandTilde(q ? q[2] : w);
+      if (!path.isAbsolute(t) && base === null) return { kind: "sentinel", reason: "base" };
+      const p = resolvePathReal(t, base ?? sessionCwd);
+      if (!isInside(p)) outside.push(p);
+    }
+    return outside.length
+      ? { kind: "outside", paths: [...new Set(outside)] }
+      : { kind: "inside" };
+  }
   let sub: SubResult;
   if (ref.kind === "cwdLocal") {
     sub = { kind: "cwdLocal" }; // in-list words (bare / globs / $(find …)) are base-relative by construction
@@ -236,7 +274,6 @@ function resolveAt(
     sub = resolveValue(ref.raw, 0, visibleAssignments(segments, idx, assignments));
   }
   if (sub === null) return { kind: "sentinel", reason: "var" };
-  const base = effectiveCwds[idx] ?? null;
   let resolved: string;
   if (sub.kind === "cwdLocal") {
     if (base === null) return { kind: "sentinel", reason: "base" };

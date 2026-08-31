@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.12.0 — 2026-08-31
+
+Parser resolution of script bodies and loop in-lists — the three
+"unresolvable" shapes from the 2026-08-31 log now resolve statically
+(docs/dspa-redesign.md, D15).
+
+- **Script-body paths join the path set (fail-closed).** Path-like
+  literals in heredoc bodies and multi-line literal args (`python3 -
+  << 'EOF' … open('/var/lib/…') … EOF`, `node -e '…'`) are extracted and
+  checked like any shell argument — the script's filesystem access is
+  floor-visible from the first run, not only to the judge. URLs and
+  single-segment noise stay excluded.
+- **Glob-tailed values bind to their directory.** A glob never matches `/`,
+  so `F=/a/b; grep $F/*.js` resolves to `/a/b` (before: the `*` in the
+  token's own tail voided the binding → `runtime location unresolvable`).
+  Applies to quoted and substituted values; brace expansion stays a
+  sentinel (several names, one value).
+- **Literal-path loop in-lists name every word.** `for d in /a /b; do ls
+  "$d"; done` now resolves to the concrete dirs (before: one sentinel per
+  iteration — Always-for-dir could never apply, and every run re-prompted).
+  A word containing `$`, a glob, or `..` keeps the marker; a
+  symlink-escaping word names its real target (still outside, never
+  exempt).
+
 ## 3.11.0 — 2026-08-31
 
 One status widget: mode lines pinned on top, one line each.

@@ -573,6 +573,47 @@ noise.
   now LEADS the fall-through body (it used to trail it — off-screen on
   long prompts, which is why the stop was guessed from latency).
 
+### D15. Script bodies and loop in-lists resolve at the parser (2026-08-31)
+
+D13's path-report mining of the 2026-08-31 log surfaced three command
+shapes that stopped at `runtime location unresolvable` (or were only
+judge-visible) although the command statically resolves its own locations:
+
+- **Script-body paths join the path set (fail-closed).** Heredoc bodies
+  (`python3 << 'EOF' … open('/var/lib/…') … EOF`) and multi-line literal
+  args (`node -e '…'`) are opaque to the shell — the script's filesystem
+  access was visible only to the judge (the D13 report). Path-like
+  literals in those bodies (≥2 segments, `~`/`/` start, word chars; the
+  lookbehind + segment count reject URL tails and single-segment noise)
+  are extracted and join the static path set like any shell argument:
+  fail-closed, SAFE_SYSTEM_PATHS filter and dedup apply. A phantom path in
+  a commit-message heredoc prompts — accepted tradeoff: the script may
+  touch it.
+- **Glob-tail assignments bind to the directory.** `F=/a/b; grep $F/*.js` —
+  the `*` in the token's own tail voided the whole binding. A glob never
+  matches `/`, so a value with a glob tail is bounded by its prefix:
+  `globBaseDir` (`/a/*.js` → `/a`; `*` → the cwd) resolves the ref to the
+  directory the glob cannot escape. Applies to quoted values and
+  substituted values alike. Strictly unbounded characters are now
+  exactly `$`/backtick/brace — brace expansion is several names in one
+  value and stays a sentinel.
+- **Literal-path loop in-lists name every word.** `for d in ~/.x/a ~/.x/b;
+  do ls "$d"; done` — the in-list was opaque (a word could be an
+  expansion), so every iteration was a sentinel. When ALL words are pure
+  literals (no `$`, backtick, glob `*?[`, or `..` segments), the parser
+  mints a `loopList` opaque ref carrying the words; the resolver expands
+  each against its own base (tilde → real home, relative → segment base,
+  `resolvePathReal` — a symlink-escaping word names its REAL target, still
+  outside, never exempt). All inside → inside; any outside → the union of
+  those, concrete and grantable. Glob/$/`..` words stay opaque: the
+  expansion set is filesystem-dependent.
+
+Effect on the mined shapes: the heredoc `open()` target is floor-visible
+from the first run (concrete stop → grantable); `$F/*.js` binds to F's
+directory; `for d in …` names every literal dir, so Always-for-dir works
+per dir. The unresolvable sentinel now stops only what truly cannot be
+resolved.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -616,6 +657,9 @@ class"). Suite 3229.
   verdict carries an optional `paths` report; deterministic cross-check
   against the floor's own knowledge; `judgePaths` / `judgePathMisses`
   decision-log fields; `log-inspect.mjs dspa --paths` view). Suite 3486.
+- **Phase 3j — done** (2026-08-31): D15 (parser resolutions — script-body
+  paths join the path set; glob-tail assignment values bind to their
+  directory; literal-path loop in-lists name every word). Suite 3444.
 
 ## 5. Open questions (grill order)
 

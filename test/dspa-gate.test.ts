@@ -793,3 +793,65 @@ describe("confirmed resolutions (deterministic sentinel resolution)", () => {
     }
   });
 });
+
+describe("script-body and loop-list resolution (2026-08-31 log)", () => {
+  // Outside-base fixtures under $HOME (dot-prefixed — tmpdir is
+  // config-allowed, so a tmpdir dir would sit INSIDE the manual bar).
+  function makeOutsideDir(): { base: string; cleanup: () => void } {
+    const base = fs.mkdtempSync(path.join(os.homedir(), ".halter-gate-"));
+    fs.mkdirSync(path.join(base, "app"));
+    return {
+      base,
+      cleanup: () => fs.rmSync(base, { recursive: true, force: true }),
+    };
+  }
+
+  it("a for-loop over literal outside dirs is a CONCRETE outside-base stop, not an unresolvable-location stop", async () => {
+    const { base, cleanup } = makeOutsideDir();
+    try {
+      const r = await checkDspaGate(bashPd(`for d in ${base}/app ${base}; do ls "$d"; done`), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.reason).toContain("outside base");
+        expect(r.reason).not.toContain("unresolvable");
+        expect(r.reason).toContain(path.join(base, "app"));
+        expect(r.advisory).toBe(true);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("an assignment + glob tail names the assignment's directory at the floor", async () => {
+    const { base, cleanup } = makeOutsideDir();
+    try {
+      const r = await checkDspaGate(bashPd(`F=${base}/app; grep -l "Notes" $F/*.js`), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.reason).toContain(path.join(base, "app"));
+        expect(r.reason).not.toContain("unresolvable");
+        expect(r.advisory).toBe(true);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a heredoc script body's path stops the floor (fail-closed)", async () => {
+    const { base, cleanup } = makeOutsideDir();
+    try {
+      const r = await checkDspaGate(
+        bashPd(`python3 - << 'EOF'\nopen('${base}/app/main.js')\nEOF`),
+        store,
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.reason).toContain("outside base");
+        expect(r.reason).toContain(base);
+        expect(r.advisory).toBe(true);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+});
