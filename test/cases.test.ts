@@ -52,6 +52,35 @@ describe("bare-token symlink escape (end-to-end decision)", () => {
   });
 });
 
+// Loop in-list under an allowed root (/tmp): the values are statically
+// inside only if EVERY glob match really lives under the root (realpath-
+// verified). This row uses a PRIVATE tmpdir instead of the shared /tmp top
+// level: the static row globbed /tmp/* while the other ~44 test files create
+// and delete tmpdirs there in parallel, fs.globSync raced a mid-scan
+// deletion (ENOENT), the verification — correctly — failed closed, and the
+// auto-allow flipped to prompt (intermittent suite flake, 2026-08-31).
+describe("loop in-list under allowed root (hermetic fixture)", () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-allowed-root-"));
+    fs.mkdirSync(path.join(tmp, "a"));
+    fs.mkdirSync(path.join(tmp, "b"));
+  });
+  afterAll(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("glob in-list under the allowed root stays auto-allow (values statically inside — log FP)", async () => {
+    const cmd = `for d in ${tmp}/*/; do echo "== $d"; ls "$d" | head -5; done`;
+    const store = createStore();
+    const analysis = await analyzeCommand(cmd, cwd);
+    const decision = await decide({ type: "bash", command: cmd, cwd }, store);
+    expect(analysis.safety.isSimple).toBe(true);
+    expect(analysis.safety.hasUnsafePattern).toBe(false);
+    expect(decision.kind).toBe("auto-allow");
+  });
+});
+
 // ─── Run tests ───
 
 describe.each(cases)("$desc", ({ cmd, simple: expSimple, unsafe: expUnsafe, decision: expDecision }) => {
