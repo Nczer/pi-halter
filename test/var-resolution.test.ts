@@ -47,6 +47,11 @@ describe("isCwdLocalSubstitution", () => {
     "find . -name x | uniq -c",
     "find . | xargs grep -l pat",
     "find . -name x | xargs grep -l -e pat",
+    "grep -l pat config/",
+    "grep -rln 'export function expandTilde' config/ analysis/ | head -1",
+    "grep -rl pat . | sort -u",
+    "grep -l 'a b' config/ | head -1",
+    "grep -l \"pat\" dir",
   ];
   const rejected = [
     "find /abs",
@@ -67,6 +72,16 @@ describe("isCwdLocalSubstitution", () => {
     "find $x",
     "find . -name \"$x\"",
     "ls .",
+    "grep -l pat",
+    "grep -l pat /abs",
+    "grep -l pat ..",
+    "grep pat dir",
+    "grep -el pat dir",
+    "grep -f /p dir",
+    "grep --include=x -l pat dir",
+    "grep -l pat dir | wc -l",
+    "grep -l 'a b' '/etc x'",
+    "grep -l pat - | head -1",
     "",
   ];
 
@@ -323,6 +338,46 @@ describe("literal-path loop in-lists (2026-08-31 log case)", () => {
   });
 });
 
+describe("relative-glob loop in-lists (2026-08-31 log case)", () => {
+  it("bounds the glob against the segment base — inside when there is no cd", async () => {
+    const r = await resolve('for f in */x.ts; do cat "$f"; done');
+    expect(r.paths).toEqual([]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("after a cd the effective base is named (grantable), not sentinel-prompted", async () => {
+    const r = await resolve("cd /etc && for f in */x.ts; do cat \"$f\"; done");
+    expect(r.paths).toEqual(["/etc"]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("a mixed bare + relative-glob in-list is bounded the same way", async () => {
+    const r = await resolve('for f in dir/*.ts notes.txt; do cat "$f"; done');
+    expect(r.paths).toEqual([]);
+    expect(r.unresolved).toEqual([]);
+  });
+});
+
+describe("cwd-local grep -l substitution (2026-08-31 log case)", () => {
+  it("f=$(grep -rln …) binds to the segment base — inside when there is no cd", async () => {
+    const r = await resolve('f=$(grep -rln \'pat\' config/ analysis/ | head -1); cat "$f"');
+    expect(r.paths).toEqual([]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("after a cd the bound base is named (grantable), not sentinel-prompted", async () => {
+    const r = await resolve('cd /etc && f=$(grep -rln \'pat\' config/ | head -1); cat "$f"');
+    expect(r.paths).toEqual(["/etc"]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("the sed line-number glue form of the same substitution stays unresolved-free", async () => {
+    const r = await resolve('sed -n "$(grep -rln \'pat\' config/ | head -1),+16p" file.txt');
+    expect(r.paths).toEqual([]);
+    expect(r.unresolved).toEqual([]);
+  });
+});
+
 describe("decide level (the 2026-08-31 log shapes)", () => {
   // Outside-cwd dirs must EXIST (hermetic temp dirs under $HOME — see
   // hermetic-cwd.ts: tmpdir is config-allowed) so outsideDirs names the
@@ -368,5 +423,25 @@ describe("decide level (the 2026-08-31 log shapes)", () => {
     expect(d.kind).toBe("prompt");
     if (d.kind !== "prompt" || d.promptData.type !== "bash") return;
     expect(d.promptData.outsideDirs).toContain(path.join(base, "scripts"));
+  });
+
+  it("a relative-glob loop after a cd prompts for the CONCRETE dir, not an unresolvable sentinel", async () => {
+    const d = await decide(
+      { type: "bash", command: `cd ${base} && for f in *.ts; do cat "$f"; done`, cwd: sessionCwd },
+      createStore(),
+    );
+    expect(d.kind).toBe("prompt");
+    if (d.kind !== "prompt" || d.promptData.type !== "bash") return;
+    expect(d.promptData.outsideDirs).toContain(base);
+  });
+
+  it("a grep -l substitution bound under a cd'd outside dir prompts for that dir (concrete, not a sentinel)", async () => {
+    const d = await decide(
+      { type: "bash", command: `cd ${base} && f=$(grep -rln 'pat' sub/ | head -1); cat "$f"`, cwd: sessionCwd },
+      createStore(),
+    );
+    expect(d.kind).toBe("prompt");
+    if (d.kind !== "prompt" || d.promptData.type !== "bash") return;
+    expect(d.promptData.outsideDirs).toContain(base);
   });
 });

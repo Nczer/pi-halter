@@ -306,6 +306,30 @@ function isBareName(w: string): boolean {
 }
 
 /**
+ * A relative in-list word whose expansion cannot leave the runtime cwd:
+ * not absolute, not ~/, no `..` segment, no runtime expansion. Globs never
+ * match `/`, so `*`/x.ts or `dir/*` stays under the cwd — same bounding as
+ * a bare name (the resolver bounds it against the tracked effective base).
+ * The 2026-08-31 log case (for f in `*`/halter/index.ts; do cat "$f";
+ * done after a cd) degraded to an unresolvable sentinel although the base was
+ * known. Quoted words dequote first (a single-quoted glob is a literal
+ * relative name — still cwd-local); a double-quoted expansion stays opaque.
+ */
+function isCwdLocalRelWord(w: string): boolean {
+  let t = w;
+  const q = w.match(/^(['"])(.*)\1$/);
+  if (q) {
+    if (q[1] === '"' && /[$`]/.test(q[2])) return false; // expansion inside double quotes
+    t = q[2];
+  }
+  if (!t) return false;
+  if (/[`$]/.test(t)) return false; // runtime expansion — location not knowable
+  if (t.startsWith("/") || t.startsWith("~")) return false; // absolute / home-pinned
+  if (/(^|\/)\.\.(\/|$)/.test(t)) return false; // .. segment escapes the base
+  return true;
+}
+
+/**
  * True when an absolute directory is under (or is) the session cwd or an
  * allowed read/write root — lexically, or through realpath (symlinked
  * roots). A non-existent directory fails closed.
@@ -466,10 +490,10 @@ function loopBoundRef(val: string): { name: string; rest: string | null } | null
  *    as `prefix/$var/*.ts`) where the in-list is bounded — every expansion
  *    lands under prefixDir (see isBoundedInListWord).
  *  - "cwdLocal": a loop-bound reference whose in-list is cwd-local (bare
- *    names, globs, `$(find …)` words) — the value is relative to the
- *    RUNTIME cwd; the resolver must bound it against the tracked effective
- *    base (the old blanket exemption skipped that check entirely — the
- *    `cd /etc && for f in a b; do cat $f; done` hole).
+ *    names, relative globs, `$(find …)` words) — the value is relative to
+ *    the RUNTIME cwd; the resolver must bound it against the tracked
+ *    effective base (the old blanket exemption skipped that check entirely
+ *    — the `cd /etc && for f in a b; do cat $f; done` hole).
  *  - "loopList": a loop-bound reference whose in-list is all LITERAL paths
  *    (no expansion, no glob, no `..`) — the value is exactly one of the
  *    words; the resolver names the concrete words (a `for d in /a /b` over
@@ -623,6 +647,13 @@ function opaqueRef(node: TSNode, arg: string, cwd: string, segIdx: number, segme
       // locations the resolver can name.
       if (inList.every(isLiteralInListWord)) {
         return mk("loopList", undefined, inList);
+      }
+      // Relative-glob in-list (*/x.ts, dir/*, mixed bare+glob): every
+      // expansion lands under the runtime cwd — bounded like a bare name
+      // against the tracked effective base. Checked after loopList so an
+      // all-literal in-list keeps its concrete-word precision.
+      if (inList.every(isCwdLocalRelWord)) {
+        return mk("cwdLocal");
       }
       // Mixed (bare + root-pinned) or expanded in-list — the value set spans
       // bases — opaque (the resolver may still bind a prefixed form below).
