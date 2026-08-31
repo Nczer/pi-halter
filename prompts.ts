@@ -89,19 +89,39 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
   const { broaderPaths } = prompt;
   const hasBroaderPaths = !!(prompt.includeBroaderOption && broaderPaths && broaderPaths.length > 0);
 
-  // File prompts with a parent-directory hierarchy (inside or outside cwd)
-  if (hasBroaderPaths) {
-    if (prompt.includeFileOption) {
-      // Outside cwd: path / file / broader umbrella (all parents)
-      return [
+  // File prompts with a parent-directory hierarchy (inside or outside cwd).
+  // Layout marker: fileHierarchy when set (buildFilePrompt), else the legacy
+  // includeFileOption convention (test fixtures). An option is offered only
+  // when its scope is not already covered by a standing session grant —
+  // buildFilePrompt pre-filters broaderPaths and sets the *Covered flags.
+  const hierarchy = hasBroaderPaths
+    ? prompt.fileHierarchy ?? (prompt.includeFileOption ? "outside" : "inside")
+    : null;
+  if (hierarchy === "outside") {
+    // path (outsideDir) / file / broader umbrella (all uncovered parents)
+    const options: AlwaysOption[] = [];
+    if (!prompt.pathOptionCovered) {
+      options.push(
         confirmOpt(`Always (path): ${prompt.alwaysLabel}`, prompt.tier2Everything, () => { cb.onAlways(); return "always"; }),
-        confirmOpt(`Always (file): ${prompt.alwaysFileLabel}`, prompt.tier2File!, () => { cb.onAlwaysFile(); return "alwaysFile"; }),
-        { kind: "umbrella", label: "Always (broader)", startIdx: 0 },
-      ];
+      );
     }
-    // Inside cwd: file / path (immediate parent) / broader umbrella (remaining parents)
-    const options: AlwaysOption[] = [
-      confirmOpt(`Always (file): ${prompt.alwaysLabel}`, prompt.tier2Everything, () => { cb.onAlways(); return "always"; }),
+    if (!prompt.fileOptionCovered) {
+      options.push(
+        confirmOpt(`Always (file): ${prompt.alwaysFileLabel}`, prompt.tier2File!, () => { cb.onAlwaysFile(); return "alwaysFile"; }),
+      );
+    }
+    options.push({ kind: "umbrella", label: "Always (broader)", startIdx: 0 });
+    return options;
+  }
+  if (hierarchy === "inside") {
+    // file / path (first uncovered parent) / broader umbrella (remaining parents)
+    const options: AlwaysOption[] = [];
+    if (!prompt.fileOptionCovered) {
+      options.push(
+        confirmOpt(`Always (file): ${prompt.alwaysLabel}`, prompt.tier2Everything, () => { cb.onAlways(); return "always"; }),
+      );
+    }
+    options.push(
       confirmOpt(
         `Always (path): ${broaderPaths![0].label}`,
         {
@@ -111,7 +131,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
         },
         () => { cb.onAlwaysBroader?.(broaderPaths![0].dir); return "always"; },
       ),
-    ];
+    );
     if (broaderPaths!.length > 1) {
       options.push({ kind: "umbrella", label: "Always (broader)", startIdx: 1 });
     }
@@ -130,7 +150,9 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
       };
 
   const options: AlwaysOption[] = [];
-  if (prompt.includeAlwaysOption) {
+  // *Covered flags: the option's scope already has a standing session grant
+  // (file prompts only — bash/tool prompts never set them).
+  if (prompt.includeAlwaysOption && !prompt.pathOptionCovered) {
     options.push(
       confirmOpt(
         prompt.includeFileOption ? `Always (path): ${prompt.alwaysLabel}` : `Always: ${prompt.alwaysLabel}`,
@@ -139,7 +161,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
       ),
     );
   }
-  if (prompt.includeFileOption) {
+  if (prompt.includeFileOption && !prompt.fileOptionCovered) {
     options.push(confirmOpt(`Always (file): ${prompt.alwaysFileLabel}`, prompt.tier2File!, () => { cb.onAlwaysFile(); return "alwaysFile"; }));
   }
   if (prompt.includePathsOption) {

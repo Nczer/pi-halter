@@ -88,7 +88,10 @@ export async function showPrompt(
     resolutions = merged;
   }
 
-  let prompt = buildPrompt(decision, resolutions ?? undefined, confirmedTokens);
+  // Coverage predicate: "read" checks read+write grants, so a standing
+  // session grant that covers a prompt's scope suppresses its Always option.
+  const isCovered = (dir: string) => store.isInsideAllowedDir(dir, "read");
+  let prompt = buildPrompt(decision, resolutions ?? undefined, confirmedTokens, isCovered);
 
   // /dspa fall-through: explain why the operation was not auto-allowed —
   // the gate reason, and/or the judge verdict that declined to approve.

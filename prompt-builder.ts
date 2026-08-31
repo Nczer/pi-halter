@@ -22,8 +22,18 @@ export interface BuiltPrompt {
   alwaysLabel: string;
   alwaysPathsLabel?: string;
   alwaysFileLabel?: string;
-  /** Broader parent-directory alternatives for file prompts (1–3 levels up). */
+  /** Broader parent-directory alternatives for file prompts (1–3 levels up);
+   *  pre-filtered — entries already covered by a standing session grant are
+   *  dropped (re-granting a subset of a grant is noise, not a choice). */
   broaderPaths?: { label: string; dir: string }[];
+  /** File prompt parent-hierarchy layout: outside-cwd (primary = the
+   *  outside-dir grant) vs inside-cwd (primary = the file grant). */
+  fileHierarchy?: "inside" | "outside";
+  /** File prompt: the primary/path Always option's scope is already covered
+   *  by a standing session grant — suppressed. */
+  pathOptionCovered?: boolean;
+  /** File prompt: the file option's scope is already covered — suppressed. */
+  fileOptionCovered?: boolean;
   /** Whether the operation is a write (vs read) — used for accurate prompt text. */
   isWriteOp?: boolean;
   /** D10: bare package names of fetchable run forms in the command — tier-1
@@ -107,6 +117,9 @@ export function buildPrompt(
   decision: PromptDecision,
   resolutions?: ResolutionMap,
   confirmedTokens?: Set<string>,
+  /** A dir is "covered" when a standing session grant already covers it —
+   *  file prompts suppress Always options whose scope is covered. */
+  isCovered?: (dir: string) => boolean,
 ): BuiltPrompt {
   const { promptData } = decision;
 
@@ -114,7 +127,7 @@ export function buildPrompt(
     case "bash":
       return buildBashPrompt(promptData, resolutions, confirmedTokens);
     case "file":
-      return buildFilePrompt(promptData);
+      return buildFilePrompt(promptData, isCovered);
     case "tool":
       return buildToolPrompt(promptData);
   }
@@ -341,9 +354,11 @@ function buildBashPrompt(
 
 function buildFilePrompt(
   data: FilePromptData,
+  isCovered?: (dir: string) => boolean,
 ): BuiltPrompt {
   const { action, filePath, resolved, cwd, outsideDir, isWriteOp, warnedRule, symlinkHint, exists } = data;
   const insideCwd = outsideDir === null;
+  const covered = (d: string) => (isCovered ? isCovered(d) : false);
   const symlinkLine = symlinkHint ? `\n\n\u{1F517} Resolved via symlink: ${symlinkHint}` : "";
   const warnLine = warnedRule ? `\n\n\u26a0\ufe0f Matches credential pattern "${warnedRule}" — may contain secrets or tokens.` : "";
   const existsNote = exists && action === "Write"
@@ -382,6 +397,11 @@ function buildFilePrompt(
         dir: cur,
       });
     }
+    // Coverage: an Always option whose scope a standing session grant already
+    // covers is suppressed (re-granting a subset of a grant is noise, not a
+    // choice). broaderPaths is pre-filtered so the layout's [0]/umbrella math
+    // follows the surviving list.
+    const kept = broaderPaths.filter((b) => !covered(b.dir));
     return {
       title: action,
       body: `Path:\n  ${filePath}${warnLine}${symlinkLine}${existsNote}\n`,
@@ -389,16 +409,18 @@ function buildFilePrompt(
         title: `Confirm Always Allow`,
         body: `${scopeNote}\n\n  ${resolved}`,
       },
-      tier2Broader: {
+      tier2Broader: kept.length > 0 ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will ${dirScope}:\n\n  ${path.join(parentDir, '*')}`,
-      },
+        body: `"Always Yes" will ${dirScope}:\n\n  ${path.join(kept[0].dir, '*')}`,
+      } : undefined,
       includePathsOption: false,
       includeFileOption: false,
-      includeBroaderOption: broaderPaths.length > 0,
+      includeBroaderOption: kept.length > 0,
       includeAlwaysOption: true,
       alwaysLabel: `${action} ${fileName}`,
-      broaderPaths: broaderPaths.length > 0 ? broaderPaths : undefined,
+      fileHierarchy: "inside",
+      fileOptionCovered: covered(parentDir),
+      broaderPaths: kept.length > 0 ? kept : undefined,
       pathGrantDirs: [],
     };
   }
@@ -434,6 +456,11 @@ function buildFilePrompt(
 
   const outsideDirGlob = outsideDir === "/" ? resolved : path.join(outsideDir, '*');
 
+  // Coverage — same rule as the inside branch: a standing session grant that
+  // already covers a scope suppresses the Always option for it. The umbrella
+  // keeps offering genuinely new (uncovered) parent scopes.
+  const kept = broaderPaths.filter((b) => !covered(b.dir));
+
   return {
     title: `\u26a0\ufe0f ${action} outside cwd`,
     body: `Path:\n  ${filePath}\n\n\u26a0\ufe0f Outside cwd: ${outsideDir}${warnLine}${symlinkLine}${existsNote}\n`,
@@ -447,11 +474,14 @@ function buildFilePrompt(
     },
     includePathsOption: false,
     includeFileOption: true,
-    includeBroaderOption: broaderPaths.length > 0,
+    includeBroaderOption: kept.length > 0,
     includeAlwaysOption: true,
     alwaysLabel: tier2Label,
     alwaysFileLabel: `${action} ${fileName}`,
-    broaderPaths: broaderPaths.length > 0 ? broaderPaths : undefined,
+    fileHierarchy: "outside",
+    pathOptionCovered: covered(outsideDir),
+    fileOptionCovered: covered(path.dirname(resolved)),
+    broaderPaths: kept.length > 0 ? kept : undefined,
     pathGrantDirs: [],
   };
 }
