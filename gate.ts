@@ -5,7 +5,7 @@ import { pdTargetLabel } from "./prompt-builder";
 import { logDecision, logUnresolved, type DspModeTag } from "./decision-log";
 import { showPrompt, type DspaFallthrough } from "./prompt-flow";
 import type { Store } from "./store";
-import { isDspaActive, recordDspaAutoAllowed, updateDspaWidget } from "./dspa-mode";
+import { isDspaActive, recordDspaAutoAllowed, recordDspaStop, updateDspaWidget } from "./dspa-mode";
 import { isDspatActive } from "./dspat-mode";
 import { checkDspaGate } from "./dspa-gate";
 import { getJudgeVerdict, getStage2Verdict, judgeStatus, extractScriptPayload } from "./judge-prompt";
@@ -151,6 +151,10 @@ async function tryDspaAutoAllow(
       const v1 = await getJudgeVerdict(pd, ctx, store);
       const v2 = await getStage2Verdict(pd, ctx, store);
       const final = (v2 ?? v1) ?? null;
+      // The stop is the FLOOR's (any verdict here is advisory) — count it as
+      // a gate stop, with the verdict's model for counter scoping.
+      recordDspaStop("gate", final?.model ?? null);
+      updateDspaWidget(ctx);
       return {
         autoAllowed: false,
         fallthrough: {
@@ -160,6 +164,8 @@ async function tryDspaAutoAllow(
         },
       };
     }
+    recordDspaStop("gate", null);
+    updateDspaWidget(ctx);
     return { autoAllowed: false, fallthrough: { gate: gateResult, verdict: null, stage: null } };
   }
   // Stage 1 — stateless (the packet's static analysis is the whole input).
@@ -185,6 +191,13 @@ async function tryDspaAutoAllow(
   } else if (v1 && !v2) {
     note = "stage 2 (session context) unavailable — stateless verdict only";
   }
+  // The judge (or its absence) is the stop here: classify by the FINAL
+  // verdict — no verdict at all joins the defer (fail-safe) bucket.
+  recordDspaStop(
+    final === null ? "defer" : final.approve === "deny" ? "deny" : final.approve === "defer" ? "defer" : "declined",
+    final?.model ?? null,
+  );
+  updateDspaWidget(ctx);
   return {
     autoAllowed: false,
     fallthrough: { gate: gateResult, verdict: final, stage: v2 ? 2 : v1 ? 1 : null, note },

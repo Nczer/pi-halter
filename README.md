@@ -172,7 +172,7 @@ rule-generator.ts                 Derives auto-allow rules from PromptData (on-d
 ├── dsp-mode.ts                   DSP mode toggle — bypass all halter checks (warning line on the status widget)
 ├── judge.ts                      Judge settings + the one-shot model call (stateless)
 ├── judge-prompt.ts               Judge packet, verdict, on-demand explanation
-├── dspa-mode.ts                  /dspa toggle + auto-allow counter (status-widget line)
+├── dspa-mode.ts                  /dspa toggle + session-health counters (auto-allow/reject/defer/declined/gate — compact widget line)
 ├── dspa-gate.ts                  Deterministic hard floor for /dspa auto-allow
 ├── session-context.ts            Reasoning-blind session context for the stage-2 intent pass
 ├── dspat-mode.ts                 /dspat toggle + agreement stats (status-widget line)

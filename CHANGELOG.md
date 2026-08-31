@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.14.0 — 2026-09-01
+
+DSPA widget line: compact session-health counts (a g r c d) replace
+"auto-allowed N this session".
+
+- The DSPA line now renders the session tally compactly, non-zero only,
+  in stop-source order: `79a 3g 2r 1c 2d` — `a` auto-allowed, `g` floor
+  stop, `r` judge REJECT, `c` approve-but-above-authority (declined),
+  `d` DEFER or no verdict (the fail-safe bucket). `last: <target>` stays
+  as the tail detail (dropped first on narrow terminals, as before).
+- Stops are recorded at the single fall-through point
+  (`tryDspaAutoAllow` in gate.ts); counters are model-scoped like the
+  auto-allow count (a model switch resets all; a verdict-less floor stop
+  never resets).
+- Observational precursor to the D4 3/20 reject-escalation (Phase 3b,
+  still unimplemented) — see the D4 addendum in docs/dspa-redesign.md.
+
 ## 3.13.0 — 2026-09-01
 
 Package trust becomes the ONLY grant for fetchable run forms; the
