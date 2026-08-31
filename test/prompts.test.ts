@@ -864,3 +864,93 @@ describe("twoTierAlwaysPrompt: D10 trust option", () => {
     expect(onTrust).not.toHaveBeenCalled();
   });
 });
+
+// ── Covered scopes: Always options suppressed (standing session grant) ──
+
+describe("twoTierAlwaysPrompt: covered Always options are suppressed", () => {
+  // outside-cwd file prompt where a standing grant already covers both the
+  // outside dir and the file dir; the uncovered parents stay as umbrella.
+  const outsideCovered = makePrompt({
+    fileHierarchy: "outside",
+    includeFileOption: true,
+    includeBroaderOption: true,
+    alwaysLabel: "Write memory/*",
+    alwaysFileLabel: "index.ts",
+    pathOptionCovered: true,
+    fileOptionCovered: true,
+    broaderPaths: [
+      { label: "Write /a/agent/*", dir: "/a/agent" },
+      { label: "Write /a/*", dir: "/a" },
+    ],
+  });
+
+  it("offers only the umbrella when path + file scopes are covered", async () => {
+    const cb = makeCallbacks();
+    const ctx = makeCtx([0]);
+    const result = await twoTierAlwaysPrompt(
+      outsideCovered, store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+    );
+    expect(result).toBe("yes");
+    expect(ctx.__selects[0]).toEqual(["Yes", "Always (broader)", "No (with reason)", "No"]);
+  });
+
+  it("umbrella sub-menu lists only the (pre-filtered) uncovered parents", async () => {
+    const cb = makeCallbacks();
+    // tier-1: umbrella (1), sub-menu: second entry (1) → /a, confirm (0)
+    const ctx = makeCtx([1, 1, 0]);
+    const result = await twoTierAlwaysPrompt(
+      outsideCovered, store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+    );
+    expect(result).toBe("always");
+    expect(cb.onAlwaysBroader).toHaveBeenCalledWith("/a");
+    expect(ctx.__selects[1]).toEqual(["Write /a/agent/*", "Write /a/*", "Back"]);
+  });
+
+  it("no Always options at all when every scope is covered", async () => {
+    const allCovered = makePrompt({
+      fileHierarchy: "outside",
+      includeFileOption: true,
+      includeBroaderOption: false,
+      alwaysLabel: "Write memory/*",
+      alwaysFileLabel: "index.ts",
+      pathOptionCovered: true,
+      fileOptionCovered: true,
+    });
+    const cb = makeCallbacks();
+    const ctx = makeCtx([0]);
+    const result = await twoTierAlwaysPrompt(
+      allCovered, store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+    );
+    expect(result).toBe("yes");
+    expect(ctx.__selects[0]).toEqual(["Yes", "No (with reason)", "No"]);
+  });
+
+  it("inside layout: covered file option drops only the file entry", async () => {
+    const insideCovered = makePrompt({
+      fileHierarchy: "inside",
+      includeBroaderOption: true,
+      fileOptionCovered: true,
+      alwaysLabel: "index.ts",
+      broaderPaths: [
+        { label: "Read project/*", dir: "/home/user/project" },
+        { label: "Read /home/user/*", dir: "/home/user" },
+      ],
+    });
+    const cb = makeCallbacks();
+    const ctx = makeCtx([0]);
+    await twoTierAlwaysPrompt(
+      insideCovered, store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+    );
+    expect(ctx.__selects[0]).toEqual([
+      "Yes",
+      "Always (path): Read project/*",
+      "Always (broader)",
+      "No (with reason)",
+      "No",
+    ]);
+  });
+});

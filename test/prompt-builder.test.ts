@@ -892,3 +892,73 @@ describe("bash prompt: LLM/confirmed token resolutions", () => {
     expect(s).not.toContain(long);
   });
 });
+
+// ── Coverage: Always options whose scope a standing grant covers ────────
+
+describe("file prompt: covered scopes are suppressed", () => {
+  const extGrant = "/home/user/.pi/agent/extensions";
+  const covered = (dir: string) => dir === extGrant || dir.startsWith(extGrant + "/");
+
+  it("outside cwd: path + file options covered, broader list pre-filtered", () => {
+    // a standing grant for extensions/ covers both the outside dir and the
+    // file dir — only genuinely new parents remain.
+    const prompt = buildPrompt(fileDecision({
+      action: "Write",
+      isWriteOp: true,
+      outsideDir: "/home/user/.pi/agent/extensions/memory",
+      resolved: "/home/user/.pi/agent/extensions/memory/index.ts",
+    }), undefined, undefined, covered);
+    expect(prompt.fileHierarchy).toBe("outside");
+    expect(prompt.pathOptionCovered).toBe(true);
+    expect(prompt.fileOptionCovered).toBe(true);
+    expect(prompt.includeBroaderOption).toBe(true);
+    expect(prompt.broaderPaths!.map((p) => p.dir)).toEqual([
+      "/home/user/.pi/agent",
+      "/home/user/.pi",
+    ]);
+  });
+
+  it("outside cwd: no grants → nothing suppressed (status quo)", () => {
+    const prompt = buildPrompt(fileDecision({
+      action: "Write",
+      isWriteOp: true,
+      outsideDir: "/home/user/.pi/agent/extensions/memory",
+      resolved: "/home/user/.pi/agent/extensions/memory/index.ts",
+    }));
+    expect(prompt.fileHierarchy).toBe("outside");
+    expect(prompt.pathOptionCovered).toBe(false);
+    expect(prompt.fileOptionCovered).toBe(false);
+    expect(prompt.broaderPaths!.map((p) => p.dir)).toEqual([
+      "/home/user/.pi/agent/extensions",
+      "/home/user/.pi/agent",
+      "/home/user/.pi",
+    ]);
+  });
+
+  it("inside cwd: containing dir granted → file option suppressed, parent filtered", () => {
+    const srcGrant = "/home/user/project/src";
+    const coveredSrc = (dir: string) => dir === srcGrant || dir.startsWith(srcGrant + "/");
+    const prompt = buildPrompt(fileDecision({}), undefined, undefined, coveredSrc);
+    expect(prompt.fileHierarchy).toBe("inside");
+    expect(prompt.fileOptionCovered).toBe(true);
+    expect(prompt.broaderPaths!.map((p) => p.dir)).toEqual([
+      "/home/user/project",
+      "/home/user",
+      "/home",
+    ]);
+    // tier2Broader tracks the surviving first level, not the filtered-out one
+    expect(prompt.tier2Broader!.body).toContain("/home/user/project/*");
+  });
+
+  it("inside cwd: no grants → status quo", () => {
+    const prompt = buildPrompt(fileDecision({}));
+    expect(prompt.fileHierarchy).toBe("inside");
+    expect(prompt.fileOptionCovered).toBe(false);
+    expect(prompt.broaderPaths!.map((p) => p.dir)).toEqual([
+      "/home/user/project/src",
+      "/home/user/project",
+      "/home/user",
+      "/home",
+    ]);
+  });
+});
