@@ -478,7 +478,6 @@ describe("bash", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe("untrusted package (npx unknown-tool)");
-      expect(r.untrustedPackages).toEqual(["unknown-tool"]);
     }
   });
 

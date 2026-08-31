@@ -278,14 +278,47 @@ describe("bash labels", () => {
     expect(prompt.alwaysPathsLabel).toBeUndefined();
   });
 
-  it("alwaysBroaderLabel shows parent command when broader option enabled", () => {
-    const prompt = buildPrompt(bashDecision({ command: "npm test", signatures: ["npm test"], needsCommandApproval: true }));
-    expect(prompt.alwaysBroaderLabel).toBe("npm *");
+  it("fetchable run forms are granted by trust, not the command tier", () => {
+    const prompt = buildPrompt(bashDecision({
+      command: "npx tsc",
+      segments: ["npx tsc"],
+      signatures: ["npx tsc"],
+      nonAllowedSegmentIndices: [0],
+      needsCommandApproval: true,
+      fetchableForms: [{ sig: "npx tsc", pkg: "tsc" }],
+    }));
+    expect(prompt.trustPackages).toEqual(["tsc"]);
+    expect(prompt.includeAlwaysOption).toBe(false);
+    expect(prompt.includeBroaderOption).toBe(false);
+    expect(prompt.alwaysLabel).toBe("");
   });
 
-  it("alwaysBroaderLabel is undefined when broader option disabled", () => {
-    const prompt = buildPrompt(bashDecision({ signatures: ["rm"], needsCommandApproval: true }));
-    expect(prompt.alwaysBroaderLabel).toBeUndefined();
+  it("mixed command: only the fetchable sig drops out of the command tier", () => {
+    const prompt = buildPrompt(bashDecision({
+      command: "npx tsc && npm test",
+      segments: ["npx tsc", "npm test"],
+      signatures: ["npx tsc", "npm test"],
+      nonAllowedSegmentIndices: [0, 1],
+      needsCommandApproval: true,
+      fetchableForms: [{ sig: "npx tsc", pkg: "tsc" }],
+    }));
+    expect(prompt.trustPackages).toEqual(["tsc"]);
+    expect(prompt.alwaysLabel).toBe("npm test *");
+    expect(prompt.tier2Everything.body).toContain("npm test *");
+    expect(prompt.tier2Everything.body).not.toContain("npx tsc");
+  });
+
+  it("same package across run forms dedupes to one trust entry", () => {
+    const prompt = buildPrompt(bashDecision({
+      command: "npx tsc && uvx tsc",
+      segments: ["npx tsc", "uvx tsc"],
+      signatures: ["npx tsc", "uvx tsc"],
+      nonAllowedSegmentIndices: [0, 1],
+      needsCommandApproval: true,
+      fetchableForms: [{ sig: "npx tsc", pkg: "tsc" }, { sig: "uvx tsc", pkg: "tsc" }],
+    }));
+    expect(prompt.trustPackages).toEqual(["tsc"]);
+    expect(prompt.includeAlwaysOption).toBe(false);
   });
 });
 
@@ -462,10 +495,10 @@ describe("file labels and tier2", () => {
     expect(prompt.alwaysLabel).toContain("index.ts");
   });
 
-  it("alwaysBroaderLabel shows directory for inside cwd", () => {
+  it("broaderPaths label shows directory for inside cwd", () => {
     const prompt = buildPrompt(fileDecision({ action: "Read", outsideDir: null }));
-    expect(prompt.alwaysBroaderLabel).toContain("src");
-    expect(prompt.alwaysBroaderLabel).toContain("/*");
+    expect(prompt.broaderPaths![0].label).toContain("src");
+    expect(prompt.broaderPaths![0].label).toContain("/*");
   });
 
   it("generates tier2 file option for outside cwd", () => {

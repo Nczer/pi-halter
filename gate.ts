@@ -157,7 +157,6 @@ async function tryDspaAutoAllow(
           gate: gateResult,
           verdict: final,
           stage: v2 ? 2 : v1 ? 1 : null,
-          untrustedPackages: gateResult.untrustedPackages,
         },
       };
     }

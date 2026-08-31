@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Decision } from "../decision-engine";
+import type { Decision, PromptDecision } from "../decision-engine";
 
 const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn(),
@@ -28,7 +28,17 @@ vi.mock("../prompts", () => ({ twoTierAlwaysPrompt: promptSpy }));
 vi.mock("../path-resolver", () => ({ resolveUnresolvedPaths: resolverMock }));
 vi.mock("../prompt-builder", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../prompt-builder")>()),
-  buildPrompt: () => ({ title: "T", body: "B", pathGrantDirs: ["/x/a", "/x/b"], resolverDirs: ["/x/a", "/x/b"] }),
+  // Mirrors the real builder's trust contract: trustPackages derives from
+  // the decision's fetchable forms (the builder, not the flow, computes it).
+  buildPrompt: (decision?: any) => ({
+    title: "T",
+    body: "B",
+    pathGrantDirs: ["/x/a", "/x/b"],
+    resolverDirs: ["/x/a", "/x/b"],
+    trustPackages: decision?.promptData?.fetchableForms?.length
+      ? [...new Set(decision.promptData.fetchableForms.map((f: any) => f.pkg))]
+      : undefined,
+  }),
 }));
 vi.mock("../widget", () => ({ updateWidget: () => {} }));
 vi.mock("../rule-generator", () => ({
@@ -203,17 +213,39 @@ describe("/dspa fall-through", () => {
 
   it("gate blocked on untrusted package → 🚧 line + advisory verdict block (D10)", async () => {
     const dspa: DspaFallthrough = {
-      gate: { ok: false, reason: "untrusted package (npx evil-pkg)", untrustedPackages: ["evil-pkg"] },
+      gate: { ok: false, reason: "untrusted package (npx evil-pkg)" },
       verdict: { model: "llama-cpp/qwen", explanation: "Dev tool in use this session.", approve: "approve", risk: "low", reason: "dev tool", latencyMs: 10, cached: false },
       stage: 2,
-      untrustedPackages: ["evil-pkg"],
     };
-    await showPrompt(bashDecision(), ctx, store, dspa);
+    // The decision's fetchable form (from the same analysis the gate saw)
+    // is what surfaces the Trust option — not a field on the fall-through.
+    const decision: PromptDecision = {
+      kind: "prompt",
+      promptData: {
+        type: "bash",
+        command: "npx evil-pkg",
+        cwd: "/home/user/project",
+        outsideDirs: [],
+        segments: ["npx evil-pkg"],
+        signatures: ["npx evil-pkg"],
+        relativeToolIds: [],
+        nonAllowedSegmentIndices: [0],
+        riskDangerous: false,
+        riskSeverity: null,
+        riskReasons: [],
+        hasUnsafePattern: false,
+        credentialRule: null,
+        needsCommandApproval: true,
+        needsPathApproval: false,
+        fetchableForms: [{ sig: "npx evil-pkg", pkg: "evil-pkg" }],
+      },
+    };
+    await showPrompt(decision, ctx, store, dspa);
     const body = shownPrompt().body;
     expect(body).toContain("🚧 DSPA: not auto-allowed — untrusted package (npx evil-pkg)");
     expect(body).toContain("💭 Judge: Dev tool in use this session.");
     expect(body).toContain("→ suggests: APPROVE (low) — advisory (floor stop stands)");
-    // the prompt offers the Trust option for the stopped packages
+    // the prompt offers the Trust option for the fetchable form
     expect((shownPrompt() as any).trustPackages).toEqual(["evil-pkg"]);
   });
 });

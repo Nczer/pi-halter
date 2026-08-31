@@ -81,7 +81,9 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
   // The paths-only tier is independent of includeAlwaysOption: a dir grant
   // can never auto-allow an unsafe/credential command (canBeAutoAllowed
   // stays false), so it stays offered even when the command tier is
-  // suppressed. The command tiers (primary, broader) are not.
+  // suppressed. The command tier is not. (File prompts' dir umbrella and
+  // bash's package-trust option are independent too — the umbrella needs
+  // broaderPaths, Trust needs trustPackages.)
   if (!prompt.includeAlwaysOption && !prompt.includePathsOption && !prompt.trustPackages?.length) return [];
 
   const { broaderPaths } = prompt;
@@ -117,7 +119,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
   }
 
   // Standard layout: primary + optional variants (bash, outside-cwd file without parents)
-  const hasVariants = prompt.includeBroaderOption || prompt.includePathsOption || prompt.includeFileOption;
+  const hasVariants = prompt.includePathsOption || prompt.includeFileOption;
   const primaryConfig = hasVariants
     ? prompt.tier2Everything
     : {
@@ -136,12 +138,6 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
         () => { cb.onAlways(); return "always"; },
       ),
     );
-    if (prompt.includeBroaderOption) {
-      // Bash: broader package-manager prefix (e.g. "npm *") — a command
-      // grant, so it stays suppressed with the primary when the command
-      // tier is off (unsafe pattern / credential rule).
-      options.push(confirmOpt(`Always: ${prompt.alwaysBroaderLabel}`, prompt.tier2Broader ?? prompt.tier2Everything, () => { cb.onAlwaysBroader?.(); return "always"; }));
-    }
   }
   if (prompt.includeFileOption) {
     options.push(confirmOpt(`Always (file): ${prompt.alwaysFileLabel}`, prompt.tier2File!, () => { cb.onAlwaysFile(); return "alwaysFile"; }));
@@ -150,9 +146,9 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
     options.push(confirmOpt(`Always (paths): ${prompt.alwaysPathsLabel}`, prompt.tier2Paths ?? prompt.tier2Everything, () => { cb.onAlwaysPaths(); return "alwaysPaths"; }));
   }
   if (prompt.trustPackages?.length && cb.onTrust) {
-    // D10: per-package trust for fetchable run forms — broader than the
-    // signature grant (any args/flags), narrower than "npx *" (this package
-    // only, across npx/uvx/dlx/x run forms).
+    // D10: per-package trust for fetchable run forms (npx tsc, uvx tsc, …)
+    // — the ONLY command grant for those forms: any args/flags, across
+    // npx/uvx/dlx/x run forms (session-scoped).
     options.push(
       confirmOpt(
         `Trust: ${prompt.trustPackages.join(", ")} (session)`,

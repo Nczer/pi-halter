@@ -52,7 +52,6 @@ function makePrompt(overrides: Partial<BuiltPrompt> = {}): BuiltPrompt {
     includeBroaderOption: false,
     includeAlwaysOption: true,
     alwaysLabel: "test *",
-    alwaysBroaderLabel: "test broader *",
     alwaysPathsLabel: "/path/*",
     alwaysFileLabel: "file.txt",
     pathGrantDirs: [],
@@ -145,35 +144,23 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
   });
 });
 
-// ── Bash with paths + broader ──────────────────────────────────────────
+// ── Bash with paths ────────────────────────────────────────────────────
 
-describe("twoTierAlwaysPrompt: bash with paths + broader", () => {
-  // choices = ["Yes", "Always: test *", "Always: test broader *", "Always (paths): /path/*", "No (reason)", "No"]
-  // indices:     0          1                    2                           3                              4            5
+describe("twoTierAlwaysPrompt: bash with paths", () => {
+  // choices = ["Yes", "Always: test *", "Always (paths): /path/*", "No (reason)", "No"]
+  // indices:     0          1                    2                           3           4
 
-  const prompt = makePrompt({ includeBroaderOption: true, includePathsOption: true });
+  const prompt = makePrompt({ includePathsOption: true });
 
   it("calls onAlwaysPaths when Always(paths) → Confirm", async () => {
     const cb = makeCallbacks();
-    // tier-1: Always(paths) (3), tier-2: Confirm (0)
-    const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([3, 0]),
-      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
-    );
-    expect(result).toBe("alwaysPaths");
-    expect(cb.onAlwaysPaths).toHaveBeenCalledTimes(1);
-    expect(cb.onAlways).not.toHaveBeenCalled();
-  });
-
-  it("calls onAlwaysBroader when Always(broader) → Confirm", async () => {
-    const cb = makeCallbacks();
-    // tier-1: Always(broader) (2), tier-2: Confirm (0)
+    // tier-1: Always(paths) (2), tier-2: Confirm (0)
     const result = await twoTierAlwaysPrompt(
       prompt, store, makeCtx([2, 0]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
-    expect(result).toBe("always");
-    expect(cb.onAlwaysBroader).toHaveBeenCalledTimes(1);
+    expect(result).toBe("alwaysPaths");
+    expect(cb.onAlwaysPaths).toHaveBeenCalledTimes(1);
     expect(cb.onAlways).not.toHaveBeenCalled();
   });
 });
@@ -457,45 +444,50 @@ describe("twoTierAlwaysPrompt: paths tier decoupled from unsafe command", () => 
     expect(cb.onAlwaysPaths).not.toHaveBeenCalled();
   });
 
-  it("broader alone (no paths) is still fully suppressed", async () => {
-    const suppressed = makePrompt({ includeAlwaysOption: false, includeBroaderOption: true });
-    const ctx = makeCtx([2]);
+  it("includeBroaderOption never offers a bash broader option anymore", async () => {
+    // The manager-prefix tier ("npm *") was removed — fetchable run forms
+    // are granted by package trust instead; includeBroaderOption only means
+    // anything with broaderPaths (file prompts).
+    const suppressed = makePrompt({ includeBroaderOption: true });
+    const ctx = makeCtx([1]);
     await twoTierAlwaysPrompt(
       suppressed, store, ctx, () => {}, () => {}, () => {},
     );
-    expect(ctx.__selects[0]).toEqual(["Yes", "No (with reason)", "No"]);
+    expect(ctx.__selects[0]).toEqual(["Yes", "Always: test *", "No (with reason)", "No"]);
   });
 });
 
-// ── Broader-only layout (inside-cwd file, bash-style without broaderPaths) ─────────────
+// ── Trust layout (fetchable run forms) ─────────────────────────────────
 
-describe("twoTierAlwaysPrompt: broader-only layout (inside-cwd file)", () => {
-  // includeBroaderOption: true, includePathsOption: false, includeFileOption: false
-  // choices = ["Yes", "Always: test *", "Always: test broader *", "No (reason)", "No"]
+describe("twoTierAlwaysPrompt: trust layout (fetchable forms)", () => {
+  // includeAlwaysOption: true, trustPackages: ["tsc"]
+  // choices = ["Yes", "Always: test *", "Trust: tsc (session)", "No (reason)", "No"]
   // indices:     0          1                    2                      3           4
 
-  const prompt = makePrompt({ includeBroaderOption: true, includePathsOption: false, includeFileOption: false });
+  const prompt = makePrompt({ trustPackages: ["tsc"] });
 
-  it("calls onAlwaysBroader when Always(broader) → Confirm", async () => {
+  it("calls onTrust when Trust → Confirm", async () => {
     const cb = makeCallbacks();
+    const onTrust = vi.fn();
     const result = await twoTierAlwaysPrompt(
       prompt, store, makeCtx([2, 0]),
-      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader, undefined, onTrust,
     );
     expect(result).toBe("always");
-    expect(cb.onAlwaysBroader).toHaveBeenCalledTimes(1);
+    expect(onTrust).toHaveBeenCalledTimes(1);
     expect(cb.onAlways).not.toHaveBeenCalled();
   });
 
   it("calls onAlways when Always(everything) → Confirm", async () => {
     const cb = makeCallbacks();
+    const onTrust = vi.fn();
     const result = await twoTierAlwaysPrompt(
       prompt, store, makeCtx([1, 0]),
-      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader, undefined, onTrust,
     );
     expect(result).toBe("always");
     expect(cb.onAlways).toHaveBeenCalledTimes(1);
-    cb.onAlwaysBroader && expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
+    expect(onTrust).not.toHaveBeenCalled();
   });
 
   it("returns 'no' for index 4 (No)", async () => {
