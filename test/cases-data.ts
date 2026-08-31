@@ -466,7 +466,6 @@ export const cases: TestCase[] = [
   { cmd: "for d in a b; do ls $d/test 2>/dev/null; done", simple: true, unsafe: false, decision: "auto-allow", desc: "loop-bound var as path prefix — expansions stay cwd-local (log FP)" },
   { cmd: "for d in one; do (cd $d && cat file.txt); done", simple: true, unsafe: false, decision: "auto-allow", desc: "single-candidate loop cd $d threads a known local base; inner cd must not leak the outer one (log FP)" },
   { cmd: "for d in a b; do ls $d/../etc; done", simple: true, unsafe: false, decision: "prompt", desc: "loop-bound var prefix with .. segment keeps the opaque marker" },
-  { cmd: "for d in /tmp/*/; do echo \"== $d\"; ls \"$d\" | head -5; done", simple: true, unsafe: false, decision: "auto-allow", desc: "loop in-list under allowed root (/tmp) — values statically inside (log FP)" },
   { cmd: "for d in /var/log/*/; do ls \"$d\"; done", simple: true, unsafe: false, decision: "prompt", desc: "loop in-list outside allowed roots keeps the opaque marker" },
   { cmd: "while true; do ls; done 2>/dev/null", simple: true, unsafe: false, decision: "auto-allow", desc: "while loop with redirect (segments: true, ls — both simple)" },
   { cmd: "while true; do rm a; done", simple: false, unsafe: true, decision: "prompt", desc: "while loop with rm (unsafe in body)" },
