@@ -7,7 +7,7 @@
  * carve-out must block; everything else (inline scripts, redirects, pipes,
  * risk reasons) is judgeable and passes to the judge.
  */
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -633,11 +633,10 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
     }
   });
 
-  it("blocks non-explicit targets (glob, tilde, computed, stdin, bare rm)", async () => {
+  it("blocks non-explicit targets (glob, computed, stdin, bare rm)", async () => {
     for (const cmd of [
       "rm -rf *",
       "rm -rf ./*",
-      "rm ~/Documents",
       "rm -f $(echo /tmp/x)",
       "rm -f \`pwd\`/x",
       "rm -f -",
@@ -645,6 +644,29 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
+    }
+  });
+
+  it("pure tilde targets are expanded, then judged as concrete paths (2026-08-31)", async () => {
+    vi.stubEnv("HOME", "/home/u"); // ~/project → inside BASE
+    try {
+      // in-base: judgeable like the absolute-path form
+      const r = await checkDspaGate(bashPd("rm -f ~/project/scratch.log"), store);
+      expect(r.ok).toBe(true);
+      // outside base: the concrete outside-base stop, not 'not explicit'
+      const r2 = await checkDspaGate(bashPd("rm ~/Documents"), store);
+      expect(r2.ok).toBe(false);
+      if (!r2.ok) expect(r2.reason).toBe("rm target outside base (~/Documents)");
+      // tilde+glob: the glob survives expansion → still not explicit
+      const r3 = await checkDspaGate(bashPd("rm -rf ~/project/*"), store);
+      expect(r3.ok).toBe(false);
+      if (!r3.ok) expect(r3.reason).toContain("not explicit");
+      // quoted tilde: a literal filename to the shell (no expansion)
+      const r4 = await checkDspaGate(bashPd("rm -f '~/project/scratch.log'"), store);
+      expect(r4.ok).toBe(false);
+      if (!r4.ok) expect(r4.reason).toContain("not explicit");
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

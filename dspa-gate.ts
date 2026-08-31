@@ -563,8 +563,9 @@ const RM_FORBIDDEN_TARGET_RE = /[*?[~$`]/;
  * world-scratch target directly under /tmp is judgeable — the judge sees
  * the full text, and /tmp is the conventional scratch area (`rm -f
  * /tmp/probe.log` cleanup stopped 4 of 26 dspa prompts in the 2026-08-24
- * log). Recursive, glob, variable, and tilde targets never reach here
- * (the explicitness checks fail first); /tmp itself is not a target.
+ * log). Recursive, glob, and variable targets never reach here (the
+ * explicitness checks fail first); a pure tilde is expanded to its
+ * concrete path before that check; /tmp itself is not a target.
  */
 function isTmpScratchTarget(resolved: string, recursive: boolean): boolean {
   return !recursive && resolved.startsWith("/tmp/");
@@ -629,7 +630,17 @@ function checkRmTargets(
         (t) => t === "--recursive" || (t.startsWith("-") && !t.startsWith("--") && t !== "-" && /[rR]/.test(t)),
       );
       for (const a of args) {
-        const target = cleanToken(a);
+        // A pure tilde is deterministic (always $HOME) — not a hidden value
+        // like a glob or variable. Expand it first, then apply the
+        // explicitness bar to the concrete path: `rm ~/x.log` inside the
+        // trusted base is judgeable like its absolute-path form. A QUOTED
+        // tilde is a literal filename to the shell (no expansion) — it
+        // stays on the floor (the tokenizer strips quotes, so the raw
+        // segment is checked). Tilde+glob still floors (the glob survives
+        // expansion). (2026-08-31)
+        let target = cleanToken(a);
+        const quotedTilde = target.startsWith("~") && (seg.includes(`'${target}`) || seg.includes(`"${target}`));
+        if (!quotedTilde && (target === "~" || target.startsWith("~/"))) target = expandTilde(target);
         if (RM_FORBIDDEN_TARGET_RE.test(target)) {
           return { reason: `rm target not explicit (${target.slice(0, 40)})`, exempt: new Set() };
         }
