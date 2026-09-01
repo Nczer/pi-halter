@@ -1241,6 +1241,41 @@ function grepPatternArgIndices(args: string[]): Set<number> {
 }
 
 /**
+ * Index of `awk`'s PROGRAM argument: the first non-flag argument (awk's
+ * grammar is `awk [options] program [files…]`). The program is data, never a
+ * path — the shell passes it verbatim (same rationale as sed's script
+ * position and grep's PATTERN position; the text heuristic isAwkScriptArg
+ * keeps covering odd positions). -f / --file flips the grammar: its value is
+ * a program FILE (stays path-checked) and every later non-flag argument is a
+ * file. Two-token flags (-F / --field-separator, -v / --assign) consume a
+ * value that is never the program.
+ */
+function awkProgramArgIndices(args: string[]): Set<number> {
+  const idxs = new Set<number>();
+  let programFixed = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-f" || a === "--file") {
+      programFixed = true;
+      if (i + 1 < args.length) i++; // the program FILE — keep path-checked
+      continue;
+    }
+    if (a.startsWith("--file=") || (a.startsWith("-f") && a.length > 2 && !a.startsWith("--"))) {
+      programFixed = true; // -fFILE / --file= — program from a file
+      continue;
+    }
+    if (a === "-F" || a === "--field-separator" || a === "-v" || a === "--assign") {
+      if (i + 1 < args.length) i++; // flag value (sep / assignment) — not the program
+      continue;
+    }
+    if (a.startsWith("--field-separator=") || a.startsWith("--assign=")) continue;
+    if (a.startsWith("-") && a !== "-") continue; // flag (value inline, if any)
+    if (!programFixed) { programFixed = true; idxs.add(i); }
+  }
+  return idxs;
+}
+
+/**
  * Check if an argument to `awk` looks like an inline script rather than a file path.
  *
  * Awk scripts are typically the first non-flag argument. When they start with `/`,
@@ -1369,6 +1404,10 @@ export async function parseCommand(
         // vars ($re in `grep -vE "$re" f`) out of the opaque ref set, where
         // they would floor-stop the command.
         const grepPatterns = cmdName === "grep" ? grepPatternArgIndices(args.map(a => a.text)) : null;
+        // Awk: the program position is data, never a file (see
+        // awkProgramArgIndices) — a bare filter (`awk -F: '$1>420' f`) is
+        // program text whose `$1` is awk field syntax, not a shell var.
+        const awkPrograms = cmdName === "awk" ? awkProgramArgIndices(args.map(a => a.text)) : null;
         for (let ai = 0; ai < args.length; ai++) {
           const { text: arg, node: argNode } = args[ai];
           // A multi-line LITERAL argument is a script/data body (`node -e '…'`),
@@ -1388,7 +1427,7 @@ export async function parseCommand(
               (sedScripts !== null && sedScripts.has(ai) && !/^(?:\/|\.\/|~\/)/.test(arg)) ||
               isSedPatternArg(arg)
             )) ||
-              (cmdName === "awk" && isAwkScriptArg(arg)) ||
+              (cmdName === "awk" && (awkPrograms !== null && awkPrograms.has(ai) || isAwkScriptArg(arg))) ||
               (cmdName === "grep" && grepPatterns !== null && grepPatterns.has(ai))) {
             continue;
           }
