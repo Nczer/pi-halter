@@ -242,6 +242,30 @@ describe("parseCommand: opaque var markers (log FPs)", () => {
     expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
   });
 
+  it("awk bare filter program (no braces, no leading /) is not a path — 2026-09-01 log case", async () => {
+    const r = await parseCommand(`awk -F: '$1 > 1200 && $1 < 2600' f.txt`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
+  });
+
+  it("awk file position is still path-checked even though the program is exempt", async () => {
+    const r = await parseCommand(`awk '$1>420' /tmp/data.txt`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths.some(p => p.includes(realPath("/tmp/data.txt")))).toBe(true);
+  });
+
+  it("awk -f keeps the program file and the data files path-checked", async () => {
+    const r = await parseCommand(`awk -f /tmp/prog.awk /tmp/data.txt`, cwd);
+    expect(r.paths.some(p => p.includes(realPath("/tmp/prog.awk")))).toBe(true);
+    expect(r.paths.some(p => p.includes(realPath("/tmp/data.txt")))).toBe(true);
+  });
+
+  it("awk two-token flags (-v, -F) consume their values — the program stays exempt", async () => {
+    const r = await parseCommand(`awk -v x=1 -F : '$1 > 420' f.txt`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
+  });
+
   it("loop-bound var as a path prefix is exempt from the marker", async () => {
     const r = await parseCommand("for d in a b; do ls $d/test; done", cwd);
     expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
