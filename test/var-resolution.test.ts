@@ -338,6 +338,33 @@ describe("literal-path loop in-lists (2026-08-31 log case)", () => {
   });
 });
 
+describe("embedded loop refs (2026-09-01 log case)", () => {
+  it("examiner_report_$y.txt over a literal in-list, tracked cd → inside, dropped", async () => {
+    const r = await resolve("cd /home/u/project/reports && for y in 2019 2020 2021 2022 2023; do grep -n -i paper examiner_report_$y.txt; done");
+    expect(r.paths).toEqual([]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("no cd — the session base bounds the names → inside, dropped", async () => {
+    const r = await resolve("for y in 2019 2020; do grep -n -i paper examiner_report_$y.txt; done");
+    expect(r.paths).toEqual([]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("a cd outside names the concrete substituted files (grantable)", async () => {
+    const r = await resolve("cd /etc && for y in 2019 2020; do grep -n -i paper examiner_report_$y.txt; done");
+    expect(r.paths).toEqual(["/etc/examiner_report_2019.txt", "/etc/examiner_report_2020.txt"]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("an unknown base stays a sentinel (reason base)", async () => {
+    const r = await resolve("cd $X && for y in a b; do cat examiner_$y.txt; done");
+    expect(r.unresolved).toEqual([
+      { token: "examiner_$y.txt", reason: "base", marker: expect.any(String) },
+    ]);
+  });
+});
+
 describe("relative-glob loop in-lists (2026-08-31 log case)", () => {
   it("bounds the glob against the segment base — inside when there is no cd", async () => {
     const r = await resolve('for f in */x.ts; do cat "$f"; done');

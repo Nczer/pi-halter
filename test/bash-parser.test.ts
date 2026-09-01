@@ -266,6 +266,48 @@ describe("parseCommand: opaque var markers (log FPs)", () => {
     expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
   });
 
+  it("embedded loop var in a bare name, literal in-list → loopList with substituted words (2026-09-01 log case)", async () => {
+    const r = await parseCommand('for y in 2019 2020 2021 2022 2023; do grep -n -i paper examiner_report_$y.txt; done', cwd);
+    expect(r.opaque).toEqual([
+      {
+        raw: "examiner_report_$y.txt",
+        segIdx: 0,
+        kind: "loopList",
+        words: [
+          "examiner_report_2019.txt", "examiner_report_2020.txt", "examiner_report_2021.txt",
+          "examiner_report_2022.txt", "examiner_report_2023.txt",
+        ],
+      },
+    ]);
+  });
+
+  it("embedded ${y} form and a static-dir prefix substitute the same way", async () => {
+    const r = await parseCommand('for y in a b; do cat log${y}.txt reports/$y.log; done', cwd);
+    expect(r.opaque.map(o => o.kind)).toEqual(["loopList", "loopList"]);
+    expect(r.opaque[0]?.words).toEqual(["loga.txt", "logb.txt"]);
+    expect(r.opaque[1]?.words).toEqual(["reports/a.log", "reports/b.log"]);
+  });
+
+  it("embedded loop var with a .. segment stays opaque (could escape the base)", async () => {
+    const r = await parseCommand(`for y in a b; do cat ../$y.txt; done`, cwd);
+    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+
+  it("embedded loop var, unbound var stays opaque", async () => {
+    const r = await parseCommand(`cat examiner_report_$y.txt`, cwd);
+    expect(r.opaque).toEqual([{ raw: "examiner_report_$y.txt", segIdx: 0, kind: "opaque" }]);
+  });
+
+  it("embedded loop var, non-literal in-list stays opaque", async () => {
+    const r = await parseCommand(`for y in $(ls); do cat examiner_$y.txt; done`, cwd);
+    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+
+  it("two embedded vars stay opaque (one value each)", async () => {
+    const r = await parseCommand(`for y in a; do for z in b; do cat $y_$z.txt; done; done`, cwd);
+    expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+
   it("loop-bound var as a path prefix is exempt from the marker", async () => {
     const r = await parseCommand("for d in a b; do ls $d/test; done", cwd);
     expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
