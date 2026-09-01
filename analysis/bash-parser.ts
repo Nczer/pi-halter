@@ -494,11 +494,13 @@ function loopBoundRef(val: string): { name: string; rest: string | null } | null
  *    the RUNTIME cwd; the resolver must bound it against the tracked
  *    effective base (the old blanket exemption skipped that check entirely
  *    — the `cd /etc && for f in a b; do cat $f; done` hole).
- *  - "loopList": a loop-bound reference whose in-list is all LITERAL paths
+ *  - "loopList": a loop-bound reference whose in-list is all LITERAL words
  *    (no expansion, no glob, no `..`) — the value is exactly one of the
  *    words; the resolver names the concrete words (a `for d in /a /b` over
  *    outside dirs is two concrete outside locations, not an unresolvable
- *    sentinel).
+ *    sentinel). For an EMBEDDED reference (`examiner_report_$y.txt`) the
+ *    words are the textual substitutions of each in-list word into the
+ *    token.
  *  - "opaque": everything else — the resolver may still bind it through the
  *    command's own assignments (`f=x; cat $f`).
  *
@@ -516,7 +518,8 @@ export interface OpaqueRef {
   kind: "opaque" | "cwdLocal" | "pinned" | "loopList";
   /** kind "pinned": the directory every expansion lands under (realpath'd). */
   prefixDir?: string;
-  /** kind "loopList": the literal in-list words (one expansion each). */
+  /** kind "loopList": the literal value of each expansion (in-list word;
+   *  for the embedded form, the word substituted into the token). */
   words?: string[];
 }
 
@@ -536,6 +539,27 @@ function trailingLoopRef(val: string): { prefix: string; name: string } | null {
     return null; // tail could escape the pin — keep the token opaque
   }
   return { prefix: m[1], name: m[2] };
+}
+
+/**
+ * An embedded loop reference: exactly one `$var` / `${var}` at any position,
+ * everything else an expansion-free static part — `examiner_report_$y.txt`,
+ * `logs/${y}-2019.log`. The static part may carry no second `$`, backtick, or
+ * backslash (another runtime value), no glob char (the expansion set would be
+ * filesystem-dependent), and no `..` segment (could escape the base). In-list
+ * words substitute TEXTUALLY into the template, so an all-literal in-list
+ * makes every expansion a concrete name (the 2026-09-01 log case:
+ * `examiner_report_$y.txt` over `for y in 2019 … 2023` after a tracked cd —
+ * gate-stopped although all five names sat inside the known base).
+ */
+function embeddedLoopRef(val: string): { name: string; before: string; after: string } | null {
+  const m = val.match(/^(.*?)\$\{(\w+)\}(.*?)$/s) ?? val.match(/^(.*?)\$(\w+)(.*?)$/);
+  if (!m) return null;
+  const staticPart = m[1] + m[3];
+  if (/[\$`\\]/.test(staticPart)) return null; // exactly one expansion, no escapes
+  if (/[*?\[]/.test(staticPart)) return null; // glob: filesystem-dependent expansion set
+  if (/(^|\/)\.\.(\/|$)/.test(val)) return null; // a .. segment could escape the base
+  return { name: m[2], before: m[1], after: m[3] };
 }
 
 /**
@@ -667,6 +691,18 @@ function opaqueRef(node: TSNode, arg: string, cwd: string, segIdx: number, segme
     if (inList !== null && inList.every(isBoundedInListWord)) {
       const prefixDir = resolvePinPrefix(trail.prefix, cwd);
       if (prefixDir) return mk("pinned", prefixDir);
+    }
+  }
+  // Embedded form: exactly one loop-bound reference inside an expansion-free
+  // name (`examiner_report_$y.txt`, `logs/$y-2019.log`) — an all-literal
+  // in-list makes every expansion a concrete substituted word (resolved
+  // against the tracked base like loopList).
+  const emb = embeddedLoopRef(val);
+  if (emb !== null) {
+    const inList = enclosingLoopInList(node, emb.name);
+    if (inList !== null && inList.every(isLiteralInListWord)) {
+      return mk("loopList", undefined,
+        inList.map(w => emb.before + (dequoteInListWord(w) ?? w) + emb.after));
     }
   }
   return mk("opaque");
