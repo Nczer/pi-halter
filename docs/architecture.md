@@ -438,6 +438,8 @@ ui/
                           parse — what is judged is what is shown)
 analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           cwd-local, var-resolution, path-analysis,
+                          credentials (raw-text credential scan; resolves
+                          operands through path-analysis),
                           segment-analysis, segment-helpers, command-analysis,
                           risk-analyzer, obfuscation,
                           tmux (command model: the one shared parse —
