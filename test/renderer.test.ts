@@ -1,158 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
-  parseTmuxFlags,
   formatTmuxSegment,
   formatSegment,
   formatBashCommand,
 } from "../ui/tmux-render";
 import { splitIntoSegments, splitOnPipe } from "../analysis/tokenizer";
 
-// ── parseTmuxFlags ──
-
-describe("parseTmuxFlags: subcommand extraction", () => {
-  it("extracts subcommand after tmux", () => {
-    const r = parseTmuxFlags("tmux list-sessions");
-    expect(r.subcommand).toBe("list-sessions");
-  });
-
-  it("skips -S socket flag", () => {
-    const r = parseTmuxFlags("tmux -S /tmp/pi.sock list-sessions");
-    expect(r.subcommand).toBe("list-sessions");
-  });
-
-  it("skips -L alias flag", () => {
-    const r = parseTmuxFlags("tmux -L myalias capture-pane");
-    expect(r.subcommand).toBe("capture-pane");
-  });
-
-  it("skips -f config flag", () => {
-    const r = parseTmuxFlags("tmux -f /dev/null new-session");
-    expect(r.subcommand).toBe("new-session");
-  });
-
-  it("handles new alias", () => {
-    const r = parseTmuxFlags("tmux new -d -s foo");
-    expect(r.subcommand).toBe("new-session");
-  });
-
-  it("returns null for bare tmux", () => {
-    const r = parseTmuxFlags("tmux");
-    expect(r.subcommand).toBeNull();
-  });
-
-  it("returns null for non-tmux command", () => {
-    const r = parseTmuxFlags("mkdir -p /tmp/foo");
-    expect(r.subcommand).toBeNull();
-  });
-});
-
-describe("parseTmuxFlags: boilerplate stripping", () => {
-  it("strips -f /dev/null", () => {
-    const r = parseTmuxFlags("tmux -f /dev/null list-sessions");
-    expect(r.flags).not.toContainEqual(expect.objectContaining({ short: "-f" }));
-  });
-
-  it("strips -S socket", () => {
-    const r = parseTmuxFlags("tmux -S /tmp/pi.sock list-sessions");
-    expect(r.flags).not.toContainEqual(expect.objectContaining({ short: "-S" }));
-  });
-
-  it("strips both boilerplate flags", () => {
-    const r = parseTmuxFlags("tmux -f /dev/null -S /tmp/pi.sock send-keys -t foo ls Enter");
-    expect(r.subcommand).toBe("send-keys");
-    expect(r.flags).not.toContainEqual(expect.objectContaining({ short: "-f" }));
-    expect(r.flags).not.toContainEqual(expect.objectContaining({ short: "-S" }));
-  });
-
-  it("keeps -S when used as capture-pane start line", () => {
-    // capture-pane -S -200 means start from line -200
-    const r = parseTmuxFlags("tmux capture-pane -p -S -200");
-    const startFlag = r.flags.find(f => f.name === "start");
-    expect(startFlag).toBeDefined();
-    expect(startFlag?.value).toBe("-200");
-  });
-});
-
-describe("parseTmuxFlags: flag mapping", () => {
-  it("maps -t to target", () => {
-    const r = parseTmuxFlags("tmux send-keys -t mysession:0.0 ls Enter");
-    const flag = r.flags.find(f => f.name === "target");
-    expect(flag?.value).toBe("mysession:0.0");
-  });
-
-  it("maps -d to detached (boolean)", () => {
-    const r = parseTmuxFlags("tmux new-session -d -s foo");
-    const flag = r.flags.find(f => f.name === "detached");
-    expect(flag).toBeDefined();
-    expect(flag?.value).toBeNull(); // boolean flag, no value
-  });
-
-  it("maps -s to session", () => {
-    const r = parseTmuxFlags("tmux new-session -d -s foo");
-    const flag = r.flags.find(f => f.name === "session");
-    expect(flag?.value).toBe("foo");
-  });
-
-  it("maps -n to window", () => {
-    const r = parseTmuxFlags("tmux new-session -d -s foo -n shell");
-    const flag = r.flags.find(f => f.name === "window");
-    expect(flag?.value).toBe("shell");
-  });
-
-  it("maps -p to print for capture-pane", () => {
-    const r = parseTmuxFlags("tmux capture-pane -p -t foo");
-    const flag = r.flags.find(f => f.name === "print");
-    expect(flag).toBeDefined();
-  });
-
-  it("maps -J to join for capture-pane", () => {
-    const r = parseTmuxFlags("tmux capture-pane -p -J -t foo");
-    const flag = r.flags.find(f => f.name === "join");
-    expect(flag).toBeDefined();
-  });
-
-  it("maps -l to literal for send-keys", () => {
-    const r = parseTmuxFlags("tmux send-keys -t foo -l -- 'code' Enter");
-    const flag = r.flags.find(f => f.name === "literal");
-    expect(flag).toBeDefined();
-  });
-
-  it("maps -F to format", () => {
-    const r = parseTmuxFlags("tmux list-panes -t foo -F '#{pane_index}'");
-    const flag = r.flags.find(f => f.name === "format");
-    expect(flag?.value).toBe("'#{pane_index}'");
-  });
-
-  it("keeps unmapped flags as raw", () => {
-    const r = parseTmuxFlags("tmux resize-pane -D 5 -t foo");
-    const raw = r.flags.find(f => f.raw === "-D 5");
-    expect(raw).toBeDefined();
-  });
-});
-
-describe("parseTmuxFlags: send-keys keys extraction", () => {
-  it("extracts keys from send-keys", () => {
-    const r = parseTmuxFlags("tmux send-keys -t foo ls Enter");
-    expect(r.keys).toBe("ls Enter");
-  });
-
-  it("extracts keys with -l flag", () => {
-    const r = parseTmuxFlags("tmux send-keys -t foo -l -- 'python3 -q'");
-    expect(r.keys).toBe("'python3 -q'");
-  });
-
-  it("extracts keys with Enter sent separately", () => {
-    const r = parseTmuxFlags("tmux send-keys -t foo Enter");
-    expect(r.keys).toBe("Enter");
-  });
-
-  it("returns null keys for non-send-keys", () => {
-    const r = parseTmuxFlags("tmux list-sessions");
-    expect(r.keys).toBeNull();
-  });
-});
-
 // ── formatTmuxSegment ──
+// (The parse itself — subcommand extraction, boilerplate stripping, flag
+// classification, key-stream extraction — is unit-tested in tmux.test.ts
+// against analysis/tmux.ts. Here only the display rendering is pinned.)
 
 describe("formatTmuxSegment: basic commands", () => {
   it("formats list-sessions", () => {
@@ -199,6 +56,12 @@ describe("formatTmuxSegment: basic commands", () => {
 
   it("formats bare tmux (no subcommand)", () => {
     expect(formatTmuxSegment("tmux")).toBe("tmux");
+  });
+
+  it("renders unmapped flags and positionals raw, in order", () => {
+    expect(formatTmuxSegment("tmux resize-pane -D 5 -t foo")).toBe(
+      "tmux resize-pane  -D 5 target=foo",
+    );
   });
 });
 

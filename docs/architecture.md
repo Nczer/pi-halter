@@ -416,11 +416,15 @@ ui/
   prompt-builder.ts       pure formatter: PromptData → prompt content
   prompts.ts              two-tier confirmation UI (native select/input)
   widget.ts               the unified status widget
-  tmux-render.ts          tmux command display formatting
+  tmux-render.ts          tmux display (renders the shared analysis/tmux
+                          parse — what is judged is what is shown)
 analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           cwd-local, var-resolution, path-analysis,
                           segment-analysis, segment-helpers, command-analysis,
-                          risk-analyzer, obfuscation, tmux-helpers,
+                          risk-analyzer, obfuscation,
+                          tmux (command model: the one shared parse —
+                          canonical subcommand, flags, send-keys key stream,
+                          new-session command — plus the safety tables),
                           script-payload (the local script a command
                           executes, read in full),
                           evaluators/ (6 domain evaluators + builder + types)

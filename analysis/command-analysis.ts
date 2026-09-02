@@ -4,7 +4,7 @@ import { analyzeSegment } from "./segment-analysis";
 import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath } from "./cwd-tracking";
 import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
 import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
-import { getTmuxSubcommand, extractTmuxSendKeys } from "./tmux-helpers";
+import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs, checkCommandForCredentialPaths } from "./path-analysis";
 import { UNKNOWN_CWD_MARKER } from "./cwd-tracking";
@@ -152,8 +152,9 @@ async function analyzeTmuxSendKeysPayload(
     for (const u of payloadOpaque.unresolved) paths.push(u.marker);
     for (const seg of parsed.segments) {
       const text = seg.text.trim();
-      if (getFirstWord(text) === "tmux" && getTmuxSubcommand(text) === "send-keys") {
-        const innerPayload = normalizeTmuxPayload(extractTmuxSendKeys(text));
+      const innerTmux = parseTmuxCommand(text);
+      if (getFirstWord(text) === "tmux" && innerTmux.subcommand === "send-keys") {
+        const innerPayload = normalizeTmuxPayload(tmuxSendKeysKeys(innerTmux));
         const r = innerPayload
           ? await analyzeTmuxSendKeysPayload(innerPayload, cwd, depth + 1)
           : { simple: true, unsafe: false, paths: [], reasons: [] };
@@ -290,8 +291,8 @@ export async function analyzeCommand(
   const tmuxPayloadReasons: string[] = [];
   for (const seg of segments) {
     const text = seg.text.trim();
-    if (getFirstWord(text) !== "tmux" || getTmuxSubcommand(text) !== "send-keys") continue;
-    const payload = normalizeTmuxPayload(extractTmuxSendKeys(text));
+    if (getFirstWord(text) !== "tmux") continue;
+    const payload = normalizeTmuxPayload(tmuxSendKeysKeys(parseTmuxCommand(text)));
     if (!payload) continue; // bare Enter keystroke — harmless
     const r = await analyzeTmuxSendKeysPayload(payload, cwd, 1);
     tmuxPayloadSimple &&= r.simple;
