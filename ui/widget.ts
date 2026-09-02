@@ -2,7 +2,7 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { store } from "../gate/store";
 import { isDspActive } from "../modes/dsp-mode";
-import { isDspaActive, isDspaJudging, getDspaStats } from "../modes/dspa-mode";
+import { isDspaActive, getDspaJudgingStage, getDspaStats } from "../modes/dspa-mode";
 import { isDspatActive, isDspatJudging, getDspatStats } from "../modes/dspat-mode";
 import {judgeStatus} from "../judge/verdict";
 
@@ -165,13 +165,16 @@ export function updateWidget(ctx: ExtensionContext): void {
           (counts.length > 0
             ? `» DSPA${modelTag}: ${counts.join(" ")}`
             : `» DSPA${modelTag}: auto-allowing gate+judge-approved operations`) +
-          (isDspaJudging() ? " — judging…" : "");
+          (() => {
+            const st = getDspaJudgingStage();
+            return st ? ` — judging stage ${st}…` : "";
+          })();
         lines.push(modeLine(width, theme, main, s.lastTarget ? [`last: ${s.lastTarget}`] : []));
       }
 
       if (isDspatActive() && judgeOk) {
         const s = getDspatStats();
-        const main = `◎ DSPAT${isDspatJudging() ? " — judging…" : ""}: judge advises on every permission prompt`;
+        const main = `◎ DSPAT${isDspatJudging() ? " — judging stage 1…" : ""}: judge advises on every permission prompt`;
         // Agreement counter + last disagreement, merged onto the mode line.
         // updateWidget is re-run after every recorded outcome, so live.
         const details =

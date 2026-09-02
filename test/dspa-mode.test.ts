@@ -210,13 +210,15 @@ describe("widget (unified halter widget — see widget.ts)", () => {
     updateDspaWidget(ctx);
     const line = () => halterLine(widgets, theme)!.render(200)[0];
     expect(line()).toContain("» DSPA");
-    setDspaJudging(true, ctx); // re-renders the widget (forces a repaint)
-    expect(line()).toContain("1a — judging…");
+    setDspaJudging(1, ctx); // re-renders the widget (forces a repaint)
+    expect(line()).toContain("1a — judging stage 1…");
     expect(line()).toContain("— last: cargo build");
-    setDspaJudging(true, ctx); // no-op (already judging — no extra set)
+    setDspaJudging(1, ctx); // no-op (already judging — no extra set)
     expect(widgets.filter(x => x.id === "halter")).toHaveLength(2); // initial + judging toggle
-    setDspaJudging(false, ctx);
-    expect(line()).not.toContain("judging…");
+    setDspaJudging(2, ctx); // stage switch — re-rendered with the new stage
+    expect(line()).toContain("judging stage 2…");
+    setDspaJudging(null, ctx);
+    expect(line()).not.toContain("judging");
   });
 
   it("hides while the judge is not ok, reappears when it is ok again", () => {

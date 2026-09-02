@@ -21,6 +21,7 @@
 import { createHash } from "node:crypto";
 import type {
   AssistantMessage,
+  AssistantMessageEventStream,
   Context,
   Model,
   ProviderHeaders,
@@ -231,10 +232,12 @@ const APPROVES: ReadonlySet<string> = new Set(["approve", "deny", "defer"]);
 // ── Model call seam ──
 
 /**
- * The injected model-completion seam — structurally the `complete` export of
- * `@earendil-works/pi-ai`. Injected so tests substitute a fake.
+ * The injected model-stream seam — structurally the `stream` export of
+ * `@earendil-works/pi-ai/compat`: it returns an AssistantMessageEventStream
+ * whose events arrive over time (that is what the first-token deadline
+ * measures). Injected so tests substitute a fake.
  */
-export type CompleteFn = (
+export type JudgeStreamFn = (
   model: Model<any>,
   context: Context,
   options?: {
@@ -243,7 +246,13 @@ export type CompleteFn = (
     headers?: Record<string, string>;
     toolChoice?: string;
   },
-) => Promise<AssistantMessage>;
+) => AssistantMessageEventStream;
+
+/** Hard cap on a judge call's total duration (request start → finished
+ *  verdict). `timeoutMs` is the FIRST-TOKEN deadline (a dead or saturated
+ *  model fails fast); this cap bounds a call that IS producing output but
+ *  is too slow to be useful — the tool gate must not wait minutes. */
+export const JUDGE_RESPONSE_CAP_MS = 60_000;
 
 /**
  * The narrow model-registry projection the judge needs (ISP). Satisfied by
@@ -289,11 +298,18 @@ export async function resolveJudgeAuth(
  */
 export interface JudgeOptions {
   model: Model<any>;
-  complete: CompleteFn;
+  /** The model-call seam (production: `stream` from pi-ai/compat). */
+  stream: JudgeStreamFn;
   apiKey?: string;
   headers?: ProviderHeaders;
-  /** Defaults to DEFAULT_JUDGE_SETTINGS.timeoutMs. */
+  /** FIRST-TOKEN deadline: abort if the model produces no output (any
+   *  event past the stream's `start` handshake) within this window.
+   *  Defaults to DEFAULT_JUDGE_SETTINGS.timeoutMs. */
   timeoutMs?: number;
+  /** Hard cap on the WHOLE response, measured from request start — even
+   *  after the first token, the call must finish within this window.
+   *  Defaults to JUDGE_RESPONSE_CAP_MS. */
+  capMs?: number;
   /** "off" omits the `reasoning` option entirely. */
   thinking?: "off" | ThinkingLevel;
   /** Override the system prompt (stage-2 intent pass); defaults to JUDGE_SYSTEM_PROMPT. */
@@ -372,7 +388,14 @@ export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<J
 
   const controller = new AbortController();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_JUDGE_SETTINGS.timeoutMs;
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const capMs = opts.capMs ?? JUDGE_RESPONSE_CAP_MS;
+  // Two deadlines: (1) FIRST-TOKEN — abort if no event arrives past the
+  // stream's `start` handshake within timeoutMs (a dead or saturated model
+  // fails fast); (2) CAP — a hard ceiling on the whole response, so a call
+  // that is producing output but is too slow to be useful still aborts.
+  // The first-token timer clears on first output; the cap survives it.
+  const firstTokenTimer = setTimeout(() => controller.abort(), timeoutMs);
+  const capTimer = setTimeout(() => controller.abort(), capMs);
   const t0 = Date.now();
   const fail = (failReason: JudgeFailReason, detail?: string): JudgeResult => ({
     approve: "defer",
@@ -395,7 +418,7 @@ export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<J
     if (opts.thinking && opts.thinking !== "off") {
       streamOptions.reasoning = opts.thinking;
     }
-    const reply = await opts.complete(
+    const stream = opts.stream(
       opts.model,
       {
         systemPrompt: opts.systemPrompt ?? JUDGE_SYSTEM_PROMPT,
@@ -412,6 +435,14 @@ export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<J
       },
       streamOptions,
     );
+    let firstToken = false;
+    for await (const ev of stream) {
+      if (!firstToken && ev.type !== "start") {
+        firstToken = true;
+        clearTimeout(firstTokenTimer);
+      }
+    }
+    const reply = await stream.result();
 
     if (reply.stopReason === "aborted") return fail("timeout");
     if (reply.stopReason === "error") return fail("call-failed", reply.errorMessage);
@@ -460,6 +491,7 @@ export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<J
   } catch {
     return fail(controller.signal.aborted ? "timeout" : "call-failed");
   } finally {
-    clearTimeout(timer);
+    clearTimeout(firstTokenTimer);
+    clearTimeout(capTimer);
   }
 }

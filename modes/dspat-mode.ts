@@ -19,7 +19,7 @@ import { notifyStatus } from "./status-bus";
 
 let dspatActive = false;
 /** True while a judge call is in flight — rendered inline on the widget
- *  line ("… — judging…") instead of a separate in-flight widget. */
+ *  line ("… — judging stage 1…") instead of a separate in-flight widget. */
 let judging = false;
 
 interface DspatStats {
@@ -44,9 +44,10 @@ function resetStats(): void {
 }
 
 /**
- * Flip the inline judging state (judge-prompt.ts calls it at the start and
- * end of every judge stage while /dspat is active). Re-sets the widget so
- * the change paints immediately (setWidget forces a TUI repaint).
+ * Flip the inline judging state (verdict.ts calls it at the start and end
+ * of the judge stage while /dspat is active; /dspat judges stage 1 only).
+ * Re-sets the widget so the change paints immediately (setWidget forces a
+ * TUI repaint).
  */
 export function setDspatJudging(on: boolean, ctx: ExtensionContext): void {
   if (judging === on) return;

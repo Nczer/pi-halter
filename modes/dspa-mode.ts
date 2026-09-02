@@ -26,9 +26,10 @@ let gateStops = 0;
 let denials = 0;
 let declines = 0;
 let defers = 0;
-/** True while a judge call is in flight — rendered inline on this widget's
- *  line ("… — judging…") instead of a separate in-flight widget. */
-let judging = false;
+/** The in-flight judge stage (1: stateless check, 2: session-context
+ *  intent pass), null when idle — rendered inline on this widget's line
+ *  ("… — judging stage 2…") instead of a separate in-flight widget. */
+let judging: 1 | 2 | null = null;
 
 export function setDspaActive(on: boolean): void {
   active = on;
@@ -52,7 +53,7 @@ function resetCounters(): void {
   denials = 0;
   declines = 0;
   defers = 0;
-  judging = false;
+  judging = null;
 }
 
 /** Judge quality is model-dependent — a model switch starts stats fresh. */
@@ -92,20 +93,21 @@ export function recordDspaStop(kind: DspaStopKind, verdictModel: string | null):
   }
 }
 
-/** True while a judge call is in flight (the unified widget renders the
- *  "… — judging…" tag inline on the DSPA line). */
-export function isDspaJudging(): boolean {
+/** The in-flight judge stage (1: stateless check, 2: session-context
+ *  intent pass), null when idle — the unified widget renders it inline on
+ *  the DSPA line ("… — judging stage 2…"). */
+export function getDspaJudgingStage(): 1 | 2 | null {
   return judging;
 }
 
 /**
- * Flip the inline judging state (judge-prompt.ts calls it at the start and
- * end of every judge stage while /dspa is active). Re-renders the widget so
- * the change paints immediately (setWidget forces a TUI repaint).
+ * Set the inline judging stage (verdict.ts calls it at the start and end of
+ * every judge stage while /dspa is active; null clears it). Re-renders the
+ * widget so the change paints immediately (setWidget forces a TUI repaint).
  */
-export function setDspaJudging(on: boolean, ctx: ExtensionContext): void {
-  if (judging === on) return;
-  judging = on;
+export function setDspaJudging(stage: 1 | 2 | null, ctx: ExtensionContext): void {
+  if (judging === stage) return;
+  judging = stage;
   updateDspaWidget(ctx);
 }
 
