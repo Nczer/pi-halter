@@ -821,6 +821,97 @@ describe("twoTierAlwaysPrompt: Explain option", () => {
   });
 });
 
+// ── Judge again (dspa fall-through retry) ───────────────────────────────
+
+describe("twoTierAlwaysPrompt: Judge again option", () => {
+  /** Fake ctx that records every select call (title + choices) and scripts. */
+  function makeRecordingCtx(scripted: (number | string | null)[]) {
+    const calls: Array<{ title: string; options: string[] }> = [];
+    let idx = 0;
+    return {
+      calls,
+      ctx: {
+        ui: {
+          select: async (title: string, options: string[]) => {
+            calls.push({ title, options });
+            const val = scripted[idx++];
+            if (val === null || val === undefined) return undefined;
+            return typeof val === "number" ? options[val] : val;
+          },
+          input: async () => undefined,
+        },
+      } as any,
+    };
+  }
+
+  const cbs = {
+    onAlways: () => "always" as never,
+    onAlwaysPaths: () => "alwaysPaths" as never,
+    onAlwaysFile: () => "alwaysFile" as never,
+  };
+
+  it("offers 'Judge again' after the Always options; a non-allowing retry re-shows with the replacement body and the option stays", async () => {
+    const retry = vi.fn()
+      .mockResolvedValueOnce({ autoAllowed: false, body: "Base\n💭 Judge: DEFER (medium)" })
+      .mockResolvedValueOnce({ autoAllowed: false, body: "Base\n💭 Judge: REJECT (high)" });
+    const { ctx, calls } = makeRecordingCtx(["Judge again", "Judge again", "No"]);
+
+    const result = await twoTierAlwaysPrompt(
+      makePrompt(), store, ctx,
+      cbs.onAlways, cbs.onAlwaysPaths, cbs.onAlwaysFile,
+      undefined, undefined, undefined, { retry },
+    );
+
+    expect(result).toBe("no");
+    expect(retry).toHaveBeenCalledTimes(2); // repeatable — each pick is a fresh call
+    expect(calls[0].options).toEqual(["Yes", "Always: test *", "Judge again", "No (with reason)", "No"]);
+    expect(calls[0].title).not.toContain("💭 Judge:");
+    expect(calls[1].title).toContain("💭 Judge: DEFER (medium)");
+    expect(calls[2].title).toContain("💭 Judge: REJECT (high)");
+    for (const c of calls) expect(c.options).toContain("Judge again");
+  });
+
+  it("an auto-allowing retry resolves the prompt as Yes (no re-show)", async () => {
+    const retry = vi.fn().mockResolvedValue({ autoAllowed: true, body: null });
+    const { ctx, calls } = makeRecordingCtx(["Judge again"]);
+
+    const result = await twoTierAlwaysPrompt(
+      makePrompt(), store, ctx,
+      cbs.onAlways, cbs.onAlwaysPaths, cbs.onAlwaysFile,
+      undefined, undefined, undefined, { retry },
+    );
+
+    expect(result).toBe("yes");
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("with Explain present: 'Judge again' sits after it", async () => {
+    const retry = vi.fn().mockResolvedValue({ autoAllowed: false, body: "Base\n💭 Judge: DEFER (low)" });
+    const { ctx, calls } = makeRecordingCtx(["Judge again", "No"]);
+
+    const result = await twoTierAlwaysPrompt(
+      makePrompt(), store, ctx,
+      cbs.onAlways, cbs.onAlwaysPaths, cbs.onAlwaysFile,
+      undefined, { explain: vi.fn(async () => "💭 Judge: first") }, undefined, { retry },
+    );
+
+    expect(result).toBe("no");
+    expect(calls[0].options).toEqual(["Yes", "Always: test *", "Explain", "Judge again", "No (with reason)", "No"]);
+    expect(calls[1].title).toContain("💭 Judge: DEFER (low)");
+    expect(calls[1].options).toEqual(["Yes", "Always: test *", "Explain", "Judge again", "No (with reason)", "No"]);
+  });
+
+  it("no retry hook → no 'Judge again' option", async () => {
+    const { ctx, calls } = makeRecordingCtx([0]);
+    await twoTierAlwaysPrompt(
+      makePrompt(), store, ctx,
+      cbs.onAlways, cbs.onAlwaysPaths, cbs.onAlwaysFile,
+    );
+    expect(calls[0].options).not.toContain("Judge again");
+  });
+});
+
 // ── D10: trust option ──────────────────────────────────────────────────
 
 describe("twoTierAlwaysPrompt: D10 trust option", () => {

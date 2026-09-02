@@ -8,19 +8,21 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type {Decision, PromptDecision} from "../decide/types";
+import type {Decision, PermissionRequest, PromptDecision} from "../decide/types";
 
-const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock } = vi.hoisted(() => ({
+const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock, stage2Mock } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn(),
   verdictMock: vi.fn(),
   promptSpy: vi.fn(),
   resolverMock: vi.fn(),
   pathsRulesMock: vi.fn(),
+  stage2Mock: vi.fn(),
 }));
 
 vi.mock("../judge/verdict", async (importOriginal) => ({
   judgeStatus: judgeStatusMock,
   getJudgeVerdict: verdictMock,
+  getStage2Verdict: stage2Mock,
   // Real renderer — the suggests-line assertions below exercise it.
   judgeVerdictBlock: (await importOriginal<typeof import("../judge/verdict")>()).judgeVerdictBlock,
 }));
@@ -54,12 +56,14 @@ import { showPrompt } from "../ui/prompt-flow";
 import type { DspaFallthrough } from "../gate/fallthrough";
 import { createStore } from "../gate/store";
 import { setDspatActive, resetDspat } from "../modes/dspat-mode";
+import { getDspaStats } from "../modes/dspa-mode";
 
 beforeEach(() => {
   vi.clearAllMocks();
   resetDspat();
   judgeStatusMock.mockReturnValue({ state: "ok", modelLabel: "llama-cpp/qwen (session)", reason: null });
   verdictMock.mockResolvedValue(null);
+  stage2Mock.mockResolvedValue(null);
   promptSpy.mockResolvedValue("yes");
   resolverMock.mockResolvedValue(null);
   pathsRulesMock.mockReturnValue(null);
@@ -102,6 +106,9 @@ function shownPrompt() {
 }
 function judgeArg() {
   return promptSpy.mock.calls[0][7];
+}
+function retryArg() {
+  return promptSpy.mock.calls[0][9];
 }
 
 describe("default mode (no dspat)", () => {
@@ -248,6 +255,61 @@ describe("/dspa fall-through", () => {
     expect(body).toContain("→ suggests: APPROVE (low) — advisory (floor stop stands)");
     // the prompt offers the Trust option for the fetchable form
     expect((shownPrompt() as any).trustPackages).toEqual(["evil-pkg"]);
+  });
+});
+
+describe("Judge again wiring (dspa fall-through)", () => {
+  const request: PermissionRequest = { type: "bash", command: "rm -rf /tmp/test", cwd: "/home/user/project" };
+  const defer1 = { model: "llama-cpp/qwen", explanation: "E.", approve: "defer" as const, risk: "low" as const, reason: "r", latencyMs: 10, cached: false };
+  const fallthrough = (gate: DspaFallthrough["gate"], verdict: DspaFallthrough["verdict"], stage: DspaFallthrough["stage"], note?: string): DspaFallthrough =>
+    ({ gate, verdict, stage, note } as DspaFallthrough);
+
+  it("floor passed + non-reject verdict + request → retry hook offered", async () => {
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, defer1, 1, "stage 2 unavailable"), request);
+    expect(retryArg()).toBeDefined();
+  });
+
+  it("REJECT final verdict → no retry (the judgment stands)", async () => {
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, { ...defer1, approve: "deny", risk: "high" }, 2), request);
+    expect(retryArg()).toBeUndefined();
+  });
+
+  it("floor stop → no retry (the deterministic layer is not re-judged)", async () => {
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: false, reason: "dangerous: rm" }, { ...defer1, approve: "approve", risk: "low" }, 2), request);
+    expect(retryArg()).toBeUndefined();
+  });
+
+  it("no request → no retry (the auto-allow log line needs it)", async () => {
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, defer1, 1, "stage 2 unavailable"));
+    expect(retryArg()).toBeUndefined();
+  });
+
+  it("retry() re-runs stage 2; approve+low → auto-allow (counter + toast)", async () => {
+    stage2Mock.mockResolvedValue({ model: "llama-cpp/qwen", explanation: "E2.", approve: "approve", risk: "low", reason: "r2", latencyMs: 10, cached: false });
+    const notify = vi.fn();
+    const uiCtx = { ...ctx, ui: { ...ctx.ui, notify } } as never;
+    await showPrompt(bashDecision(), uiCtx, store, fallthrough({ ok: true }, defer1, 1, "stage 2 unavailable"), request);
+    const before = getDspaStats().autoAllowed;
+    const r = await retryArg()!.retry();
+    expect(stage2Mock).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({ autoAllowed: true, body: null });
+    expect(getDspaStats().autoAllowed).toBe(before + 1);
+    expect(notify).toHaveBeenCalled();
+  });
+
+  it("retry() with an over-authority verdict → replacement body, still prompting", async () => {
+    stage2Mock.mockResolvedValue({ model: "llama-cpp/qwen", explanation: "E2.", approve: "approve", risk: "high", reason: "r2", latencyMs: 10, cached: false });
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, defer1, 1, "stage 2 unavailable"), request);
+    const r = await retryArg()!.retry();
+    expect(r.autoAllowed).toBe(false);
+    expect(r.body).toContain("APPROVE (high) — not auto-allowed (risk must be low or medium)");
+  });
+
+  it("retry() with a failed stage-2 call → replacement body with the failure note", async () => {
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, defer1, 1, "stage 2 unavailable"), request);
+    const r = await retryArg()!.retry();
+    expect(r.autoAllowed).toBe(false);
+    expect(r.body).toContain("stage 2 produced no verdict");
   });
 });
 
