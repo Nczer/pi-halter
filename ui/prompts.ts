@@ -21,6 +21,21 @@ export interface JudgeExplain {
   explain: () => Promise<string | null>;
 }
 
+/**
+ * dspa fall-through retry hook: when provided, tier-1 gets a repeatable
+ * "Judge again" option. Selecting it re-runs the judge (the caller's
+ * business — in production, a fresh uncached stage-2 call).
+ *  - `autoAllowed: true` — the new verdict auto-allows; the prompt
+ *    resolves as "yes" (the side effects are the caller's).
+ *  - otherwise `body` (when non-null) REPLACES the prompt body for the
+ *    re-show (the new verdict block or a failure note); null keeps it.
+ * The option stays available on every re-show — each selection is a fresh
+ * model call (the user is explicitly asking for it).
+ */
+export interface JudgeRetry {
+  retry: () => Promise<{ autoAllowed: boolean; body: string | null }>;
+}
+
 /** Tier-2 choice indices. */
 enum Tier2 {
   Confirm = 0,
@@ -251,6 +266,7 @@ export async function twoTierAlwaysPrompt(
   onAlwaysBroader?: (dir?: string) => void,
   judge?: JudgeExplain,
   onTrust?: () => void,
+  retryJudge?: JudgeRetry,
 ): Promise<PromptResult> {
   const options = buildAlwaysOptions(prompt, { onAlways, onAlwaysPaths, onAlwaysFile, onAlwaysBroader, onTrust });
 
@@ -263,10 +279,12 @@ export async function twoTierAlwaysPrompt(
 
   while (true) {
     const showJudge = !!judge && !judgeExplained;
+    const showRetry = !!retryJudge;
     const choices = [
       "Yes",
       ...options.map(o => o.label),
       ...(showJudge ? ["Explain"] : []),
+      ...(showRetry ? ["Judge again"] : []),
       "No (with reason)",
       "No",
     ];
@@ -300,6 +318,14 @@ export async function twoTierAlwaysPrompt(
           : activePrompt.body + "\n⚠️ Judge: call failed (model unavailable or timed out)",
       };
       judgeExplained = true;
+      continue;
+    }
+
+    // ── Judge again (dspa fall-through retry — repeatable) ──
+    if (showRetry && idx === 1 + options.length + (showJudge ? 1 : 0)) {
+      const r = await retryJudge.retry();
+      if (r.autoAllowed) return "yes";
+      if (r.body) activePrompt = { ...activePrompt, body: r.body };
       continue;
     }
 

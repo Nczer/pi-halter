@@ -129,7 +129,7 @@ export async function gate(
   expandTools(ctx);
 
   try {
-    const result = await showPrompt(decision, ctx, store, dspaFallthrough);
+    const result = await showPrompt(decision, ctx, store, dspaFallthrough, request);
     if (!result.allowed) {
       return onReject(decision, result);
     }

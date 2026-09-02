@@ -1,11 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type {Decision} from "../decide/types";
+import type {Decision, PermissionRequest} from "../decide/types";
 import type { Store } from "../gate/store";
 import { buildPrompt, pdTargetLabel } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
 import { updateWidget } from "./widget";
 import { RuleGenerator } from "../decide/rule-generator";
-import {getJudgeVerdict, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
+import {getJudgeVerdict, getStage2Verdict, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
+import { dspaAutoAllowed } from "../gate/fallthrough";
 import { resolveUnresolvedPaths, type ResolutionMap } from "../judge/path-resolver";
 import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/dspat-mode";
 import type {JudgeResult} from "../judge/judge";
@@ -34,6 +35,8 @@ export async function showPrompt(
   ctx: ExtensionContext,
   store: Store,
   dspa?: DspaFallthrough,
+  /** Only for the "Judge again" retry's auto-allow log line; omitted → no retry option. */
+  request?: PermissionRequest,
 ): Promise<PromptFlowResult> {
   if (decision.kind !== "prompt") {
     return { allowed: true };
@@ -79,6 +82,9 @@ export async function showPrompt(
   // session grant that covers a prompt's scope suppresses its Always option.
   const isCovered = (dir: string) => store.isInsideAllowedDir(dir, "read");
   let prompt = buildPrompt(decision, resolutions ?? undefined, confirmedTokens, isCovered);
+  // The body before any dspa/dspat verdict lines — the "Judge again" retry
+  // re-renders from this base so re-retries never stack stale verdicts.
+  const baseBody = prompt.body;
 
   // /dspa fall-through: explain why the operation was not auto-allowed —
   // the gate reason, and/or the judge verdict that declined to approve.
@@ -180,6 +186,44 @@ export async function showPrompt(
       : undefined;
 
   /**
+   * "Judge again" (dspa fall-through, floor passed, final verdict not a
+   * REJECT): re-run the intent pass — a fresh, uncached stage-2 call. The
+   * escape hatch for the "stage 2 unavailable" fall-through (an infra
+   * failure of the judge call) and for a verdict the user wants re-judged.
+   * An approving verdict auto-allows (the same side effects as the
+   * original attempt — the log line is a plain stage-2 approval); anything
+   * else re-shows the prompt with the new verdict. A REJECT is a judgment,
+   * not an infra failure — it is not re-judged (Yes/No are the user's
+   * tools). No retry where the floor stopped the auto-allow (the floor is
+   * deterministic — re-running the judge cannot change it) or without the
+   * request (the auto-allow log line needs it).
+   */
+  const retryJudge =
+    dspa && dspa.gate.ok && dspa.verdict?.approve !== "deny" && request
+      ? {
+          retry: async () => {
+            // Immediate feedback while the re-run is in flight (the widget
+            // line shows the stage too, but the prompt has the focus).
+            try { ctx.ui.notify("⚖️ Judge: stage 2 re-running…"); } catch { /* no UI */ }
+            const v2 = await getStage2Verdict(pd, ctx, store);
+            if (v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium")) {
+              dspaAutoAllowed(request, pd, ctx, store, v2, 2);
+              return { autoAllowed: true, body: null };
+            }
+            const block = v2
+              ? judgeVerdictBlock(
+                  v2,
+                  v2.approve === "approve"
+                    ? "— not auto-allowed (risk must be low or medium)"
+                    : undefined,
+                )
+              : "🚧 DSPA: call again — stage 2 produced no verdict (timeout or call failure)";
+            return { autoAllowed: false, body: baseBody + "\n" + block };
+          },
+        }
+      : undefined;
+
+  /**
    * Persist resolutions as user-confirmed (store.confirmResolution) so the
    * same command + tokens pass the dspa gate deterministically next run.
    * `all` — the user accepted an option that granted exactly these dirs
@@ -236,7 +280,7 @@ export async function showPrompt(
     // untrusted-package stop. The store check is session-global.
     for (const pkg of prompt.trustPackages ?? []) store.trustPackage(pkg);
     updateWidget(ctx);
-  });
+  }, retryJudge);
 
   // /dspat: record the verdict paired with the human's decision —
   // session-scoped stats only (judge quality is model-dependent).
