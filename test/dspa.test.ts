@@ -23,7 +23,7 @@ import type {JudgeResult} from "../judge/judge";
 vi.mock("../judge/verdict", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../judge/verdict")>();
   return {
-    ...actual, // extractScriptPayload & friends run real (D11 conversion)
+    ...actual, // the D11 script-payload identification (analysis/) runs real
     getJudgeVerdict: vi.fn(),
     getStage2Verdict: vi.fn(),
     judgeStatus: vi.fn(() => ({ state: "ok", modelLabel: "test/model (session)", reason: null })),

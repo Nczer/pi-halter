@@ -11,21 +11,18 @@
  * timeout, bad reply) resolves to "no verdict" and the prompt looks exactly
  * as it did before.
  *
- * Script payloads: when the command executes an untrusted local script, its
- * content is read and handed to the judge fenced as untrusted data (trusted
- * skill scripts are excluded — the user already vouches for that directory).
+ * Script payloads: when the command executes an untrusted local script,
+ * analysis/script-payload.ts identifies it and its content is handed to the
+ * judge fenced as untrusted data (trusted skill scripts are excluded — the
+ * user already vouches for that directory).
  */
-import fs from "node:fs";
-import path from "node:path";
 import { stream } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {BashPromptData, PromptData} from "../decide/types";
 import type { Store } from "../gate/store";
-import { analyzeCommand, type CommandAnalysis } from "../analysis/command-analysis";
-import { expandTilde } from "../analysis/path-util";
-import { tokenizeSegment } from "../analysis/tokenizer";
-import { isTrustedScriptCommand } from "../config";
+import { analyzeCommand } from "../analysis/command-analysis";
+import { findExecutedScript } from "../analysis/script-payload";
 import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeResult, JudgeSettings} from "./judge";
 import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
@@ -49,68 +46,6 @@ import { isDspatActive, setDspatJudging } from "../modes/dspat-mode";
  */
 const STAGE2_TIMEOUT_FACTOR = 3;
 
-// ── Script payload extraction ──
-
-/** Extensions whose content is worth showing the judge (text scripts). */
-const SCRIPT_EXT_RE = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|php|lua|exs?)$/i;
-const SCRIPT_INTERPRETERS = new Set([
-  "python", "python3", "python2", "py",
-  "node", "nodejs",
-  "ruby", "perl", "php", "lua",
-  "deno", "bun",
-  "bash", "sh", "zsh",
-]);
-/**
- * Find the local script a command executes (if any) and read its content.
- * Null for interpreter forms without a resolvable file (`bash -c`,
- * `python3 -`, `python3 -m x`, computed paths, trusted skill scripts,
- * missing or non-regular files).
- */
-export function extractScriptPayload(
-  analysis: CommandAnalysis,
-  cwd: string,
-): JudgmentScript | null {
-  for (let i = 0; i < analysis.segments.length; i++) {
-    const seg = analysis.segments[i].trim();
-    if (!seg) continue;
-    const tokens = tokenizeSegment(seg);
-    if (tokens.length < 1) continue;
-    // Raw first token (getFirstWord returns the basename — /bin/bash must
-    // still count as an interpreter).
-    const firstToken = tokens[0].toLowerCase();
-    const isInterp = SCRIPT_INTERPRETERS.has(path.basename(firstToken));
-    // Direct exec (./scripts/job.sh) or interpreter (python3 job.py).
-    if (!isInterp && !(firstToken.includes("/") || firstToken.startsWith("~"))) continue;
-    if (isTrustedScriptCommand(seg, analysis.effectiveCwds[i] ?? cwd)) continue;
-
-    const base = analysis.effectiveCwds[i] ?? cwd;
-    // First non-flag token that looks like a script file.
-    const startIdx = isInterp ? 1 : 0;
-    for (let j = startIdx; j < tokens.length; j++) {
-      const token = tokens[j];
-      if (token.startsWith("-")) continue;
-      if (token.includes("$") || token.includes("`")) break; // computed — unresolvable
-      if (!SCRIPT_EXT_RE.test(token)) break;
-      const resolved = path.resolve(base, expandTilde(token));
-      return readScriptFile(resolved);
-    }
-  }
-  return null;
-}
-
-function readScriptFile(resolved: string): JudgmentScript | null {
-  try {
-    const stat = fs.statSync(resolved);
-    if (!stat.isFile()) return null;
-    // Full read (D11): the payload is write content — trimmed payloads made
-    // the judge defer on safe long scripts.
-    const content = fs.readFileSync(resolved, "utf-8");
-    return { path: resolved, content };
-  } catch {
-    return null;
-  }
-}
-
 // ── Judgment input from any prompt ──
 
 /**
@@ -133,7 +68,7 @@ async function buildJudgmentInput(
         isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
         getConfirmedResolution: (t) => store.getConfirmedResolution(t),
       }));
-    const script = extractScriptPayload(analysis, pd.cwd);
+    const script = findExecutedScript(analysis, pd.cwd);
     const input: JudgmentBashInput = {
       command: pd.command,
       cwd: pd.cwd,

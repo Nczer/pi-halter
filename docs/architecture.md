@@ -421,6 +421,8 @@ analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           cwd-local, var-resolution, path-analysis,
                           segment-analysis, segment-helpers, command-analysis,
                           risk-analyzer, obfuscation, tmux-helpers,
+                          script-payload (the local script a command
+                          executes, read in full),
                           evaluators/ (6 domain evaluators + builder + types)
 config/                   (unchanged) bash-patterns, path-rules,
                           dangerous-patterns, trusted-scripts, logging, index
