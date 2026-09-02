@@ -1,8 +1,8 @@
 /**
- * judge-prompt.ts — phase 1 wiring: explanation extraction, script payload
- * detection (untrusted local scripts, trusted/binary/computed exclusion),
- * and the fail-safe behavior of getJudgeVerdict through an injected
- * `stream` seam (no real model, no network).
+ * judge-prompt.ts — judge verdict wiring: explanation extraction and the
+ * fail-safe behavior of getJudgeVerdict through an injected `stream` seam
+ * (no real model, no network). Script-payload identification is tested in
+ * test/script-payload.test.ts (analysis layer).
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -12,7 +12,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createStore } from "../gate/store";
-import {extractScriptPayload, getJudgeVerdict, getStage2Verdict, judgeAvailable, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
+import {getJudgeVerdict, getStage2Verdict, judgeAvailable, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
 import { analyzeCommand } from "../analysis/command-analysis";
 import {DEFAULT_JUDGE_SETTINGS, JudgeStreamFn, JudgeResult, JudgeSettings} from "../judge/judge";
 import type {BashPromptData as BashPromptDataType} from "../decide/types";
@@ -134,53 +134,6 @@ beforeEach(() => {
   for (const f of fs.readdirSync(tmp)) {
     fs.rmSync(path.join(tmp, f), { recursive: true, force: true });
   }
-});
-
-// ── Script payload extraction ──
-
-describe("extractScriptPayload", () => {
-  async function analyze(command: string, cwd = tmp) {
-    return analyzeCommand(command, cwd);
-  }
-
-  it("includes an interpreter-run local script", async () => {
-    fs.writeFileSync(path.join(tmp, "job.py"), "print('hello from job')\n");
-    const s = extractScriptPayload(await analyze("python3 job.py"), tmp);
-    expect(s?.path).toBe(path.join(tmp, "job.py"));
-    expect(s?.content).toContain("hello from job");
-  });
-
-  it("includes a directly-executed local script", async () => {
-    fs.writeFileSync(path.join(tmp, "job.sh"), "#!/bin/sh\necho hi\n");
-    const s = extractScriptPayload(await analyze("./job.sh"), tmp);
-    expect(s?.path).toBe(path.join(tmp, "job.sh"));
-    expect(s?.content).toContain("echo hi");
-  });
-
-  it("resolves the script against the effective cwd after a cd", async () => {
-    const sub = path.join(tmp, "sub");
-    fs.mkdirSync(sub);
-    fs.writeFileSync(path.join(sub, "job.py"), "print('nested')\n");
-    const s = extractScriptPayload(await analyze(`cd ${sub} && python3 job.py`), tmp);
-    expect(s?.path).toBe(path.join(sub, "job.py"));
-  });
-
-  it("returns null for bash -c (no resolvable file)", async () => {
-    expect(extractScriptPayload(await analyze("bash -c 'echo hi'"), tmp)).toBeNull();
-  });
-
-  it("returns null for computed script paths", async () => {
-    expect(extractScriptPayload(await analyze("python3 $SCRIPT"), tmp)).toBeNull();
-  });
-
-  it("returns null for executables without a script extension", async () => {
-    fs.writeFileSync(path.join(tmp, "tool"), "not a script\n");
-    expect(extractScriptPayload(await analyze("./tool"), tmp)).toBeNull();
-  });
-
-  it("returns null when the file does not exist", async () => {
-    expect(extractScriptPayload(await analyze("python3 missing.py"), tmp)).toBeNull();
-  });
 });
 
 // ── getJudgeVerdict ──

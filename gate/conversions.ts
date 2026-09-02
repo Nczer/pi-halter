@@ -20,7 +20,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {Decision, PermissionRequest} from "../decide/types";
 import { synthesizeManualBashPrompt } from "../decide/bash-rules";
-import { extractScriptPayload, judgeStatus } from "../judge/verdict";
+import { findExecutedScript } from "../analysis/script-payload";
+import { judgeStatus } from "../judge/verdict";
 import { isDspaActive } from "../modes/dspa-mode";
 import { gateDecide } from "./gate";
 import type { Store } from "./store";
@@ -59,7 +60,7 @@ export async function applyDspaConversions(
   // D11: bash script-payload conversion.
   if (request.type === "bash") {
     const analysis = decision.analysis;
-    if (analysis && extractScriptPayload(analysis, request.cwd) !== null) {
+    if (analysis && findExecutedScript(analysis, request.cwd) !== null) {
       const synthetic = await synthesizeManualBashPrompt(request, store, analysis);
       if (synthetic?.kind === "prompt") return synthetic;
     }
