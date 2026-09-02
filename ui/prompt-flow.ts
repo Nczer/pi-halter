@@ -186,20 +186,26 @@ export async function showPrompt(
       : undefined;
 
   /**
-   * "Judge again" (dspa fall-through, floor passed, final verdict not a
-   * REJECT): re-run the intent pass — a fresh, uncached stage-2 call. The
-   * escape hatch for the "stage 2 unavailable" fall-through (an infra
-   * failure of the judge call) and for a verdict the user wants re-judged.
-   * An approving verdict auto-allows (the same side effects as the
-   * original attempt — the log line is a plain stage-2 approval); anything
-   * else re-shows the prompt with the new verdict. A REJECT is a judgment,
-   * not an infra failure — it is not re-judged (Yes/No are the user's
-   * tools). No retry where the floor stopped the auto-allow (the floor is
-   * deterministic — re-running the judge cannot change it) or without the
+   * "Judge again" (dspa fall-through, floor passed, the judge call failed):
+   * the final verdict is stage 1's or absent — the model was unreachable or
+   * a call produced no verdict within its deadline. Re-run the intent pass —
+   * a fresh, uncached stage-2 call (the model may have been busy loading).
+   * An approving verdict auto-allows (the same side effects as the original
+   * attempt — the log line is a plain stage-2 approval); anything else
+   * re-shows the prompt with the new verdict (or a failure note).
+   * Legitimate stage-2 verdicts (DEFER, REJECT, approve above authority)
+   * are judgments, not infra failures — never re-judged (Yes/No are the
+   * user's tools). No retry when the judge is off (a choice, not a transient
+   * failure), where the floor stopped the auto-allow (the floor is
+   * deterministic — re-running the judge cannot change it), or without the
    * request (the auto-allow log line needs it).
    */
   const retryJudge =
-    dspa && dspa.gate.ok && dspa.verdict?.approve !== "deny" && request
+    dspa &&
+    dspa.gate.ok &&
+    dspa.stage !== 2 &&
+    judgeStatus(ctx).state !== "off" &&
+    request
       ? {
           retry: async () => {
             // Immediate feedback while the re-run is in flight (the widget
