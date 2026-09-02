@@ -264,13 +264,29 @@ describe("Judge again wiring (dspa fall-through)", () => {
   const fallthrough = (gate: DspaFallthrough["gate"], verdict: DspaFallthrough["verdict"], stage: DspaFallthrough["stage"], note?: string): DspaFallthrough =>
     ({ gate, verdict, stage, note } as DspaFallthrough);
 
-  it("floor passed + non-reject verdict + request → retry hook offered", async () => {
+  it("floor passed + stage-2 call failed (stage-1 verdict carried) + request → retry hook offered", async () => {
     await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, defer1, 1, "stage 2 unavailable"), request);
     expect(retryArg()).toBeDefined();
   });
 
-  it("REJECT final verdict → no retry (the judgment stands)", async () => {
+  it("floor passed + no verdict at all → retry hook offered", async () => {
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, null, null, "judge call failed"), request);
+    expect(retryArg()).toBeDefined();
+  });
+
+  it("legitimate stage-2 DEFER → no retry (a judgment, not an infra failure)", async () => {
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, defer1, 2), request);
+    expect(retryArg()).toBeUndefined();
+  });
+
+  it("legitimate stage-2 REJECT → no retry (the judgment stands)", async () => {
     await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, { ...defer1, approve: "deny", risk: "high" }, 2), request);
+    expect(retryArg()).toBeUndefined();
+  });
+
+  it("judge off → no retry (a choice, not a transient failure)", async () => {
+    judgeStatusMock.mockReturnValue({ state: "off", modelLabel: null, reason: null });
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, null, null), request);
     expect(retryArg()).toBeUndefined();
   });
 

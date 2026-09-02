@@ -213,14 +213,18 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
 
 `approve` + `high`, `deny`, `defer`, and any no-verdict outcome prompt.
 
-**"Judge again" retry.** When the floor passed but the operation still
-prompted (DEFER, over-authority approve, or a failed/absent stage-2 call),
-the prompt offers a repeatable `Judge again` option: a fresh, uncached
-stage-2 call. An approving verdict (low/medium risk) auto-allows with the
-normal dspa side effects; anything else re-shows the prompt with the new
-verdict (or a failure note). Not offered after a final REJECT (a judgment,
-not an infra failure — Yes/No are the user's tools), after a floor stop (the
-deterministic layer cannot be re-judged), or without the permission request.
+**"Judge again" retry.** When the floor passed but the judge call itself
+failed — the model was unreachable, or a stage produced no verdict within
+its deadline (the carried verdict is stage 1's or absent) — the prompt
+offers a repeatable `Judge again` option: a fresh, uncached stage-2 call
+(the model may have been busy loading). An approving verdict (low/medium
+risk) auto-allows with the normal dspa side effects; anything else re-shows
+the prompt with the new verdict (or a failure note). Legitimate stage-2
+verdicts (DEFER, REJECT, approve above authority) are judgments, not infra
+failures — never re-judged (Yes/No are the user's tools). Not offered when
+the judge is off (a choice, not a transient failure), after a floor stop
+(the deterministic layer cannot be re-judged), or without the permission
+request.
 Scope-class floor stops (outside bar, unresolvable, untrusted package) run
 the judge anyway and render the verdict advisory; danger-class stops (parse,
 obscured, credential, egress) stay bare. Auto-allowed operations toast.
