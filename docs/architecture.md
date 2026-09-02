@@ -262,8 +262,9 @@ pending more observed data.
 
 ## dspat regime
 
-Identical to manual plus a `💭 Judge:` block in every bash prompt (explanation
-+ `→ suggests: APPROVE|REJECT|DEFER (<risk>)`). The user's choice is recorded
+Identical to manual plus a `💭 Judge:` block in every prompt — bash, file,
+and tool (stage 1 only; the packet builder covers all three prompt types)
+(explanation + `→ suggests: APPROVE|REJECT|DEFER (<risk>)`). The user's choice is recorded
 against the verdict as session agreement stats (widget line). No auto-allow.
 An on-demand `💭 Explain` prompt option runs the judge in any regime without
 recording agreement stats (the human picks when to consult, so the subset is

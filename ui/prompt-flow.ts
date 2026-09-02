@@ -135,7 +135,7 @@ export async function showPrompt(
   }
 
   // /dspat (advisory): the judge runs automatically on every prompt type
-  // (bash / file) and the prompt shows the full verdict (explanation
+  // (bash / file / tool) and the prompt shows the full verdict (explanation
   // + suggestion). The human always takes the call; the verdict + decision
   // feed the session stats (model-scoped, never persisted). The
   // `!dspa?.verdict` guard is defensive — the modes are exclusive
