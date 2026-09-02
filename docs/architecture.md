@@ -212,6 +212,15 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
    final.
 
 `approve` + `high`, `deny`, `defer`, and any no-verdict outcome prompt.
+
+**"Judge again" retry.** When the floor passed but the operation still
+prompted (DEFER, over-authority approve, or a failed/absent stage-2 call),
+the prompt offers a repeatable `Judge again` option: a fresh, uncached
+stage-2 call. An approving verdict (low/medium risk) auto-allows with the
+normal dspa side effects; anything else re-shows the prompt with the new
+verdict (or a failure note). Not offered after a final REJECT (a judgment,
+not an infra failure — Yes/No are the user's tools), after a floor stop (the
+deterministic layer cannot be re-judged), or without the permission request.
 Scope-class floor stops (outside bar, unresolvable, untrusted package) run
 the judge anyway and render the verdict advisory; danger-class stops (parse,
 obscured, credential, egress) stay bare. Auto-allowed operations toast.
@@ -272,13 +281,24 @@ verbatim) plus a 10-line tool-call digest (≤120 chars/line) plus session
 grants. Agent prose and tool outputs never appear: a compromised agent cannot
 talk the approver into compliance.
 
+**Timeouts are two deadlines, not one.** `timeout` (default 8000ms) is a
+FIRST-TOKEN deadline: the streaming call is aborted if the model produces no
+output (any event past the stream's `start` handshake) within that window — a
+dead or saturated model fails fast. The whole response is separately capped
+(`JUDGE_RESPONSE_CAP_MS`, 60s), so a responsive model can finish a long
+verdict; a call that starts promptly but never finishes still aborts. Stage 2
+gets `STAGE2_TIMEOUT_FACTOR` (3×) the base first-token window: its larger
+packet has a slower prefill on local models, and an unmet stage-2 deadline is
+what turns an approvable operation into a "stage 2 unavailable" fall-through.
+
 Any failure (model unresolved, auth, timeout, malformed reply) resolves to
 no verdict, and the prompt shows exactly what it would have shown without the
 judge. The judge never alters a decision on its own: display-only by default,
 auto-allow only behind the floor.
 
 Settings (`/judge`: bare = show; `on|off`, `model <provider/id|session>`,
-`thinking <level>`, `timeout <ms>`) persist in the `halter` namespace of
+`thinking <level>`, `timeout <ms>` — first-token deadline, see above) persist
+in the `halter` namespace of
 `~/.pi/agent/settings-ext.json` via `halter-settings.ts` (stat-cached reads,
 corrupt file → `.bak` + defaults, defaults materialized on first read).
 
@@ -358,7 +378,8 @@ halter-settings.ts        owner of the halter namespace in settings-ext.json
 decide/
   engine.ts               async dispatcher: request type → policy → Decision
   types.ts                Decision, PromptData, requests, DecideOptions
-  bash-rules.ts           the rule pipeline (RetryLoop → … → PromptFallback)
+  bash-rules.ts           the rule pipeline (RetryLoop → … → PromptFallback);
+                          synthesizeManualBashPrompt (D3 bash conversion)
   bash-policy.ts          bash entry: parse → rules
   file-policy.ts          file entry: path checks
   rule-generator.ts       "Always" → grant derivation (on-demand)
@@ -374,7 +395,8 @@ gate/
   store.ts                session grants + confirmed resolutions + aborts
   decision-log.ts         JSONL logs (decisions + unresolved)
 judge/
-  judge.ts                judge settings access + one-shot model call + cache
+  judge.ts                judge settings access + streaming model call
+                          (first-token deadline + response cap) + cache
   packet.ts               packet building + system prompts + script payload
   verdict.ts              verdict wrappers, advisory block rendering
   session-context.ts      reasoning-blind stage-2 context
