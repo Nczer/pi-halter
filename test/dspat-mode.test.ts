@@ -148,9 +148,9 @@ describe("widget (unified halter widget — see widget.ts)", () => {
     const line = () => halterLine(widgets, theme)!.render(200)[0];
     expect(line()).toContain("◎ DSPAT: judge advises");
     setDspatJudging(true, ctx);
-    expect(line()).toContain("◎ DSPAT — judging…");
+    expect(line()).toContain("◎ DSPAT — judging stage 1…");
     setDspatJudging(false, ctx);
-    expect(line()).not.toContain("judging…");
+    expect(line()).not.toContain("judging");
   });
 
   it("drops details from the tail before truncating (narrow terminals)", () => {

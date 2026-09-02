@@ -3,7 +3,7 @@
  * judge call (verdict parsing, fail-safe defers, timeout), LRU cache,
  * settings merge/auto-gen, and model resolution.
  *
- * The model call is exercised through the injected `complete` seam — no real
+ * The model call is exercised through the injected `stream` seam — no real
  * model, no network. Settings tests run against a tmp file; the real
  * ~/.pi/agent/settings-ext.json is never touched.
  */
@@ -12,8 +12,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {buildJudgmentPacket, JudgmentInput} from "../judge/packet";
-import {judge, readJudgeSettings, writeJudgeSettings, resolveJudgeModel, resolveJudgeAuth, resetJudgeCache, DEFAULT_JUDGE_SETTINGS, JUDGE_SYSTEM_PROMPT, JUDGE_STAGE2_SYSTEM_PROMPT, JudgeOptions, CompleteFn, ModelRegistryLike} from "../judge/judge";
+import {judge, readJudgeSettings, writeJudgeSettings, resolveJudgeModel, resolveJudgeAuth, resetJudgeCache, DEFAULT_JUDGE_SETTINGS, JUDGE_SYSTEM_PROMPT, JUDGE_STAGE2_SYSTEM_PROMPT, JudgeOptions, JudgeStreamFn, ModelRegistryLike} from "../judge/judge";
 
 // ── Fakes ──
 
@@ -65,11 +66,25 @@ interface CapturedCall {
   options: { signal?: AbortSignal; apiKey?: string; headers?: Record<string, string>; toolChoice?: string } | undefined;
 }
 
-/** Fake complete that returns a fixed reply and captures the call. */
-function fixedComplete(reply: () => AssistantMessage, calls: CapturedCall[]): CompleteFn {
-  return async (model, context, options) => {
+/** Fake stream: pushes start → toolcall_start → done (or error, matching
+ *  the reply's stop reason) on a microtask, and captures the call.
+ *  Mirrors pi-ai's AssistantMessageEventStream contract. */
+function fixedStream(reply: () => AssistantMessage, calls: CapturedCall[]): JudgeStreamFn {
+  return (model, context, options) => {
     calls.push({ model, context, options });
-    return reply();
+    const s = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      const msg = reply();
+      s.push({ type: "start", partial: msg } as never);
+      s.push({ type: "toolcall_start", contentIndex: 0, partial: msg } as never);
+      if (msg.stopReason === "aborted" || msg.stopReason === "error") {
+        s.push({ type: "error", reason: msg.stopReason, error: msg } as never);
+      } else {
+        s.push({ type: "done", reason: "stop", message: msg } as never);
+      }
+      s.end();
+    });
+    return s;
   };
 }
 
@@ -85,7 +100,7 @@ const baseInput: JudgmentInput = {
 
 const baseOpts: JudgeOptions = {
   model: fakeModel(),
-  complete: fixedComplete(() => toolCallReply(VERDICT), []),
+  stream: fixedStream(() => toolCallReply(VERDICT), []),
   thinking: "low",
   timeoutMs: 5000,
 };
@@ -233,7 +248,7 @@ describe("judgment packet", () => {
 describe("judge call", () => {
   it("parses a valid tool call into a result", async () => {
     const calls: CapturedCall[] = [];
-    const r = await judge(baseInput, { ...baseOpts, complete: fixedComplete(() => toolCallReply(VERDICT), calls) });
+    const r = await judge(baseInput, { ...baseOpts, stream: fixedStream(() => toolCallReply(VERDICT), calls) });
     expect(r).toMatchObject({
       approve: "approve",
       risk: "low",
@@ -253,10 +268,10 @@ describe("judge call", () => {
 
   it("forwards the thinking level as reasoning, and omits it for off", async () => {
     const on: CapturedCall[] = [];
-    await judge(baseInput, { ...baseOpts, complete: fixedComplete(() => toolCallReply(VERDICT), on), thinking: "xhigh" });
+    await judge(baseInput, { ...baseOpts, stream: fixedStream(() => toolCallReply(VERDICT), on), thinking: "xhigh" });
     resetJudgeCache();
     const off: CapturedCall[] = [];
-    await judge({ ...baseInput, command: "ls" }, { ...baseOpts, complete: fixedComplete(() => toolCallReply(VERDICT), off), thinking: "off" });
+    await judge({ ...baseInput, command: "ls" }, { ...baseOpts, stream: fixedStream(() => toolCallReply(VERDICT), off), thinking: "off" });
     expect(on[0].options).toMatchObject({ reasoning: "xhigh" });
     expect("reasoning" in (off[0].options ?? {})).toBe(false);
   });
@@ -265,7 +280,7 @@ describe("judge call", () => {
     const long = "word ".repeat(100).trim();
     const r = await judge(
       { ...baseInput, command: "pwd" },
-      { ...baseOpts, complete: fixedComplete(() => toolCallReply({ ...VERDICT, explanation: long }), []) },
+      { ...baseOpts, stream: fixedStream(() => toolCallReply({ ...VERDICT, explanation: long }), []) },
     );
     expect(r.explanation.length).toBeLessThanOrEqual(441);
     expect(r.explanation).toMatch(/…$/);
@@ -275,7 +290,7 @@ describe("judge call", () => {
     const dirty = "\x1b[2mDimmed text\x1b[0m with \x07 bell";
     const r = await judge(
       { ...baseInput, command: "pwd" },
-      { ...baseOpts, complete: fixedComplete(() => toolCallReply({ ...VERDICT, explanation: dirty }), []) },
+      { ...baseOpts, stream: fixedStream(() => toolCallReply({ ...VERDICT, explanation: dirty }), []) },
     );
     expect(r.explanation).toBe("Dimmed text with  bell");
     expect(r.explanation).not.toContain("\x1b");
@@ -284,7 +299,7 @@ describe("judge call", () => {
   it("defers with no-tool-call when the reply has no tool call", async () => {
     const r = await judge(baseInput, {
       ...baseOpts,
-      complete: fixedComplete(() => assistantMsg([{ type: "text", text: '{"approve":"approve"}' }]), []),
+      stream: fixedStream(() => assistantMsg([{ type: "text", text: '{"approve":"approve"}' }]), []),
     });
     expect(r.approve).toBe("defer");
     expect(r.failReason).toBe("no-tool-call");
@@ -295,22 +310,32 @@ describe("judge call", () => {
   it("defers with bad-args on an invalid enum or missing explanation", async () => {
     const badRisk = await judge(baseInput, {
       ...baseOpts,
-      complete: fixedComplete(() => toolCallReply({ ...VERDICT, risk: "extreme" }), []),
+      stream: fixedStream(() => toolCallReply({ ...VERDICT, risk: "extreme" }), []),
     });
     expect(badRisk.failReason).toBe("bad-args");
     const noExpl = await judge({ ...baseInput, command: "pwd" }, {
       ...baseOpts,
-      complete: fixedComplete(() => toolCallReply({ ...VERDICT, explanation: "" }), []),
+      stream: fixedStream(() => toolCallReply({ ...VERDICT, explanation: "" }), []),
     });
     expect(noExpl.failReason).toBe("bad-args");
   });
 
-  it("defers with timeout when complete rejects on abort", async () => {
-    const complete: CompleteFn = (_m, _c, options) =>
-      new Promise<AssistantMessage>((_resolve, reject) => {
-        options?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
-      });
-    const r = await judge(baseInput, { ...baseOpts, complete, timeoutMs: 50 });
+  it("defers with timeout when no first token arrives before the deadline", async () => {
+    // A stream that produces nothing (not even the `start` handshake) until
+    // the signal aborts — a dead or saturated model.
+    const silentStream: JudgeStreamFn = (_m, _c, options) => {
+      const s = createAssistantMessageEventStream();
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          s.push({ type: "error", reason: "aborted", error: assistantMsg([], "aborted") } as never);
+          s.end();
+        },
+        { once: true },
+      );
+      return s;
+    };
+    const r = await judge(baseInput, { ...baseOpts, stream: silentStream, timeoutMs: 50 });
     expect(r.approve).toBe("defer");
     expect(r.failReason).toBe("timeout");
     expect(r.explanation).toBe("");
@@ -319,21 +344,76 @@ describe("judge call", () => {
   it("defers with timeout on an aborted stop reason", async () => {
     const r = await judge(baseInput, {
       ...baseOpts,
-      complete: fixedComplete(() => assistantMsg([], "aborted"), []),
+      stream: fixedStream(() => assistantMsg([], "aborted"), []),
     });
+    expect(r.failReason).toBe("timeout");
+  });
+
+  it("completes when the first token is early, even if the full response outlasts timeoutMs", async () => {
+    // First token at 20ms (inside the 40ms first-token deadline); the full
+    // reply lands at 100ms — past timeoutMs, inside the cap.
+    const reply = toolCallReply(VERDICT);
+    const slowStream: JudgeStreamFn = (_m, _c, options) => {
+      const s = createAssistantMessageEventStream();
+      const t1 = setTimeout(() => {
+        s.push({ type: "start", partial: reply } as never);
+        s.push({ type: "toolcall_start", contentIndex: 0, partial: reply } as never);
+      }, 20);
+      const t2 = setTimeout(() => {
+        s.push({ type: "done", reason: "stop", message: reply } as never);
+        s.end();
+      }, 100);
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(t1);
+          clearTimeout(t2);
+          s.push({ type: "error", reason: "aborted", error: assistantMsg([], "aborted") } as never);
+          s.end();
+        },
+        { once: true },
+      );
+      return s;
+    };
+    const r = await judge(baseInput, { ...baseOpts, stream: slowStream, timeoutMs: 40 });
+    expect(r.approve).toBe("approve");
+    expect(r.failReason).toBeUndefined();
+  });
+
+  it("caps the whole response at capMs even after an early first token", async () => {
+    // First token at 5ms (well inside the 40ms deadline), then the call
+    // stalls — the 60ms cap aborts a responding-but-stuck model.
+    const stub = assistantMsg([], "stop");
+    const stuckStream: JudgeStreamFn = (_m, _c, options) => {
+      const s = createAssistantMessageEventStream();
+      setTimeout(() => {
+        s.push({ type: "start", partial: stub } as never);
+        s.push({ type: "thinking_start", contentIndex: 0, partial: stub } as never);
+      }, 5);
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          s.push({ type: "error", reason: "aborted", error: assistantMsg([], "aborted") } as never);
+          s.end();
+        },
+        { once: true },
+      );
+      return s;
+    };
+    const r = await judge(baseInput, { ...baseOpts, stream: stuckStream, timeoutMs: 40, capMs: 60 });
     expect(r.failReason).toBe("timeout");
   });
 
   it("defers with call-failed on an error stop reason or a throw", async () => {
     const err = await judge(baseInput, {
       ...baseOpts,
-      complete: fixedComplete(() => assistantMsg([], "error", "boom"), []),
+      stream: fixedStream(() => assistantMsg([], "error", "boom"), []),
     });
     expect(err.failReason).toBe("call-failed");
     expect(err.reason).toContain("boom");
     const thrown = await judge({ ...baseInput, command: "pwd" }, {
       ...baseOpts,
-      complete: (async () => { throw new Error("network down"); }) as CompleteFn,
+      stream: (() => { throw new Error("network down"); }) as JudgeStreamFn,
     });
     expect(thrown.failReason).toBe("call-failed");
   });
@@ -344,7 +424,7 @@ describe("judge call", () => {
 describe("judge cache", () => {
   it("serves the second identical call from cache without a model call", async () => {
     const calls: CapturedCall[] = [];
-    const opts = { ...baseOpts, complete: fixedComplete(() => toolCallReply(VERDICT), calls) };
+    const opts = { ...baseOpts, stream: fixedStream(() => toolCallReply(VERDICT), calls) };
     const r1 = await judge(baseInput, opts);
     const r2 = await judge(baseInput, opts);
     expect(r1.cached).toBe(false);
@@ -355,7 +435,7 @@ describe("judge cache", () => {
 
   it("misses when the script content changes", async () => {
     const calls: CapturedCall[] = [];
-    const opts = { ...baseOpts, complete: fixedComplete(() => toolCallReply(VERDICT), calls) };
+    const opts = { ...baseOpts, stream: fixedStream(() => toolCallReply(VERDICT), calls) };
     const input = { ...baseInput, command: "python3 job.py", script: { path: "/w/job.py", content: "a=1" } };
     await judge(input, opts);
     await judge({ ...input, script: { path: "/w/job.py", content: "a=2" } }, opts);
@@ -366,7 +446,7 @@ describe("judge cache", () => {
     const calls: CapturedCall[] = [];
     const opts: JudgeOptions = {
       ...baseOpts,
-      complete: fixedComplete(() => assistantMsg([{ type: "text", text: "no tool" }], "stop"), calls),
+      stream: fixedStream(() => assistantMsg([{ type: "text", text: "no tool" }], "stop"), calls),
     };
     const r1 = await judge(baseInput, opts);
     const r2 = await judge(baseInput, opts);
@@ -380,7 +460,7 @@ describe("judge cache", () => {
     const opts: JudgeOptions = {
       ...baseOpts,
       uncached: true,
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
     };
     const r1 = await judge(baseInput, opts);
     const r2 = await judge(baseInput, opts);
@@ -389,7 +469,7 @@ describe("judge cache", () => {
     expect(calls).toHaveLength(2);
     // The uncached result must not be served to a later cached call.
     const cachedCalls: CapturedCall[] = [];
-    await judge(baseInput, { ...baseOpts, complete: fixedComplete(() => toolCallReply(VERDICT), cachedCalls) });
+    await judge(baseInput, { ...baseOpts, stream: fixedStream(() => toolCallReply(VERDICT), cachedCalls) });
     expect(cachedCalls).toHaveLength(1);
   });
 
@@ -400,7 +480,7 @@ describe("judge cache", () => {
       systemPrompt: "STAGE2 PROMPT",
       extraPacket: "## Session context\n### User messages\ncompare the two extractions",
       uncached: true,
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
     };
     await judge(baseInput, opts);
     expect(calls).toHaveLength(1);
@@ -621,7 +701,7 @@ describe("D13 — stage-2 path report", () => {
       {
         ...baseOpts,
         uncached: true,
-        complete: fixedComplete(
+        stream: fixedStream(
           () => toolCallReply({ ...VERDICT, paths: ["/a/b", "  /a/c  ", 42, ""] }),
           [],
         ),
@@ -633,7 +713,7 @@ describe("D13 — stage-2 path report", () => {
   it("tolerates missing or malformed paths — the verdict still stands", async () => {
     const r1 = await judge(
       baseInput,
-      { ...baseOpts, uncached: true, complete: fixedComplete(() => toolCallReply(VERDICT), []) },
+      { ...baseOpts, uncached: true, stream: fixedStream(() => toolCallReply(VERDICT), []) },
     );
     expect(r1.paths).toBeUndefined();
     const r2 = await judge(
@@ -641,7 +721,7 @@ describe("D13 — stage-2 path report", () => {
       {
         ...baseOpts,
         uncached: true,
-        complete: fixedComplete(() => toolCallReply({ ...VERDICT, paths: "nope" }), []),
+        stream: fixedStream(() => toolCallReply({ ...VERDICT, paths: "nope" }), []),
       },
     );
     expect(r2.paths).toBeUndefined();

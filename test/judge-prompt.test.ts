@@ -2,7 +2,7 @@
  * judge-prompt.ts — phase 1 wiring: explanation extraction, script payload
  * detection (untrusted local scripts, trusted/binary/computed exclusion),
  * and the fail-safe behavior of getJudgeVerdict through an injected
- * `complete` seam (no real model, no network).
+ * `stream` seam (no real model, no network).
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -10,10 +10,11 @@ import path from "node:path";
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createStore } from "../gate/store";
-import {extractScriptPayload, getJudgeVerdict, judgeAvailable, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
+import {extractScriptPayload, getJudgeVerdict, getStage2Verdict, judgeAvailable, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
 import { analyzeCommand } from "../analysis/command-analysis";
-import {DEFAULT_JUDGE_SETTINGS, CompleteFn, JudgeResult, JudgeSettings} from "../judge/judge";
+import {DEFAULT_JUDGE_SETTINGS, JudgeStreamFn, JudgeResult, JudgeSettings} from "../judge/judge";
 import type {BashPromptData as BashPromptDataType} from "../decide/types";
 
 // ── Fakes ──
@@ -58,10 +59,24 @@ interface CapturedCall {
   options: { signal?: AbortSignal; apiKey?: string; toolChoice?: string } | undefined;
 }
 
-function fixedComplete(reply: () => AssistantMessage, calls: CapturedCall[]): CompleteFn {
-  return async (_model, context, options) => {
+/** Fake stream: pushes start → toolcall_start → done (or error, matching
+ *  the reply's stop reason) on a microtask, and captures the call. */
+function fixedStream(reply: () => AssistantMessage, calls: CapturedCall[]): JudgeStreamFn {
+  return (_model, context, options) => {
     calls.push({ context, options: options as CapturedCall["options"] });
-    return reply();
+    const s = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      const msg = reply();
+      s.push({ type: "start", partial: msg } as never);
+      s.push({ type: "toolcall_start", contentIndex: 0, partial: msg } as never);
+      if (msg.stopReason === "aborted" || msg.stopReason === "error") {
+        s.push({ type: "error", reason: msg.stopReason, error: msg } as never);
+      } else {
+        s.push({ type: "done", reason: "stop", message: msg } as never);
+      }
+      s.end();
+    });
+    return s;
   };
 }
 
@@ -175,7 +190,7 @@ describe("getJudgeVerdict", () => {
     const calls: CapturedCall[] = [];
     const { ctx, widgets } = makeCtx(fakeModel());
     const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
       settings: OFF,
     });
     expect(r).toBeNull();
@@ -187,7 +202,7 @@ describe("getJudgeVerdict", () => {
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(undefined);
     const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
     expect(r).toBeNull();
@@ -198,7 +213,7 @@ describe("getJudgeVerdict", () => {
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel(), false);
     const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
     expect(r).toBeNull();
@@ -209,7 +224,7 @@ describe("getJudgeVerdict", () => {
     const calls: CapturedCall[] = [];
     const { ctx, widgets } = makeCtx(fakeModel());
     const r = await getJudgeVerdict(makePd("ls -la", tmp), ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
     expect(r?.explanation).toBe(VERDICT.explanation);
@@ -225,8 +240,7 @@ describe("getJudgeVerdict", () => {
   it("no-tool-call reply → null", async () => {
     const { ctx } = makeCtx(fakeModel());
     const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
-      complete: (async () =>
-        assistantText("I refuse to call tools") as AssistantMessage) as CompleteFn,
+      stream: fixedStream(() => assistantText("I refuse to call tools"), []),
       settings: ON,
     });
     expect(r).toBeNull();
@@ -237,7 +251,7 @@ describe("getJudgeVerdict", () => {
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
     const r = await getJudgeVerdict(makePd("python3 job.py", tmp), ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
     expect(r?.explanation).toBe(VERDICT.explanation);
@@ -250,7 +264,7 @@ describe("getJudgeVerdict", () => {
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
     await getJudgeVerdict(makePd("bash -c 'echo hi'", tmp), ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
     const packet = String(calls[0].context.messages[0].content);
@@ -263,7 +277,7 @@ describe("getJudgeVerdict", () => {
     const carried = await analyzeCommand("ls -la carried-marker", tmp);
     const pd = { ...makePd("f=rm; $f -rf ./build", tmp), analysis: carried };
     await getJudgeVerdict(pd, ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
     const packet = String(calls[0].context.messages[0].content);
@@ -276,9 +290,9 @@ describe("getJudgeVerdict", () => {
   it("an internal throw still resolves to null (fail-safe)", async () => {
     const { ctx } = makeCtx(fakeModel());
     const r = await getJudgeVerdict(makePd("ls", tmp), ctx, createStore(), {
-      complete: (async () => {
+      stream: (() => {
         throw new Error("boom");
-      }) as CompleteFn,
+      }) as JudgeStreamFn,
       settings: ON,
     });
     expect(r).toBeNull();
@@ -299,6 +313,45 @@ function assistantText(text: string): AssistantMessage {
 }
 
 // ── judgeVerdictBlock ──
+
+describe("stage-2 first-token headroom", () => {
+  it("stage 2 gets 3× the first-token deadline (STAGE2_TIMEOUT_FACTOR); stage 1 keeps the base", async () => {
+    // The first token arrives at 100ms: inside stage 2's extended window
+    // (3 × 40ms = 120ms), outside stage 1's (40ms). Unique command — the
+    // LRU is per (model, operation bytes) and must not see earlier tests.
+    const lateStream: JudgeStreamFn = (_m, _c, options) => {
+      const s = createAssistantMessageEventStream();
+      const t = setTimeout(() => {
+        const msg = toolCallReply(VERDICT);
+        s.push({ type: "start", partial: msg } as never);
+        s.push({ type: "toolcall_start", contentIndex: 0, partial: msg } as never);
+        s.push({ type: "done", reason: "stop", message: msg } as never);
+        s.end();
+      }, 100);
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(t);
+          s.push({
+            type: "error",
+            reason: "aborted",
+            error: { ...assistantText(""), stopReason: "aborted" } as never,
+          } as never);
+          s.end();
+        },
+        { once: true },
+      );
+      return s;
+    };
+    const settings: JudgeSettings = { ...ON, timeoutMs: 40 };
+    const { ctx } = makeCtx(fakeModel());
+    const pd = makePd("ls stage-two-headroom", tmp);
+    const v2 = await getStage2Verdict(pd, ctx, createStore(), { stream: lateStream, settings });
+    expect(v2?.approve).toBe("approve"); // 100ms < 3 × 40ms
+    const v1 = await getJudgeVerdict(pd, ctx, createStore(), { stream: lateStream, settings });
+    expect(v1).toBeNull(); // 100ms > 40ms → aborted
+  });
+});
 
 describe("judgeVerdictBlock", () => {
   const v = (approve: string, risk: string) =>
@@ -429,7 +482,7 @@ describe("getJudgeVerdict: file prompts", () => {
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
     const r = await getJudgeVerdict(pd, ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
     expect(r?.explanation).toBe(VERDICT.explanation);
@@ -458,7 +511,7 @@ describe("getJudgeVerdict: file content threading", () => {
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
     await getJudgeVerdict(pd, ctx, createStore(), {
-      complete: fixedComplete(() => toolCallReply(VERDICT), calls),
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
       settings: ON,
     });
     const packet = String(calls[0].context.messages[0].content);

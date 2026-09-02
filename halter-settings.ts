@@ -50,6 +50,12 @@ export const JUDGE_DEFAULTS: {
   // Eval 2026-08-22 (Qwen3 27B, 16-case matrix incl. 10 hard traps):
   // `low` matched xhigh's 10/10 on the hard set with no 34s-style tail.
   thinking: "low",
+  // FIRST-TOKEN deadline (ms): the call is aborted if the model produces
+  // no output within this window (a dead or saturated model fails fast).
+  // The whole response is separately capped (JUDGE_RESPONSE_CAP_MS in
+  // judge/judge.ts), so a slow-but-responsive model can still finish a
+  // long verdict — and stage 2 gets 3× this window (larger packet →
+  // slower prefill; see STAGE2_TIMEOUT_FACTOR in judge/verdict.ts).
   timeoutMs: 8000,
 };
 

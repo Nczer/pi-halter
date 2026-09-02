@@ -28,11 +28,11 @@ import type {
   Tool,
   ToolCall,
 } from "@earendil-works/pi-ai";
-import { complete } from "@earendil-works/pi-ai/compat";
+import { stream } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {BashPromptData} from "../decide/types";
-import {readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, CompleteFn, JudgeSettings} from "./judge";
+import {JUDGE_RESPONSE_CAP_MS, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeSettings} from "./judge";
 import { expandTilde } from "../analysis/path-util";
 
 // ── Model call ──
@@ -111,7 +111,7 @@ function cacheKey(modelId: string, pd: BashPromptData, tokens: string[]): string
  * production uses the real `complete` from @earendil-works/pi-ai and
  * ~/.pi/agent/settings-ext.json. */
 export interface PathResolverDeps {
-  complete?: CompleteFn;
+  stream?: JudgeStreamFn;
   settings?: JudgeSettings;
 }
 
@@ -162,7 +162,10 @@ export async function resolveUnresolvedPaths(
 
     const controller = new AbortController();
     const timeoutMs = settings.timeoutMs ?? 15000;
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // Same two-deadline scheme as judge(): a FIRST-TOKEN window (a dead or
+    // saturated model fails fast) plus a hard cap on the whole response.
+    const firstTokenTimer = setTimeout(() => controller.abort(), timeoutMs);
+    const capTimer = setTimeout(() => controller.abort(), JUDGE_RESPONSE_CAP_MS);
     const streamOptions: Record<string, unknown> = {
       signal: controller.signal,
       apiKey: auth.apiKey,
@@ -173,7 +176,7 @@ export async function resolveUnresolvedPaths(
       toolChoice: "auto",
     };
     try {
-      const reply: AssistantMessage = await (deps.complete ?? complete)(
+      const s = (deps.stream ?? stream)(
         model,
         {
           systemPrompt: RESOLVE_SYSTEM_PROMPT,
@@ -188,6 +191,14 @@ export async function resolveUnresolvedPaths(
         },
         streamOptions,
       );
+      let firstToken = false;
+      for await (const ev of s) {
+        if (!firstToken && ev.type !== "start") {
+          firstToken = true;
+          clearTimeout(firstTokenTimer);
+        }
+      }
+      const reply: AssistantMessage = await s.result();
       if (reply.stopReason === "aborted" || reply.stopReason === "error") return null;
 
       // Read the tool call by position (the first one), not by name — under
@@ -214,7 +225,8 @@ export async function resolveUnresolvedPaths(
     } catch {
       return null;
     } finally {
-      clearTimeout(timer);
+      clearTimeout(firstTokenTimer);
+      clearTimeout(capTimer);
     }
   } catch {
     return null;

@@ -17,7 +17,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { complete } from "@earendil-works/pi-ai/compat";
+import { stream } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {BashPromptData, PromptData} from "../decide/types";
@@ -26,11 +26,28 @@ import { analyzeCommand, type CommandAnalysis } from "../analysis/command-analys
 import { expandTilde } from "../analysis/path-util";
 import { tokenizeSegment } from "../analysis/tokenizer";
 import { isTrustedScriptCommand } from "../config";
-import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, CompleteFn, JudgeResult, JudgeSettings} from "./judge";
+import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeResult, JudgeSettings} from "./judge";
 import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
 import { isDspaActive, setDspaJudging } from "../modes/dspa-mode";
 import { isDspatActive, setDspatJudging } from "../modes/dspat-mode";
+
+// ── Stage-2 timeout headroom ──
+
+/**
+ * The judge timeout (judge.timeoutMs) is a FIRST-TOKEN deadline: the call
+ * is aborted if the model produces no output (any stream event past the
+ * `start` handshake) within that window; the whole response is separately
+ * capped (JUDGE_RESPONSE_CAP_MS). Stage 2's packet is structurally larger
+ * (full operation content + session context), so its PREFILL — the wait
+ * before the first token — is the part most likely to exceed the base
+ * window on a slow model (local llama-cpp); an unmet stage-2 deadline
+ * leaves the stage-1 verdict with a "stage 2 unavailable" note and the
+ * prompt falls through. Stage 2 therefore gets this factor × the base
+ * first-token deadline; stage 1 keeps the base (it must stay snappy — it
+ * runs on every prompt under /dspat too).
+ */
+const STAGE2_TIMEOUT_FACTOR = 3;
 
 // ── Script payload extraction ──
 
@@ -230,7 +247,7 @@ export function judgeAvailable(
  * ~/.pi/agent/settings-ext.json.
  */
 export interface JudgePromptDeps {
-  complete?: CompleteFn;
+  stream?: JudgeStreamFn;
   settings?: JudgeSettings;
 }
 
@@ -270,12 +287,12 @@ async function runJudgeStage(
     const input = await buildJudgmentInput(pd, store);
 
     try {
-      if (dspaMode) setDspaJudging(true, ctx);
-      else if (dspatMode) setDspatJudging(true, ctx);
+      if (dspaMode) setDspaJudging(stage as 1 | 2, ctx);
+      else if (dspatMode) setDspatJudging(true, ctx); // /dspat judges stage 1 only
       else {
         ctx.ui.setWidget("judge", (_tui, theme) => ({
           render: (width: number) => [
-            truncateToWidth(theme.fg("muted", "⏳ Judge: explaining…"), width),
+            truncateToWidth(theme.fg("muted", `⏳ Judge: stage ${stage} — explaining…`), width),
           ],
           invalidate: () => {},
         }), { placement: "belowEditor" });
@@ -287,10 +304,10 @@ async function runJudgeStage(
 
     const result = await judge(input, {
       model,
-      complete: deps.complete ?? complete,
+      stream: deps.stream ?? stream,
       apiKey: auth.apiKey,
       headers: auth.headers,
-      timeoutMs: settings.timeoutMs,
+      timeoutMs: stage === 2 ? Math.round(settings.timeoutMs * STAGE2_TIMEOUT_FACTOR) : settings.timeoutMs,
       thinking: settings.thinking,
       systemPrompt: stage === 2 ? JUDGE_STAGE2_SYSTEM_PROMPT : undefined,
       extraPacket: stage === 2 ? buildSessionContext(ctx, store) : undefined,
@@ -301,7 +318,7 @@ async function runJudgeStage(
     return null;
   } finally {
     try {
-      if (dspaMode) setDspaJudging(false, ctx);
+      if (dspaMode) setDspaJudging(null, ctx);
       else if (dspatMode) setDspatJudging(false, ctx);
       else if (widgetShown) ctx.ui.setWidget("judge", undefined);
     } catch {
