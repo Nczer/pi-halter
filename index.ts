@@ -91,7 +91,7 @@ export default async function halterExtension(pi: ExtensionAPI) {
       const displaced = applyMode(ctx, isDspatActive() ? "manual" : "dspat");
       ctx.ui.notify(
         isDspatActive()
-          ? `DSPAT ON — judge advises on every bash prompt (you decide)${displaced ? ` (${displaced} off)` : ""}`
+          ? `DSPAT ON — judge advises on every prompt (you decide)${displaced ? ` (${displaced} off)` : ""}`
           : "DSPAT OFF — judge suggestions disabled",
         "info",
       );
