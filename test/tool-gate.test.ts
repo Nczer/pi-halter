@@ -243,12 +243,13 @@ describe("checkDspaGate: tool prompts", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("file and consent are never auto-allowed by the judge", async () => {
+  it("file and consent never auto-allow — advisory like every floor stop (D16)", async () => {
     for (const req of [fileReq(), consentReq()]) {
       const pd = promptOf(await decide(req, createStore())).promptData;
       const r = await checkDspaGate(pd, createStore());
       if (r.ok) throw new Error("expected floor stop");
-      expect(r.reason).toContain("not judgeable");
+      expect(r.reason).toContain("never auto-allows");
+      expect(r.advisory).toBe(true);
     }
   });
 });

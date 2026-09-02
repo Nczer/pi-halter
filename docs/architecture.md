@@ -205,6 +205,10 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
      auto-allow (D7).
    - the rm carve-out: explicit `/tmp` scratch targets are judgeable (D8/D11);
      computed/glob rm and `rm /etc/hosts` still stop.
+
+   Every floor stop is **advisory** (D16): the judge runs both stages and the
+   verdict renders in the prompt ("— advisory (floor stop stands)") — the stop
+   stands, the judge never grants over the floor.
 2. **Stage 1** (stateless, LRU-cached on the operation): the packet's static
    analysis is the whole input. `approve` + `low` auto-allows.
 3. **Stage 2** (reasoning-blind session context, uncached): runs when stage 1
@@ -225,9 +229,8 @@ failures — never re-judged (Yes/No are the user's tools). Not offered when
 the judge is off (a choice, not a transient failure), after a floor stop
 (the deterministic layer cannot be re-judged), or without the permission
 request.
-Scope-class floor stops (outside bar, unresolvable, untrusted package) run
-the judge anyway and render the verdict advisory; danger-class stops (parse,
-obscured, credential, egress) stay bare. Auto-allowed operations toast.
+EVERY floor stop is advisory (D16): the judge runs both stages and renders
+the verdict in the prompt — the stop stands. Auto-allowed operations toast.
 
 **Content-bearing manual auto-allows are judged too (D3/D11).** In dspa, a
 file WRITE that manual mode would auto-allow (grants, config-allowed,
