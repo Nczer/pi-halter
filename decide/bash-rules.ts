@@ -257,3 +257,20 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
     },
   };
 };
+
+/**
+ * The D11 conversion entry point: synthesize the manual-shaped prompt for
+ * a bash auto-allow that carries a reviewable script payload (gate/
+ * conversions calls this). The gate layer never imports a pipeline rule by
+ * name — PromptFallbackRule's identity stays inside the pipeline; this
+ * wrapper is its one public shape for the /dspa content-judgment flow.
+ * Returns the prompt decision, or null when the analysis carries no
+ * prompt (defensive — the caller has already verified a payload exists).
+ */
+export async function synthesizeManualBashPrompt(
+  req: BashRequest,
+  store: Store,
+  analysis: CommandAnalysis,
+): Promise<Decision | null> {
+  return PromptFallbackRule(req, store, analysis);
+}

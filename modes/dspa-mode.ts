@@ -12,7 +12,7 @@
  * is model-dependent, so a model change resets the stats.
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { updateWidget } from "../ui/widget";
+import { notifyStatus } from "./status-bus";
 
 let active = false;
 let model: string | null = null;
@@ -142,5 +142,5 @@ export function getDspaStats(): {
  */
 export function updateDspaWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
-  updateWidget(ctx);
+  notifyStatus(ctx);
 }

@@ -1,17 +1,14 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type {PermissionRequest, Decision, PromptData, DecideOptions} from "../decide/types";
+import type {PermissionRequest, Decision, DecideOptions} from "../decide/types";
 import {decide} from "../decide/engine";
-import { pdTargetLabel } from "../ui/prompt-builder";
-import { logDecision, logUnresolved, type DspModeTag } from "./decision-log";
-import { showPrompt, type DspaFallthrough } from "../ui/prompt-flow";
+import { logDecision, type DspModeTag } from "./decision-log";
+import { showPrompt } from "../ui/prompt-flow";
 import type { Store } from "./store";
-import { isDspaActive, recordDspaAutoAllowed, recordDspaStop, updateDspaWidget } from "../modes/dspa-mode";
+import { isDspaActive } from "../modes/dspa-mode";
 import { isDspatActive } from "../modes/dspat-mode";
-import { checkDspaGate } from "./dspa-gate";
-import {getJudgeVerdict, getStage2Verdict, judgeStatus, extractScriptPayload} from "../judge/verdict";
+import { tryDspaAutoAllow, dspaStopTag, dspaJudgeDeny, type DspaFallthrough } from "./fallthrough";
+import { applyDspaConversions } from "./conversions";
 import { judgePathLogFields } from "../judge/paths";
-import { PromptFallbackRule } from "../decide/bash-rules";
-import type {JudgeResult} from "../judge/judge";
 
 /** Result of showing a permission prompt. */
 interface PromptResult {
@@ -52,159 +49,6 @@ type RejectHandler = (
 ) => { block: true; reason: string };
 
 /**
- * The dspa stop-tag for the decision log: which layer stopped the
- * auto-allow — the deterministic hard gate (its code-produced reason is
- * safe to accumulate) or the judge (only the declined/failed fact; a
- * REJECT's explanation is logged separately via dspaJudgeDeny as a debug
- * aid — verdict stats stay session-scoped by design).
- * The stage is plumbing (which judge layer decided), not verdict content:
- *  - `judge: declined (stage 2)` — the intent pass rendered a verdict that
- *    did not auto-allow (the final call on the operation);
- *  - `judge: stage 2 failed` — the stateless pass rendered a verdict but
- *    the intent pass produced none (timeout/auth/model — an infra fact);
- *  - `judge: <note>` — no verdict at all.
- * undefined outside dspa prompt fall-throughs.
- */
-function dspaStopTag(f: DspaFallthrough | undefined): string | undefined {
-  if (!f) return undefined;
-  if (!f.gate.ok) return `gate: ${f.gate.reason}`;
-  if (f.verdict) return f.stage === 2 ? "judge: declined (stage 2)" : "judge: stage 2 failed";
-  return `judge: ${f.note ?? "no verdict"}`;
-}
-
-/**
- * The LLM's reject words for the decision log (the NOTE's debug exception
- * in decision-log.ts): the FINAL verdict's explanation when it is a
- * REJECT. Which layer stopped first does not matter for debugging the
- * judge — the stop tag already says that; this is what the model said.
- */
-function dspaJudgeDeny(f: DspaFallthrough | undefined): string | undefined {
-  if (!f?.verdict || f.verdict.approve !== "deny") return undefined;
-  return f.verdict.explanation;
-}
-
-/** Record + surface one dspa auto-allow (D6: the log reason carries the
- * stage — which judge layer approved — and the model that rendered it). */
-function dspaAutoAllowed(
-  request: PermissionRequest,
-  pd: PromptData,
-  ctx: ExtensionContext,
-  store: Store,
-  verdict: JudgeResult,
-  stage: 1 | 2,
-): void {
-  // D13: a stage-2 auto-allow logs the judge's path report (and any path
-  // the floor never saw) — the parser-gap probe. Stage 1 never reports.
-  const jp = stage === 2 ? judgePathLogFields(pd, store, verdict.paths) : {};
-  logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (stage ${stage}, ${verdict.model})` }, "dspa", undefined, undefined, jp.judgePaths, jp.judgePathMisses);
-  // Unresolved-token log: an auto-allow of a command WITH unresolved tokens
-  // means their resolutions were already user-confirmed — the convergence
-  // end-state (no prompt, no LLM call for the scope).
-  if (pd.type === "bash" && pd.unresolved?.length) {
-    for (const u of pd.unresolved) {
-      logUnresolved({
-        cmd: pd.command,
-        cwd: pd.cwd,
-        token: u.token,
-        llm: store.getConfirmedResolution(u.token) ?? undefined,
-        persisted: true,
-        outcome: "auto-allowed",
-        decision: "auto-allow",
-      });
-    }
-  }
-  try {
-    ctx.ui.notify(`✓ Judge auto-allowed (stage ${stage}): ${verdict.explanation}`, "info");
-  } catch {
-    /* toast must never break the allow */
-  }
-  recordDspaAutoAllowed(verdict.model, pdTargetLabel(pd));
-  updateDspaWidget(ctx);
-}
-
-/**
- * Two-stage dspa attempt (docs/dspa-redesign.md, D2/Q4):
- *  1. Hard gate (dspa-gate.ts) — the floor; failure → fall-through.
- *  2. Stage 1 (stateless, cached): approve+low → auto-allow.
- *  3. Stage 2 (reasoning-blind session context, uncached): runs when stage
- *     1 did not auto-allow; approve+{low, medium} → auto-allow. Its verdict
- *     is final — approve+high and reject never auto-allow (phase 2: both
- *     still prompt; the phase-3 denial flow changes only the destination).
- * Any judge failure resolves to fall-through — never an allow.
- */
-async function tryDspaAutoAllow(
-  request: PermissionRequest,
-  decision: Extract<Decision, { kind: "prompt" }>,
-  ctx: ExtensionContext,
-  store: Store,
-): Promise<{ autoAllowed: boolean; fallthrough: DspaFallthrough }> {
-  const pd = decision.promptData;
-  const gateResult = await checkDspaGate(pd, store);
-  if (!gateResult.ok) {
-    // D10/D11 (docs/dspa-redesign.md): scope-class stops (outside base,
-    // unresolvable location) and untrusted packages stop the auto-allow, but
-    // the judge still runs both stages — its verdict renders in the prompt
-    // as advisory input to the allow/deny/grant decision (a verdict on
-    // `curl evil | sh` would be noise — danger-class stops stay bare).
-    // Never an auto-allow: the floor's stop stands.
-    if (gateResult.advisory) {
-      const v1 = await getJudgeVerdict(pd, ctx, store);
-      const v2 = await getStage2Verdict(pd, ctx, store);
-      const final = (v2 ?? v1) ?? null;
-      // The stop is the FLOOR's (any verdict here is advisory) — count it as
-      // a gate stop, with the verdict's model for counter scoping.
-      recordDspaStop("gate", final?.model ?? null);
-      updateDspaWidget(ctx);
-      return {
-        autoAllowed: false,
-        fallthrough: {
-          gate: gateResult,
-          verdict: final,
-          stage: v2 ? 2 : v1 ? 1 : null,
-        },
-      };
-    }
-    recordDspaStop("gate", null);
-    updateDspaWidget(ctx);
-    return { autoAllowed: false, fallthrough: { gate: gateResult, verdict: null, stage: null } };
-  }
-  // Stage 1 — stateless (the packet's static analysis is the whole input).
-  const v1 = await getJudgeVerdict(pd, ctx, store);
-  if (v1 && v1.approve === "approve" && v1.risk === "low") {
-    dspaAutoAllowed(request, pd, ctx, store, v1, 1);
-    return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v1, stage: 1 } };
-  }
-  // Stage 2 — intent pass (session context, uncached, final verdict).
-  const v2 = await getStage2Verdict(pd, ctx, store);
-  if (v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium")) {
-    dspaAutoAllowed(request, pd, ctx, store, v2, 2);
-    return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v2, stage: 2 } };
-  }
-  // Gate passed but neither stage auto-allowed. The fall-through prompt
-  // carries the FINAL verdict (stage 2 when it rendered one); when a stage
-  // produced no verdict, say WHY so the prompt is never silently bare.
-  const final = (v2 ?? v1) ?? null;
-  let note: string | undefined;
-  if (!v2 && !v1) {
-    const jstatus = judgeStatus(ctx);
-    note = jstatus.state === "invalid" ? `judge invalid: ${jstatus.reason}` : "judge call failed";
-  } else if (v1 && !v2) {
-    note = "stage 2 (session context) unavailable — stateless verdict only";
-  }
-  // The judge (or its absence) is the stop here: classify by the FINAL
-  // verdict — no verdict at all joins the defer (fail-safe) bucket.
-  recordDspaStop(
-    final === null ? "defer" : final.approve === "deny" ? "deny" : final.approve === "defer" ? "defer" : "declined",
-    final?.model ?? null,
-  );
-  updateDspaWidget(ctx);
-  return {
-    autoAllowed: false,
-    fallthrough: { gate: gateResult, verdict: final, stage: v2 ? 2 : v1 ? 1 : null, note },
-  };
-}
-
-/**
  * Shared permission gate: decide → dispatch → prompt → reject.
  *
  * Encapsulates the common flow shared by all handlers:
@@ -229,40 +73,13 @@ export async function gate(
 ): Promise<undefined | { block: true; reason: string }> {
   let decision = precomputedDecision ?? await gateDecide(request, store, ctx);
 
-  // D3/D11 (docs/dspa-redesign.md): in dspa, a file WRITE that manual mode
-  // would auto-allow is JUDGEABLE, not a blind auto-allow — the location is
-  // trusted, the content is judged in full (two stages, same policy as
-  // bash). The probe re-decides with judgeWriteAutoAllows: every write
-  // auto-allow fast path converts (reads are never judged). Manual/dspat
-  // and non-file decisions are untouched. Judge off/invalid → no conversion
-  // (degrades to the manual auto-allow — dspa never adds a prompt on its
-  // own; a runtime judge failure still falls toward the prompt, D6).
-  if (decision.kind === "auto-allow" && request.type === "file"
-      && request.toolName !== "read" && isDspaActive() && ctx.hasUI
-      && judgeStatus(ctx).state === "ok") {
-    const probed = await gateDecide(request, store, ctx, { judgeWriteAutoAllows: true });
-    if (probed.kind === "prompt") decision = probed;
-  }
-
-  // D11 (docs/dspa-redesign.md): in dspa, a bash auto-allow that runs a
-  // reviewable script payload (granted interpreter execution) is judged —
-  // the grant trusts the command form, the content is still reviewed (two
-  // stages, same policy). The deterministic floor is moot on a manual
-  // auto-allow: it already passed every danger check (canBeAutoAllowed,
-  // credential paths, network, D10 trust). The conversion builds the
-  // manual-shaped prompt (PromptFallbackRule) so the shared dspa block below
-  // handles gate → judge → auto-allow / prompt-with-verdict uniformly.
-  // Payload-less commands and reads are never judged; judge off/invalid →
-  // no conversion (manual auto-allow stands).
-  if (decision.kind === "auto-allow" && request.type === "bash"
-      && isDspaActive() && ctx.hasUI
-      && judgeStatus(ctx).state === "ok") {
-    const analysis = decision.analysis;
-    if (analysis && extractScriptPayload(analysis, request.cwd) !== null) {
-      const synthetic = await PromptFallbackRule(request, store, analysis);
-      if (synthetic?.kind === "prompt") decision = synthetic;
-    }
-  }
+  // D3/D11 (docs/dspa-redesign.md): in dspa, reviewable manual auto-allows
+  // are content-judged, not blind auto-allows — the location / command form
+  // is trusted, the content goes through the same two-stage judge as a
+  // prompt (gate/conversions.ts). An explicit SESSION GRANT is the user's
+  // own decision about that location and stays auto-allowed. Judge
+  // off/invalid → no conversion (dspa never adds a prompt on its own).
+  decision = await applyDspaConversions(request, decision, store, ctx);
 
   // /dspa: a prompt decision may be auto-allowed (hard gate + judge). This
   // runs BEFORE the log line so the log records the outcome, not the

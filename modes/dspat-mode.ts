@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { updateWidget } from "../ui/widget";
+import { notifyStatus } from "./status-bus";
 
 /**
  * /dspat — judge advisory mode (session-scoped).
@@ -111,5 +111,5 @@ export function getDspatStats(): DspatStats {
  */
 export function updateDspatWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
-  updateWidget(ctx);
+  notifyStatus(ctx);
 }
