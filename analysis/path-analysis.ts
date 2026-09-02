@@ -38,29 +38,46 @@ export function hasRelativePath(segment: string): boolean {
 
 // ── Path resolution ──
 
+/**
+ * Memo for resolvePathReal, keyed by the fully resolved (absolute,
+ * normalized) path. The real-path of an existing prefix is stable for the
+ * process's lifetime — same staleness class as getHomePiDir/HOME_REAL —
+ * and every analysis pass re-resolves the same project paths, so without
+ * this the credential scan, symlink checks, and policy probes each pay
+ * their own realpathSync walk-up. Bounded: a full map clears rather than
+ * growing unbounded in long sessions (evicting everything keeps the cache
+ * O(1) with no LRU bookkeeping; the survivors are re-resolved lazily).
+ */
+const realPathMemo = new Map<string, string>();
+const REAL_PATH_MEMO_MAX = 8192;
+
 export function resolvePathReal(inputPath: string, cwd: string): string {
   const resolved = path.resolve(cwd, inputPath);
+  const memoized = realPathMemo.get(resolved);
+  if (memoized !== undefined) return memoized;
+  let found: string | null = null;
   try {
-    return fs.realpathSync(resolved);
+    found = fs.realpathSync(resolved);
   } catch {
     // Path doesn't exist — walk up to find the deepest existing parent,
     // resolve it (catches symlinks in parent directories), then re-append
     // the remaining components.
     let p = resolved;
     let suffix = "";
-    while (p !== path.dirname(p)) {
+    while (p !== path.dirname(p) && found === null) {
       try {
         const real = fs.realpathSync(p);
-        const result = suffix ? path.join(real, suffix) : real;
-        return result;
+        found = suffix ? path.join(real, suffix) : real;
       } catch {
         suffix = path.join(path.basename(p), suffix);
         p = path.dirname(p);
       }
     }
-    // No existing parent found (e.g. /tmp/new/sub/file) — return as-is
-    return resolved;
   }
+  const result = found ?? resolved; // no existing parent (e.g. /tmp/new/sub/file) — as-is
+  if (realPathMemo.size >= REAL_PATH_MEMO_MAX) realPathMemo.clear();
+  realPathMemo.set(resolved, result);
+  return result;
 }
 
 // ── Path containment checks ──
