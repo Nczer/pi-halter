@@ -25,7 +25,7 @@ const OBfus_ALIAS_RE = /\b(alias|declare|typeset)\s+\w+=\s*(rm|sudo|curl|wget|ss
 
 /**
  * Detect obfuscation techniques in a command string.
- * Used by segment-analysis.ts and tmux-helpers.ts.
+ * Used by segment-analysis.ts.
  */
 export function detectObfuscation(cmd: string): { detected: boolean; techniques: string[] } {
   const techniques: string[] = [];

@@ -4,89 +4,31 @@
  * Formats tmux commands into structured, readable output:
  *   tmux -f /dev/null -S $SOCKET send-keys -t foo ls Enter
  *   → tmux send-keys  target=foo → ls Enter
+ *
+ * Renders the shared tmux command model (analysis/tmux.ts) — the same parse
+ * the security pipeline judges, with display names overlaid here (display
+ * vocabulary stays in the UI). Global boilerplate (-f /dev/null, -S socket,
+ * -L alias) is consumed by the parse and never displayed.
  */
 
-import { splitOnPipe, splitIntoSegments, tokenize } from "../analysis/tokenizer";
+import { parseTmuxCommand, type TmuxCommand } from "../analysis/tmux";
+import { splitOnPipe, splitIntoSegments } from "../analysis/tokenizer";
 
-// ── Flag definitions ──
-
-/** Tmux boilerplate flags to strip (agent infrastructure, not semantic). */
-const BOILERPLATE_FLAGS = new Set(["-f", "-S", "-L"]);
+// ── Flag display names ──
 
 /**
- * Mapping of tmux flag short forms to named params.
- * Some flags are subcommand-specific (e.g., -s for new-session vs -s for send-keys).
- * When a flag has multiple meanings, we use the most common one.
+ * Display names for tmux flags (rendering only — the parse is
+ * analysis/tmux.ts). Some flags are subcommand-specific (e.g., -S is the
+ * socket globally but the start line for capture-pane); the most common
+ * meaning is used. Unmapped flags render raw.
  */
-interface FlagMapping {
-  /** Named param to display (e.g., "target", "session"). */
-  name: string;
-  /** Whether this flag takes a value (true) or is boolean (false). */
-  hasValue: boolean;
-  /** Raw flag string (e.g., "-t", "-d"). */
-  short: string;
-  /** Long form if applicable (e.g., "-target"). */
-  long?: string;
-}
-
-const FLAG_MAP: Map<string, FlagMapping> = new Map([
-  // Common flags
-  ["-t", { name: "target", hasValue: true, short: "-t" }],
-  ["-d", { name: "detached", hasValue: false, short: "-d" }],
-  ["-p", { name: "print", hasValue: false, short: "-p" }],
-  ["-l", { name: "literal", hasValue: false, short: "-l" }],
-  ["-J", { name: "join", hasValue: false, short: "-J" }],
-  // new-session flags
-  ["-s", { name: "session", hasValue: true, short: "-s" }],
-  ["-n", { name: "window", hasValue: true, short: "-n" }],
-  ["-F", { name: "format", hasValue: true, short: "-F" }],
-  // capture-pane flags
-  ["-S", { name: "start", hasValue: true, short: "-S" }], // -S for capture-pane (start line)
-  // send-keys flags
-  ["-H", { name: "copy-mode", hasValue: false, short: "-H" }],
-  ["-R", { name: "replace", hasValue: false, short: "-R" }],
-  ["-M", { name: "magic", hasValue: false, short: "-M" }],
-  ["-r", { name: "repeat", hasValue: false, short: "-r" }],
-]);
-
-/** Short alias → canonical subcommand name. */
-const SUBCOMMAND_ALIASES: Record<string, string> = {
-  "new": "new-session",
-  "kill-sg": "kill-session",
-  "kill-wg": "kill-window",
-  "move-w": "move-window",
-  "rename-s": "rename-session",
-  "rename-w": "rename-window",
-  "respawn-p": "respawn-pane",
-  "respawn-w": "respawn-window",
-  "show-m": "show-messages",
-  "show-o": "show-options",
-  "split-w": "split-window",
-  "swap-p": "swap-pane",
-  "swap-w": "swap-window",
+const FLAG_NAMES: Record<string, string> = {
+  "-t": "target", "-d": "detached", "-p": "print", "-l": "literal",
+  "-J": "join", "-s": "session", "-n": "window", "-F": "format",
+  "-S": "start", "-H": "copy-mode", "-R": "replace", "-M": "magic",
 };
 
-/** Parsed tmux command structure. */
-export interface ParsedTmuxFlags {
-  /** The tmux subcommand (e.g., "send-keys", "new-session"). Null if not a tmux command. */
-  subcommand: string | null;
-  /** Parsed flags (boilerplate stripped). */
-  flags: ParsedFlag[];
-  /** Keys being sent (for send-keys subcommand). Null for other subcommands. */
-  keys: string | null;
-}
-
-/** A parsed flag. */
-export interface ParsedFlag {
-  /** Named param (e.g., "target", "detached"). Null for raw flags. */
-  name: string | null;
-  /** Value for flags that take one. Null for boolean flags. */
-  value: string | null;
-  /** Raw representation (e.g., "-D 5"). Used for unmapped flags. */
-  raw: string;
-}
-
-// ── Parsing ──
+// ── Dispatch ──
 
 /**
  * Check if a command starts with "tmux".
@@ -94,108 +36,6 @@ export interface ParsedFlag {
 export function isTmuxCommand(cmd: string): boolean {
   const trimmed = cmd.trim();
   return trimmed === "tmux" || trimmed.startsWith("tmux ");
-}
-
-/**
- * Parse tmux command flags into structured data.
- * Strips boilerplate (-f /dev/null, -S socket, -L alias).
- * Maps known flags to named params.
- * Extracts send-keys keys.
- */
-export function parseTmuxFlags(cmd: string): ParsedTmuxFlags {
-  if (!isTmuxCommand(cmd)) {
-    return { subcommand: null, flags: [], keys: null };
-  }
-
-  const tokens = tokenize(cmd);
-  if (tokens.length < 2) {
-    return { subcommand: null, flags: [], keys: null };
-  }
-
-  // Find subcommand (skip tmux global flags)
-  let subIdx = 1;
-  while (subIdx < tokens.length) {
-    const token = tokens[subIdx];
-    if (token === "-S" || token === "-L" || token === "-f") {
-      subIdx += 2; // skip flag + value
-      continue;
-    }
-    if (token.startsWith("-") && !token.startsWith("--")) {
-      subIdx++; // skip unknown short flag
-      continue;
-    }
-    if (token.startsWith("--")) {
-      subIdx += 2; // skip unknown long flag + value
-      continue;
-    }
-    break;
-  }
-
-  let subcommand = subIdx < tokens.length ? tokens[subIdx].toLowerCase() : null;
-  // Resolve aliases
-  subcommand = subcommand ? (SUBCOMMAND_ALIASES[subcommand] ?? subcommand) : null;
-
-  // Parse flags after subcommand
-  const flags: ParsedFlag[] = [];
-  const isSendKeys = subcommand === "send-keys";
-  let keysStartIdx = -1;
-
-  for (let i = subIdx + 1; i < tokens.length; i++) {
-    const token = tokens[i];
-
-    // Handle -- separator (everything after is keys for send-keys)
-    if (token === "--") {
-      if (isSendKeys) {
-        keysStartIdx = i + 1;
-      }
-      break;
-    }
-
-    // Skip boilerplate flags (-S is in BOILERPLATE_FLAGS for socket, but for capture-pane it means start line)
-    if (BOILERPLATE_FLAGS.has(token) && !(token === "-S" && subcommand === "capture-pane")) {
-      i++; // skip value
-      continue;
-    }
-
-    // For send-keys, stop collecting flags when we hit a non-flag token
-    if (isSendKeys && !token.startsWith("-")) {
-      keysStartIdx = i;
-      break;
-    }
-
-    // Try to map the flag
-    const mapping = FLAG_MAP.get(token);
-    if (mapping) {
-      if (mapping.hasValue && i + 1 < tokens.length) {
-        flags.push({ name: mapping.name, value: tokens[i + 1], raw: `${token} ${tokens[i + 1]}` });
-        i++;
-      } else if (!mapping.hasValue) {
-        flags.push({ name: mapping.name, value: null, raw: token });
-      }
-      continue;
-    }
-
-    // Unmapped flag — keep as raw
-    if (token.startsWith("-")) {
-      if (i + 1 < tokens.length && !tokens[i + 1].startsWith("-")) {
-        flags.push({ name: null, value: null, raw: `${token} ${tokens[i + 1]}` });
-        i++;
-      } else {
-        flags.push({ name: null, value: null, raw: token });
-      }
-    } else if (!isSendKeys) {
-      // Positional argument for non-send-keys commands (e.g., display-message 'hello')
-      flags.push({ name: null, value: null, raw: token });
-    }
-  }
-
-  // Extract keys for send-keys
-  let keys: string | null = null;
-  if (isSendKeys && keysStartIdx > 0 && keysStartIdx < tokens.length) {
-    keys = tokens.slice(keysStartIdx).join(" ");
-  }
-
-  return { subcommand, flags, keys };
 }
 
 // ── Formatting ──
@@ -218,34 +58,40 @@ export function truncateSegmentDisplay(display: string): string {
 /**
  * Format a parsed tmux command into structured text.
  * e.g. "tmux send-keys  target=foo → ls Enter"
+ *
+ * Flags render as display names (value or bare); positionals render raw in
+ * original order. For send-keys, the positional key stream renders after an
+ * arrow — exactly the tokens the pipeline judged.
  */
-function formatParsedTmux(parsed: ParsedTmuxFlags): string {
+function formatParsedTmux(parsed: TmuxCommand): string {
   if (!parsed.subcommand) return "tmux";
 
   let result = `tmux ${parsed.subcommand}`;
 
-  // Add flags (skip boilerplate, use named params)
-  // Double space before flags to separate subcommand from params
-  const hasFlags = parsed.flags.length > 0 || parsed.keys;
-  if (hasFlags) {
-    result += " ";
-  }
-  for (const flag of parsed.flags) {
-    if (flag.name) {
-      if (flag.value !== null) {
-        result += ` ${flag.name}=${flag.value}`;
-      } else {
-        result += ` ${flag.name}`;
-      }
+  const parts: string[] = [];
+  const keys: string[] = [];
+  for (const arg of parsed.args) {
+    if (arg.name) {
+      const name = FLAG_NAMES[arg.name] ?? arg.name;
+      parts.push(arg.value !== null ? `${name}=${arg.value}` : name);
+    } else if (parsed.subcommand === "send-keys") {
+      keys.push(arg.value as string);
     } else {
-      // Raw flag (unmapped)
-      result += ` ${flag.raw}`;
+      parts.push(arg.value as string);
     }
   }
 
-  // Add send-keys keys with arrow
-  if (parsed.keys) {
-    result += ` → ${parsed.keys}`;
+  // Double space before params to separate subcommand from them
+  if (parts.length > 0 || keys.length > 0) {
+    result += " ";
+  }
+  for (const part of parts) {
+    result += ` ${part}`;
+  }
+
+  // send-keys key stream with arrow
+  if (parsed.subcommand === "send-keys" && keys.length > 0) {
+    result += ` → ${keys.join(" ")}`;
   }
 
   return result;
@@ -253,14 +99,13 @@ function formatParsedTmux(parsed: ParsedTmuxFlags): string {
 
 /**
  * Format a single tmux command segment.
- * Strips boilerplate, maps flags to named params.
+ * Renders the shared parse (boilerplate stripped, flags mapped to names).
  */
 export function formatTmuxSegment(segment: string): string {
   const trimmed = segment.trim();
   if (!isTmuxCommand(trimmed)) return trimmed;
 
-  const parsed = parseTmuxFlags(trimmed);
-  return formatParsedTmux(parsed);
+  return formatParsedTmux(parseTmuxCommand(trimmed));
 }
 
 /**

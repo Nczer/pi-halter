@@ -2,11 +2,11 @@ import { EvaluationBuilder } from "./builder";
 import { EvalCache, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
 import {
-  getTmuxSubcommand,
-  tmuxNewSessionRunsCommand,
+  parseTmuxCommand,
+  tmuxNewSessionCommand,
   TMUX_SAFE_SUBCOMMANDS,
   TMUX_DANGEROUS_DESCRIPTIONS,
-} from "../tmux-helpers";
+} from "../tmux";
 
 /**
  * Evaluates tmux commands for dangerous operations.
@@ -20,7 +20,8 @@ export const TmuxEvaluator: RiskEvaluator = {
 
     if (firstWord !== "tmux") return b.build();
 
-    const tmuxSub = getTmuxSubcommand(segment);
+    const tmux = parseTmuxCommand(segment);
+    const tmuxSub = tmux.subcommand;
 
     // send-keys: the evaluator does NOT judge payload content. The payload is
     // analyzed by the full pipeline (analyzeTmuxSendKeysPayload in
@@ -32,14 +33,13 @@ export const TmuxEvaluator: RiskEvaluator = {
 
     let isDangerous = !tmuxSub || !TMUX_SAFE_SUBCOMMANDS.has(tmuxSub);
 
-    // new-session/new are safe only when flag-only: an optional [shell-command]
-    // argument (or the global -c option) executes code in the new session.
-    if (!isDangerous && (tmuxSub === "new-session" || tmuxSub === "new")) {
-      if (tmuxNewSessionRunsCommand(segment)) {
-        isDangerous = true;
-        b.setHigh();
-        b.markDanger();
-      }
+    // new-session (and its "new"/"start" aliases, canonicalized by the parse)
+    // is safe only when flag-only: an optional [shell-command] argument (or
+    // the global -c option) executes code in the new session.
+    if (!isDangerous && tmuxNewSessionCommand(tmux) !== null) {
+      isDangerous = true;
+      b.setHigh();
+      b.markDanger();
     }
 
     if (isDangerous) {
