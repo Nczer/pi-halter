@@ -13,7 +13,7 @@ A halter for pi tool calls. Intercepts `bash` and `read`/`write`/`edit` calls, a
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
 - **No-UI fallback** — auto-blocks when no UI is available
 - **DSP mode** — `/dsp` command toggles "Dangerously Skip Permissions" to bypass all checks (with a persistent warning line pinned on top of the status widget)
-- **Judge modes** — `/dspa` auto-allows operations that pass a deterministic hard floor *and* a two-stage LLM-judge verdict (stateless pass, then an intent pass with reasoning-blind session context) (visible toast); `/dspat` shows the judge's verdict in every bash prompt and records agreement stats; both fail toward the prompt. The modes are one machine — **manual / dspa / dspat / dsp**: enabling one leaves the others off (switching resets the left judge mode's session stats)
+- **Judge modes** — `/dspa` auto-allows operations that pass a deterministic hard floor *and* a two-stage LLM-judge verdict (stateless pass, then an intent pass with reasoning-blind session context) (visible toast); a dspa prompt with a non-REJECT verdict offers a repeatable "Judge again" that re-runs the intent pass; `/dspat` shows the judge's verdict in every bash prompt and records agreement stats; both fail toward the prompt. The modes are one machine — **manual / dspa / dspat / dsp**: enabling one leaves the others off (switching resets the left judge mode's session stats)
 - **Judge settings** — `/judge` (bare = show; `on|off`, `model <provider/id|session>`, `thinking <level>`, `timeout <ms>`) — persisted in the `halter` namespace of `~/.pi/agent/settings-ext.json`
 - **Decision log** — `/halter-decision-log` records every gate decision to a JSONL file (see *Configuration → Decision log*)
 
@@ -186,8 +186,8 @@ One line per command:
 For a one-off script instead of the harness, call `decide()` directly:
 
 ```ts
-import { decide } from "./decision-engine";
-import { createStore } from "./store";
+import { decide } from "./decide/engine";
+import { createStore } from "./gate/store";
 
 const d = await decide(
   { type: "bash", command: "cd /var/tmp && ls", cwd: "/mnt/Ndr/Projects" },
