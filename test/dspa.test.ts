@@ -505,6 +505,25 @@ describe("fall-through", () => {
     expect(String(logLines()[0].dspa)).toMatch(/^gate: /);
   });
 
+  it("hard gate block (rm neighborhood) → judge runs advisory, stop stands (D16)", async () => {
+    setDspaActive(true);
+    // The mocks return no verdict, so the prompt is bare — the point is the
+    // D16 flow: both stages run on a formerly bare rm-class stop (the
+    // dev-loop cp … && rm … shape), and the floor's stop stays in the log.
+    // rm is never auto-allowed.
+    await runGate(bashDecision("cp /tmp/show-msg.test.ts f && rm f"));
+    expect(judgePrompt.getJudgeVerdict).toHaveBeenCalledTimes(1);
+    expect(judgePrompt.getStage2Verdict).toHaveBeenCalledTimes(1);
+    const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
+    expect(fallthrough?.gate.ok).toBe(false);
+    if (fallthrough?.gate && !fallthrough.gate.ok) {
+      expect(fallthrough.gate.reason).toContain("dangerous");
+      expect(fallthrough.gate.advisory).toBe(true);
+    }
+    expect(fallthrough?.verdict).toBeNull();
+    expect(String(logLines()[0].dspa)).toMatch(/^gate: /);
+  });
+
   it("file outside base → gate stop stands, judge runs advisory (D11)", async () => {
     setDspaActive(true);
     // The mocks return no verdict, so the prompt is bare — the point is the

