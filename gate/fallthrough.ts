@@ -15,7 +15,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {PermissionRequest, Decision, PromptData} from "../decide/types";
 import type { Store } from "./store";
-import { logDecision, logUnresolved } from "./decision-log";
+import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decision-log";
 import { checkDspaGate, type DspaGateResult } from "./dspa-gate";
 import {getJudgeVerdict, getStage2Verdict, judgeStatus} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
@@ -83,6 +83,10 @@ export function dspaAutoAllowed(
   // the floor never saw) — the parser-gap probe. Stage 1 never reports.
   const jp = stage === 2 ? judgePathLogFields(pd, store, verdict.paths) : {};
   logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (stage ${stage}, ${verdict.model})` }, "dspa", undefined, undefined, jp.judgePaths, jp.judgePathMisses);
+  // D17: the same path report also goes to the always-on judge ledger
+  // (decisions.jsonl is toggle-gated and version-bound; the ledger is the
+  // durable home for D13 mining).
+  if (stage === 2) logJudgePaths(pd, store, verdict, "dspa");
   // Unresolved-token log: an auto-allow of a command WITH unresolved tokens
   // means their resolutions were already user-confirmed — the convergence
   // end-state (no prompt, no LLM call for the scope).
@@ -135,6 +139,8 @@ export async function tryDspaAutoAllow(
     if (gateResult.advisory) {
       const v1 = await getJudgeVerdict(pd, ctx, store);
       const v2 = await getStage2Verdict(pd, ctx, store);
+      logJudgeDiff(pd, "dspa", v1, v2);
+      if (v2) logJudgePaths(pd, store, v2, "dspa");
       const final = (v2 ?? v1) ?? null;
       // The stop is the FLOOR's (any verdict here is advisory) — count it as
       // a gate stop, with the verdict's model for counter scoping.
@@ -161,6 +167,7 @@ export async function tryDspaAutoAllow(
   }
   // Stage 2 — intent pass (session context, uncached, final verdict).
   const v2 = await getStage2Verdict(pd, ctx, store);
+  logJudgeDiff(pd, "dspa", v1, v2);
   if (v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium")) {
     dspaAutoAllowed(request, pd, ctx, store, v2, 2);
     return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v2, stage: 2 } };
@@ -169,6 +176,9 @@ export async function tryDspaAutoAllow(
   // carries the FINAL verdict (stage 2 when it rendered one); when a stage
   // produced no verdict, say WHY so the prompt is never silently bare.
   const final = (v2 ?? v1) ?? null;
+  // D17: stage-2 path report → always-on judge ledger (the auto-allow
+  // branch logs it in dspaAutoAllowed — each stage-2 verdict exactly once).
+  if (v2) logJudgePaths(pd, store, v2, "dspa");
   let note: string | undefined;
   if (!v2 && !v1) {
     const jstatus = judgeStatus(ctx);

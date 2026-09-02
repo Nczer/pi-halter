@@ -599,7 +599,9 @@ LLM call) and mines the diff:
 - **Logged only** (decision log, final stage-2 verdict — auto-allow and
   fall-through lines alike): `judgePaths` (sanitized report, capped) and
   `judgePathMisses` (capped at 5). Nothing in the gate reads these fields
-  back — the runtime decision is untouched.
+  back — the runtime decision is untouched. D17: mismatches are ALSO
+  mirrored to the always-on judge ledger (judge.jsonl) — the decision log
+  is toggle-gated and version-bound, so the ledger is the durable home.
 - **View**: `log-inspect.mjs dspa --paths` lists the mismatch entries
   (the summary and `dspa --reasons` count them).
 
@@ -720,6 +722,55 @@ granted writes), so judging nothing there costs nothing.
   authority over the floor. Cost: two sequential stage calls before the
   prompt renders (the latency the user already pays on egress/scope
   stops).
+
+### D17. dspat runs both stages; always-on judge ledgers (2026-09-02)
+
+Two data holes in the trust decision (D4 is on hold pending exactly this
+data):
+
+1. **dspat measured stage 1 alone** — the stateless, context-poor stage.
+   dspa acts on the FINAL verdict (stage 2 when it renders), so the shadow
+   regime's agreement stats systematically under-report the deployed
+   pipeline: intent-shaped ops (local probes, session-scratch rm, dev-loop
+   shapes) draw more REJECT/DEFER from stage 1, and every Yes the user
+   gives records as an artifact disagreement, not a judgment error. The
+   D4 decision would have been biased against the pipeline.
+2. **Every judge diagnostic lived in decisions.jsonl** — toggle-gated
+   (default OFF) and version-bound (wiped on /reload). Stage
+   disagreements, infra failures, and D13 path mismatches were captured
+   only in sessions where the log happened to be on. Same for
+   unresolved.jsonl: it shared the decision-log toggle, so the parser-
+   convergence ledger (the workflow behind D7–D12) was lost in every
+   default session.
+
+Decisions:
+
+- **dspat runs BOTH stages, never skipping** — the same cascade order as
+  /dspa, but stage 2 runs even on stage-1 approve+low. That cross-check
+  is precisely the data /dspa's auto-allow path cannot produce: a v1
+  approve+low auto-allow is checked by neither stage 2 nor the user (the
+  blind spot — 150 of 177 approvals in the pre-wipe log). Final verdict =
+  `v2 ?? v1` — shown in the prompt and recorded in the agreement stats
+  against the human's choice. Cost: two sequential model calls per
+  prompt (the latency /dspa already pays; /dspat is opt-in measurement).
+- **Always-on judge ledger `.log/judge.jsonl`** (`logJudge` — signal
+  lines only, never the agreeing majority):
+  - `diff` — both stages rendered and DISAGREE (on approve or risk):
+    `{ts, mode, model, cmd≤200, s1, s2}` in `"approve/low"` form. /dspa
+    (whenever stage 2 ran, incl. the Judge-again retry) and /dspat (always).
+  - `infra` — a stage produced no verdict: `no-model` / `no-auth` /
+    `no-explanation` / `call-failed` (the last is the fail-safe for
+    unexpected internal throws — judge() normalizes model-side failures
+    into no-explanation). Judge OFF stays silent: a choice, not a
+    failure.
+  - `paths` — D13 floor mismatches (judge saw dirs the floor never did),
+    only when non-empty.
+  - Mine with `node tools/log-inspect.mjs judge` (rollups + listing).
+- **Toggle split.** `/halter-decision-log` controls decisions.jsonl ONLY.
+  unresolved.jsonl and judge.jsonl are always-on (both small: one line
+  per unresolved token / per signal, 5 MiB rotation each). Test
+  hermeticity moves to per-file env seams (HALTER_UNRESOLVED_LOG, the new
+  HALTER_JUDGE_LOG; the vitest worker setup forces all three off).
 
 ## 4. Phasing
 

@@ -119,6 +119,39 @@ async function runGate(decision: Decision) {
   }
 }
 
+/**
+ * Like runGate, but the prompt data carries its analysis (the single-
+ * analysis-per-decision invariant) so the D13 log fields can derive the
+ * floor's path knowledge. The hard gate still runs real analysis.
+ */
+async function runAnalyzedGate(
+  command: string,
+  v1: JudgeResult | null,
+  v2: JudgeResult | null,
+) {
+  const store = createStore();
+  const decision = bashDecision(command) as { kind: "prompt"; promptData: BashPromptData };
+  const pd = decision.promptData;
+  pd.analysis = await analyzeCommand(command, pd.cwd, {
+    isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+    getConfirmedResolution: (t) => store.getConfirmedResolution(t),
+  });
+  vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(v1);
+  vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(v2);
+  setDspaActive(true);
+  const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
+  try {
+    return await gate(
+      { type: "bash", command: "placeholder", cwd: "/home/u/project" },
+      makeCtx(),
+      store,
+      (d, r) => rejectBash(d, r, store, makeCtx()),
+    );
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // clearAllMocks keeps implementations: re-pin the judge status default
@@ -678,39 +711,6 @@ describe("D3: granted-dir file writes are judged (dspa)", () => {
 // ── D13 — stage-2 judge path report (diagnostic log) ───────────────────
 
 describe("D13 — stage-2 path report (diagnostic log)", () => {
-  /**
-   * Like runGate, but the prompt data carries its analysis (the single-
-   * analysis-per-decision invariant) so the D13 log fields can derive the
-   * floor's path knowledge. The hard gate still runs real analysis.
-   */
-  async function runAnalyzedGate(
-    command: string,
-    v1: JudgeResult | null,
-    v2: JudgeResult | null,
-  ) {
-    const store = createStore();
-    const decision = bashDecision(command) as { kind: "prompt"; promptData: BashPromptData };
-    const pd = decision.promptData;
-    pd.analysis = await analyzeCommand(command, pd.cwd, {
-      isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
-      getConfirmedResolution: (t) => store.getConfirmedResolution(t),
-    });
-    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(v1);
-    vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(v2);
-    setDspaActive(true);
-    const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
-    try {
-      return await gate(
-        { type: "bash", command: "placeholder", cwd: "/home/u/project" },
-        makeCtx(),
-        store,
-        (d, r) => rejectBash(d, r, store, makeCtx()),
-      );
-    } finally {
-      spy.mockRestore();
-    }
-  }
-
   it("stage-2 auto-allow logs judgePaths + judgePathMisses", async () => {
     await runAnalyzedGate(
       "ls /home/u/project/target",
@@ -773,5 +773,70 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
     expect(String(line.dspa)).toContain("gate:");
     expect(line.judgePaths).toEqual(["/etc/hostname", "/etc/shadow"]);
     expect(line.judgePathMisses).toEqual(["/etc/shadow"]);
+  });
+});
+
+// ── D17 — always-on judge ledger (judge.jsonl) ─────────────────────────
+
+describe("D17 — always-on judge ledger (judge.jsonl)", () => {
+  const judgeLog = path.join(os.tmpdir(), `dspa-judge-ledger-${process.pid}.jsonl`);
+  const savedJudgeLog = process.env.HALTER_JUDGE_LOG;
+
+  function judgeLines(): Array<Record<string, unknown>> {
+    if (!fs.existsSync(judgeLog)) return [];
+    return fs.readFileSync(judgeLog, "utf-8").trim().split("\n").map((l) => JSON.parse(l));
+  }
+
+  beforeEach(() => {
+    fs.rmSync(judgeLog, { force: true });
+    process.env.HALTER_JUDGE_LOG = judgeLog;
+  });
+  afterEach(() => {
+    if (savedJudgeLog === undefined) delete process.env.HALTER_JUDGE_LOG;
+    else process.env.HALTER_JUDGE_LOG = savedJudgeLog;
+    fs.rmSync(judgeLog, { force: true });
+  });
+
+  it("dspa: stage disagreement → one diff line (never on the agreeing majority)", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(verdict({ risk: "medium" }));
+    vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(
+      verdict({ approve: "deny", risk: "high", explanation: "unbounded target" }),
+    );
+    await runGate(bashDecision("make test"));
+    expect(judgeLines()).toEqual([
+      expect.objectContaining({ kind: "diff", mode: "dspa", s1: "approve/medium", s2: "deny/high" }),
+    ]);
+  });
+
+  it("dspa: stages agree → no diff line", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(verdict({ risk: "medium" }));
+    vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(verdict({ risk: "medium" }));
+    await runGate(bashDecision("make test")); // stage 2 auto-allows (medium is in authority)
+    expect(judgeLines()).toHaveLength(0);
+  });
+
+  it("dspa: stage-1 auto-allow (stage 2 never runs) → no lines at all", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(verdict({ risk: "low" }));
+    await runGate(bashDecision("make test"));
+    expect(fs.existsSync(judgeLog)).toBe(false);
+  });
+
+  it("dspa: D13 floor mismatch → paths line (the durable parser-gap home)", async () => {
+    await runAnalyzedGate(
+      "cat /etc/hostname",
+      verdict(),
+      verdict({ approve: "deny", paths: ["/etc/hostname", "/etc/shadow"] }),
+    );
+    const pathsLine = judgeLines().find((l) => l.kind === "paths");
+    expect(pathsLine).toEqual(
+      expect.objectContaining({
+        mode: "dspa",
+        judgePaths: ["/etc/hostname", "/etc/shadow"],
+        misses: ["/etc/shadow"],
+      }),
+    );
   });
 });

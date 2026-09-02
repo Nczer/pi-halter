@@ -28,6 +28,7 @@ import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
 import { isDspaActive, setDspaJudging } from "../modes/dspa-mode";
 import { isDspatActive, setDspatJudging } from "../modes/dspat-mode";
+import { logJudgeInfra } from "../gate/decision-log";
 
 // ── Stage-2 timeout headroom ──
 
@@ -209,21 +210,29 @@ async function runJudgeStage(
   // so a mid-call mode toggle cannot route cleanup to the wrong widget.
   const dspaMode = isDspaActive();
   const dspatMode = !dspaMode && isDspatActive();
+  // Regime tag for the always-on judge ledger (infra lines).
+  const logMode: "dspa" | "dspat" | "manual" = dspaMode ? "dspa" : dspatMode ? "dspat" : "manual";
   let widgetShown = false;
   try {
     const settings = deps.settings ?? readJudgeSettings();
-    if (!settings.enabled) return null;
+    if (!settings.enabled) return null; // off = the user's choice, stays silent
 
     const model = resolveJudgeModel(settings, ctx.modelRegistry, ctx.model);
-    if (!model) return null;
+    if (!model) {
+      logJudgeInfra(pd, logMode, stage, "no-model");
+      return null;
+    }
     const auth = await resolveJudgeAuth(model, ctx.modelRegistry);
-    if (!auth) return null;
+    if (!auth) {
+      logJudgeInfra(pd, logMode, stage, "no-auth", `${model.provider}/${model.id}`);
+      return null;
+    }
 
     const input = await buildJudgmentInput(pd, store);
 
     try {
       if (dspaMode) setDspaJudging(stage as 1 | 2, ctx);
-      else if (dspatMode) setDspatJudging(true, ctx); // /dspat judges stage 1 only
+      else if (dspatMode) setDspatJudging(stage, ctx);
       else {
         ctx.ui.setWidget("judge", (_tui, theme) => ({
           render: (width: number) => [
@@ -237,24 +246,41 @@ async function runJudgeStage(
       /* the explanation still works without a widget */
     }
 
-    const result = await judge(input, {
-      model,
-      stream: deps.stream ?? stream,
-      apiKey: auth.apiKey,
-      headers: auth.headers,
-      timeoutMs: stage === 2 ? Math.round(settings.timeoutMs * STAGE2_TIMEOUT_FACTOR) : settings.timeoutMs,
-      thinking: settings.thinking,
-      systemPrompt: stage === 2 ? JUDGE_STAGE2_SYSTEM_PROMPT : undefined,
-      extraPacket: stage === 2 ? buildSessionContext(ctx, store) : undefined,
-      uncached: stage === 2,
-    });
-    return result.explanation ? result : null;
+    let result: JudgeResult;
+    try {
+      result = await judge(input, {
+        model,
+        stream: deps.stream ?? stream,
+        apiKey: auth.apiKey,
+        headers: auth.headers,
+        timeoutMs: stage === 2 ? Math.round(settings.timeoutMs * STAGE2_TIMEOUT_FACTOR) : settings.timeoutMs,
+        thinking: settings.thinking,
+        systemPrompt: stage === 2 ? JUDGE_STAGE2_SYSTEM_PROMPT : undefined,
+        extraPacket: stage === 2 ? buildSessionContext(ctx, store) : undefined,
+        uncached: stage === 2,
+      });
+    } catch {
+      // judge() normalizes model-side failures (timeout, response cap,
+      // transport, bad reply) into a no-explanation defer — this branch
+      // only sees UNEXPECTED internal throws (session-context build, a
+      // judge bug). Logged so no failure path is ever silent (D17).
+      logJudgeInfra(pd, logMode, stage, "call-failed", `${model.provider}/${model.id}`);
+      return null;
+    }
+    if (!result.explanation) {
+      // No usable explanation — covers timeout, refusal, malformed reply,
+      // and thrown calls (all normalized here by judge()). Treated as no
+      // verdict; the no-explanation rate is itself signal (D17).
+      logJudgeInfra(pd, logMode, stage, "no-explanation", `${model.provider}/${model.id}`);
+      return null;
+    }
+    return result;
   } catch {
     return null;
   } finally {
     try {
       if (dspaMode) setDspaJudging(null, ctx);
-      else if (dspatMode) setDspatJudging(false, ctx);
+      else if (dspatMode) setDspatJudging(null, ctx);
       else if (widgetShown) ctx.ui.setWidget("judge", undefined);
     } catch {
       /* widget cleanup must never mask the result */

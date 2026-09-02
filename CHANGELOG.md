@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.16.0 — 2026-09-02
+
+D17: /dspat runs both judge stages; always-on judge ledgers
+(docs/dspa-redesign.md, D17).
+
+- **/dspat runs BOTH stages, never skipping** — the same cascade order as
+  /dspa, but stage 2 runs even on stage-1 approve+low. That cross-check is
+  the data /dspa's auto-allow path cannot produce (a v1 approve+low
+  auto-allow is checked by neither stage 2 nor the user). The prompt shows
+  the FINAL verdict (stage 2, else stage 1) and records agreement stats
+  against it; the widget line now says "judging stage N…".
+- **New always-on judge ledger `.log/judge.jsonl`** (`logJudge`, signal
+  lines only): `diff` (both stages rendered and disagree on approve or
+  risk — /dspa wherever stage 2 ran, incl. the Judge-again retry, and
+  /dspat always), `infra` (a stage produced no verdict: no-model /
+  no-auth / no-explanation / call-failed — judge OFF stays silent),
+  `paths` (D13 stage-2 path mismatches — now durable instead of lost when
+  the decision log is off or wiped on /reload). Mine with
+  `node tools/log-inspect.mjs judge` (rollups + listing).
+- **Toggle split**: `/halter-decision-log` controls `decisions.jsonl` only.
+  `.log/unresolved.jsonl` was previously gated by the same toggle (off by
+  default) — the parser-convergence ledger was being lost in every default
+  session. Both ledgers are now always-on with test-only env seams
+  (`HALTER_UNRESOLVED_LOG=off`, `HALTER_JUDGE_LOG=off`; the vitest worker
+  setup forces all three logs off).
+
 ## 3.15.0 — 2026-09-02
 
 Every /dspa floor stop is advisory (docs/dspa-redesign.md, D16).

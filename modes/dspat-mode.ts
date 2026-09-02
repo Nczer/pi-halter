@@ -5,9 +5,13 @@ import { notifyStatus } from "./status-bus";
  * /dspat — judge advisory mode (session-scoped).
  *
  * When ON, the judge runs automatically on every permission prompt (bash,
- * file) and the prompt shows the full verdict (explanation +
- * approve/reject suggestion). The human always takes the call — this mode
- * never changes the gate's decision.
+ * file, tool) and the prompt shows the full verdict (explanation +
+ * approve/reject suggestion). D17: BOTH stages run (never skipped, even on
+ * stage-1 approve+low — the cross-check of stage-1 lows is exactly the
+ * data /dspa's auto-allow path cannot produce) and the FINAL verdict is
+ * stage 2's, or stage 1's when stage 2 produced none; stage disagreement
+ * is mirrored to the always-on judge ledger (.log/judge.jsonl). The human
+ * always takes the call — this mode never changes the gate's decision.
  *
  * The widget is the unified halter widget's mode line: an indicator plus
  * the agreement counter merged onto ONE line (`… — 12/14 agreed — last:
@@ -18,9 +22,11 @@ import { notifyStatus } from "./status-bus";
  */
 
 let dspatActive = false;
-/** True while a judge call is in flight — rendered inline on the widget
- *  line ("… — judging stage 1…") instead of a separate in-flight widget. */
-let judging = false;
+/** The judge stage in flight (1 | 2), or null — rendered inline on the
+ *  widget line ("… — judging stage N…") instead of a separate in-flight
+ *  widget. D17: dspat runs BOTH stages; the stage number is the progress
+ *  the user sees while the second call is in flight. */
+let judging: 1 | 2 | null = null;
 
 interface DspatStats {
   /** The model that produced the counted verdicts (null = none yet). */
@@ -40,18 +46,18 @@ function resetStats(): void {
   stats.total = 0;
   stats.agreed = 0;
   stats.lastDisagreement = null;
-  judging = false;
+  judging = null;
 }
 
 /**
- * Flip the inline judging state (verdict.ts calls it at the start and end
- * of the judge stage while /dspat is active; /dspat judges stage 1 only).
+ * Set the inline judging state (verdict.ts calls it with the stage at the
+ * start of a judge stage while /dspat is active, and null at its end).
  * Re-sets the widget so the change paints immediately (setWidget forces a
  * TUI repaint).
  */
-export function setDspatJudging(on: boolean, ctx: ExtensionContext): void {
-  if (judging === on) return;
-  judging = on;
+export function setDspatJudging(stage: 1 | 2 | null, ctx: ExtensionContext): void {
+  if (judging === stage) return;
+  judging = stage;
   updateDspatWidget(ctx);
 }
 
@@ -59,9 +65,9 @@ export function isDspatActive(): boolean {
   return dspatActive;
 }
 
-/** True while a judge call is in flight (the unified widget renders the
- *  "… — judging…" tag inline on the DSPAT line). */
-export function isDspatJudging(): boolean {
+/** The judge stage in flight (the unified widget renders the
+ *  "… — judging stage N…" tag inline on the DSPAT line); null = idle. */
+export function getDspatJudgingStage(): 1 | 2 | null {
   return judging;
 }
 

@@ -17,6 +17,10 @@
  *   dspa --reasons   why judge-regime entries auto-allowed / stopped — the
  *             reason rollup (auto-allow reasons, stop tags, judge denials,
  *             each with counts + a first-seen example)
+ *   judge     the always-on judge ledger (.log/judge.jsonl, D17): stage-1/
+ *             stage-2 verdict disagreements, infra failures, D13 path
+ *             mismatches — with error/miss rollups. Reads the ledger
+ *             directly (not decisions.jsonl), so --file is rarely needed
  *   stats     per-target aggregation — who prompts repeatedly, who auto-allows
  *   audit     anomaly scan: known bug classes (test-fixture pollution,
  *             contradictions, phantom root paths, misleading outside-base
@@ -66,8 +70,9 @@ const top = Number(flags.top ?? 10);
 const truncateLen = flags.full ? Infinity : 110;
 
 const DEFAULT_FILE = path.join(here, "..", ".log", "decisions.jsonl");
+const JUDGE_LEDGER = path.join(here, "..", ".log", "judge.jsonl");
 const files = [];
-const base = flags.file ? String(flags.file) : DEFAULT_FILE;
+const base = flags.file ? String(flags.file) : cmd === "judge" ? JUDGE_LEDGER : DEFAULT_FILE;
 if (!fs.existsSync(base)) {
   console.error(`log file not found: ${base}`);
   process.exit(2);
@@ -109,7 +114,7 @@ function inFilter(e) {
     if (m !== flags.mode) return false;
   }
   if (flags.grep) {
-    const hay = `${e.reason ?? ""} ${e.dspa ?? ""} ${e.target ?? ""}`.toLowerCase();
+    const hay = `${e.reason ?? ""} ${e.dspa ?? ""} ${e.target ?? ""} ${e.cmd ?? ""}`.toLowerCase();
     if (!hay.includes(String(flags.grep).toLowerCase())) return false;
   }
   return true;
@@ -512,6 +517,41 @@ function show() {
   console.log(JSON.stringify(clean, null, 1));
 }
 
+/** D17 judge ledger: the always-on diff/infra/paths lines + rollups. The
+ *  ledger is small by design (only signal) — the listing IS the report. */
+function judgeCmd() {
+  const diffs = F.filter((e) => e.kind === "diff");
+  const infras = F.filter((e) => e.kind === "infra");
+  const pathLines = F.filter((e) => e.kind === "paths");
+  console.log(`# judge — ${F.length} lines: ${diffs.length} diff, ${infras.length} infra, ${pathLines.length} paths`);
+  const errCount = {};
+  for (const e of infras) {
+    const key = `${e.error ?? "?"} (${e.mode} · stage ${e.stage})`;
+    errCount[key] = (errCount[key] ?? 0) + 1;
+  }
+  if (Object.keys(errCount).length) {
+    console.log("\ninfra rollup:");
+    for (const [k, n] of Object.entries(errCount).sort((a, b) => b[1] - a[1])) console.log(`  ${n}× ${k}`);
+  }
+  const missCount = {};
+  for (const e of pathLines) for (const m of e.misses ?? []) missCount[m] = (missCount[m] ?? 0) + 1;
+  if (Object.keys(missCount).length) {
+    console.log("\npath misses (top 10 — parser gaps or hallucinations):");
+    for (const [m, n] of Object.entries(missCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
+  }
+  if (F.length) {
+    console.log("\nlines:");
+    for (const e of F) {
+      const parts = [String(e.ts ?? "").slice(5, 16), e.kind, e.mode, e.model ?? "?"];
+      if (e.s1) parts.push(`${e.s1} → ${e.s2}`);
+      if (e.error) parts.push(e.error);
+      if (e.misses?.length) parts.push(`misses: ${e.misses.join(", ")}`);
+      if (e.cmd) parts.push(trunc(e.cmd, 80));
+      console.log(`  ${parts.join("  ")}`);
+    }
+  }
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────
 
 switch (cmd) {
@@ -519,10 +559,11 @@ switch (cmd) {
   case "list": listCmd(); break;
   case "blocks": blocksCmd(); break;
   case "dspa": flags.reasons ? dspaReasons() : flags.paths ? dspaPaths() : dspaCmd(); break;
+  case "judge": judgeCmd(); break;
   case "stats": stats(); break;
   case "audit": audit(); break;
   case "show": show(); break;
   default:
-    console.error(`unknown command: ${cmd}\nusage: node tools/log-inspect.mjs [summary|list|blocks|dspa|stats|audit|show N] [options]`);
+    console.error(`unknown command: ${cmd}\nusage: node tools/log-inspect.mjs [summary|list|blocks|dspa|judge|stats|audit|show N] [options]`);
     process.exit(2);
 }

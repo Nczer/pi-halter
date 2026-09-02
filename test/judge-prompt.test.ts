@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -470,5 +470,71 @@ describe("getJudgeVerdict: file content threading", () => {
     const packet = String(calls[0].context.messages[0].content);
     expect(packet).toContain("## New content (UNTRUSTED DATA)");
     expect(packet).toContain("the-secret-marker-42");
+  });
+});
+
+// ── D17: judge infra ledger (runJudgeStage failure sites) ──
+
+describe("D17: infra lines in the always-on judge ledger", () => {
+  const judgeLog = path.join(os.tmpdir(), `judge-infra-${process.pid}.jsonl`);
+  const savedJudgeLog = process.env.HALTER_JUDGE_LOG;
+
+  function judgeLines(): Array<Record<string, unknown>> {
+    if (!fs.existsSync(judgeLog)) return [];
+    return fs.readFileSync(judgeLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  }
+
+  beforeEach(() => {
+    fs.rmSync(judgeLog, { force: true });
+    process.env.HALTER_JUDGE_LOG = judgeLog;
+  });
+  afterEach(() => {
+    if (savedJudgeLog === undefined) delete process.env.HALTER_JUDGE_LOG;
+    else process.env.HALTER_JUDGE_LOG = savedJudgeLog;
+    fs.rmSync(judgeLog, { force: true });
+  });
+
+  it("settings off → silent (a choice, not an infra failure)", async () => {
+    const { ctx } = makeCtx(fakeModel());
+    await getJudgeVerdict(makePd("infra-off-test", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), []),
+      settings: OFF,
+    });
+    expect(fs.existsSync(judgeLog)).toBe(false);
+  });
+
+  it("no model resolvable → infra line (no-model)", async () => {
+    const { ctx } = makeCtx(undefined);
+    await getJudgeVerdict(makePd("infra-nomodel-test", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), []),
+      settings: ON,
+    });
+    expect(judgeLines()).toEqual([
+      expect.objectContaining({ kind: "infra", mode: "manual", stage: 1, error: "no-model" }),
+    ]);
+  });
+
+  it("auth failure → infra line (no-auth, model named)", async () => {
+    const { ctx } = makeCtx(fakeModel(), false);
+    await getJudgeVerdict(makePd("infra-noauth-test", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), []),
+      settings: ON,
+    });
+    expect(judgeLines()).toEqual([
+      expect.objectContaining({ kind: "infra", error: "no-auth", model: "llama-cpp/qwen3-27b" }),
+    ]);
+  });
+
+  it("reply without explanation (a thrown stream normalizes to the same) → no-explanation line", async () => {
+    const { ctx } = makeCtx(fakeModel());
+    await getJudgeVerdict(makePd("infra-noexpl-test", tmp), ctx, createStore(), {
+      stream: (() => { throw new Error("boom"); }) as JudgeStreamFn,
+      settings: ON,
+    });
+    await getJudgeVerdict(makePd("infra-noexpl-test-2", tmp), ctx, createStore(), {
+      stream: fixedStream(() => assistantText("I refuse to call tools"), []),
+      settings: ON,
+    });
+    expect(judgeLines().map((l) => l.error)).toEqual(["no-explanation", "no-explanation"]);
   });
 });

@@ -252,7 +252,9 @@ fail-safe bucket. The widget renders non-zero counts in `g r c d` order after
 **Path report (D13).** A stage-2 verdict also reports the paths the operation
 touches; the gate cross-checks them against the floor's own knowledge and
 logs mismatches as `judgePathMisses` (diagnostic only; nothing in the gate reads
-model output back). Mine with `tools/log-inspect.mjs dspa --paths`.
+model output back). Mismatches land in the decision log AND the always-on
+judge ledger (D17); mine with `tools/log-inspect.mjs judge` (or
+`dspa --paths` on a toggle-on decision log).
 
 **D4 (denials to the agent) is on HOLD**: the planned behavior where a
 stage-2 `deny` returns to the agent as a good-faith block (escalating to a
@@ -263,9 +265,15 @@ pending more observed data.
 ## dspat regime
 
 Identical to manual plus a `💭 Judge:` block in every prompt — bash, file,
-and tool (stage 1 only; the packet builder covers all three prompt types)
-(explanation + `→ suggests: APPROVE|REJECT|DEFER (<risk>)`). The user's choice is recorded
-against the verdict as session agreement stats (widget line). No auto-allow.
+and tool (the packet builder covers all three prompt types). D17: BOTH judge
+stages run (the same cascade order as /dspa, but stage 2 is never skipped,
+even on stage-1 approve+low — the cross-check of stage-1 lows is the data
+/dspa's auto-allow path cannot produce) and the block shows the FINAL
+verdict — stage 2's, or stage 1's when stage 2 produced none
+(explanation + `→ suggests: APPROVE|REJECT|DEFER (<risk>)`). The user's
+choice is recorded against that final verdict as session agreement stats
+(widget line). Stage disagreements and stage-2 path mismatches are mirrored
+to the always-on judge ledger (D17). No auto-allow.
 An on-demand `💭 Explain` prompt option runs the judge in any regime without
 recording agreement stats (the human picks when to consult, so the subset is
 self-selected).
@@ -365,12 +373,18 @@ calls to its tool; the loader recovers the tool name from the plugin file's
   into `decide()` and the prompt flow; a runtime singleton.
 - **Decision log** (`.log/decisions.jsonl`, off by default): one line per tool
   call with kind, target, why/reason, regime tag, and dspa stop tag.
-  Version-bound: delete after a `/reload` of gate code. `tools/log-inspect.mjs`
-  does the recurring extractions (summary, audit, dspa, dspa --paths, stats).
-- **Unresolved log** (`.log/unresolved.jsonl`): the fate of each unbound token
-  (outcome, LLM suggestion, user decision, whether it became a confirmed
-  resolution). Convergence is the token flipping from `prompted` to
-  `auto-allowed`.
+  Version-bound: delete after a `/reload` of gate code. The
+  `/halter-decision-log` toggle covers THIS file only (D17 split). `tools/
+  log-inspect.mjs` does the recurring extractions (summary, audit, dspa,
+  dspa --paths, stats).
+- **Unresolved log** (`.log/unresolved.jsonl`, always-on): the fate of each
+  unbound token (outcome, LLM suggestion, user decision, whether it became a
+  confirmed resolution). Convergence is the token flipping from `prompted`
+  to `auto-allowed`.
+- **Judge ledger** (`.log/judge.jsonl`, always-on, D17): signal-only judge
+  diagnostics — stage-1/stage-2 verdict disagreements (`diff`), stage
+  failures (`infra`: no-model / no-auth / no-explanation / call-failed),
+  and D13 path mismatches (`paths`). Mine with `tools/log-inspect.mjs judge`.
 - **Widget** (`ui/widget.ts`): one status widget. Mode lines pinned on top (one
   line each: dsp warning, dspa health counts, dspat agreement), then the
   session's active rules.
