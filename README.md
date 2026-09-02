@@ -183,6 +183,8 @@ One line per command:
 
 `tools/converge-probe.mts` exercises the D12 steady state for an unbound path token across three fresh stores — `run1` unconfirmed (PROMPT + gate stop `runtime location unresolvable`), `run2` confirmed all-in-bar (AUTO-ALLOW), `run3` confirmed one-out-of-bar (PROMPT naming exactly that dir, grantable by "Always (paths)"). It discovers the token from run1 (no hardcoding) and defaults both dirs to fresh temp dirs under `$HOME`; pass `[outsidePrefix] [cwd]` to use your own (caller dirs are never deleted).
 
+`tools/bench.mts [rounds]` measures `decide()` runtime: every bash contract case through a fresh store, N rounds (round 0 = warmup), with a per-fs-method syscall table (wraps `fs` in-process, no source changes). Use it before/after any change to the analysis hot path.
+
 For a one-off script instead of the harness, call `decide()` directly:
 
 ```ts
