@@ -12,9 +12,9 @@ import path from "node:path";
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
-import { resolveUnresolvedPaths, resetPathResolverCache } from "../path-resolver";
-import { DEFAULT_JUDGE_SETTINGS, type CompleteFn, type JudgeSettings } from "../judge";
-import type { BashPromptData } from "../decision-engine";
+import { resolveUnresolvedPaths, resetPathResolverCache } from "../judge/path-resolver";
+import {DEFAULT_JUDGE_SETTINGS, CompleteFn, JudgeSettings} from "../judge/judge";
+import type {BashPromptData} from "../decide/types";
 
 // ── Fakes (judge-prompt.test.ts pattern) ──
 

@@ -1,17 +1,17 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { PermissionRequest, Decision, PromptData, DecideOptions } from "./decision-engine";
-import { decide } from "./decision-engine";
-import { pdTargetLabel } from "./prompt-builder";
+import type {PermissionRequest, Decision, PromptData, DecideOptions} from "../decide/types";
+import {decide} from "../decide/engine";
+import { pdTargetLabel } from "../ui/prompt-builder";
 import { logDecision, logUnresolved, type DspModeTag } from "./decision-log";
-import { showPrompt, type DspaFallthrough } from "./prompt-flow";
+import { showPrompt, type DspaFallthrough } from "../ui/prompt-flow";
 import type { Store } from "./store";
-import { isDspaActive, recordDspaAutoAllowed, recordDspaStop, updateDspaWidget } from "./dspa-mode";
-import { isDspatActive } from "./dspat-mode";
+import { isDspaActive, recordDspaAutoAllowed, recordDspaStop, updateDspaWidget } from "../modes/dspa-mode";
+import { isDspatActive } from "../modes/dspat-mode";
 import { checkDspaGate } from "./dspa-gate";
-import { getJudgeVerdict, getStage2Verdict, judgeStatus, extractScriptPayload } from "./judge-prompt";
-import { judgePathLogFields } from "./judge-paths";
-import { PromptFallbackRule } from "./policies/bash-rules";
-import type { JudgeResult } from "./judge";
+import {getJudgeVerdict, getStage2Verdict, judgeStatus, extractScriptPayload} from "../judge/verdict";
+import { judgePathLogFields } from "../judge/paths";
+import { PromptFallbackRule } from "../decide/bash-rules";
+import type {JudgeResult} from "../judge/judge";
 
 /** Result of showing a permission prompt. */
 interface PromptResult {

@@ -419,8 +419,8 @@ describe("Signature store round-trip: relative paths", () => {
   });
 
   it("relative path signature after approval does NOT auto-allow via store", async () => {
-    const { decide } = await import("../decision-engine");
-    const { createStore } = await import("../store");
+    const { decide } = await import("../decide/engine");
+    const { createStore } = await import("../gate/store");
     const store = createStore();
     store.addAllowed({ bashSigs: ["./scripts/foo.sh"] });
     const d = await decide({ type: "bash", command: "./scripts/foo.sh", cwd }, store);

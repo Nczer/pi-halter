@@ -31,15 +31,9 @@ import type {
 import { complete } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { BashPromptData } from "./decision-engine";
-import {
-  readJudgeSettings,
-  resolveJudgeModel,
-  resolveJudgeAuth,
-  type CompleteFn,
-  type JudgeSettings,
-} from "./judge";
-import { expandTilde } from "./analysis/path-util";
+import type {BashPromptData} from "../decide/types";
+import {readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, CompleteFn, JudgeSettings} from "./judge";
+import { expandTilde } from "../analysis/path-util";
 
 // ── Model call ──
 

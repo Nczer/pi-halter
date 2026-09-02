@@ -20,28 +20,17 @@ import path from "node:path";
 import { complete } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { BashPromptData, PromptData } from "./decision-engine";
-import type { Store } from "./store";
-import { analyzeCommand, type CommandAnalysis } from "./analysis/command-analysis";
-import { expandTilde } from "./analysis/path-util";
-import { tokenizeSegment } from "./analysis/tokenizer";
-import { isTrustedScriptCommand } from "./config";
-import {
-  judge,
-  JUDGE_STAGE2_SYSTEM_PROMPT,
-  readJudgeSettings,
-  resolveJudgeModel,
-  resolveJudgeAuth,
-  type CompleteFn,
-  type JudgeResult,
-  type JudgeSettings,
-  type JudgmentBashInput,
-  type JudgmentInput,
-  type JudgmentScript,
-} from "./judge";
+import type {BashPromptData, PromptData} from "../decide/types";
+import type { Store } from "../gate/store";
+import { analyzeCommand, type CommandAnalysis } from "../analysis/command-analysis";
+import { expandTilde } from "../analysis/path-util";
+import { tokenizeSegment } from "../analysis/tokenizer";
+import { isTrustedScriptCommand } from "../config";
+import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, CompleteFn, JudgeResult, JudgeSettings} from "./judge";
+import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
-import { isDspaActive, setDspaJudging } from "./dspa-mode";
-import { isDspatActive, setDspatJudging } from "./dspat-mode";
+import { isDspaActive, setDspaJudging } from "../modes/dspa-mode";
+import { isDspatActive, setDspatJudging } from "../modes/dspat-mode";
 
 // ── Script payload extraction ──
 

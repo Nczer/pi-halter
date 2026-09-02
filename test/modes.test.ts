@@ -12,9 +12,9 @@ const handlersMock = vi.hoisted(() => ({
 }));
 vi.mock("../handlers", () => handlersMock);
 import halterExtension from "../index";
-import { isDspActive, setDspActive } from "../dsp-mode";
-import { isDspaActive, setDspaActive, resetDspa, recordDspaAutoAllowed, getDspaStats } from "../dspa-mode";
-import { isDspatActive, setDspatActive, resetDspat, recordDspatOutcome, getDspatStats } from "../dspat-mode";
+import { isDspActive, setDspActive } from "../modes/dsp-mode";
+import { isDspaActive, setDspaActive, resetDspa, recordDspaAutoAllowed, getDspaStats } from "../modes/dspa-mode";
+import { isDspatActive, setDspatActive, resetDspat, recordDspatOutcome, getDspatStats } from "../modes/dspat-mode";
 
 interface CommandDef {
   description: string;

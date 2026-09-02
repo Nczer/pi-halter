@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildPrompt, pdTargetLabel, summarizePrompt } from "../prompt-builder";
-import type { PromptDecision, BashPromptData, FilePromptData } from "../decision-engine";
+import { buildPrompt, pdTargetLabel, summarizePrompt } from "../ui/prompt-builder";
+import type {PromptDecision, BashPromptData, FilePromptData} from "../decide/types";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

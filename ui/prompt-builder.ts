@@ -1,9 +1,9 @@
 import path from "node:path";
-import type { PromptDecision, PromptData, BashPromptData, FilePromptData, ToolPromptData } from "./decision-engine";
+import type {PromptDecision, PromptData, BashPromptData, FilePromptData, ToolPromptData} from "../decide/types";
 
-import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./renderers/tmux";
-import { shortenToken } from "./analysis/path-util";
-import type { ResolutionMap } from "./path-resolver";
+import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./tmux-render";
+import { shortenToken } from "../analysis/path-util";
+import type { ResolutionMap } from "../judge/path-resolver";
 
 // ── Output types (match twoTierAlwaysPrompt's expected inputs) ──
 

@@ -8,8 +8,8 @@
  * prompts still prompt; their Always tiers are file-level or root-free.
  */
 import { describe, it, expect } from "vitest";
-import { RuleGenerator } from "../rule-generator";
-import type { BashPromptData, FilePromptData } from "../decision-engine";
+import { RuleGenerator } from "../decide/rule-generator";
+import type {BashPromptData, FilePromptData} from "../decide/types";
 
 const BASE = "/home/u/project";
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { isDspActive, setDspActive, updateDspWidget } from "../dsp-mode";
+import { isDspActive, setDspActive, updateDspWidget } from "../modes/dsp-mode";
 
 describe("dsp-mode", () => {
   beforeEach(() => {

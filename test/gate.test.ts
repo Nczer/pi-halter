@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { gate, rejectBash, rejectFile } from "../gate";
-import { createStore } from "../store";
-import type { Decision } from "../decision-engine";
-import * as decisionEngine from "../decision-engine";
+import { gate, rejectBash, rejectFile } from "../gate/gate";
+import { createStore } from "../gate/store";
+import type {Decision} from "../decide/types";
+import * as decisionEngine from "../decide/engine";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 

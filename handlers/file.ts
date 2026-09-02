@@ -1,8 +1,8 @@
 import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
-import type { FileRequest } from "../decision-engine";
-import { gate, gateDecide, rejectFile } from "../gate";
-import { store } from "../store";
+import type {FileRequest} from "../decide/types";
+import { gate, gateDecide, rejectFile } from "../gate/gate";
+import { store } from "../gate/store";
 import {
   expandTilde,
   resolvePathReal,

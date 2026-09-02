@@ -2,12 +2,13 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { decide, type ToolRequest, type PromptDecision } from "../decision-engine";
-import { createStore } from "../store";
-import { RuleGenerator } from "../rule-generator";
-import { buildPrompt, pdTargetLabel, summarizePrompt } from "../prompt-builder";
-import { buildJudgmentPacket } from "../judge";
-import { checkDspaGate } from "../dspa-gate";
+import {decide} from "../decide/engine";
+import type {ToolRequest, PromptDecision} from "../decide/types";
+import { createStore } from "../gate/store";
+import { RuleGenerator } from "../decide/rule-generator";
+import { buildPrompt, pdTargetLabel, summarizePrompt } from "../ui/prompt-builder";
+import {buildJudgmentPacket} from "../judge/packet";
+import { checkDspaGate } from "../gate/dspa-gate";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 

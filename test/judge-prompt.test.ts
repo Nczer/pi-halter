@@ -10,11 +10,11 @@ import path from "node:path";
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
-import { createStore } from "../store";
-import { extractScriptPayload, getJudgeVerdict, judgeAvailable, judgeStatus, judgeVerdictBlock } from "../judge-prompt";
+import { createStore } from "../gate/store";
+import {extractScriptPayload, getJudgeVerdict, judgeAvailable, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
 import { analyzeCommand } from "../analysis/command-analysis";
-import { DEFAULT_JUDGE_SETTINGS, type CompleteFn, type JudgeResult, type JudgeSettings } from "../judge";
-import type { BashPromptData as BashPromptDataType } from "../decision-engine";
+import {DEFAULT_JUDGE_SETTINGS, CompleteFn, JudgeResult, JudgeSettings} from "../judge/judge";
+import type {BashPromptData as BashPromptDataType} from "../decide/types";
 
 // ── Fakes ──
 

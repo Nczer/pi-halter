@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { analyzeCommand } from "../analysis/command-analysis";
-import { decide, type Decision } from "../decision-engine";
-import { createStore } from "../store";
+import {decide} from "../decide/engine";
+import type {Decision} from "../decide/types";
+import { createStore } from "../gate/store";
 import {
   getTmuxSubcommand,
   extractTmuxSendKeys,

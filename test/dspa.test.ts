@@ -9,19 +9,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { gate, rejectBash, rejectFile } from "../gate";
-import { createStore } from "../store";
-import type { Decision, BashPromptData, FilePromptData } from "../decision-engine";
-import * as decisionEngine from "../decision-engine";
+import { gate, rejectBash, rejectFile } from "../gate/gate";
+import { createStore } from "../gate/store";
+import type {Decision, BashPromptData, FilePromptData} from "../decide/types";
+import * as decisionEngine from "../decide/engine";
 import { analyzeCommand } from "../analysis/command-analysis";
-import * as judgePrompt from "../judge-prompt";
-import * as promptFlow from "../prompt-flow";
-import { setDspaActive, resetDspa, getDspaStats } from "../dspa-mode";
-import { setDspatActive, resetDspat } from "../dspat-mode";
-import type { JudgeResult } from "../judge";
+import * as judgePrompt from "../judge/verdict";
+import * as promptFlow from "../ui/prompt-flow";
+import { setDspaActive, resetDspa, getDspaStats } from "../modes/dspa-mode";
+import { setDspatActive, resetDspat } from "../modes/dspat-mode";
+import type {JudgeResult} from "../judge/judge";
 
-vi.mock("../judge-prompt", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../judge-prompt")>();
+vi.mock("../judge/verdict", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../judge/verdict")>();
   return {
     ...actual, // extractScriptPayload & friends run real (D11 conversion)
     getJudgeVerdict: vi.fn(),
@@ -29,7 +29,7 @@ vi.mock("../judge-prompt", async (importOriginal) => {
     judgeStatus: vi.fn(() => ({ state: "ok", modelLabel: "test/model (session)", reason: null })),
   };
 });
-vi.mock("../prompt-flow", () => ({
+vi.mock("../ui/prompt-flow", () => ({
   showPrompt: vi.fn(async () => ({ allowed: true })),
 }));
 

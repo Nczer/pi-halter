@@ -12,12 +12,12 @@ import {
   getDspatStats,
   updateDspatWidget,
   setDspatJudging,
-} from "../dspat-mode";
+} from "../modes/dspat-mode";
 
 const { judgeStatusMock } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn<() => { state: string; modelLabel: string | null; reason: string | null }>(),
 }));
-vi.mock("../judge-prompt", () => ({ judgeStatus: judgeStatusMock }));
+vi.mock("../judge/verdict", () => ({ judgeStatus: judgeStatusMock }));
 
 beforeEach(() => {
   resetDspat();

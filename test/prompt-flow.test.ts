@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Decision, PromptDecision } from "../decision-engine";
+import type {Decision, PromptDecision} from "../decide/types";
 
 const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn(),
@@ -18,16 +18,16 @@ const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock } 
   pathsRulesMock: vi.fn(),
 }));
 
-vi.mock("../judge-prompt", async (importOriginal) => ({
+vi.mock("../judge/verdict", async (importOriginal) => ({
   judgeStatus: judgeStatusMock,
   getJudgeVerdict: verdictMock,
   // Real renderer — the suggests-line assertions below exercise it.
-  judgeVerdictBlock: (await importOriginal<typeof import("../judge-prompt")>()).judgeVerdictBlock,
+  judgeVerdictBlock: (await importOriginal<typeof import("../judge/verdict")>()).judgeVerdictBlock,
 }));
-vi.mock("../prompts", () => ({ twoTierAlwaysPrompt: promptSpy }));
-vi.mock("../path-resolver", () => ({ resolveUnresolvedPaths: resolverMock }));
-vi.mock("../prompt-builder", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../prompt-builder")>()),
+vi.mock("../ui/prompts", () => ({ twoTierAlwaysPrompt: promptSpy }));
+vi.mock("../judge/path-resolver", () => ({ resolveUnresolvedPaths: resolverMock }));
+vi.mock("../ui/prompt-builder", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ui/prompt-builder")>()),
   // Mirrors the real builder's trust contract: trustPackages derives from
   // the decision's fetchable forms (the builder, not the flow, computes it).
   buildPrompt: (decision?: any) => ({
@@ -40,8 +40,8 @@ vi.mock("../prompt-builder", async (importOriginal) => ({
       : undefined,
   }),
 }));
-vi.mock("../widget", () => ({ updateWidget: () => {} }));
-vi.mock("../rule-generator", () => ({
+vi.mock("../ui/widget", () => ({ updateWidget: () => {} }));
+vi.mock("../decide/rule-generator", () => ({
   RuleGenerator: {
     generatePrimaryRules: () => [],
     generatePathsOnlyRules: pathsRulesMock,
@@ -50,9 +50,9 @@ vi.mock("../rule-generator", () => ({
   },
 }));
 
-import { showPrompt, type DspaFallthrough } from "../prompt-flow";
-import { createStore } from "../store";
-import { setDspatActive, resetDspat } from "../dspat-mode";
+import { showPrompt, type DspaFallthrough } from "../ui/prompt-flow";
+import { createStore } from "../gate/store";
+import { setDspatActive, resetDspat } from "../modes/dspat-mode";
 
 beforeEach(() => {
   vi.clearAllMocks();

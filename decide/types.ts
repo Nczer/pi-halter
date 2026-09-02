@@ -1,12 +1,13 @@
-import fs from "node:fs";
-import path from "node:path";
-import { decideBash } from "./policies/bash";
-import { decideFile } from "./policies/file";
-import type { CommandAnalysis } from "./analysis/command-analysis";
-import { resolvePathReal, isInsideCwd } from "./analysis/path-analysis";
-import { expandTilde } from "./analysis/path-util";
-import type { Store, AllowRules } from "./store";
-export type { Store, AllowRules };
+/**
+ * Core decision types — the shared vocabulary of halter's decision layer.
+ *
+ * Request types (what a gated call is), decision types (what the gate
+ * resolved it to), and prompt data (what the prompt shows and what
+ * "Always" would grant). Pure types: no runtime code.
+ */
+import type { CommandAnalysis } from "../analysis/command-analysis";
+
+export type { Store, AllowRules } from "../gate/store";
 
 // ── Request types (discriminated union) ──
 
@@ -68,7 +69,7 @@ interface AutoAllowDecision {
   reason?: string;
   /** D11: the analysis a bash auto-allow was made from — the dspa content
    *  review (granted script executions) reuses it instead of re-parsing. */
-  analysis?: import("./analysis/command-analysis").CommandAnalysis;
+  analysis?: CommandAnalysis;
 }
 
 /** Command must be blocked — no prompt shown. */
@@ -179,11 +180,11 @@ export interface ToolPromptData {
 
 export type PromptData = BashPromptData | FilePromptData | ToolPromptData;
 
-// ── Decision engine ──
+// ── Decision options ──
 
 /**
- * Pure decision function. Given a permission request and the current store state,
- * returns a decision: auto-allow, block, or prompt.
+ * Pure decision function. Given a permission request and the current store
+ * state, returns a decision: auto-allow, block, or prompt.
  *
  * UI-agnostic — always returns "prompt" when human judgment is needed,
  * regardless of whether a UI is available. The handler adapts.
@@ -197,48 +198,4 @@ export interface DecideOptions {
    * behavior — auto-allow.
    */
   judgeWriteAutoAllows?: boolean;
-}
-
-export async function decide(request: PermissionRequest, store: Store, opts?: DecideOptions): Promise<Decision> {
-  switch (request.type) {
-    case "bash":
-      return decideBash(request, store);
-    case "file":
-      return decideFile(request, store, opts);
-    case "tool":
-      return decideTool(request, store);
-  }
-}
-
-/**
- * Tool-call decision (plugins). Grant model — two scopes, session-scoped:
- *  - `<tool>` (whole tool; the "Always" on an exec/file prompt): covers
- *    every action of the tool, INCLUDING code execution;
- *  - `<tool>:kind:<consentKind>` (the "Always" on a consent prompt): covers
- *    only that kind — a read consent can never cover an exec action.
- * No grant → prompt. (Per-action grants are a later refinement.)
- */
-function decideTool(req: ToolRequest, store: Store): Decision {
-  if (store.hasToolGrant(req.tool)) return { kind: "auto-allow" };
-  if (req.gate === "consent" && req.consentKind
-      && store.hasToolGrant(`${req.tool}:kind:${req.consentKind}`)) {
-    return { kind: "auto-allow" };
-  }
-  const pd: ToolPromptData = {
-    type: "tool",
-    tool: req.tool,
-    label: req.label,
-    gate: req.gate,
-    script: req.script,
-    argsPreview: req.argsPreview,
-    consentKind: req.consentKind,
-    note: req.note,
-  };
-  if (req.gate === "file" && req.path) {
-    const resolved = resolvePathReal(expandTilde(req.path), req.cwd);
-    pd.resolved = resolved;
-    pd.outsideDir = isInsideCwd(resolved, req.cwd) ? null : path.dirname(resolved);
-    pd.exists = fs.existsSync(resolved);
-  }
-  return { kind: "prompt", promptData: pd };
 }

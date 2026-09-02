@@ -10,8 +10,8 @@
 import path from "node:path";
 import os from "node:os";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { decide } from "../decision-engine";
-import { createStore } from "../store";
+import {decide} from "../decide/engine";
+import { createStore } from "../gate/store";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 let cwd: string;

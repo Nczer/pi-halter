@@ -30,12 +30,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DECISION_LOG_ENABLED } from "./config/logging";
-import { SETTINGS_PATH, readSettingsFile, writeSettings } from "./halter-settings";
-import { summarizePrompt } from "./prompt-builder";
-import type { Decision, FilePromptData, PermissionRequest } from "./decision-engine";
+import { DECISION_LOG_ENABLED } from "../config/logging";
+import { SETTINGS_PATH, readSettingsFile, writeSettings } from "../halter-settings";
+import { summarizePrompt } from "../ui/prompt-builder";
+import type {Decision, FilePromptData, PermissionRequest} from "../decide/types";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
+// Anchored to the extension ROOT, not this file's dir (gate/): the log
+// lives at <extension dir>/.log/ regardless of where the module lives.
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 // ── Persisted toggle ("decisionLog" in the halter namespace of
  // settings-ext.json, shared with the judge settings) ──
@@ -66,8 +68,8 @@ export function isDecisionLogEnabled(): boolean {
   return decisionLogEnabled;
 }
 
-export const DEFAULT_LOG_FILE = path.join(here, ".log", "decisions.jsonl");
-export const UNRESOLVED_LOG_FILE = path.join(here, ".log", "unresolved.jsonl");
+export const DEFAULT_LOG_FILE = path.join(root, ".log", "decisions.jsonl");
+export const UNRESOLVED_LOG_FILE = path.join(root, ".log", "unresolved.jsonl");
 
 /** Resolve the unresolved-token log path. `HALTER_UNRESOLVED_LOG` is a
  * test seam (point the log at a scratch path); production never sets it. */

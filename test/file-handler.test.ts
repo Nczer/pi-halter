@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import { handleFile } from "../handlers";
-import { store } from "../store";
+import { store } from "../gate/store";
 
 const cwd = process.cwd();
 
@@ -200,8 +200,8 @@ describe("handleFile edit pre-validation security", () => {
 
 // ── Judge content threading ──
 
-import * as decisionEngine from "../decision-engine";
-import { resetDspa } from "../dspa-mode";
+import * as decisionEngine from "../decide/engine";
+import { resetDspa } from "../modes/dspa-mode";
 
 describe("handleFile content threading (judge input)", () => {
   let decideSpy: ReturnType<typeof vi.spyOn>;

@@ -1,7 +1,7 @@
 import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
-import type { ToolRequest } from "../decision-engine";
-import { gate, rejectTool } from "../gate";
-import { store } from "../store";
+import type {ToolRequest} from "../decide/types";
+import { gate, rejectTool } from "../gate/gate";
+import { store } from "../gate/store";
 import { getLoadedPlugins } from "../plugins/loader";
 import type { ToolGateRequest } from "../plugins/types";
 

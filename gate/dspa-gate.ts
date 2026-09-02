@@ -56,25 +56,25 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type { PromptData } from "./decision-engine";
+import type {PromptData} from "../decide/types";
 import type { Store } from "./store";
-import { analyzeCommand } from "./analysis/command-analysis";
-import { resolveOpaqueRefs } from "./analysis/var-resolution";
-import { expandTilde, shortenToken } from "./analysis/path-util";
-import { resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "./analysis/path-analysis";
-import { isTrustedScriptPath } from "./config/trusted-scripts";
-import { UNKNOWN_CWD_MARKER, cdBaseBounds, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "./analysis/cwd-tracking";
-import { rootScanTarget } from "./analysis/evaluators/disk-evaluator";
-import { OPAQUE_VAR_DIR } from "./analysis/bash-parser";
-import { getDelegatedCommand, segmentFetchPackage } from "./analysis/segment-helpers";
-import { tokenizeSegment, splitOnPipe } from "./analysis/tokenizer";
+import { analyzeCommand } from "../analysis/command-analysis";
+import { resolveOpaqueRefs } from "../analysis/var-resolution";
+import { expandTilde, shortenToken } from "../analysis/path-util";
+import { resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
+import { isTrustedScriptPath } from "../config/trusted-scripts";
+import { UNKNOWN_CWD_MARKER, cdBaseBounds, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
+import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
+import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
+import { getDelegatedCommand, segmentFetchPackage } from "../analysis/segment-helpers";
+import { tokenizeSegment, splitOnPipe } from "../analysis/tokenizer";
 import {
   NETWORK_COMMANDS,
   NETWORK_URL_RE,
   NETWORK_URL_RE_GLOBAL,
   gitNetworkSubcommand,
   skipEnvPrefixes,
-} from "./config";
+} from "../config";
 
 export type DspaGateResult =
   | { ok: true }

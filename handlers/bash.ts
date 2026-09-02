@@ -1,8 +1,8 @@
 import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import type { BashRequest } from "../decision-engine";
-import { gate, rejectBash } from "../gate";
-import { store } from "../store";
+import type {BashRequest} from "../decide/types";
+import { gate, rejectBash } from "../gate/gate";
+import { store } from "../gate/store";
 
 export async function handleBash(
   event: ToolCallEvent,

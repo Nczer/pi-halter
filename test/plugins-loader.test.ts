@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPlugins, setLoadedPlugins } from "../plugins/loader";
 import { handleTool } from "../handlers/tool";
-import { store } from "../store";
+import { store } from "../gate/store";
 
 const FIXTURE_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

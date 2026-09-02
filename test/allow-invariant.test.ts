@@ -20,10 +20,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { unconditionallySafeCommands, isAllowedCommand } from "../config";
-import { FastAllowRule, SafetyRule } from "../policies/bash-rules";
+import { FastAllowRule, SafetyRule } from "../decide/bash-rules";
 import { analyzeCommand } from "../analysis/command-analysis";
-import { createStore } from "../store";
-import type { BashRequest } from "../decision-engine";
+import { createStore } from "../gate/store";
+import type {BashRequest} from "../decide/types";
 
 describe("unconditionallySafeCommands invariant", () => {
   let cwd: string;

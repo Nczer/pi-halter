@@ -1,14 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { updateWidget } from "./widget";
+import { updateWidget } from "./ui/widget";
 import { handleBash, handleFile, handleTool } from "./handlers";
 import { loadPlugins, setLoadedPlugins } from "./plugins/loader";
-import { isDspActive, setDspActive } from "./dsp-mode";
-import { isDspatActive, resetDspat, setDspatActive } from "./dspat-mode";
-import { isDspaActive, resetDspa, setDspaActive } from "./dspa-mode";
-import { isDecisionLogEnabled, setDecisionLogEnabled } from "./decision-log";
-import { readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, type JudgeSettings } from "./judge";
-import { judgeStatus } from "./judge-prompt";
-import { store } from "./store";
+import { isDspActive, setDspActive } from "./modes/dsp-mode";
+import { isDspatActive, resetDspat, setDspatActive } from "./modes/dspat-mode";
+import { isDspaActive, resetDspa, setDspaActive } from "./modes/dspa-mode";
+import { isDecisionLogEnabled, setDecisionLogEnabled } from "./gate/decision-log";
+import {readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, JudgeSettings} from "./judge/judge";
+import {judgeStatus} from "./judge/verdict";
+import { store } from "./gate/store";
 
 // ── Main extension ──
 
