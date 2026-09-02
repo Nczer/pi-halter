@@ -86,12 +86,12 @@ export default async function halterExtension(pi: ExtensionAPI) {
   // ── /dspat command (exclusive with /dspa and /dsp) ──
   pi.registerCommand("dspat", {
     description:
-      "Toggle judge advisory mode: the judge explains every bash prompt and suggests approve/reject; you still decide (verdicts are logged). Exclusive with /dspa and /dsp",
+      "Toggle judge advisory mode: the judge runs BOTH stages on every prompt (bash/file/tool) and shows the final verdict (stage 2, else stage 1); you still decide. Exclusive with /dspa and /dsp",
     handler: async (_args, ctx) => {
       const displaced = applyMode(ctx, isDspatActive() ? "manual" : "dspat");
       ctx.ui.notify(
         isDspatActive()
-          ? `DSPAT ON — judge advises on every prompt (you decide)${displaced ? ` (${displaced} off)` : ""}`
+          ? `DSPAT ON — judge (both stages) advises on every prompt (you decide)${displaced ? ` (${displaced} off)` : ""}`
           : "DSPAT OFF — judge suggestions disabled",
         "info",
       );
@@ -184,7 +184,7 @@ export default async function halterExtension(pi: ExtensionAPI) {
 
   // ── /halter-decision-log command ──
   pi.registerCommand("halter-decision-log", {
-    description: "Toggle the JSONL decision log on/off. Pass 'on', 'off', or nothing to toggle. Saved in ~/.pi/agent/settings-ext.json.",
+    description: "Toggle the JSONL decision log (decisions.jsonl) on/off — the always-on ledgers (unresolved.jsonl, judge.jsonl) are not affected. Pass 'on', 'off', or nothing to toggle. Saved in ~/.pi/agent/settings-ext.json.",
     handler: async (args, ctx) => {
       const arg = (args ?? "").trim().toLowerCase();
       const next =

@@ -3,7 +3,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { store } from "../gate/store";
 import { isDspActive } from "../modes/dsp-mode";
 import { isDspaActive, getDspaJudgingStage, getDspaStats } from "../modes/dspa-mode";
-import { isDspatActive, isDspatJudging, getDspatStats } from "../modes/dspat-mode";
+import { isDspatActive, getDspatJudgingStage, getDspatStats } from "../modes/dspat-mode";
 import {judgeStatus} from "../judge/verdict";
 
 // ── Path deduplication ──
@@ -174,7 +174,8 @@ export function updateWidget(ctx: ExtensionContext): void {
 
       if (isDspatActive() && judgeOk) {
         const s = getDspatStats();
-        const main = `◎ DSPAT${isDspatJudging() ? " — judging stage 1…" : ""}: judge advises on every permission prompt`;
+        const stage = getDspatJudgingStage();
+        const main = `◎ DSPAT${stage ? ` — judging stage ${stage}…` : ""}: judge advises on every permission prompt`;
         // Agreement counter + last disagreement, merged onto the mode line.
         // updateWidget is re-run after every recorded outcome, so live.
         const details =

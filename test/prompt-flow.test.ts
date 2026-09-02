@@ -6,7 +6,10 @@
  * a failed judge call under /dspat is surfaced, and the on-demand Explain
  * option is offered only when the judge can actually run.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {Decision, PermissionRequest, PromptDecision} from "../decide/types";
 
@@ -143,29 +146,83 @@ describe("/dspat active", () => {
     expect(verdictMock).not.toHaveBeenCalled();
   });
 
-  it("judge call failed (null verdict) → ⚠️ no-verdict line", async () => {
+  it("judge call failed (both stages null) → ⚠️ no-verdict line", async () => {
     verdictMock.mockResolvedValue(null);
+    stage2Mock.mockResolvedValue(null);
     await showPrompt(bashDecision(), ctx, store);
-    expect(shownPrompt().body).toContain("⚠️ Judge: no verdict (call failed or timed out)");
+    expect(shownPrompt().body).toContain("⚠️ Judge: no verdict (both stages failed or timed out)");
     expect(judgeArg()).toBeUndefined();
   });
 
-  it("verdict shown → 💭 Judge line with suggestion, no Explain option", async () => {
+  it("D17: BOTH stages run (stage 2 never skipped, even on stage-1 approve+low)", async () => {
     verdictMock.mockResolvedValue({
       model: "llama-cpp/qwen",
       explanation: "Removes a temp file.",
       approve: "approve",
       risk: "low",
     });
+    stage2Mock.mockResolvedValue({
+      model: "llama-cpp/qwen",
+      explanation: "Confirmed: scoped temp cleanup.",
+      approve: "approve",
+      risk: "low",
+    });
     await showPrompt(bashDecision(), ctx, store);
-    const body = shownPrompt().body;
-    expect(body).toContain("💭 Judge: Removes a temp file.");
-    expect(body).toContain("→ suggests: APPROVE (low)");
+    expect(verdictMock).toHaveBeenCalledTimes(1);
+    expect(stage2Mock).toHaveBeenCalledTimes(1);
+    // Final verdict = stage 2's.
+    expect(shownPrompt().body).toContain("💭 Judge: Confirmed: scoped temp cleanup.");
     expect(judgeArg()).toBeUndefined();
   });
 
-  it("defer verdict → DEFER, not REJECT (the model could not verify — a different signal)", async () => {
+  it("D17: stage 1 approve+low, stage 2 upgrades → stage 2 shown (the blind-spot probe)", async () => {
     verdictMock.mockResolvedValue({
+      model: "llama-cpp/qwen",
+      explanation: "Looks like a temp cleanup.",
+      approve: "approve",
+      risk: "low",
+    });
+    stage2Mock.mockResolvedValue({
+      model: "llama-cpp/qwen",
+      explanation: "Target escapes the cwd — unscoped delete.",
+      approve: "deny",
+      risk: "high",
+    });
+    await showPrompt(bashDecision(), ctx, store);
+    const body = shownPrompt().body;
+    expect(body).toContain("💭 Judge: Target escapes the cwd — unscoped delete.");
+    expect(body).toContain("→ suggests: REJECT (high)");
+    expect(body).not.toContain("Looks like a temp cleanup.");
+  });
+
+  it("D17: stage 2 failed → stage 1 verdict shown", async () => {
+    verdictMock.mockResolvedValue({
+      model: "llama-cpp/qwen",
+      explanation: "Removes a temp file.",
+      approve: "approve",
+      risk: "low",
+    });
+    stage2Mock.mockResolvedValue(null);
+    await showPrompt(bashDecision(), ctx, store);
+    expect(shownPrompt().body).toContain("💭 Judge: Removes a temp file.");
+    expect(shownPrompt().body).toContain("→ suggests: APPROVE (low)");
+  });
+
+  it("D17: stage 1 failed → stage 2 verdict shown", async () => {
+    verdictMock.mockResolvedValue(null);
+    stage2Mock.mockResolvedValue({
+      model: "llama-cpp/qwen",
+      explanation: "Session context shows a bounded target.",
+      approve: "approve",
+      risk: "medium",
+    });
+    await showPrompt(bashDecision(), ctx, store);
+    expect(shownPrompt().body).toContain("💭 Judge: Session context shows a bounded target.");
+    expect(shownPrompt().body).toContain("→ suggests: APPROVE (medium)");
+  });
+
+  it("defer verdict (final stage) → DEFER, not REJECT (the model could not verify — a different signal)", async () => {
+    stage2Mock.mockResolvedValue({
       model: "llama-cpp/qwen",
       explanation: "Truncated output hides the target list.",
       approve: "defer",
@@ -176,6 +233,63 @@ describe("/dspat active", () => {
     expect(body).toContain("→ suggests: DEFER (medium)");
     expect(body).not.toContain("REJECT");
     expect(judgeArg()).toBeUndefined();
+  });
+});
+
+describe("D17: dspat stage disagreement → always-on judge ledger", () => {
+  const judgeLog = path.join(os.tmpdir(), `pf-judge-ledger-${process.pid}.jsonl`);
+  const savedJudgeLog = process.env.HALTER_JUDGE_LOG;
+
+  function judgeLines(): Array<Record<string, unknown>> {
+    if (!fs.existsSync(judgeLog)) return [];
+    return fs.readFileSync(judgeLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  }
+
+  beforeEach(() => {
+    setDspatActive(true);
+    fs.rmSync(judgeLog, { force: true });
+    process.env.HALTER_JUDGE_LOG = judgeLog;
+  });
+  afterEach(() => {
+    if (savedJudgeLog === undefined) delete process.env.HALTER_JUDGE_LOG;
+    else process.env.HALTER_JUDGE_LOG = savedJudgeLog;
+    fs.rmSync(judgeLog, { force: true });
+  });
+
+  it("stage-1 low, stage-2 high → diff line (the blind-spot probe)", async () => {
+    verdictMock.mockResolvedValue({
+      model: "llama-cpp/qwen", explanation: "Looks safe.", approve: "approve", risk: "low",
+    });
+    stage2Mock.mockResolvedValue({
+      model: "llama-cpp/qwen", explanation: "Unscoped delete.", approve: "deny", risk: "high",
+    });
+    await showPrompt(bashDecision(), ctx, store);
+    expect(judgeLines()).toEqual([
+      expect.objectContaining({
+        kind: "diff", mode: "dspat", s1: "approve/low", s2: "deny/high",
+        cmd: "rm -rf /tmp/test",
+      }),
+    ]);
+  });
+
+  it("stages agree → no line (the ledger only records signal)", async () => {
+    verdictMock.mockResolvedValue({
+      model: "llama-cpp/qwen", explanation: "Safe.", approve: "approve", risk: "low",
+    });
+    stage2Mock.mockResolvedValue({
+      model: "llama-cpp/qwen", explanation: "Confirmed safe.", approve: "approve", risk: "low",
+    });
+    await showPrompt(bashDecision(), ctx, store);
+    expect(fs.existsSync(judgeLog)).toBe(false);
+  });
+
+  it("one stage failed → no diff line (a diff needs both sides)", async () => {
+    verdictMock.mockResolvedValue(null);
+    stage2Mock.mockResolvedValue({
+      model: "llama-cpp/qwen", explanation: "Bounded.", approve: "approve", risk: "medium",
+    });
+    await showPrompt(bashDecision(), ctx, store);
+    expect(fs.existsSync(judgeLog)).toBe(false);
   });
 });
 

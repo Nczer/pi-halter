@@ -24,10 +24,16 @@ import {
   logUnresolved,
   MAX_LOG_BYTES,
   DEFAULT_LOG_FILE,
+  resolveJudgeLogPath,
+  logJudge,
+  logJudgeDiff,
+  logJudgeInfra,
+  logJudgePaths,
   type DecisionLogEntry,
 } from "../gate/decision-log";
 import { DECISION_LOG_ENABLED } from "../config/logging";
 import type {BashRequest, Decision, FileRequest} from "../decide/types";
+import type {JudgeResult} from "../judge/judge";
 
 const noUiCtx = { hasUI: false } as never;
 const noReject = (() => {
@@ -301,10 +307,7 @@ describe("unresolved-token log (logUnresolved)", () => {
   });
   beforeEach(() => {
     process.env.HALTER_UNRESOLVED_LOG = unresolvedFile;
-    // Anything but "off" — the decision log is redirected to a scratch path
-    // so the hermeticity guard does not disable the unresolved log.
     process.env.HALTER_DECISION_LOG = path.join(tmp, "decisions.jsonl");
-    setDecisionLogEnabled(true, settingsFile);
   });
   afterEach(() => {
     setDecisionLogEnabled(false, settingsFile);
@@ -350,14 +353,15 @@ describe("unresolved-token log (logUnresolved)", () => {
     expect(entry.outcome).toBe("gate-stop");
   });
 
-  it("stays silent when the toggle is off", () => {
+  it("D17: writes even when the decision-log toggle is OFF (the ledgers are independent)", () => {
     setDecisionLogEnabled(false, settingsFile);
     logUnresolved({ cmd: "ls", cwd: "/c", token: "$FOO", persisted: false, outcome: "prompted" });
-    expect(fs.existsSync(unresolvedFile)).toBe(false);
+    const entry = JSON.parse(fs.readFileSync(unresolvedFile, "utf8").trim());
+    expect(entry.token).toBe("$FOO");
   });
 
-  it("stays silent under HALTER_DECISION_LOG=off (test hermeticity guard)", () => {
-    process.env.HALTER_DECISION_LOG = "off";
+  it("stays silent under HALTER_UNRESOLVED_LOG=off (test hermeticity guard)", () => {
+    process.env.HALTER_UNRESOLVED_LOG = "off";
     logUnresolved({ cmd: "ls", cwd: "/c", token: "$FOO", persisted: false, outcome: "prompted" });
     expect(fs.existsSync(unresolvedFile)).toBe(false);
   });
@@ -368,6 +372,111 @@ describe("unresolved-token log (logUnresolved)", () => {
     process.env.HALTER_UNRESOLVED_LOG = path.join(blocker, "sub", "unresolved.jsonl");
     expect(() =>
       logUnresolved({ cmd: "ls", cwd: "/c", token: "$FOO", persisted: false, outcome: "auto-allowed" }),
+    ).not.toThrow();
+  });
+});
+
+describe("judge ledger (logJudge, always-on, D17)", () => {
+  let tmp: string;
+  let judgeFile: string;
+  const savedEnv = process.env.HALTER_JUDGE_LOG;
+
+  function v(approve: "approve" | "defer" | "deny", risk: "low" | "medium" | "high", paths?: string[]): JudgeResult {
+    return {
+      model: "llama-cpp/qwen", explanation: "x", approve, risk, paths,
+      reason: "r", latencyMs: 100, cached: false,
+    } as JudgeResult;
+  }
+  const bashPd = {
+    type: "bash" as const,
+    command: "rm -rf /tmp/x",
+    cwd: "/home/u/project",
+  } as any;
+
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-judge-"));
+    judgeFile = path.join(tmp, "judge.jsonl");
+  });
+  afterAll(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  beforeEach(() => {
+    process.env.HALTER_JUDGE_LOG = judgeFile;
+  });
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.HALTER_JUDGE_LOG;
+    else process.env.HALTER_JUDGE_LOG = savedEnv;
+    for (const f of [judgeFile, judgeFile + ".1"]) {
+      try {
+        fs.unlinkSync(f);
+      } catch {
+        /* not created */
+      }
+    }
+  });
+
+  function judgeLines() {
+    return fs.readFileSync(judgeFile, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  }
+
+  it("resolveJudgeLogPath: default file, scratch path, off → null", () => {
+    const orig = process.env.HALTER_JUDGE_LOG;
+    try {
+      delete process.env.HALTER_JUDGE_LOG;
+      expect(resolveJudgeLogPath()).toContain(path.join("halter", ".log", "judge.jsonl"));
+      process.env.HALTER_JUDGE_LOG = judgeFile;
+      expect(resolveJudgeLogPath()).toBe(judgeFile);
+      process.env.HALTER_JUDGE_LOG = "off";
+      expect(resolveJudgeLogPath()).toBeNull();
+    } finally {
+      if (orig === undefined) delete process.env.HALTER_JUDGE_LOG;
+      else process.env.HALTER_JUDGE_LOG = orig;
+    }
+  });
+
+  it("diff: logs only when both stages rendered and disagree (approve or risk)", () => {
+    logJudgeDiff(bashPd, "dspa", v("approve", "low"), v("approve", "low")); // agree → no line
+    logJudgeDiff(bashPd, "dspa", null, v("approve", "low")); // one stage absent → no line
+    logJudgeDiff(bashPd, "dspat", v("approve", "low"), v("approve", "high")); // risk diff
+    logJudgeDiff(bashPd, "dspa", v("approve", "medium"), v("deny", "medium")); // approve diff
+    const entries = judgeLines();
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      kind: "diff", mode: "dspat", model: "llama-cpp/qwen",
+      cmd: "rm -rf /tmp/x", s1: "approve/low", s2: "approve/high",
+    });
+    expect(entries[1]).toMatchObject({ s1: "approve/medium", s2: "deny/medium" });
+    expect(new Date(entries[0].ts).toString()).not.toBe("Invalid Date");
+  });
+
+  it("infra: one line per failure site with the error class", () => {
+    logJudgeInfra(bashPd, "dspa", 2, "call-failed", "llama-cpp/qwen");
+    logJudgeInfra(bashPd, "dspat", 1, "no-model");
+    logJudgeInfra(bashPd, "manual", 1, "no-explanation", "llama-cpp/qwen");
+    const entries = judgeLines();
+    expect(entries.map((e) => e.error)).toEqual(["call-failed", "no-model", "no-explanation"]);
+    expect(entries[0]).toMatchObject({ kind: "infra", mode: "dspa", stage: 2, cmd: "rm -rf /tmp/x" });
+    expect(entries[1].model).toBeUndefined();
+  });
+
+  it("paths: logs the floor mismatches (D13) — the no-analysis no-op is pinned by the D13 suite", () => {
+    // A bash pd WITHOUT analysis: judgePathLogFields returns {} → no line.
+    logJudgePaths(bashPd, {} as never, v("approve", "low", ["/secret/dir"]), "dspa");
+    expect(fs.existsSync(judgeFile)).toBe(false);
+  });
+
+  it("cmd is truncated to 200 (log economy)", () => {
+    logJudge({ kind: "infra", mode: "manual", stage: 1, error: "no-model", cmd: "x".repeat(300) });
+    const [e] = judgeLines();
+    expect(e.cmd).toHaveLength(200);
+  });
+
+  it("never throws when the log path is impossible", () => {
+    const blocker = path.join(tmp, "blocker");
+    fs.writeFileSync(blocker, "i am a file");
+    process.env.HALTER_JUDGE_LOG = path.join(blocker, "sub", "judge.jsonl");
+    expect(() =>
+      logJudgeDiff(bashPd, "dspa", v("approve", "low"), v("deny", "high")),
     ).not.toThrow();
   });
 });

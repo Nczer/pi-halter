@@ -19,13 +19,27 @@
  * Transient override: HALTER_DECISION_LOG=<path> (enables at that path) or
  * HALTER_DECISION_LOG=off (forces off).
  *
- * A second, independent file records unresolved-token outcomes
- * (logUnresolved): <extension dir>/.log/unresolved.jsonl, same rotation,
- * same module toggle (/halter-decision-log). The env switch only REDIRECTS
- * the decision log to a scratch path (it is not an override for the
- * unresolved log's location) — except `off`, which disables BOTH (test
- * hermeticity: the vitest setup forces off so fixture lines never reach the
- * live logs).
+ * A second file (logUnresolved) records unresolved-token outcomes:
+ * <extension dir>/.log/unresolved.jsonl — the parser-convergence ledger
+ * (the same token's outcome flipping prompted → gate-stop → auto-allowed).
+ * ALWAYS ON (D17): it is small — one line per unresolved token, on signal
+ * only — and the /halter-decision-log toggle deliberately does not cover
+ * it.
+ *
+ * A third file (logJudge) records judge diagnostics:
+ * <extension dir>/.log/judge.jsonl — stage 1 / stage 2 verdict
+ * DISAGREEMENTS (both judge modes), judge infra failures (no-model /
+ * no-auth / call-failed / no-explanation), and stage-2 path-report
+ * mismatches (the D13 parser-gap signal, mirrored into decisions.jsonl
+ * while that log is on). ALWAYS ON for the same reason.
+ *
+ * Both ledgers are append-only and NOT version-bound (unlike
+ * decisions.jsonl, which is reviewed per gate version).
+ *
+ * Test hermeticity: the vitest worker setup forces ALL THREE off —
+ * HALTER_DECISION_LOG=off (decision log), plus HALTER_UNRESOLVED_LOG=off
+ * and HALTER_JUDGE_LOG=off (the always-on ledgers). Test files that need
+ * one set the matching env var to a tmp path per-test.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -33,7 +47,10 @@ import { fileURLToPath } from "node:url";
 import { DECISION_LOG_ENABLED } from "../config/logging";
 import { SETTINGS_PATH, readSettingsFile, writeSettings } from "../halter-settings";
 import { summarizePrompt } from "../ui/prompt-builder";
-import type {Decision, FilePromptData, PermissionRequest} from "../decide/types";
+import type {Decision, FilePromptData, PermissionRequest, PromptData} from "../decide/types";
+import type {Store} from "./store";
+import type {JudgeResult} from "../judge/judge";
+import { judgePathLogFields } from "../judge/paths";
 
 // Anchored to the extension ROOT, not this file's dir (gate/): the log
 // lives at <extension dir>/.log/ regardless of where the module lives.
@@ -70,11 +87,24 @@ export function isDecisionLogEnabled(): boolean {
 
 export const DEFAULT_LOG_FILE = path.join(root, ".log", "decisions.jsonl");
 export const UNRESOLVED_LOG_FILE = path.join(root, ".log", "unresolved.jsonl");
+export const JUDGE_LOG_FILE = path.join(root, ".log", "judge.jsonl");
 
 /** Resolve the unresolved-token log path. `HALTER_UNRESOLVED_LOG` is a
- * test seam (point the log at a scratch path); production never sets it. */
-export function resolveUnresolvedLogPath(): string {
-  return process.env.HALTER_UNRESOLVED_LOG || UNRESOLVED_LOG_FILE;
+ * test seam (point the log at a scratch path); `off` disables it (vitest
+ * hermeticity). Production never sets it. */
+export function resolveUnresolvedLogPath(): string | null {
+  const v = process.env.HALTER_UNRESOLVED_LOG;
+  if (v === undefined) return UNRESOLVED_LOG_FILE;
+  return v === "off" ? null : v;
+}
+
+/** Resolve the judge-ledger path. `HALTER_JUDGE_LOG` is a test seam
+ * (scratch path); `off` disables it (vitest hermeticity). Production
+ * never sets it. */
+export function resolveJudgeLogPath(): string | null {
+  const v = process.env.HALTER_JUDGE_LOG;
+  if (v === undefined) return JUDGE_LOG_FILE;
+  return v === "off" ? null : v;
 }
 export const MAX_LOG_BYTES = 5 * 1024 * 1024;
 const MAX_TARGET_LEN = 1000;
@@ -311,19 +341,134 @@ export interface UnresolvedLogEntry {
  */
 export function logUnresolved(e: UnresolvedLogEntry): void {
   try {
-    if (!decisionLogEnabled) return;
-    // `off` disables both logs — the vitest setup forces this so fixture
-    // lines never reach the live .log/ dir.
-    if (process.env.HALTER_DECISION_LOG === "off") return;
+    // Always-on (D17): the toggle covers decisions.jsonl only — the
+    // convergence ledger must not depend on it. The env seam is the only
+    // gate (vitest hermeticity).
+    const file = resolveUnresolvedLogPath();
+    if (!file) return;
     const entry: UnresolvedLogEntry = {
       ts: new Date().toISOString(),
       ...e,
       cmd: e.cmd.slice(0, 200),
     };
-    appendJsonl(resolveUnresolvedLogPath(), JSON.stringify(entry) + "\n");
+    appendJsonl(file, JSON.stringify(entry) + "\n");
   } catch {
     /* never throw */
   }
+}
+
+// ── Judge ledger (always-on, D17) ──────────────────────────────────────
+
+export type JudgeLogMode = "dspa" | "dspat" | "manual";
+
+export interface JudgeLogEntry {
+  /** ISO timestamp. */
+  ts: string;
+  /** diff — the two judge stages disagreed · infra — a stage produced no
+   *  verdict · paths — stage-2 path report vs the floor (D13). */
+  kind: "diff" | "infra" | "paths";
+  /** The regime that produced the signal. */
+  mode: JudgeLogMode;
+  /** The judge model (absent when the failure preceded model resolution). */
+  model?: string;
+  /** The operation (command / file path / tool label), truncated. */
+  cmd?: string;
+  // kind: "diff" — compact stage verdicts, "approve/low" form.
+  s1?: string;
+  s2?: string;
+  // kind: "infra".
+  stage?: 1 | 2;
+  error?: "no-model" | "no-auth" | "call-failed" | "no-explanation";
+  // kind: "paths" — the report as sanitized, plus the floor mismatches.
+  judgePaths?: string[];
+  misses?: string[];
+}
+
+/** The operation a log line is about (logJudge truncates to 200). */
+function judgeCmdOf(pd: PromptData): string {
+  return pd.type === "bash" ? pd.command : pd.type === "file" ? pd.filePath : `${pd.tool}/${pd.label}`;
+}
+
+/**
+ * Append one line to the always-on judge ledger (see JudgeLogEntry). Only
+ * on signal: diffs and mismatches, never the agreeing/covered majority.
+ * Never throws.
+ */
+export function logJudge(e: Omit<JudgeLogEntry, "ts">): void {
+  try {
+    const file = resolveJudgeLogPath();
+    if (!file) return;
+    // Log economy: the ledger is mineable by eye — truncate the operation.
+    const line = { ts: new Date().toISOString(), ...e };
+    if (line.cmd) line.cmd = line.cmd.slice(0, 200);
+    appendJsonl(file, JSON.stringify(line) + "\n");
+  } catch {
+    /* never throw */
+  }
+}
+
+/**
+ * Both judge stages rendered verdicts and they DISAGREE (on approve or on
+ * risk) — the judge-quality signal the agreement counters cannot see. A
+ * no-op when either stage produced no verdict or the two agree. Called
+ * from /dspa (both stages) and /dspat (both stages, always — D17).
+ */
+export function logJudgeDiff(
+  pd: PromptData,
+  mode: JudgeLogMode,
+  v1: JudgeResult | null,
+  v2: JudgeResult | null,
+): void {
+  if (!v1 || !v2) return;
+  if (v1.approve === v2.approve && v1.risk === v2.risk) return;
+  logJudge({
+    kind: "diff",
+    mode,
+    model: v2.model,
+    cmd: judgeCmdOf(pd),
+    s1: `${v1.approve}/${v1.risk}`,
+    s2: `${v2.approve}/${v2.risk}`,
+  });
+}
+
+/**
+ * D13: a stage-2 verdict whose path report the floor never saw — the
+ * parser-gap / hallucination signal, mirrored to the always-on ledger so
+ * it survives the decision log being off (or wiped on /reload). A no-op
+ * when the report is absent or fully covered by the floor.
+ */
+export function logJudgePaths(
+  pd: PromptData,
+  store: Store,
+  verdict: JudgeResult,
+  mode: JudgeLogMode,
+): void {
+  if (pd.type !== "bash") return;
+  const f = judgePathLogFields(pd, store, verdict.paths);
+  if (!f.judgePathMisses?.length) return;
+  logJudge({
+    kind: "paths",
+    mode,
+    model: verdict.model,
+    cmd: judgeCmdOf(pd),
+    judgePaths: f.judgePaths,
+    misses: f.judgePathMisses,
+  });
+}
+
+/**
+ * A judge stage failed to produce a verdict — runJudgeStage calls this at
+ * each failure site. The judge being OFF (settings) is a choice, not an
+ * infra failure: it is never logged.
+ */
+export function logJudgeInfra(
+  pd: PromptData,
+  mode: JudgeLogMode,
+  stage: 1 | 2,
+  error: NonNullable<JudgeLogEntry["error"]>,
+  model?: string,
+): void {
+  logJudge({ kind: "infra", mode, stage, error, cmd: judgeCmdOf(pd), model });
 }
 
 // The one-line prompt summary lives in prompt-builder (summarizePrompt);

@@ -12,7 +12,7 @@ import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/d
 import type {JudgeResult} from "../judge/judge";
 import { makeManualBar } from "../gate/dspa-gate";
 import type { DspaFallthrough } from "../gate/fallthrough";
-import { logUnresolved } from "../gate/decision-log";
+import { logJudgeDiff, logJudgePaths, logUnresolved } from "../gate/decision-log";
 
 /** Result of showing a permission prompt to the user. */
 interface PromptFlowResult {
@@ -136,10 +136,16 @@ export async function showPrompt(
 
   // /dspat (advisory): the judge runs automatically on every prompt type
   // (bash / file / tool) and the prompt shows the full verdict (explanation
-  // + suggestion). The human always takes the call; the verdict + decision
-  // feed the session stats (model-scoped, never persisted). The
-  // `!dspa?.verdict` guard is defensive — the modes are exclusive
-  // (index.ts), so a dspa fall-through never coexists with dspat.
+  // + suggestion). D17: BOTH stages run — the same cascade order as /dspa,
+  // but stage 2 is NEVER skipped (not even on stage-1 approve+low): the
+  // cross-check of stage-1 lows is the data /dspa's auto-allow path cannot
+  // produce. The final verdict is stage 2's, or stage 1's when stage 2
+  // produced none; stage disagreement and stage-2 path mismatches are
+  // mirrored to the always-on judge ledger. The human always takes the
+  // call; the verdict + decision feed the session stats (model-scoped,
+  // never persisted). The `!dspa?.verdict` guard is defensive — the modes
+  // are exclusive (index.ts), so a dspa fall-through never coexists with
+  // dspat.
   let dspatVerdict: JudgeResult | null = null;
   if (isDspatActive() && !dspa?.verdict) {
     if (jstatus.state === "invalid") {
@@ -148,16 +154,20 @@ export async function showPrompt(
         body: prompt.body + `\n⚠️ Judge invalid: ${jstatus.reason}`,
       };
     } else {
-      const verdict = await getJudgeVerdict(pd, ctx, store);
+      const v1 = await getJudgeVerdict(pd, ctx, store);
+      const v2 = await getStage2Verdict(pd, ctx, store);
+      logJudgeDiff(pd, "dspat", v1, v2);
+      if (v2) logJudgePaths(pd, store, v2, "dspat");
+      const verdict = v2 ?? v1;
       if (verdict) {
         dspatVerdict = verdict;
         prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(verdict) };
       } else {
-        // The call failed (auth, timeout, bad reply) — surface it instead
-        // of silently showing a bare prompt.
+        // Both stages failed (auth, timeout, bad reply) — surface it
+        // instead of silently showing a bare prompt.
         prompt = {
           ...prompt,
-          body: prompt.body + "\n⚠️ Judge: no verdict (call failed or timed out)",
+          body: prompt.body + "\n⚠️ Judge: no verdict (both stages failed or timed out)",
         };
       }
     }
@@ -212,6 +222,10 @@ export async function showPrompt(
             // line shows the stage too, but the prompt has the focus).
             try { ctx.ui.notify("⚖️ Judge: stage 2 re-running…"); } catch { /* no UI */ }
             const v2 = await getStage2Verdict(pd, ctx, store);
+            // D17: the retry's stage-2 verdict vs the carried stage-1
+            // verdict is a stage pair too — log its disagreement.
+            if (dspa.stage === 1 && dspa.verdict) logJudgeDiff(pd, "dspa", dspa.verdict, v2);
+            if (v2) logJudgePaths(pd, store, v2, "dspa");
             if (v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium")) {
               dspaAutoAllowed(request, pd, ctx, store, v2, 2);
               return { autoAllowed: true, body: null };
