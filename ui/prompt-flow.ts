@@ -9,22 +9,9 @@ import {getJudgeVerdict, judgeStatus, judgeVerdictBlock} from "../judge/verdict"
 import { resolveUnresolvedPaths, type ResolutionMap } from "../judge/path-resolver";
 import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/dspat-mode";
 import type {JudgeResult} from "../judge/judge";
-import { makeManualBar, type DspaGateResult } from "../gate/dspa-gate";
+import { makeManualBar } from "../gate/dspa-gate";
+import type { DspaFallthrough } from "../gate/fallthrough";
 import { logUnresolved } from "../gate/decision-log";
-
-/**
- * Carried into showPrompt when /dspa declined to auto-allow, so the
- * fall-through prompt explains WHY (gate reason and/or judge verdict).
- */
-export interface DspaFallthrough {
-  gate: DspaGateResult;
-  /** The FINAL verdict — stage 2 when it rendered one, else stage 1. */
-  verdict: JudgeResult | null;
-  /** Stage of the carried verdict (1 = stateless, 2 = intent pass); null = no verdict. */
-  stage: 1 | 2 | null;
-  /** Set when the gate passed but a judge stage produced no verdict — why. */
-  note?: string;
-}
 
 /** Result of showing a permission prompt to the user. */
 interface PromptFlowResult {

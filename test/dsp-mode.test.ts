@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { isDspActive, setDspActive, updateDspWidget } from "../modes/dsp-mode";
+import { onStatusChange } from "../modes/status-bus";
+import { updateWidget } from "../ui/widget";
 
 describe("dsp-mode", () => {
   beforeEach(() => {
     setDspActive(false);
+    // Production wiring (index.ts): the unified widget is the status-bus
+    // listener. The widget-delegation tests below exercise mode → bus →
+    // widget → setWidget through that real edge.
+    onStatusChange(updateWidget);
   });
 
   afterEach(() => {

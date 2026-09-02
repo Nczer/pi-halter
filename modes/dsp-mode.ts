@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { updateWidget } from "../ui/widget";
+import { notifyStatus } from "./status-bus";
 
 // ── DSP (Dangerously Skip Permissions) state ──
 
@@ -22,5 +22,5 @@ export function setDspActive(value: boolean): void {
  */
 export function updateDspWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
-  updateWidget(ctx);
+  notifyStatus(ctx);
 }

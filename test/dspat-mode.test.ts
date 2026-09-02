@@ -13,6 +13,8 @@ import {
   updateDspatWidget,
   setDspatJudging,
 } from "../modes/dspat-mode";
+import { onStatusChange } from "../modes/status-bus";
+import { updateWidget } from "../ui/widget";
 
 const { judgeStatusMock } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn<() => { state: string; modelLabel: string | null; reason: string | null }>(),
@@ -23,6 +25,9 @@ beforeEach(() => {
   resetDspat();
   judgeStatusMock.mockReset();
   judgeStatusMock.mockReturnValue({ state: "off", modelLabel: null, reason: null });
+  // Production wiring (index.ts): the unified widget is the status-bus
+  // listener — mode → bus → widget → setWidget.
+  onStatusChange(updateWidget);
 });
 
 describe("mode toggle", () => {

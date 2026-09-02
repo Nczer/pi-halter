@@ -5,6 +5,7 @@ import { loadPlugins, setLoadedPlugins } from "./plugins/loader";
 import { isDspActive, setDspActive } from "./modes/dsp-mode";
 import { isDspatActive, resetDspat, setDspatActive } from "./modes/dspat-mode";
 import { isDspaActive, resetDspa, setDspaActive } from "./modes/dspa-mode";
+import { onStatusChange } from "./modes/status-bus";
 import { isDecisionLogEnabled, setDecisionLogEnabled } from "./gate/decision-log";
 import {readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, JudgeSettings} from "./judge/judge";
 import {judgeStatus} from "./judge/verdict";
@@ -42,6 +43,11 @@ export default async function halterExtension(pi: ExtensionAPI) {
   // Loaded before the tool_call handler can fire; a broken plugin blocks its
   // tool rather than leaving it ungated.
   setLoadedPlugins(await loadPlugins());
+
+  // Mode→UI edge (modes/status-bus.ts): the mode modules emit
+  // notifyStatus on state changes; the unified widget is the listener.
+  // Without this registration the modes' state changes are silent (no UI).
+  onStatusChange(updateWidget);
 
   // ── Session shutdown ──
   pi.on("session_shutdown", async (_event, ctx) => {

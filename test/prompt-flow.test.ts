@@ -50,7 +50,8 @@ vi.mock("../decide/rule-generator", () => ({
   },
 }));
 
-import { showPrompt, type DspaFallthrough } from "../ui/prompt-flow";
+import { showPrompt } from "../ui/prompt-flow";
+import type { DspaFallthrough } from "../gate/fallthrough";
 import { createStore } from "../gate/store";
 import { setDspatActive, resetDspat } from "../modes/dspat-mode";
 
