@@ -20,7 +20,7 @@
  * context, so they are not the live intent either).
  */
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { Store } from "./store";
+import type { Store } from "../gate/store";
 
 /** Last N user messages, verbatim. */
 const USER_MSGS_MAX = 4;

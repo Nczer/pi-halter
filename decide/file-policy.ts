@@ -10,7 +10,7 @@ import {
   isPathDeniedResolved,
   isPathWarnedResolved,
 } from "../analysis/path-analysis";
-import type { Store, AllowRules, FileRequest, Decision, FilePromptData, DecideOptions } from "../decision-engine";
+import type {Store, AllowRules, FileRequest, Decision, FilePromptData, DecideOptions} from "./types";
 
 export function decideFile(req: FileRequest, store: Store, opts?: DecideOptions): Decision {
   const resolved = req.resolvedPath ?? resolvePathReal(expandTilde(req.filePath), req.cwd);

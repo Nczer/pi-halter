@@ -13,11 +13,12 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { describe, expect, it, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
-import { decide, FileRequest, type BashPromptData, type FilePromptData } from "../decision-engine";
+import {decide} from "../decide/engine";
+import {FileRequest, BashPromptData, FilePromptData} from "../decide/types";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
-import { createStore } from "../store";
-import { buildPrompt } from "../prompt-builder";
-import { RuleGenerator } from "../rule-generator";
+import { createStore } from "../gate/store";
+import { buildPrompt } from "../ui/prompt-builder";
+import { RuleGenerator } from "../decide/rule-generator";
 
 // Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /var → /private/var)
 const realPath = (p: string) => {

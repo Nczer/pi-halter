@@ -10,8 +10,9 @@
 import path from "node:path";
 import os from "node:os";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { decide, type BashPromptData } from "../decision-engine";
-import { createStore } from "../store";
+import {decide} from "../decide/engine";
+import type {BashPromptData} from "../decide/types";
+import { createStore } from "../gate/store";
 import { decodeAnsiCEscapes, tokenizeSegment, splitOnPipe } from "../analysis/tokenizer";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 

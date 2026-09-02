@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BuiltPrompt } from "./prompt-builder";
-import type { Store } from "./store";
+import type { Store } from "../gate/store";
 /** Native select → option index, or null on cancel. Keeps index-based dispatch. */
 async function selectIndex(ctx: ExtensionContext, title: string, options: string[]): Promise<number | null> {
   const sel = await ctx.ui.select(title, options);

@@ -1,5 +1,5 @@
 import { analyzeCommand } from "../analysis/command-analysis";
-import type { Store, BashRequest, Decision } from "../decision-engine";
+import type {Store, BashRequest, Decision} from "./types";
 import { RetryLoopRule, FastAllowRule, SafetyRule, PromptFallbackRule, CredentialDenyRule } from "./bash-rules";
 
 export async function decideBash(req: BashRequest, store: Store): Promise<Decision> {

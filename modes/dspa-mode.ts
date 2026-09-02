@@ -12,7 +12,7 @@
  * is model-dependent, so a model change resets the stats.
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { updateWidget } from "./widget";
+import { updateWidget } from "../ui/widget";
 
 let active = false;
 let model: string | null = null;

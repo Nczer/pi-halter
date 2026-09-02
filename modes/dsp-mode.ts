@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { updateWidget } from "./widget";
+import { updateWidget } from "../ui/widget";
 
 // ── DSP (Dangerously Skip Permissions) state ──
 

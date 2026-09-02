@@ -8,8 +8,8 @@
  */
 import { describe, it, expect } from "vitest";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { buildSessionContext } from "../session-context";
-import { createStore } from "../store";
+import { buildSessionContext } from "../judge/session-context";
+import { createStore } from "../gate/store";
 
 const BASE = "/home/u/project";
 

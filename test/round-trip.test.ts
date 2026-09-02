@@ -15,9 +15,10 @@
 import path from "node:path";
 import os from "node:os";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { decide, BashRequest, FileRequest, type BashPromptData } from "../decision-engine";
-import { createStore } from "../store";
-import { RuleGenerator } from "../rule-generator";
+import {decide} from "../decide/engine";
+import {BashRequest, FileRequest, BashPromptData} from "../decide/types";
+import { createStore } from "../gate/store";
+import { RuleGenerator } from "../decide/rule-generator";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 let cwd: string;

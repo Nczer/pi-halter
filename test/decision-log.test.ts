@@ -12,8 +12,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import { gate } from "../gate";
-import { createStore } from "../store";
+import { gate } from "../gate/gate";
+import { createStore } from "../gate/store";
 import {
   logDecision,
   resolveLogPath,
@@ -25,9 +25,9 @@ import {
   MAX_LOG_BYTES,
   DEFAULT_LOG_FILE,
   type DecisionLogEntry,
-} from "../decision-log";
+} from "../gate/decision-log";
 import { DECISION_LOG_ENABLED } from "../config/logging";
-import type { BashRequest, Decision, FileRequest } from "../decision-engine";
+import type {BashRequest, Decision, FileRequest} from "../decide/types";
 
 const noUiCtx = { hasUI: false } as never;
 const noReject = (() => {

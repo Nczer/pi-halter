@@ -14,8 +14,8 @@ import os from "node:os";
 import fs from "node:fs";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { analyzeCommand } from "../analysis/command-analysis";
-import { decide } from "../decision-engine";
-import { createStore } from "../store";
+import {decide} from "../decide/engine";
+import { createStore } from "../gate/store";
 import { cases } from "./cases-data";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 

@@ -1,4 +1,4 @@
-import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "./config";
+import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "../config";
 
 // ── Allow rules ──
 

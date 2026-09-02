@@ -20,8 +20,8 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { decide } from "../decision-engine";
-import { createStore } from "../store";
+import {decide} from "../decide/engine";
+import { createStore } from "../gate/store";
 import { cases } from "./cases-data";
 
 // The contract suite's cwd (~/Projects) is a bare string in its rows; here the

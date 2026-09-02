@@ -4,7 +4,7 @@ import {
   formatTmuxSegment,
   formatSegment,
   formatBashCommand,
-} from "../renderers/tmux";
+} from "../ui/tmux-render";
 import { splitIntoSegments, splitOnPipe } from "../analysis/tokenizer";
 
 // ── parseTmuxFlags ──

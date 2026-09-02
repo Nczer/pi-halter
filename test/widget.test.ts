@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { filterSubPaths, groupCommandVariants, updateWidget } from "../widget";
-import { store } from "../store";
+import { filterSubPaths, groupCommandVariants, updateWidget } from "../ui/widget";
+import { store } from "../gate/store";
 
 describe("filterSubPaths", () => {
   it("removes sub-paths of parent directories", () => {

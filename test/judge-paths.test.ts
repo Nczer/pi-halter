@@ -9,7 +9,7 @@ import {
   sanitizeJudgePaths,
   judgePathReport,
   type JudgePathFloor,
-} from "../judge-paths";
+} from "../judge/paths";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
 

@@ -21,11 +21,11 @@
  * tools/log-inspect.mjs `dspa --paths` lists them.
  */
 import path from "node:path";
-import { expandTilde } from "./analysis/path-util";
-import { OPAQUE_VAR_DIR } from "./analysis/bash-parser";
-import { UNKNOWN_CWD_MARKER } from "./analysis/cwd-tracking";
-import type { PromptData } from "./decision-engine";
-import type { Store } from "./store";
+import { expandTilde } from "../analysis/path-util";
+import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
+import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
+import type {PromptData} from "../decide/types";
+import type { Store } from "../gate/store";
 
 /** Log economy: cap the stored report. */
 const JUDGE_PATHS_MAX = 8;

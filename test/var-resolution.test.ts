@@ -12,8 +12,8 @@ import { parseCommand } from "../analysis/bash-parser";
 import { resolveOpaqueRefs } from "../analysis/var-resolution";
 import { trackEffectiveCwd } from "../analysis/cwd-tracking";
 import { isCwdLocalSubstitution, isCwdLocalWord } from "../analysis/cwd-local";
-import { decide } from "../decision-engine";
-import { createStore } from "../store";
+import {decide} from "../decide/engine";
+import { createStore } from "../gate/store";
 
 const CWD = "/home/u/project";
 const home = os.homedir();

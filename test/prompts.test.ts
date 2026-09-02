@@ -5,9 +5,9 @@
  * return canned indices/strings. Verifies callback wiring and tier-2 confirmation flow.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { twoTierAlwaysPrompt } from "../prompts";
-import type { BuiltPrompt } from "../prompt-builder";
-import { store } from "../store";
+import { twoTierAlwaysPrompt } from "../ui/prompts";
+import type { BuiltPrompt } from "../ui/prompt-builder";
+import { store } from "../gate/store";
 
 // ── Fake ctx ───────────────────────────────────────────────────────────
 

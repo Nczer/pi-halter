@@ -1,6 +1,6 @@
 import path from "node:path";
-import type { AllowRules } from "./store";
-import type { PromptData, BashPromptData, FilePromptData, ToolPromptData } from "./decision-engine";
+import type { AllowRules } from "../gate/store";
+import type {PromptData, BashPromptData, FilePromptData, ToolPromptData} from "./types";
 
 /**
  * The filesystem root is never part of an Always grant: one click must not

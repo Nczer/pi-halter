@@ -1,10 +1,10 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { store } from "./store";
-import { isDspActive } from "./dsp-mode";
-import { isDspaActive, isDspaJudging, getDspaStats } from "./dspa-mode";
-import { isDspatActive, isDspatJudging, getDspatStats } from "./dspat-mode";
-import { judgeStatus } from "./judge-prompt";
+import { store } from "../gate/store";
+import { isDspActive } from "../modes/dsp-mode";
+import { isDspaActive, isDspaJudging, getDspaStats } from "../modes/dspa-mode";
+import { isDspatActive, isDspatJudging, getDspatStats } from "../modes/dspat-mode";
+import {judgeStatus} from "../judge/verdict";
 
 // ── Path deduplication ──
 

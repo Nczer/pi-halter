@@ -1,16 +1,16 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Decision } from "./decision-engine";
-import type { Store } from "./store";
+import type {Decision} from "../decide/types";
+import type { Store } from "../gate/store";
 import { buildPrompt, pdTargetLabel } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
 import { updateWidget } from "./widget";
-import { RuleGenerator } from "./rule-generator";
-import { getJudgeVerdict, judgeStatus, judgeVerdictBlock } from "./judge-prompt";
-import { resolveUnresolvedPaths, type ResolutionMap } from "./path-resolver";
-import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "./dspat-mode";
-import type { JudgeResult } from "./judge";
-import { makeManualBar, type DspaGateResult } from "./dspa-gate";
-import { logUnresolved } from "./decision-log";
+import { RuleGenerator } from "../decide/rule-generator";
+import {getJudgeVerdict, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
+import { resolveUnresolvedPaths, type ResolutionMap } from "../judge/path-resolver";
+import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/dspat-mode";
+import type {JudgeResult} from "../judge/judge";
+import { makeManualBar, type DspaGateResult } from "../gate/dspa-gate";
+import { logUnresolved } from "../gate/decision-log";
 
 /**
  * Carried into showPrompt when /dspa declined to auto-allow, so the

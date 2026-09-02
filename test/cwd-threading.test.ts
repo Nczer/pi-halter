@@ -9,8 +9,9 @@ import {
 } from "../analysis/cwd-tracking";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { analyzeCommand } from "../analysis/command-analysis";
-import { decide, type BashPromptData } from "../decision-engine";
-import { createStore } from "../store";
+import {decide} from "../decide/engine";
+import type {BashPromptData} from "../decide/types";
+import { createStore } from "../gate/store";
 import type { BashSegment } from "../analysis/bash-parser";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 

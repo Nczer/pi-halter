@@ -23,9 +23,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { decide } from "../decision-engine";
-import { checkDspaGate } from "../dspa-gate";
-import { createStore } from "../store";
+import {decide} from "../decide/engine";
+import { checkDspaGate } from "../gate/dspa-gate";
+import { createStore } from "../gate/store";
 
 const outsidePrefixArg = process.argv[2];
 const cwdArg = process.argv[3];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createStore } from "../store";
+import { createStore } from "../gate/store";
 
 describe("Store: Fresh state", () => {
   it("starts with no allowances", () => {

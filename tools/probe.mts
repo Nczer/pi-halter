@@ -1,5 +1,5 @@
-import { decide } from "../decision-engine";
-import { createStore } from "../store";
+import {decide} from "../decide/engine";
+import { createStore } from "../gate/store";
 
 const CWD = "/mnt/Ndr/Projects";
 const cmds = process.argv.slice(2);

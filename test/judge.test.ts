@@ -12,22 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
-import {
-  buildJudgmentPacket,
-  judge,
-  readJudgeSettings,
-  writeJudgeSettings,
-  resolveJudgeModel,
-  resolveJudgeAuth,
-  resetJudgeCache,
-  DEFAULT_JUDGE_SETTINGS,
-  JUDGE_SYSTEM_PROMPT,
-  JUDGE_STAGE2_SYSTEM_PROMPT,
-  type JudgmentInput,
-  type JudgeOptions,
-  type CompleteFn,
-  type ModelRegistryLike,
-} from "../judge";
+import {buildJudgmentPacket, JudgmentInput} from "../judge/packet";
+import {judge, readJudgeSettings, writeJudgeSettings, resolveJudgeModel, resolveJudgeAuth, resetJudgeCache, DEFAULT_JUDGE_SETTINGS, JUDGE_SYSTEM_PROMPT, JUDGE_STAGE2_SYSTEM_PROMPT, JudgeOptions, CompleteFn, ModelRegistryLike} from "../judge/judge";
 
 // ── Fakes ──
 

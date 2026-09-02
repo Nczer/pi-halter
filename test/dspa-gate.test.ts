@@ -11,13 +11,10 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkDspaGate } from "../dspa-gate";
+import { checkDspaGate } from "../gate/dspa-gate";
 import { analyzeCommand } from "../analysis/command-analysis";
-import { createStore } from "../store";
-import type {
-  BashPromptData,
-  FilePromptData,
-} from "../decision-engine";
+import { createStore } from "../gate/store";
+import type {BashPromptData, FilePromptData} from "../decide/types";
 
 const BASE = "/home/u/project";
 let store: ReturnType<typeof createStore>;
