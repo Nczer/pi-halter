@@ -1,5 +1,6 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { homedir } from "node:os";
 import { store } from "../gate/store";
 import { isDspActive } from "../modes/dsp-mode";
 import { isDspaActive, getDspaJudgingStage, getDspaStats } from "../modes/dspa-mode";
@@ -23,6 +24,67 @@ export function filterSubPaths(paths: string[]): string[] {
     if (!isSub) result.push(p);
   }
   return result;
+}
+
+// ── Path display helpers ──
+
+/** Display-only shortening: absolute paths under $HOME render with a `~`
+ *  prefix (cwd-relative paths pass through). Grants stay real — this only
+ *  shapes the display. */
+export function shortenHomePath(p: string): string {
+  const home = homedir() + "/";
+  if (p.startsWith(home)) return "~" + p.slice(homedir().length);
+  return p;
+}
+
+/** Longest common prefix of two paths cut at a directory boundary (trailing
+ *  slash); "" when the paths share no directory (incl. top-level siblings). */
+function commonDirPrefix(a: string, b: string): string {
+  let k = 0;
+  const min = Math.min(a.length, b.length);
+  while (k < min && a[k] === b[k]) k++;
+  const slash = a.lastIndexOf("/", k - 1);
+  return slash > 0 ? a.slice(0, slash + 1) : "";
+}
+
+/** Common directory prefix (trailing slash) over a whole group; "" when the
+ *  shared part carries no directory boundary (top-level siblings). */
+function groupCommonDir(group: string[]): string {
+  const first = group[0];
+  let k = first.length;
+  for (const p of group.slice(1)) {
+    while (k > 0 && (k >= p.length || p[k - 1] !== first[k - 1])) k--;
+  }
+  const slash = first.lastIndexOf("/", k - 1);
+  return slash > 0 ? first.slice(0, slash + 1) : "";
+}
+
+/** Display-only combining of paths that share a directory prefix —
+ *  a/b/x a/b/y → "a/b/x & y" (reconstructable: shared prefix + names).
+ *  Applied after ~-shortening, and only when it actually saves width. */
+export function combineCommonPaths(paths: string[]): string {
+  const sorted = [...paths].sort();
+  const parts: string[] = [];
+  let i = 0;
+  while (i < sorted.length) {
+    let j = i + 1;
+    while (j < sorted.length && commonDirPrefix(sorted[i], sorted[j]) !== "") j++;
+    if (j - i >= 2) {
+      const group = sorted.slice(i, j);
+      const prefix = groupCommonDir(group);
+      if (prefix !== "") {
+        const combined = `${prefix.slice(0, -1)}/${group.map((p) => p.slice(prefix.length)).join(" & ")}`;
+        if (combined.length < group.join(" ").length) {
+          parts.push(combined);
+          i = j;
+          continue;
+        }
+      }
+    }
+    parts.push(sorted[i]);
+    i++;
+  }
+  return parts.join(" ");
 }
 
 // ── Command grouping ──
@@ -76,15 +138,67 @@ function modeLine(width: number, theme: Pick<Theme, "fg" | "bold">, main: string
 }
 
 /**
+ * One session-rules line: `· R/W: … · R: … · Bash: … · Pkg: … · Cwd: … ·
+ * Tools: …` — every grant category on ONE row (same style as the other
+ * bottom-bar lines), in safety-priority order (the write boundary first).
+ * Each category caps its items (paths 3, commands 5, cwd 2, tools 3) with a
+ * `…+N` tail; when the line outgrows the width, whole low-priority segments
+ * drop behind one `…+N` marker (N = hidden categories). The widget is thus
+ * bounded: one rules line no matter how many grants exist.
+ */
+export function renderRulesLine(
+  width: number,
+  theme: Pick<Theme, "fg">,
+  segments: { label: string; text: string }[],
+): string | null {
+  if (segments.length === 0) return null;
+  const n = segments.length;
+  const styled = segments.map(
+    (seg) => theme.fg("muted", `${seg.label}: `) + theme.fg("dim", seg.text),
+  );
+  // Drop whole lowest-priority segments until the FULL line (leading `· `,
+  // separators and the `…+N` marker included) fits the width.
+  for (let keep = n; keep >= 1; keep--) {
+    const hidden = n - keep;
+    const line =
+      theme.fg("muted", "· ") +
+      styled.slice(0, keep).join(" · ") +
+      (hidden > 0 ? theme.fg("dim", ` · …+${hidden}`) : "");
+    if (visibleWidth(line) <= width) return line;
+  }
+  // Even one segment overflows — return it anyway; the caller's final
+  // truncateToWidth applies.
+  return theme.fg("muted", "· ") + styled[0] + theme.fg("dim", ` · …+${n - 1}`);
+}
+
+/** Plain item list capped at `cap` with a `…+N` tail. */
+function capList(items: string[], cap: number): string {
+  const shown = items.slice(0, cap);
+  const tail = items.length > cap ? ` …+${items.length - cap}` : "";
+  return shown.join(" ") + tail;
+}
+
+/** Path list for the rules line: sorted (stable display order), capped, then
+ *  sibling-combined for width; overflow rides a `…+N` tail. */
+function displayPaths(paths: string[], cap: number): string {
+  const sorted = [...paths].sort();
+  const shown = sorted.slice(0, cap);
+  const tail = sorted.length > cap ? ` …+${sorted.length - cap}` : "";
+  return combineCommonPaths(shown) + tail;
+}
+
+/**
  * The single halter status widget (below the editor):
  *
  *   ⚠ DSP MODE — all permissions bypassed ⚠        (DSP active — alone)
- *   » DSPA (model): 79a 3g 2r 1c 2d — last: <target> (DSPA active)
+ *   » DSPA: 79a 3g 2r 1c 2d — last: <target>        (DSPA active)
  *     (compact session-health counts, non-zero only: a auto-allowed,
  *      g floor stop, r judge reject, c declined (approve, risk too high),
- *      d defer/no verdict)
+ *      d defer/no verdict. A model tag `(Name)` appears only when the judge
+ *      model differs from the session model — the status line below already
+ *      names that one.)
  *   ◎ DSPAT: judge advises… — M/N agreed — last: …  (DSPAT active)
- *   Bash: …  R: …  R/W: …  Pkg: …  Cwd: …  Tools: … (session rules)
+ *   · R/W: … · R: … · Bash: … · Pkg: … · Cwd: … · Tools: … (one line)
  *
  * ONE widget, because pi renders same-placement widgets in set order and a
  * re-set moves the widget to the end — with separate "dspa"/"dspat" widgets
@@ -151,7 +265,14 @@ export function updateWidget(ctx: ExtensionContext): void {
         const s = getDspaStats();
         // `»` is a text-default glyph (monochrome in every terminal) — the
         // mode follows the DSP widget's style: no color emoji, all-caps name.
-        const modelTag = s.model ? ` (${s.model})` : "";
+        // The judge model tag only when it is NOT the session model (pi's
+        // status line one row below already names that one): `» DSPA:` bare,
+        // or `» DSPA (Other-9B):` for a differently-configured judge.
+        const sessionRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null;
+        const modelTag =
+          s.model === null || s.model === sessionRef
+            ? ""
+            : ` (${s.model.split("/").pop()})`;
         // Session health as compact counts (only non-zero), in stop-source
         // order: a = auto-allowed, g = floor stop, r = judge REJECT,
         // c = approve-but-above-authority (declined), d = DEFER/no verdict.
@@ -169,7 +290,7 @@ export function updateWidget(ctx: ExtensionContext): void {
             const st = getDspaJudgingStage();
             return st ? ` — judging stage ${st}…` : "";
           })();
-        lines.push(modeLine(width, theme, main, s.lastTarget ? [`last: ${s.lastTarget}`] : []));
+        lines.push(modeLine(width, theme, main, s.lastTarget ? [`last: ${s.lastTarget.replace(homedir() + "/", "~/")}`] : []));
       }
 
       if (isDspatActive() && judgeOk) {
@@ -186,29 +307,34 @@ export function updateWidget(ctx: ExtensionContext): void {
       }
 
       if (hasSessionRules) {
-        if (bashItems.length > 0) {
-          const grouped = groupCommandVariants(bashItems);
-          lines.push(theme.fg("muted", "Bash:") + " " + theme.fg("dim", grouped.join(" ")));
+        // One line for every grant category, safety-priority order (the write
+        // boundary first, cosmetic tool grants last). Paths are ~-shortened
+        // and sibling-combined for display; command sigs keep their grouping.
+        const segments: { label: string; text: string }[] = [];
+        if (allWritePaths.length > 0) {
+          segments.push({ label: "R/W", text: displayPaths(allWritePaths.map(shortenHomePath), 3) });
         }
         if (readOnlyPaths.length > 0) {
-          lines.push(theme.fg("muted", "R:") + " " + theme.fg("dim", readOnlyPaths.join(" ")));
+          segments.push({ label: "R", text: displayPaths(readOnlyPaths.map(shortenHomePath), 3) });
         }
-        if (allWritePaths.length > 0) {
-          lines.push(theme.fg("muted", "R/W:") + " " + theme.fg("dim", allWritePaths.join(" ")));
+        if (bashItems.length > 0) {
+          segments.push({ label: "Bash", text: capList(groupCommandVariants(bashItems), 5) });
         }
         if (pkgItems.length > 0) {
           // D10: trusted packages (fetchable run forms — npx/uvx/dlx …)
-          lines.push(theme.fg("muted", "Pkg:") + " " + theme.fg("dim", pkgItems.join(" ")));
+          segments.push({ label: "Pkg", text: capList(pkgItems, 5) });
         }
         if (cwdItems.length > 0) {
           // Cwd-bound bash grants (relative-path tools): shown with the cwd
           // they bind to, since the same sig is a different grant elsewhere.
-          lines.push(theme.fg("muted", "Cwd:") + " " + theme.fg("dim", cwdItems.join(" ")));
+          segments.push({ label: "Cwd", text: capList(cwdItems.map(shortenHomePath), 2) });
         }
         if (toolGrantItems.length > 0) {
           // Tool-plugin grants: `blender` (whole tool) or `blender:kind:read`.
-          lines.push(theme.fg("muted", "Tools:") + " " + theme.fg("dim", toolGrantItems.join(" ")));
+          segments.push({ label: "Tools", text: capList(toolGrantItems, 3) });
         }
+        const ruleLine = renderRulesLine(width, theme, segments);
+        if (ruleLine) lines.push(ruleLine);
       }
 
       return lines.map(l => truncateToWidth(l, width));

@@ -158,7 +158,8 @@ describe("widget (unified halter widget — see widget.ts)", () => {
     expect(lines).toHaveLength(1); // one line, not two
     expect(lines[0]).toContain("» DSPA");
     expect(lines[0]).toContain("1a");
-    expect(lines[0]).toContain("llama-cpp/Qwen3.8-27B");
+    // No session model in this ctx → the judge model shows its short name.
+    expect(lines[0]).toContain("(Qwen3.8-27B)");
     expect(lines[0]).toContain("— last: cargo build");
     expect(lines[0].indexOf("1a")).toBeLessThan(lines[0].indexOf("last: cargo build"));
   });
