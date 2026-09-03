@@ -315,7 +315,7 @@ export async function twoTierAlwaysPrompt(
         ...activePrompt,
         body: block
           ? activePrompt.body + "\n" + block
-          : activePrompt.body + "\n⚠️ Judge: call failed (model unavailable or timed out)",
+          : activePrompt.body + "\n⚠️ Judge: no verdict (call failed or reply unparseable)",
       };
       judgeExplained = true;
       continue;

@@ -72,9 +72,12 @@ export function decideFile(req: FileRequest, store: Store, opts?: DecideOptions)
     ? `${originalParent} → ${resolvedDir}`
     : null;
 
-  // Check if the target file already exists (informational for write prompts).
-  // Skip for warned paths (.env, .aws, etc.) — no filesystem operations on credential paths.
-  const exists = req.toolName === "write" && !warnResult.warned && fs.existsSync(resolved);
+  // Whether the target file exists on disk (judge packet: "file exists:
+  // yes/no"). ALL write ops — write and edit: a false "no" for an in-place
+  // edit contradicts the session context (the file was just read) and made
+  // the judge defer on safe edits. Skip for warned paths (.env, .aws, etc.)
+  // — no filesystem operations on credential paths.
+  const exists = isWriteOp && !warnResult.warned && fs.existsSync(resolved);
 
   const promptData: FilePromptData = {
     type: "file",

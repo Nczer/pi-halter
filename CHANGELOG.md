@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.17.0 — 2026-09-03
+
+Judge packet: edits show the after-edit file view; infra failures are
+diagnosable (docs/dspa-redesign.md, D11/D17 refinement).
+
+- **Edits carry the after-edit view** — the judge packet for an edit is
+  now the file WITH the replacements applied, each replaced region shown
+  with ±10 context lines (line numbers, '>' marks the lines the edit
+  sets), built from the pre-validation read the file handler already
+  performs (non-credential, ≤1MB; otherwise the old newText join). The
+  bare newText fragment read "truncated / non-self-contained" and forced
+  a stage-2 pass — and a defer — on every safe edit.
+- **`file exists` for all write ops** — the flag was probed only for
+  `write`, so every edit packet said "file exists: no"; with session
+  context showing the file being read, the judge deferred on the
+  contradiction (2026-09-03 llama-link session). Edit packet wording:
+  "modifies the existing file in place" (the replace warning stays a
+  write thing).
+- **Infra lines carry the sub-reason** — no-explanation judge failures
+  log `detail` ("timeout" / "no-tool-call" / "bad-args: {…}" /
+  "call-failed: <msg>"); thrown stream errors keep their message. The
+  "stage 2 unavailable" prompt note and the on-demand-explain failure
+  line now say what actually happened (no parseable verdict) instead of
+  implying the model was unreachable.
+
 ## 3.16.0 — 2026-09-02
 
 D17: /dspat runs both judge stages; always-on judge ledgers

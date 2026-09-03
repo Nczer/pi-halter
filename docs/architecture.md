@@ -20,7 +20,7 @@ Decision rationale for the judge regimes lives in `docs/dspa-redesign.md`.
 | run form | A package-manager form that executes local code: `npm run`, `uv run`, `bun <script>`, `python <file>`. Judgeable, never fetch-gated (D8). |
 | grant | A session-scoped "Always" outcome: command signature, path (read or read+write), or trusted package. |
 | fall-through | A prompt shown because the dspa auto-allow attempt did not complete: floor stop or judge verdict/absence. Carries which layer stopped it. |
-| packet | The judge's entire input for one operation: command, analysis digest, script content. Untrimmed (D11). |
+| packet | The judge's entire input for one operation: command, analysis digest, script content. Untrimmed (D11); file EDITS carry the after-edit view (replaced regions ±10 lines, line numbers) instead of the whole file. |
 
 ## Request flow
 
@@ -383,8 +383,9 @@ calls to its tool; the loader recovers the tool name from the plugin file's
   to `auto-allowed`.
 - **Judge ledger** (`.log/judge.jsonl`, always-on, D17): signal-only judge
   diagnostics — stage-1/stage-2 verdict disagreements (`diff`), stage
-  failures (`infra`: no-model / no-auth / no-explanation / call-failed),
-  and D13 path mismatches (`paths`). Mine with `tools/log-inspect.mjs judge`.
+  failures (`infra`: no-model / no-auth / no-explanation / call-failed —
+  no-explanation lines carry the normalized sub-reason in `detail`), and
+  D13 path mismatches (`paths`). Mine with `tools/log-inspect.mjs judge`.
 - **Widget** (`ui/widget.ts`): one status widget. Mode lines pinned on top (one
   line each: dsp warning, dspa health counts, dspat agreement), then the
   session's active rules.

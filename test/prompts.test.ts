@@ -808,7 +808,7 @@ describe("twoTierAlwaysPrompt: Explain option", () => {
     expect(calls).toHaveLength(2);
     // The failure is surfaced in the body, so the option is consumed.
     expect(calls[1].options).not.toContain("Explain");
-    expect(calls[1].title).toContain("⚠️ Judge: call failed (model unavailable or timed out)");
+    expect(calls[1].title).toContain("⚠️ Judge: no verdict (call failed or reply unparseable)");
   });
 
   it("no judge → no Explain option", async () => {

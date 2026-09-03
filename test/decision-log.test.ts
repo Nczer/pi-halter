@@ -452,11 +452,15 @@ describe("judge ledger (logJudge, always-on, D17)", () => {
   it("infra: one line per failure site with the error class", () => {
     logJudgeInfra(bashPd, "dspa", 2, "call-failed", "llama-cpp/qwen");
     logJudgeInfra(bashPd, "dspat", 1, "no-model");
-    logJudgeInfra(bashPd, "manual", 1, "no-explanation", "llama-cpp/qwen");
+    logJudgeInfra(bashPd, "manual", 1, "no-explanation", "llama-cpp/qwen", "no-tool-call");
     const entries = judgeLines();
     expect(entries.map((e) => e.error)).toEqual(["call-failed", "no-model", "no-explanation"]);
     expect(entries[0]).toMatchObject({ kind: "infra", mode: "dspa", stage: 2, cmd: "rm -rf /tmp/x" });
     expect(entries[1].model).toBeUndefined();
+    // The normalized sub-reason rides along (detail) — the no-explanation
+    // rate alone is unactionable without it.
+    expect(entries[2].detail).toBe("no-tool-call");
+    expect(entries[0].detail).toBeUndefined();
   });
 
   it("paths: logs the floor mismatches (D13) — the no-analysis no-op is pinned by the D13 suite", () => {

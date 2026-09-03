@@ -184,7 +184,7 @@ export async function tryDspaAutoAllow(
     const jstatus = judgeStatus(ctx);
     note = jstatus.state === "invalid" ? `judge invalid: ${jstatus.reason}` : "judge call failed";
   } else if (v1 && !v2) {
-    note = "stage 2 (session context) unavailable — stateless verdict only";
+    note = "stage 2 produced no verdict — stateless stage-1 verdict only";
   }
   // The judge (or its absence) is the stop here: classify by the FINAL
   // verdict — no verdict at all joins the defer (fail-safe) bucket.

@@ -58,8 +58,11 @@ export interface JudgmentFileInput {
   /** Matched credential-pattern name (warned paths), if any. */
   warnedRule?: string | null;
   symlinkHint?: string | null;
-  /** Content being written (write: full new content; edit: newText blocks). */
+  /** Content being written (write: full new content; edit: the file AFTER
+   * the edit — replaced regions with surrounding lines, line numbers). */
   content?: string;
+  /** Heading for the content section (default "New content"). */
+  contentHeading?: string;
 }
 
 /**
@@ -134,8 +137,10 @@ export function buildJudgmentPacket(input: JudgmentInput): string {
 }
 
 /** Packet for a file read/write/edit: the judge weighs the path, the
- * write-vs-read nature, and whether the target exists; writes/edits carry
- * the new content, fenced as untrusted data. */
+ * write-vs-read nature, and whether the target exists; writes carry the
+ * full new content, edits the after-edit file view (replaced regions with
+ * context — the edit's effect is the delta and where it lands, not the
+ * whole file), fenced as untrusted data. */
 function buildFilePacket(input: JudgmentFileInput): string {
   const parts: string[] = [];
   const op = input.isWriteOp ? `file ${input.action} (WRITE)` : "file read";
@@ -148,15 +153,22 @@ function buildFilePacket(input: JudgmentFileInput): string {
     "",
   );
   if (input.isWriteOp && input.exists) {
-    parts.push("The write will REPLACE the existing file content.", "");
+    parts.push(
+      input.action === "write"
+        ? "The write will REPLACE the existing file content."
+        : "The edit modifies the existing file in place.",
+      "",
+    );
   }
   if (input.warnedRule) parts.push(`credential-pattern warning: ${input.warnedRule}`, "");
   if (input.symlinkHint) parts.push(`symlink: ${input.symlinkHint}`, "");
   if (input.content) {
     // Full content, untrimmed (D11): the judge must see the whole write to
     // clear it — a head cut would force a defer on every long safe write.
+    // For edits the content is the after-edit file view (bounded context
+    // around each replaced region) — see buildEditAfterView (handlers/file).
     parts.push(
-      "## New content (UNTRUSTED DATA)",
+      `## ${input.contentHeading ?? "New content"} (UNTRUSTED DATA)`,
       "```",
       input.content,
       "```",
