@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
-import { handleFile } from "../handlers";
-import { store } from "../gate/store";
+import os from "node:os";
+import path from "node:path";
+import { handleFile, buildEditAfterView } from "../handlers";
+import { store, createStore } from "../gate/store";
+import { decideFile } from "../decide/file-policy";
 
 const cwd = process.cwd();
 
@@ -256,5 +259,207 @@ describe("handleFile content threading (judge input)", () => {
     await handleFile(event, makeCtx());
     const req = decideSpy.mock.calls[0][0] as any;
     expect(req.content).toBeUndefined();
+  });
+
+  it("edit that would succeed: the judge input becomes the after-edit file view", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halter-editview-"));
+    try {
+      const file = path.join(dir, "app.ts");
+      const content = ["l1", "l2", "l3", "l4", "l5"].join("\n");
+      fs.writeFileSync(file, content);
+      const promptData: any = {
+        type: "file",
+        action: "Edit",
+        filePath: file,
+        resolved: file,
+        cwd,
+        outsideDir: null,
+        isWriteOp: true,
+        warnedRule: null,
+        symlinkHint: null,
+        exists: true,
+        content: "L3-new",
+      };
+      decideSpy.mockResolvedValue({ kind: "prompt", promptData });
+      await handleFile(
+        { toolName: "edit", input: { path: file, edits: [{ oldText: "l3", newText: "L3-new" }] } } as any,
+        makeCtx(),
+      );
+      expect(promptData.contentHeading).toBe("File after this edit");
+      expect(promptData.content).toBe(
+        buildEditAfterView(content, [{ oldText: "l3", newText: "L3-new" }]),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── decideFile: exists flag (judge input) ──
+
+describe("decideFile: exists for write ops", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("edit prompt carries exists: true when the file is on disk", () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    const d = decideFile(
+      {
+        type: "file",
+        toolName: "edit",
+        filePath: "/some/outside/app.ts",
+        cwd,
+        resolvedPath: "/some/outside/app.ts",
+        content: "b",
+      },
+      createStore(),
+    );
+    expect(d.kind).toBe("prompt");
+    if (d.kind !== "prompt") return;
+    expect(d.promptData.type).toBe("file");
+    if (d.promptData.type !== "file") return;
+    expect(d.promptData.exists).toBe(true);
+  });
+
+  it("edit prompt carries exists: false when the file is absent", () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const d = decideFile(
+      {
+        type: "file",
+        toolName: "edit",
+        filePath: "/some/outside/app.ts",
+        cwd,
+        resolvedPath: "/some/outside/app.ts",
+        content: "b",
+      },
+      createStore(),
+    );
+    expect(d.kind).toBe("prompt");
+    if (d.kind !== "prompt") return;
+    expect(d.promptData.type).toBe("file");
+    if (d.promptData.type !== "file") return;
+    expect(d.promptData.exists).toBe(false);
+  });
+
+  it("write prompt behavior unchanged (exists: true on overwrite)", () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    const d = decideFile(
+      {
+        type: "file",
+        toolName: "write",
+        filePath: "/some/outside/app.ts",
+        cwd,
+        resolvedPath: "/some/outside/app.ts",
+        content: "hello",
+      },
+      createStore(),
+    );
+    expect(d.kind).toBe("prompt");
+    if (d.kind !== "prompt") return;
+    expect(d.promptData.type).toBe("file");
+    if (d.promptData.type !== "file") return;
+    expect(d.promptData.exists).toBe(true);
+  });
+});
+
+// ── buildEditAfterView (judge input for edits) ──
+
+function fileOf(n: number): string {
+  return Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n");
+}
+
+describe("buildEditAfterView", () => {
+  // Anchored: <line number> <marker> <content> — padding-agnostic.
+  const shown = (n: number, marker: ">" | "·", text: string): RegExp =>
+    new RegExp(`(^|\n)\\s*${n} ${marker} ${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m");
+
+  it("single replacement: line numbers, '>' marks, context, ellipses", () => {
+    const file = fileOf(30);
+    const view = buildEditAfterView(file, [{ oldText: "line 15", newText: "NEW 15" }]);
+    expect(view).not.toBeNull();
+    expect(view!.split("\n")[0]).toBe(
+      "30 lines total · 1 replacement · 10-line context · '>' = line set by the edit, '·' = context",
+    );
+    // Context window: lines 5–25 shown; the edit line is '>', the rest '·'.
+    expect(view!).toMatch(shown(5, "·", "line 5"));
+    expect(view!).toMatch(shown(14, "·", "line 14"));
+    expect(view!).toMatch(shown(15, ">", "NEW 15"));
+    expect(view!).toMatch(shown(16, "·", "line 16"));
+    expect(view!).toMatch(shown(25, "·", "line 25"));
+    expect(view!.split("\n").filter((l) => l === "…").length).toBe(2); // head + tail
+    expect(view!).not.toMatch(shown(1, "·", "line 1")); // outside the window
+  });
+
+  it("small file (≤ 2×context + 1): whole file shown, no ellipses", () => {
+    const file = fileOf(5);
+    const view = buildEditAfterView(file, [{ oldText: "line 3", newText: "NEW 3" }]);
+    expect(view!).toMatch(shown(1, "·", "line 1"));
+    expect(view!).toMatch(shown(3, ">", "NEW 3"));
+    expect(view!).toMatch(shown(5, "·", "line 5"));
+    expect(view!).not.toContain("…");
+  });
+
+  it("two distant blocks: two intervals separated by a single ellipsis", () => {
+    const file = fileOf(60);
+    const view = buildEditAfterView(file, [
+      { oldText: "line 10", newText: "NEW 10" },
+      { oldText: "line 50", newText: "NEW 50" },
+    ]);
+    expect(view!).toContain("2 replacements");
+    expect(view!).toMatch(shown(10, ">", "NEW 10"));
+    expect(view!).toMatch(shown(50, ">", "NEW 50"));
+    // Windows 1–19 and 40–60 (the second reaches EOF) → exactly one gap.
+    expect(view!.split("\n").filter((l) => l === "…").length).toBe(1);
+  });
+
+  it("adjacent blocks merge into one interval", () => {
+    const file = fileOf(40);
+    const view = buildEditAfterView(file, [
+      { oldText: "line 10", newText: "NEW 10" },
+      { oldText: "line 18", newText: "NEW 18" },
+    ]);
+    // Windows 1–19 and 8–28 overlap (±10) → merged 1–28, one trailing gap only.
+    expect(view!).toMatch(shown(10, ">", "NEW 10"));
+    expect(view!).toMatch(shown(18, ">", "NEW 18"));
+    expect(view!.split("\n").filter((l) => l === "…").length).toBe(1);
+  });
+
+  it("blocks apply sequentially — the second matches the post-first content", () => {
+    const file = fileOf(20);
+    const view = buildEditAfterView(file, [
+      { oldText: "line 5", newText: "line 5\ninserted A\ninserted B" },
+      { oldText: "line 10", newText: "NEW 10" },
+    ]);
+    // After the first block (2 inserted lines) old "line 10" sits on line 12.
+    // The inserted lines are part of the newText → marked '>'.
+    expect(view!).toMatch(shown(7, ">", "inserted B"));
+    expect(view!).toMatch(shown(12, ">", "NEW 10"));
+    expect(view!).toContain("22 lines total");
+  });
+
+  it("deletion (empty newText): noted in the header, line count drops", () => {
+    const file = fileOf(30);
+    const view = buildEditAfterView(file, [{ oldText: "line 15\n", newText: "" }]);
+    expect(view!).toContain("1 replacement (1 deletion)");
+    expect(view!).toContain("29 lines total");
+  });
+
+  it("mid-line replacement: the joined line is shown and marked", () => {
+    const file = "aa bb cc\nmid line\nzz";
+    const view = buildEditAfterView(file, [{ oldText: "bb", newText: "BB" }]);
+    expect(view!).toMatch(shown(1, ">", "aa BB cc"));
+    expect(view!).toContain("3 lines total");
+  });
+
+  it("returns null when a block matches twice (or never)", () => {
+    const file = "x\nx";
+    expect(buildEditAfterView(file, [{ oldText: "x", newText: "y" }])).toBeNull();
+    expect(buildEditAfterView(file, [{ oldText: "nope", newText: "y" }])).toBeNull();
+  });
+
+  it("no trailing newline: last line still numbered", () => {
+    const file = "a\nb\nc"; // no final newline
+    const view = buildEditAfterView(file, [{ oldText: "c", newText: "C" }]);
+    expect(view!).toMatch(shown(3, ">", "C"));
+    expect(view!).toContain("3 lines total");
   });
 });

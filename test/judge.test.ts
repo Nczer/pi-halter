@@ -626,6 +626,37 @@ describe("buildJudgmentPacket: file operations", () => {
     expect(p).not.toContain("## Command");
   });
 
+  it("file edit on an existing target — in-place wording, no replace warning", () => {
+    const p = buildJudgmentPacket({
+      type: "file",
+      action: "edit",
+      resolved: "/w/app.ts",
+      cwd: "/w",
+      outsideDir: null,
+      isWriteOp: true,
+      exists: true,
+    });
+    expect(p).toContain("file exists: yes");
+    expect(p).toContain("modifies the existing file in place");
+    expect(p).not.toContain("REPLACE the existing");
+  });
+
+  it("edit content uses the contentHeading (after-edit view)", () => {
+    const p = buildJudgmentPacket({
+      type: "file",
+      action: "edit",
+      resolved: "/w/app.ts",
+      cwd: "/w",
+      outsideDir: null,
+      isWriteOp: true,
+      exists: true,
+      content: "    42 > L3-new",
+      contentHeading: "File after this edit",
+    });
+    expect(p).toContain("## File after this edit (UNTRUSTED DATA)");
+    expect(p).toContain("    42 > L3-new");
+  });
+
   it("file inside base, no flags", () => {
     const p = buildJudgmentPacket({
       type: "file",

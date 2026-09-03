@@ -157,6 +157,9 @@ export interface FilePromptData {
   exists: boolean;
   /** Content being written (write/edit) — judge input only, not shown in the human prompt. */
   content?: string;
+  /** Heading for the packet's content section (edits carry the after-edit
+   * file view, not raw new content). */
+  contentHeading?: string;
 }
 
 /**

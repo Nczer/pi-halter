@@ -1,3 +1,3 @@
 export { handleBash } from "./bash";
-export { handleFile } from "./file";
+export { handleFile, buildEditAfterView } from "./file";
 export { handleTool } from "./tool";

@@ -488,8 +488,11 @@ export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<J
     }
     if (!opts.uncached) cacheSet(key, result);
     return result;
-  } catch {
-    return fail(controller.signal.aborted ? "timeout" : "call-failed");
+  } catch (err) {
+    // Keep the underlying message — a bare "call-failed" line in the ledger
+    // is undiagnosable (was it the transport? the server? the adapter?).
+    const detail = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+    return fail(controller.signal.aborted ? "timeout" : "call-failed", detail);
   } finally {
     clearTimeout(firstTokenTimer);
     clearTimeout(capTimer);

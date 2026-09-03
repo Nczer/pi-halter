@@ -108,6 +108,7 @@ async function buildJudgmentInput(
     warnedRule: pd.warnedRule,
     symlinkHint: pd.symlinkHint,
     content: pd.content,
+    contentHeading: pd.contentHeading,
   };
 }
 
@@ -270,8 +271,11 @@ async function runJudgeStage(
     if (!result.explanation) {
       // No usable explanation — covers timeout, refusal, malformed reply,
       // and thrown calls (all normalized here by judge()). Treated as no
-      // verdict; the no-explanation rate is itself signal (D17).
-      logJudgeInfra(pd, logMode, stage, "no-explanation", `${model.provider}/${model.id}`);
+      // verdict; the no-explanation rate is itself signal (D17). The
+      // normalized sub-reason rides along (result.reason: "timeout" /
+      // "no-tool-call" / "bad-args: …" / "call-failed: …") — the rate
+      // alone is unactionable without it.
+      logJudgeInfra(pd, logMode, stage, "no-explanation", `${model.provider}/${model.id}`, result.reason.slice(0, 200));
       return null;
     }
     return result;

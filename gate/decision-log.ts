@@ -379,6 +379,9 @@ export interface JudgeLogEntry {
   // kind: "infra".
   stage?: 1 | 2;
   error?: "no-model" | "no-auth" | "call-failed" | "no-explanation";
+  // kind: "infra" — the normalized sub-reason (JudgeResult.reason, ≤200ch):
+  // "timeout" / "no-tool-call" / "bad-args: {…}" / "call-failed: <msg>".
+  detail?: string;
   // kind: "paths" — the report as sanitized, plus the floor mismatches.
   judgePaths?: string[];
   misses?: string[];
@@ -467,8 +470,9 @@ export function logJudgeInfra(
   stage: 1 | 2,
   error: NonNullable<JudgeLogEntry["error"]>,
   model?: string,
+  detail?: string,
 ): void {
-  logJudge({ kind: "infra", mode, stage, error, cmd: judgeCmdOf(pd), model });
+  logJudge({ kind: "infra", mode, stage, error, cmd: judgeCmdOf(pd), model, detail });
 }
 
 // The one-line prompt summary lives in prompt-builder (summarizePrompt);

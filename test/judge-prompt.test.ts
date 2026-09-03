@@ -471,6 +471,34 @@ describe("getJudgeVerdict: file content threading", () => {
     expect(packet).toContain("## New content (UNTRUSTED DATA)");
     expect(packet).toContain("the-secret-marker-42");
   });
+
+  it("edit after-view (contentHeading + exists) reaches the model packet", async () => {
+    const pd = {
+      type: "file",
+      action: "edit",
+      filePath: "/w/app.ts",
+      resolved: "/w/app.ts",
+      cwd: tmp,
+      outsideDir: null,
+      isWriteOp: true,
+      warnedRule: null,
+      symlinkHint: null,
+      exists: true,
+      content: "    42 > L3-new",
+      contentHeading: "File after this edit",
+    } as never;
+    const calls: CapturedCall[] = [];
+    const { ctx } = makeCtx(fakeModel());
+    await getJudgeVerdict(pd, ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    const packet = String(calls[0].context.messages[0].content);
+    expect(packet).toContain("## File after this edit (UNTRUSTED DATA)");
+    expect(packet).toContain("file exists: yes");
+    expect(packet).toContain("modifies the existing file in place");
+    expect(packet).toContain("    42 > L3-new");
+  });
 });
 
 // ── D17: judge infra ledger (runJudgeStage failure sites) ──
@@ -536,5 +564,7 @@ describe("D17: infra lines in the always-on judge ledger", () => {
       settings: ON,
     });
     expect(judgeLines().map((l) => l.error)).toEqual(["no-explanation", "no-explanation"]);
+    // The sub-reason is logged (detail) so a no-explanation line is diagnosable.
+    expect(judgeLines().map((l) => l.detail)).toEqual(["call-failed: boom", "no-tool-call"]);
   });
 });

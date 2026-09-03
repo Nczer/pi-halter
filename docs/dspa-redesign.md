@@ -465,6 +465,20 @@ from. Six decisions (implemented the same day; reverts fix (a) of
    64KB slice removed). Overflow is the existing judge-failure mode:
    the call fails → defer → prompt. The segment digest keeps its
    head-cut — it is a digest, not write content.
+
+   Refinement (2026-09-03, 3.17.0): for file EDITS the untrimmed content
+   is the AFTER-EDIT VIEW — the file with the replacements applied, each
+   replaced region shown with ±10 context lines (1-based line numbers, '>'
+   marks the lines the edit sets). The edit's effect is the delta and
+   where it lands; the whole file is context, so it stays bounded (the
+   write case is unchanged: the whole new file IS the effect and rides
+   untrimmed). Built from the pre-validation read the handler already
+   performs for prompt decisions (non-credential, ≤1MB); anything else
+   falls back to the old newText-block join. `file exists` is computed
+   for ALL write ops — a false "no" for an in-place edit contradicted the
+   session context and made the judge defer on safe edits (the 2026-09-03
+   llama-link session: three outside-cwd edit prompts, all traceable to
+   the fragment + false-exists packet).
 3. **Clause A extended: the judge reviews ALL content-bearing manual
    auto-allows.** Every file-write auto-allow (dir/file grant,
    config-allowed, project-pi) converts to a judged prompt (the D3 probe
@@ -762,7 +776,11 @@ Decisions:
     `no-explanation` / `call-failed` (the last is the fail-safe for
     unexpected internal throws — judge() normalizes model-side failures
     into no-explanation). Judge OFF stays silent: a choice, not a
-    failure.
+    failure. no-explanation lines carry `detail` — the normalized
+    sub-reason ("timeout" / "no-tool-call" / "bad-args: {…}" /
+    "call-failed: <msg>"): the rate alone was unactionable (the
+    2026-09-03 llama-link session's two stage-2 no-explanation hits were
+    undiagnosable after the fact).
   - `paths` — D13 floor mismatches (judge saw dirs the floor never did),
     only when non-empty.
   - Mine with `node tools/log-inspect.mjs judge` (rollups + listing).
