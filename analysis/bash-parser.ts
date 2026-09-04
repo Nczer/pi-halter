@@ -819,7 +819,30 @@ export interface BashSegment {
 }
 
 /** Node types that are shell operators (split points or internal ops). */
-const OPERATOR_TYPES = new Set(["&&", "||", ";", "|", "|&", "&"]);
+/** List operators that CONTINUE the current and-or chain into the next
+ *  segment ("&&", "||", "|", "|&", "&" — see splitOnOp). */
+const CHAIN_OPS = new Set(["&&", "||", "|", "|&", "&"]);
+/** Children that START a fresh and-or chain: the ";" list separator, the
+ *  case-item boundaries (")", ";;"), and compound keywords — body/clause
+ *  starts (do/then/else/elif/…) and heads (if/for/while/…/in/case), all of
+ *  which precede the next segment's own list. A chain-start segment is
+ *  tagged precedingOp ";" (statement anchor for cd threading). */
+const CHAIN_STARTS = new Set([
+  ";", ")", ";;",
+  "for", "while", "until", "if", "elif", "else", "in", "do", "then", "case",
+  "fi", "done", "esac", "{", "}",
+]);
+/** Statement positions in a container: may emit segments (or, like
+ *  test_command, may not) and always separate and-or chains — two adjacent
+ *  statement siblings with no operator between them are newline-separated,
+ *  which tree-sitter emits with NO operator node (an implicit ";"). */
+const STATEMENT_ITEMS = new Set([
+  "command", "test_command", "list", "pipeline", "subshell",
+  "redirected_statement", "variable_assignment", "declaration_command",
+  "for_statement", "while_statement", "until_statement", "if_statement",
+  "case_statement", "do_group", "case_item", "else_clause", "elif_clause",
+  "compound_statement",
+]);
 
 /**
  * Recursively walk the AST to extract segments.
@@ -845,15 +868,26 @@ function extractSegmentsFromNode(
 ): BashSegment[] {
   const segments: BashSegment[] = [];
 
-  // Document-order slot: the operator seen so far belongs to the NEXT segment
-  // pushed (operators and segments strictly interleave in walk order; a
-  // segment push always consumes the slot, an operator always sets it).
+  // Document-order slot: the boundary seen so far belongs to the NEXT
+  // segment pushed (boundaries and segments strictly interleave in walk
+  // order; a segment push always consumes the slot). Two kinds:
+  // - pendingOp — a CHAIN_OPS operator: the segment continues its chain.
+  // - chainStart — the segment starts a FRESH and-or chain (command start,
+  //   ";", a compound body start, a case-item body, a subshell fork, or an
+  //   implicit ";" between newline-separated siblings). It is tagged
+  //   precedingOp ";" so trackEffectiveCwd refreshes its statement anchor.
+  // A "||" must not clobber a pending chain start: a segmentless statement
+  // (test_command) between the boundary and the first segment cannot have
+  // changed the cwd, so the anchor (the base now) IS the chain's start base.
   let pendingOp: string | null = null;
+  let chainStart = false;
   // Depth of enclosing `( )` subshells during the walk (see BashSegment.subshellDepth).
   let subshellDepth = 0;
   const pushSeg = (seg: BashSegment): void => {
-    if (pendingOp) seg.precedingOp = pendingOp;
+    if (chainStart) seg.precedingOp = ";";
+    else if (pendingOp) seg.precedingOp = pendingOp;
     pendingOp = null;
+    chainStart = false;
     if (subshellDepth > 0) seg.subshellDepth = subshellDepth;
     segments.push(seg);
   };
@@ -871,25 +905,46 @@ function extractSegmentsFromNode(
   };
 
   /**
-   * Split on operator nodes (program, list).
-   * tree-sitter-bash 0.25 shapes: `a && b` → list[a, &&, b]; `a; b` / `a & b`
-   * → program-level sibling operators. An `&` backgrounds its PRECEDING
-   * sibling (which runs in a subshell) — mark those segments retroactively.
+   * Statement container: process children in document order, maintaining
+   * the op/boundary slot for the next segment. Handles program, list, and
+   * the compound-body containers — in tree-sitter-bash 0.25 the ;-separated
+   * statements inside for/if/while/case/{} bodies sit DIRECTLY under the
+   * container node (not under a `list`), and newline separators emit no
+   * operator node at all (two adjacent statement siblings imply a ";").
+   * An `&` backgrounds its PRECEDING sibling (which runs in a subshell) —
+   * mark those segments retroactively.
    */
   const splitOnOp: Handler = (n) => {
-    let prevStart = 0; // index where the previous sibling's segments begin
+    let prevStart = 0; // index where the previous sibling's segments begin (for & marking)
+    let prevWasStatement = false;
     for (let i = 0; i < n.childCount; i++) {
       const child = n.child(i);
       if (!child) continue;
-      if (OPERATOR_TYPES.has(child.type)) {
-        if (child.type === "&" && segments.length > prevStart) {
+      const t = child.type;
+      if (CHAIN_OPS.has(t)) {
+        if (t === "&" && segments.length > prevStart) {
           for (let j = prevStart; j < segments.length; j++) segments[j].backgrounded = true;
         }
-        pendingOp = child.type; // "&&" | "||" | ";" | "&" — precedes the next segment
+        pendingOp = t; // "&&" | "||" | "|" | "|&" | "&" — precedes the next segment
         prevStart = segments.length;
+        prevWasStatement = false;
         continue;
       }
+      if (CHAIN_STARTS.has(t)) {
+        chainStart = true;
+        prevWasStatement = false;
+        continue;
+      }
+      if (STATEMENT_ITEMS.has(t)) {
+        if (prevWasStatement) chainStart = true; // implicit ";" between sibling statements
+        walk(child);
+        prevWasStatement = true;
+        continue;
+      }
+      // keyword/word leaf (for-head, in-list words, test operators, …) —
+      // cannot carry or consume a boundary
       walk(child);
+      prevWasStatement = false;
     }
   };
 
@@ -1033,6 +1088,16 @@ function extractSegmentsFromNode(
   const handlers: Map<string, Handler> = new Map([
     ["program", splitOnOp],
     ["list", splitOnOp],
+    ["do_group", splitOnOp],
+    ["else_clause", splitOnOp],
+    ["elif_clause", splitOnOp],
+    ["compound_statement", splitOnOp],
+    ["for_statement", splitOnOp],
+    ["while_statement", splitOnOp],
+    ["until_statement", splitOnOp],
+    ["if_statement", splitOnOp],
+    ["case_statement", splitOnOp],
+    ["case_item", splitOnOp],
     ["pipeline", handlePipeline],
     ["redirected_statement", handleRedirectedStatement],
     ["command", handleLeaf],
@@ -1048,7 +1113,11 @@ function extractSegmentsFromNode(
     // the extra depth so cd threading stays scoped to the subshell.
     if (n.type === "subshell") {
       subshellDepth++;
+      // The subshell's list starts a fresh chain at the fork point.
+      const outer = chainStart;
+      chainStart = true;
       recurseAll(n);
+      chainStart = outer;
       subshellDepth--;
       return;
     }
@@ -1093,12 +1162,6 @@ function extractSegmentsFromNode(
     const handler = handlers.get(n.type);
     if (handler) {
       handler(n);
-      return;
-    }
-
-    // for/if/while/case: recurse into body
-    if (n.type.startsWith("for_") || n.type.startsWith("if_") || n.type.startsWith("while_") || n.type.startsWith("case_")) {
-      recurseAll(n);
       return;
     }
 

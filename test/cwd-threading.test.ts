@@ -598,6 +598,63 @@ describe("loop cd $d base threading (single-candidate only, fail-closed otherwis
   }, 15000);
 });
 
+describe("compound-body chain boundaries (over-freeze fix: for/if/case bodies)", () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-compbody-"));
+    fs.mkdirSync(path.join(tmp, "one"));
+    fs.writeFileSync(path.join(tmp, "top.txt"), "x");
+  });
+  afterAll(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  const d = (cmd: string) => decide({ type: "bash", command: cmd, cwd: tmp }, createStore());
+
+  it("parser: the body || after a segmentless test keeps the chain-start op (the unresolved.jsonl case)", async () => {
+    const { parseCommand } = await import("../analysis/bash-parser");
+    const p = await parseCommand('cd /var/tmp && for d in x; do [ -d "$d" ] || continue; echo "$d"; done', tmp);
+    expect(p.segments.map(s => s.precedingOp)).toEqual([undefined, ";", ";"]);
+  }, 15000);
+
+  it("parser: && -chained if body — the condition starts a fresh chain (op ';' not '&&')", async () => {
+    const { parseCommand } = await import("../analysis/bash-parser");
+    // segments: cd, true (condition), echo a, echo b
+    const p = await parseCommand('cd /var/tmp && if true; then echo a || echo b; fi', tmp);
+    expect(p.segments.map(s => s.precedingOp)).toEqual([undefined, ";", ";", "||"]);
+  }, 15000);
+
+  it("the log case: cd && for + [ -d ] || keep the threaded base (no spurious unresolved-cwd)", async () => {
+    // The exact log command (parser-level) + an allowlisted-segment variant
+    // (decide-level: `continue` itself needs a learned signature — a separate
+    // layer, not the threading).
+    const a = await analyzeCommand('cd one && for d in x; do [ -d "$d" ] || continue; cat top.txt; done', tmp);
+    expect(a.paths).not.toContain(UNKNOWN_CWD_MARKER);
+    expect(a.paths).toContain(path.join(tmp, "one")); // base access under the threaded base
+    expect(a.prompt.unresolved).toEqual([]);
+    expect((await d('cd one && for d in x; do [ -d "$d" ] || echo skip; cat top.txt; done')).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("&& -chained if body with || in the then-branch keeps the threaded base", async () => {
+    expect((await d('cd one && if true; then ls || cat top.txt; fi')).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("newline for-body (no ; operator nodes at all) with || keeps the base", async () => {
+    expect((await d("cd one\nfor d in x; do ls || cat top.txt; done")).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("case-item body: ) starts the chain — || inside the item keeps the base", async () => {
+    expect((await d('cd one && case x in a) ls || cat top.txt;; esac')).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("a REAL branch dependency inside a body still freezes (cd might fail → unknown base)", async () => {
+    // cd /var/tmp can fail at runtime → cat runs under the outer base; it can
+    // succeed → cat never runs. Branch-dependent: the marker must survive.
+    const a = await analyzeCommand('cd one; for d in x; do (cd /var/tmp || cat top.txt); done', tmp);
+    expect(a.paths).toContain(UNKNOWN_CWD_MARKER);
+    expect((await d('cd one; for d in x; do (cd /var/tmp || cat top.txt); done')).kind).toBe("prompt");
+  }, 15000);
+});
+
 describe("unknown-cwd marker hygiene (log-review display FPs)", () => {
   it("marker keeps its prefix for ..-relative tokens (no path.join normalization)", () => {
     expect(reResolveCwdDependentPaths(seg("cat ../node_modules/x"), null))

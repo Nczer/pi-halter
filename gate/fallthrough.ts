@@ -88,16 +88,19 @@ export function dspaAutoAllowed(
   // durable home for D13 mining).
   if (stage === 2) logJudgePaths(pd, store, verdict, "dspa");
   // Unresolved-token log: an auto-allow of a command WITH unresolved tokens
-  // means their resolutions were already user-confirmed — the convergence
-  // end-state (no prompt, no LLM call for the scope).
+  // — either their resolutions were already user-confirmed (the convergence
+  // end-state, persisted) or the floor passed on bounded candidates with no
+  // confirmed resolution (judge-absorbed, not persisted — it re-logs on the
+  // next identical command, which is the honest signal).
   if (pd.type === "bash" && pd.unresolved?.length) {
     for (const u of pd.unresolved) {
+      const confirmed = store.getConfirmedResolution(u.token);
       logUnresolved({
         cmd: pd.command,
         cwd: pd.cwd,
         token: u.token,
-        llm: store.getConfirmedResolution(u.token) ?? undefined,
-        persisted: true,
+        llm: confirmed ?? undefined,
+        persisted: (confirmed?.length ?? 0) > 0,
         outcome: "auto-allowed",
         decision: "auto-allow",
       });
