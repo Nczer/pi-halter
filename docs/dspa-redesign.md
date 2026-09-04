@@ -769,9 +769,12 @@ Decisions:
   prompt (the latency /dspa already pays; /dspat is opt-in measurement).
 - **Always-on judge ledger `.log/judge.jsonl`** (`logJudge` — signal
   lines only, never the agreeing majority):
-  - `diff` — both stages rendered and DISAGREE (on approve or risk):
-    `{ts, mode, model, cmd≤200, s1, s2}` in `"approve/low"` form. /dspa
-    (whenever stage 2 ran, incl. the Judge-again retry) and /dspat (always).
+  - `diff` — both stages rendered and stage 2 (session context) is
+    STRICTER than stateless stage 1 (on approve or risk — the context-
+    reveals-risk signal; a stage-2 loosening is the expected direction for
+    a stateless stage 1, not a line): `{ts, mode, model, cmd≤200, s1, s2}`
+    in `"approve/low"` form. /dspa (whenever stage 2 ran, incl. the
+    Judge-again retry) and /dspat (always).
   - `infra` — a stage produced no verdict: `no-model` / `no-auth` /
     `no-explanation` / `call-failed` (the last is the fail-safe for
     unexpected internal throws — judge() normalizes model-side failures
