@@ -653,6 +653,42 @@ describe("compound-body chain boundaries (over-freeze fix: for/if/case bodies)",
     expect(a.paths).toContain(UNKNOWN_CWD_MARKER);
     expect((await d('cd one; for d in x; do (cd /var/tmp || cat top.txt); done')).kind).toBe("prompt");
   }, 15000);
+
+  it("parser: conditional branch bodies carry conditionalBranch (conditions and loop bodies do not)", async () => {
+    const { parseCommand } = await import("../analysis/bash-parser");
+    const p1 = await parseCommand('case x in a) cd /var/tmp;; b) cd /tmp;; esac', tmp);
+    expect(p1.segments.map(s => s.conditionalBranch)).toEqual([true, true]);
+    const p2 = await parseCommand('if true; then cd /var/tmp; else cd /tmp; fi', tmp);
+    expect(p2.segments.map(s => s.conditionalBranch)).toEqual([undefined, true, true]); // condition untagged
+    const p3 = await parseCommand('if a; then cd /var/tmp; elif b; then cd /tmp; fi', tmp);
+    expect(p3.segments.map(s => s.conditionalBranch)).toEqual([undefined, true, undefined, true]); // elif body tagged
+    const p4 = await parseCommand('for i in 1; do cd /tmp; done', tmp);
+    expect(p4.segments.map(s => s.conditionalBranch)).toEqual([undefined]); // loop bodies are not branches
+  }, 15000);
+
+  it("two distinct branch cds freeze the post-compound base (case divergence)", async () => {
+    // The runtime cwd after the case is /var/tmp OR /tmp (item dispatch) —
+    // last-wins threading (/tmp) would under-flag the /var/tmp branch.
+    const a = await analyzeCommand('case x in a) cd /var/tmp;; b) cd /tmp;; esac; ls', tmp);
+    expect(a.paths).toContain(UNKNOWN_CWD_MARKER);
+    expect((await d('case x in a) cd /var/tmp;; b) cd /tmp;; esac; ls')).kind).toBe("prompt");
+  }, 15000);
+
+  it("if/else with a cd in each branch freezes the same way", async () => {
+    expect((await d('if true; then cd /var/tmp; else cd /tmp; fi; ls')).kind).toBe("prompt");
+  }, 15000);
+
+  it("a single-branch cd keeps its base (the common if-[ -d ]-then-cd pattern)", async () => {
+    expect((await d('if [ -d one ]; then cd one; fi; cat top.txt')).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("the same target in both branches keeps the base", async () => {
+    expect((await d('if true; then cd /tmp; else cd /tmp; fi; ls')).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("a definite cd after the compound clears the branch uncertainty", async () => {
+    expect((await d('if true; then cd /var/tmp; fi; cd /tmp; ls')).kind).toBe("auto-allow");
+  }, 15000);
 });
 
 describe("unknown-cwd marker hygiene (log-review display FPs)", () => {
