@@ -27,8 +27,9 @@
  * it.
  *
  * A third file (logJudge) records judge diagnostics:
- * <extension dir>/.log/judge.jsonl — stage 1 / stage 2 verdict
- * DISAGREEMENTS (both judge modes), judge infra failures (no-model /
+ * <extension dir>/.log/judge.jsonl — stage-2 TIGHTENINGS over stateless
+ * stage 1 (both judge modes — a stage-2 loosening is the expected
+ * direction for a stateless stage 1, not a line), judge infra failures (no-model /
  * no-auth / call-failed / no-explanation), and stage-2 path-report
  * mismatches (the D13 parser-gap signal, mirrored into decisions.jsonl
  * while that log is on). ALWAYS ON for the same reason.
@@ -364,8 +365,9 @@ export type JudgeLogMode = "dspa" | "dspat" | "manual";
 export interface JudgeLogEntry {
   /** ISO timestamp. */
   ts: string;
-  /** diff — the two judge stages disagreed · infra — a stage produced no
-   *  verdict · paths — stage-2 path report vs the floor (D13). */
+  /** diff — stage 2 (session context) tightened over stateless stage 1 ·
+   *  infra — a stage produced no verdict ·
+   *  paths — stage-2 path report vs the floor (D13). */
   kind: "diff" | "infra" | "paths";
   /** The regime that produced the signal. */
   mode: JudgeLogMode;
@@ -410,11 +412,23 @@ export function logJudge(e: Omit<JudgeLogEntry, "ts">): void {
   }
 }
 
+/** Strictness order — approve < defer < deny, low < medium < high. Stage 1
+ *  is stateless (no session context), so it is EXPECTED to be the more
+ *  conservative stage: a stage-2 LOOSENING (s1 stricter) is the design
+ *  working, not a disagreement. Only a stage-2 TIGHTENING — context
+ *  revealing risk the stateless view missed (the D4 blind spot) — is signal. */
+const ACTION_RANK: Record<JudgeResult["approve"], number> = { approve: 0, defer: 1, deny: 2 };
+const RISK_RANK: Record<string, number> = { low: 0, medium: 1, high: 2 };
+const verdictStrictness = (v: JudgeResult): number =>
+  ACTION_RANK[v.approve] * 10 + (RISK_RANK[v.risk ?? ""] ?? 0);
+
 /**
- * Both judge stages rendered verdicts and they DISAGREE (on approve or on
- * risk) — the judge-quality signal the agreement counters cannot see. A
- * no-op when either stage produced no verdict or the two agree. Called
- * from /dspa (both stages) and /dspat (both stages, always — D17).
+ * Stage-2 TIGHTENING signal: both stages rendered verdicts and stage 2
+ * (with session context) came out STRICTER than stateless stage 1 — the
+ * judge-quality signal the agreement counters cannot see. No-op when either
+ * stage produced no verdict, the two agree, or stage 2 is looser (the
+ * expected direction for a stateless stage 1). Called from /dspa (both
+ * stages) and /dspat (both stages, always — D17).
  */
 export function logJudgeDiff(
   pd: PromptData,
@@ -423,7 +437,7 @@ export function logJudgeDiff(
   v2: JudgeResult | null,
 ): void {
   if (!v1 || !v2) return;
-  if (v1.approve === v2.approve && v1.risk === v2.risk) return;
+  if (verdictStrictness(v2) <= verdictStrictness(v1)) return;
   logJudge({
     kind: "diff",
     mode,

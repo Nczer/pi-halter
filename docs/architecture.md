@@ -382,7 +382,8 @@ calls to its tool; the loader recovers the tool name from the plugin file's
   confirmed resolution). Convergence is the token flipping from `prompted`
   to `auto-allowed`.
 - **Judge ledger** (`.log/judge.jsonl`, always-on, D17): signal-only judge
-  diagnostics — stage-1/stage-2 verdict disagreements (`diff`), stage
+  diagnostics — stage-2 tightenings over stateless stage 1 (`diff` — a
+  stage-2 loosening is the expected direction, not a line), stage
   failures (`infra`: no-model / no-auth / no-explanation / call-failed —
   no-explanation lines carry the normalized sub-reason in `detail`), and
   D13 path mismatches (`paths`). Mine with `tools/log-inspect.mjs judge`.

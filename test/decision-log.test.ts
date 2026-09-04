@@ -434,9 +434,14 @@ describe("judge ledger (logJudge, always-on, D17)", () => {
     }
   });
 
-  it("diff: logs only when both stages rendered and disagree (approve or risk)", () => {
+  it("diff: logs only a stage-2 TIGHTENING (s1 stricter is the expected direction)", () => {
     logJudgeDiff(bashPd, "dspa", v("approve", "low"), v("approve", "low")); // agree → no line
     logJudgeDiff(bashPd, "dspa", null, v("approve", "low")); // one stage absent → no line
+    // Stage 1 stricter (stateless = expected conservative) → no line:
+    logJudgeDiff(bashPd, "dspa", v("defer", "medium"), v("approve", "low"));
+    logJudgeDiff(bashPd, "dspa", v("approve", "medium"), v("approve", "low"));
+    logJudgeDiff(bashPd, "dspa", v("deny", "high"), v("approve", "low"));
+    // Stage 2 tighter (context reveals risk) → line:
     logJudgeDiff(bashPd, "dspat", v("approve", "low"), v("approve", "high")); // risk diff
     logJudgeDiff(bashPd, "dspa", v("approve", "medium"), v("deny", "medium")); // approve diff
     const entries = judgeLines();
