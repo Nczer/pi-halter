@@ -804,6 +804,14 @@ export interface BashSegment {
   /** Segment runs in a background subshell (its cd does not persist into later segments). */
   backgrounded?: boolean;
   /**
+   * Segment runs in a conditional branch body (if/elif/else then, case item).
+   * Its execution is branch-dependent: a cd here may or may not have run. Two
+   * distinct branch-cd targets make the post-compound base unresolvable —
+   * trackEffectiveCwd freezes ("last one wins" would under-flag the other
+   * branch's runtime cwd, e.g. `case $z in a) cd /etc;; b) cd /tmp;; esac; cat x`).
+   */
+  conditionalBranch?: boolean;
+  /**
    * Depth of enclosing `( )` subshell nodes (0 = top level). A subshell runs
    * in a child process: a cd inside it sets only the subshell's local base,
    * never the outer one. trackEffectiveCwd scopes its base stack by this
@@ -883,11 +891,14 @@ function extractSegmentsFromNode(
   let chainStart = false;
   // Depth of enclosing `( )` subshells during the walk (see BashSegment.subshellDepth).
   let subshellDepth = 0;
+  // Depth of enclosing conditional branch bodies (see BashSegment.conditionalBranch).
+  let branchDepth = 0;
   const pushSeg = (seg: BashSegment): void => {
     if (chainStart) seg.precedingOp = ";";
     else if (pendingOp) seg.precedingOp = pendingOp;
     pendingOp = null;
     chainStart = false;
+    if (branchDepth > 0) seg.conditionalBranch = true;
     if (subshellDepth > 0) seg.subshellDepth = subshellDepth;
     segments.push(seg);
   };
@@ -917,6 +928,14 @@ function extractSegmentsFromNode(
   const splitOnOp: Handler = (n) => {
     let prevStart = 0; // index where the previous sibling's segments begin (for & marking)
     let prevWasStatement = false;
+    // Conditional branch bodies (then/else/case-item) — segments inside are
+    // tagged conditionalBranch. A body opens at `then` / `else` / `)` and
+    // closes at `fi` / `esac` / `;;`, at an else/elif clause sibling (which
+    // starts its own region), or at the end of the children.
+    let branchSave: number | null = null;
+    const endBranch = (): void => {
+      if (branchSave !== null) { branchDepth = branchSave; branchSave = null; }
+    };
     for (let i = 0; i < n.childCount; i++) {
       const child = n.child(i);
       if (!child) continue;
@@ -930,12 +949,21 @@ function extractSegmentsFromNode(
         prevWasStatement = false;
         continue;
       }
-      if (CHAIN_STARTS.has(t)) {
+      if (t === "then" || t === "else" || (t === ")" && n.type === "case_item")) {
+        if (branchSave === null) branchSave = branchDepth;
+        branchDepth++;
         chainStart = true;
         prevWasStatement = false;
         continue;
       }
+      if (CHAIN_STARTS.has(t)) {
+        chainStart = true;
+        if (t === "fi" || t === "esac" || t === ";;") endBranch();
+        prevWasStatement = false;
+        continue;
+      }
       if (STATEMENT_ITEMS.has(t)) {
+        if (t === "else_clause" || t === "elif_clause") endBranch(); // the then-body is over
         if (prevWasStatement) chainStart = true; // implicit ";" between sibling statements
         walk(child);
         prevWasStatement = true;
@@ -946,6 +974,7 @@ function extractSegmentsFromNode(
       walk(child);
       prevWasStatement = false;
     }
+    endBranch();
   };
 
   /** Group pipeline commands into one segment with pipe ops. */

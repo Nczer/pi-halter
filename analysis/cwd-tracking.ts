@@ -193,19 +193,27 @@ export function cdBaseBounds(
  *   • backgrounded segment → no change (subshell cd doesn't persist)
  *   • resolvable cd        → thread (absolute literal recovers an unknown base)
  *   • non-literal cd       → unknown (sticky until an absolute literal cd)
+ *   • conditional-branch cd (if/elif/else then, case item) → thread, but the
+ *     set of DISTINCT branch-cd targets since the last definite cd is
+ *     tracked per depth: two or more make the base unknown — each branch may
+ *     or may not have run, so "last one wins" would under-flag the other
+ *     branch's runtime cwd. One distinct target keeps its base (conservative:
+ *     the runtime cwd is that target or the in-bar pre-cd base).
  */
 export function trackEffectiveCwd(segments: BashSegment[], baseCwd: string): CwdBase[] {
   const result: CwdBase[] = [];
   const bases: CwdBase[] = [path.resolve(expandTilde(baseCwd))];
   // Base at the start of the current (;) statement, per depth — the || freeze anchor.
   const stmtStarts: CwdBase[] = [bases[0]];
+  // Distinct conditional-branch cd targets since the last definite cd, per depth.
+  const branchCds: Set<string>[] = [new Set()];
   let depth = 0;
   for (const seg of segments) {
     const d = seg.subshellDepth ?? 0;
     // Subshells open/close in document (DFS) order and a segment only exists
     // if every enclosing node produced it, so depth changes are well-formed.
-    while (depth < d) { bases.push(bases[depth]); stmtStarts.push(bases[depth]); depth++; }
-    while (depth > d) { bases.pop(); stmtStarts.pop(); depth--; }
+    while (depth < d) { bases.push(bases[depth]); stmtStarts.push(bases[depth]); branchCds.push(new Set()); depth++; }
+    while (depth > d) { bases.pop(); stmtStarts.pop(); branchCds.pop(); depth--; }
     if (seg.precedingOp === ";") stmtStarts[depth] = bases[depth];
     // The branch segment's runtime cwd is wherever the statement left it —
     // branch-dependent (unknown) only if a cd earlier in the statement could
@@ -215,8 +223,17 @@ export function trackEffectiveCwd(segments: BashSegment[], baseCwd: string): Cwd
     result.push(bases[depth]);
     if (seg.backgrounded) continue;
     const r = resolveCdTarget(seg, bases[depth]);
-    if (r.kind === "thread") bases[depth] = r.dir;
-    else if (r.kind === "unknown") bases[depth] = null;
+    if (r.kind === "thread") {
+      bases[depth] = r.dir;
+      if (seg.conditionalBranch) {
+        // Branch-dependent cd: a second distinct target means the post-
+        // compound runtime cwd is unresolvable (either branch may have run).
+        branchCds[depth].add(r.dir);
+        if (branchCds[depth].size >= 2) bases[depth] = null;
+      } else {
+        branchCds[depth].clear(); // definite cd: the runtime cwd is now exactly r.dir
+      }
+    } else if (r.kind === "unknown") bases[depth] = null;
   }
   return result;
 }
