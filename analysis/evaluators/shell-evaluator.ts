@@ -1,5 +1,5 @@
 import { EvaluationBuilder } from "./builder";
-import { EvalCache, RiskEvaluator } from "./types";
+import { EvalCache, EvaluatorResult, RiskEvaluator } from "./types";
 import { wrapperCommands } from "../../config";
 import { dangerousSedFlags, dangerousPerlFlags, SORT_OUTPUT_RE } from "../../config/bash-patterns";
 import {
@@ -26,7 +26,7 @@ const RCE_IN_SUBSHELL_RE = /\b(?:curl|wget)\b[\s\S]*?\|\s*(?:sh|bash|zsh|fish|ks
  */
 export const ShellEvaluator: RiskEvaluator = {
   name: "shell",
-  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
     // `command printf …`, `env sort -o …`, `\printf …` execute the same
@@ -45,10 +45,10 @@ export const ShellEvaluator: RiskEvaluator = {
       const allReadOnly = !!innerTexts && innerTexts.length > 0 &&
         innerTexts.every(inner => isReadOnlySubshellText(inner));
       if (!allReadOnly) {
-        b.addHigh("command substitution (subshell)");
+        b.high("command substitution (subshell)");
         // Surface RCE reason for curl/wget piped to shell inside the subshell
         if (innerTexts?.some(inner => RCE_IN_SUBSHELL_RE.test(inner))) {
-          b.addReason("curl/wget | interpreter (download & execute remote code)");
+          b.note("curl/wget | interpreter (download & execute remote code)");
         }
       }
     }
@@ -57,66 +57,64 @@ export const ShellEvaluator: RiskEvaluator = {
     const hasHeredoc = seg.ops.includes("<<") || seg.ops.includes("<<<");
     const isInterpreterWithHeredoc = hasHeredoc && HEREDOC_INTERPRETER_RE.test(effectiveFirst);
     if (isInterpreterWithHeredoc) {
-      b.addHigh("heredoc to shell interpreter (executable code)");
+      b.high("heredoc to shell interpreter (executable code)");
     }
 
     // Write redirect
     if (hasWriteRedirect(segment)) {
-      b.addMedium("shell output redirection (can overwrite files)");
-      b.markDanger();
+      b.danger("shell output redirection (can overwrite files)");
     }
 
     // sed/perl flags
     if (effectiveFirst === "sed" && dangerousSedFlags.test(segment)) {
-      b.addHigh("sed -i (in-place file modification)");
+      b.high("sed -i (in-place file modification)");
     }
     if (effectiveFirst === "perl" && dangerousPerlFlags.test(segment)) {
-      b.addHigh("perl -pi/-i (in-place file modification)");
+      b.high("perl -pi/-i (in-place file modification)");
     }
 
     // sort -o/--output (writes/truncates a file)
     if (effectiveFirst === "sort" && SORT_OUTPUT_RE.test(segment)) {
-      b.addHigh("sort -o/--output (can truncate files)");
+      b.high("sort -o/--output (can truncate files)");
     }
 
     // echo/printf terminal escape sequences — screen spoofing (\033[2J + fake
     // prompt) and OSC 52 clipboard writes (\033]52;c;…). printf interprets
     // escapes unconditionally; echo only with -e or $'…' ANSI-C quoting.
     if (effectiveFirst === "printf" && hasTerminalEscape(segment)) {
-      b.addHigh("terminal escape sequence in printf (screen spoofing / clipboard write)");
+      b.high("terminal escape sequence in printf (screen spoofing / clipboard write)");
     }
     if (effectiveFirst === "echo" && echoInterpretsEscapes(segment) && hasTerminalEscape(segment)) {
-      b.addHigh("terminal escape sequence in echo (screen spoofing / clipboard write)");
+      b.high("terminal escape sequence in echo (screen spoofing / clipboard write)");
     }
 
     // Wrapper running write (not relative path - that only affects isSimple)
     if (wrapperCommands.has(firstWord) && isWrapperRunningWrite(segment, false)) {
-      b.addHigh(`${firstWord} wrapper running write operation`);
+      b.high(`${firstWord} wrapper running write operation`);
     }
 
     // bash -c/-i (shell with inline/script command)
     if (effectiveFirst === "bash" && /\s-(?:[a-z]*c[a-z]*|[a-z]*i[a-z]*)(?:\s|$)/.test(segment)) {
-      b.addHigh("bash -c/-i (shell with inline/script command)");
+      b.high("bash -c/-i (shell with inline/script command)");
     }
 
     // source (config/secrets loading)
     if (effectiveFirst === "source" && /\.(?:env|bashrc|zshrc|profile|secret|local)\b/i.test(segment)) {
-      b.addHigh("source (config/secrets loading)");
+      b.high("source (config/secrets loading)");
     }
 
     // eval (arbitrary code execution)
     if (effectiveFirst === "eval") {
-      b.addHigh("eval (arbitrary code execution)");
+      b.high("eval (arbitrary code execution)");
     }
 
     // Obfuscation (use cached result)
     const obfuscation = cache?.obfuscation ?? { detected: false, techniques: [] };
     if (obfuscation.detected) {
       for (const tech of obfuscation.techniques) {
-        b.addReason(tech);
+        b.note(tech);
       }
-      b.setHigh();
-      b.markDanger();
+      b.high();
     }
 
     return b.build();

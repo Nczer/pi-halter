@@ -1,5 +1,5 @@
 import { EvaluationBuilder } from "./builder";
-import { EvalCache, RiskEvaluator } from "./types";
+import { EvalCache, EvaluatorResult, RiskEvaluator } from "./types";
 import {
   getFirstWord,
   isFindExecWrite,
@@ -87,7 +87,7 @@ const TOOL_HANDLERS: Array<{ match: (seg: ToolSegment) => boolean; reason: strin
  */
 export const ToolEvaluator: RiskEvaluator = {
   name: "tool",
-  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const rest = segment.trim().split(/\s+/).slice(1);
@@ -96,7 +96,7 @@ export const ToolEvaluator: RiskEvaluator = {
     const toolSeg: ToolSegment = { text: segment, firstWord, rest, ops: seg.ops };
     for (const handler of TOOL_HANDLERS) {
       if (handler.match(toolSeg)) {
-        b.addHigh(handler.reason);
+        b.high(handler.reason);
       }
     }
 

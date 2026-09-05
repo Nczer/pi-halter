@@ -1,5 +1,5 @@
 import { EvaluationBuilder } from "./builder";
-import { EvalCache, RiskEvaluator } from "./types";
+import { EvalCache, EvaluatorResult, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
 import {
   parseTmuxCommand,
@@ -13,7 +13,7 @@ import {
  */
 export const TmuxEvaluator: RiskEvaluator = {
   name: "tmux",
-  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const b = new EvaluationBuilder();
@@ -38,17 +38,15 @@ export const TmuxEvaluator: RiskEvaluator = {
     // the global -c option) executes code in the new session.
     if (!isDangerous && tmuxNewSessionCommand(tmux) !== null) {
       isDangerous = true;
-      b.setHigh();
-      b.markDanger();
+      b.high();
     }
 
     if (isDangerous) {
-      b.setHigh();
-      b.markDanger();
+      b.high();
       if (tmuxSub) {
         const desc = TMUX_DANGEROUS_DESCRIPTIONS[tmuxSub]
           || "not in safe allowlist — may execute code or modify sessions";
-        b.addReason(`tmux ${tmuxSub} (${desc})`);
+        b.note(`tmux ${tmuxSub} (${desc})`);
       }
     }
 
