@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { isDspActive, setDspActive, updateDspWidget } from "../modes/dsp-mode";
-import { onStatusChange } from "../modes/status-bus";
+import { isDspActive, setDspActive } from "../modes/dsp-mode";
+import { notifyStatus, onStatusChange } from "../modes/status-bus";
 import { updateWidget } from "../ui/widget";
 
 describe("dsp-mode", () => {
@@ -33,17 +33,12 @@ describe("dsp-mode", () => {
     });
   });
 
-  describe("updateDspWidget (delegates to the unified halter widget — widget.ts)", () => {
-    it("is a no-op when hasUI is false", () => {
-      const ctx = { hasUI: false } as any;
-      expect(() => updateDspWidget(ctx)).not.toThrow();
-    });
-
+  describe("mode → status bus → unified widget (widget.ts)", () => {
     it("sets the unified widget when dsp is active", () => {
       const setWidget = vi.fn();
       const ctx = { hasUI: true, ui: { setWidget } } as any;
       setDspActive(true);
-      updateDspWidget(ctx);
+      notifyStatus(ctx);
       expect(setWidget).toHaveBeenCalledWith("halter", expect.any(Function), { placement: "belowEditor" });
       // The legacy per-mode ids are cleared (no stale duplicate warning).
       expect(setWidget).toHaveBeenCalledWith("dsp-warning", undefined);
@@ -53,7 +48,7 @@ describe("dsp-mode", () => {
       const setWidget = vi.fn();
       const ctx = { hasUI: true, ui: { setWidget } } as any;
       setDspActive(false);
-      updateDspWidget(ctx);
+      notifyStatus(ctx);
       expect(setWidget).toHaveBeenLastCalledWith("halter", undefined);
     });
 
@@ -61,7 +56,7 @@ describe("dsp-mode", () => {
       const setWidget = vi.fn();
       const ctx = { hasUI: true, ui: { setWidget } } as any;
       setDspActive(true);
-      updateDspWidget(ctx);
+      notifyStatus(ctx);
 
       // Extract the unified widget builder and call it
       const builder = setWidget.mock.calls.find((c: unknown[]) => c[0] === "halter")![1];
@@ -82,17 +77,17 @@ describe("dsp-mode", () => {
 
       // Toggle ON
       setDspActive(true);
-      updateDspWidget(ctx);
+      notifyStatus(ctx);
       expect(setWidget).toHaveBeenLastCalledWith("halter", expect.any(Function), { placement: "belowEditor" });
 
       // Toggle OFF (no rules) → cleared
       setDspActive(false);
-      updateDspWidget(ctx);
+      notifyStatus(ctx);
       expect(setWidget).toHaveBeenLastCalledWith("halter", undefined);
 
       // Toggle ON again
       setDspActive(true);
-      updateDspWidget(ctx);
+      notifyStatus(ctx);
       expect(setWidget).toHaveBeenLastCalledWith("halter", expect.any(Function), { placement: "belowEditor" });
     });
   });

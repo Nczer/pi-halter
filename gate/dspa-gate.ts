@@ -221,7 +221,7 @@ function isLoopbackHost(hostWithPort: string): boolean {
  * from the parent environment without appearing as a URL can't be built
  * from this command alone (scheme://$VAR still surfaces as a URL here).
  */
-export function isLoopbackEgress(command: string, segments: string[]): boolean {
+function isLoopbackEgress(command: string, segments: string[]): boolean {
   for (const seg of segments) {
     const words = seg.trim().split(/\s+/);
     const oper = words.slice(skipEnvPrefixes(words));

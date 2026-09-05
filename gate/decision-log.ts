@@ -87,13 +87,13 @@ export function isDecisionLogEnabled(): boolean {
 }
 
 export const DEFAULT_LOG_FILE = path.join(root, ".log", "decisions.jsonl");
-export const UNRESOLVED_LOG_FILE = path.join(root, ".log", "unresolved.jsonl");
-export const JUDGE_LOG_FILE = path.join(root, ".log", "judge.jsonl");
+const UNRESOLVED_LOG_FILE = path.join(root, ".log", "unresolved.jsonl");
+const JUDGE_LOG_FILE = path.join(root, ".log", "judge.jsonl");
 
 /** Resolve the unresolved-token log path. `HALTER_UNRESOLVED_LOG` is a
  * test seam (point the log at a scratch path); `off` disables it (vitest
  * hermeticity). Production never sets it. */
-export function resolveUnresolvedLogPath(): string | null {
+function resolveUnresolvedLogPath(): string | null {
   const v = process.env.HALTER_UNRESOLVED_LOG;
   if (v === undefined) return UNRESOLVED_LOG_FILE;
   return v === "off" ? null : v;

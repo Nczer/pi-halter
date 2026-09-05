@@ -189,7 +189,7 @@ export function isPathWarnedResolved(filePath: string, resolved: string): { warn
  * `/?x/b/$f` → null (no static prefix, base-dependent, or glob-prefixed —
  * a glob prefix spans several dirs, none of which is provably the prefix).
  */
-export function opaqueStaticPrefixDir(raw: string): string | null {
+function opaqueStaticPrefixDir(raw: string): string | null {
   let idx = raw.length;
   for (const c of ["$", "`"]) {
     const i = raw.indexOf(c);

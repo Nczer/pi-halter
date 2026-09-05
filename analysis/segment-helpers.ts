@@ -323,7 +323,7 @@ export function hasWriteRedirect(cmd: string): boolean {
 /**
  * Determine if a wrapper argument should be skipped (is a flag or wrapper-specific option).
  */
-export function skipWrapperArg(wrapper: string, arg: string): boolean {
+function skipWrapperArg(wrapper: string, arg: string): boolean {
   if (arg.startsWith("-")) return true;
   if (wrapper === "env" && WRAPPER_ENV_ASSIGN_RE.test(arg) && !arg.startsWith("/")) return true;
   if (wrapper === "timeout" && WRAPPER_TIMEOUT_RE.test(arg)) return true;
