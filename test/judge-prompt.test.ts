@@ -12,7 +12,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createStore } from "../gate/store";
-import {getJudgeVerdict, getStage2Verdict, judgeAvailable, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
+import {getJudgeVerdict, getStage2Verdict, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
 import { analyzeCommand } from "../analysis/command-analysis";
 import {DEFAULT_JUDGE_SETTINGS, JudgeStreamFn, JudgeResult, JudgeSettings} from "../judge/judge";
 import type {BashPromptData as BashPromptDataType} from "../decide/types";
@@ -392,27 +392,27 @@ describe("judgeStatus", () => {
   });
 });
 
-// ── judgeAvailable ──
+// ── judgeStatus.state (drives the "💭 Explain" option) ──
 
-describe("judgeAvailable", () => {
-  it("false when disabled, even with a session model", () => {
+describe("judgeStatus.state", () => {
+  it("off when disabled, even with a session model", () => {
     const { ctx } = makeCtx(fakeModel());
-    expect(judgeAvailable(ctx, OFF)).toBe(false);
+    expect(judgeStatus(ctx, OFF).state).toBe("off");
   });
 
-  it("false when no model is resolvable (no session model, nothing configured)", () => {
+  it("invalid when no model is resolvable (no session model, nothing configured)", () => {
     const { ctx } = makeCtx(undefined);
-    expect(judgeAvailable(ctx, ON)).toBe(false);
+    expect(judgeStatus(ctx, ON).state).toBe("invalid");
   });
 
-  it("true when enabled and a session model exists", () => {
+  it("ok when enabled and a session model exists", () => {
     const { ctx } = makeCtx(fakeModel());
-    expect(judgeAvailable(ctx, ON)).toBe(true);
+    expect(judgeStatus(ctx, ON).state).toBe("ok");
   });
 
   it("session-model path never touches the registry (no throw even if absent)", () => {
     const ctx = { model: fakeModel(), modelRegistry: undefined } as unknown as ExtensionContext;
-    expect(judgeAvailable(ctx, ON)).toBe(true);
+    expect(judgeStatus(ctx, ON).state).toBe("ok");
   });
 });
 

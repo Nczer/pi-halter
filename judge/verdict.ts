@@ -168,17 +168,6 @@ export function judgeStatus(
 }
 
 /**
- * True when the judge can actually run (state === "ok"). Never throws —
- * used to decide whether the "💭 Explain" option is offered.
- */
-export function judgeAvailable(
-  ctx: ExtensionContext,
-  settings?: JudgeSettings,
-): boolean {
-  return judgeStatus(ctx, settings).state === "ok";
-}
-
-/**
  * Test seam: `complete` (the model call) and settings are injectable.
  * Production uses the real `complete` from @earendil-works/pi-ai and
  * ~/.pi/agent/settings-ext.json.
