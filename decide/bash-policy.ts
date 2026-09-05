@@ -10,7 +10,7 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   ];
 
   for (const rule of rules) {
-    const decision = await rule(req, store);
+    const decision = rule(req, store);
     if (decision) return decision;
   }
 
@@ -25,8 +25,8 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
   ];
 
   for (const rule of analysisRules) {
-    const decision = await rule(req, store, analysis);
-    if (decision) return decision as Decision;
+    const decision = rule(req, store, analysis);
+    if (decision) return decision;
   }
 
   return {
