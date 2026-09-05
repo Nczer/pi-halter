@@ -5,7 +5,10 @@ import { tokenizeSegment } from "../analysis/tokenizer";
 import type {Store, BashRequest, Decision} from "./types";
 import type { CommandAnalysis } from "../analysis/command-analysis";
 
-export type BashRule = (req: BashRequest, store: Store, analysis?: CommandAnalysis) => Decision | Promise<Decision | null> | null;
+/** A rule is a pure, synchronous decision over the (precomputed) analysis —
+ *  the only async work in the bash pipeline is the analysis itself,
+ *  which the pipeline computes once and passes in. `null` = not decided. */
+type BashRule = (req: BashRequest, store: Store, analysis?: CommandAnalysis) => Decision | null;
 
 /**
  * Blocks if the command was aborted recently (retry-loop prevention).
@@ -267,10 +270,10 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
  * Returns the prompt decision, or null when the analysis carries no
  * prompt (defensive — the caller has already verified a payload exists).
  */
-export async function synthesizeManualBashPrompt(
+export function synthesizeManualBashPrompt(
   req: BashRequest,
   store: Store,
   analysis: CommandAnalysis,
-): Promise<Decision | null> {
+): Decision | null {
   return PromptFallbackRule(req, store, analysis);
 }

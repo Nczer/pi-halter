@@ -61,7 +61,7 @@ export async function applyDspaConversions(
   if (request.type === "bash") {
     const analysis = decision.analysis;
     if (analysis && findExecutedScript(analysis, request.cwd) !== null) {
-      const synthetic = await synthesizeManualBashPrompt(request, store, analysis);
+      const synthetic = synthesizeManualBashPrompt(request, store, analysis);
       if (synthetic?.kind === "prompt") return synthetic;
     }
   }
