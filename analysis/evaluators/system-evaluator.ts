@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { EvaluationBuilder } from "./builder";
-import { EvalCache, RiskEvaluator } from "./types";
+import { EvalCache, EvaluatorResult, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
 import { expandTilde } from "../path-util";
 
@@ -109,19 +109,19 @@ function flagMassDeletionTarget(
       : cwdKnown ? path.resolve(cwd, dirPart) : dirPart;
     const n = countDirEntries(base, LARGE_DIR_THRESHOLD);
     if (n !== null && n >= LARGE_DIR_THRESHOLD) {
-      b.addReason(`glob matches ${n}+ files (mass deletion)`);
+      b.note(`glob matches ${n}+ files (mass deletion)`);
     }
     return;
   }
   const p = resolveRmTarget(token, cwd, cwdKnown);
   if (!p) return;
   if (isHomePath(p)) {
-    b.addReason("target is the home directory (entire home deleted)");
+    b.note("target is the home directory (entire home deleted)");
     return;
   }
   const norm = path.normalize(p).replace(/\/+$/, "") || "/";
   if (SYSTEM_RM_DIRS.has(norm)) {
-    b.addReason(`target is system directory ${norm} (entire tree deleted)`);
+    b.note(`target is system directory ${norm} (entire tree deleted)`);
     return;
   }
   // Non-recursive `rm dir` fails on directories — the entry count only
@@ -129,7 +129,7 @@ function flagMassDeletionTarget(
   if (recursive) {
     const n = countDirEntries(p, LARGE_DIR_THRESHOLD);
     if (n !== null && n >= LARGE_DIR_THRESHOLD) {
-      b.addReason(`recursive delete of directory with ${n}+ entries (mass deletion)`);
+      b.note(`recursive delete of directory with ${n}+ entries (mass deletion)`);
     }
   }
 }
@@ -144,7 +144,7 @@ function evaluateMassDeletion(
   const recursive = rest.some((a) => hasShortFlag(a, "r") || hasShortFlag(a, "R") || a === "--recursive");
   const targets = rest.filter((a) => !a.startsWith("-"));
   if (targets.length >= LARGE_DIR_THRESHOLD) {
-    b.addReason(`deletes ${targets.length} file arguments (mass deletion)`);
+    b.note(`deletes ${targets.length} file arguments (mass deletion)`);
     return;
   }
   for (const t of targets) {
@@ -159,7 +159,7 @@ const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: 
   // sudo
   { match: (c) => c === "sudo",
     evaluate: (_cmd, rest, b, ctx) => {
-      b.addHigh("sudo (privilege escalation)");
+      b.high("sudo (privilege escalation)");
       // `sudo rm …` / `sudo -u root rm …` — find the rm and mass-check its args.
       // A literal file named "rm" in a non-rm sudo command just yields no targets.
       const rmIdx = rest.indexOf("rm");
@@ -168,97 +168,87 @@ const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: 
   // rm/rmdir/unlink
   { match: (c) => ["rm", "rmdir", "unlink"].includes(c),
     evaluate: (cmd, rest, b, ctx) => {
-      b.setHigh();
-      b.markDanger();
+      b.high();
       if (rest.some((a) => hasShortFlag(a, "r") || hasShortFlag(a, "R")))
-        b.addReason("recursive delete (-r/-R)");
+        b.note("recursive delete (-r/-R)");
       if (rest.some((a) => hasShortFlag(a, "f")))
-        b.addReason("forced delete (-f)");
+        b.note("forced delete (-f)");
       // rmdir only removes empty dirs and unlink a single file — mass checks are rm-only.
       if (cmd === "rm") evaluateMassDeletion(rest, ctx.cwd, ctx.cwdKnown, b);
     } },
   // chmod/chown
   { match: (c) => c === "chmod" || c === "chown",
     evaluate: (cmd, rest, b) => {
-      b.markDanger();
       if (rest.includes("-R") || rest.includes("--recursive")) {
-        b.addReason(`${cmd} -R (recursive ${cmd === "chmod" ? "permission" : "ownership"} changes)`);
-        b.setHigh();
+        b.high(`${cmd} -R (recursive ${cmd === "chmod" ? "permission" : "ownership"} changes)`);
       } else {
-        b.setMedium();
+        b.danger();
       }
     } },
   // mv/cp
   { match: (c) => c === "mv" || c === "cp",
     evaluate: (cmd, rest, b) => {
-      b.markDanger();
       if (rest.some((a) => hasShortFlag(a, "f")) || rest.includes("--force")) {
-        b.addMedium(`${cmd} --force/-f (can overwrite files)`);
+        b.danger(`${cmd} --force/-f (can overwrite files)`);
       } else {
-        b.setMedium();
+        b.danger();
       }
     } },
   // truncate
   { match: (c) => c === "truncate",
-    evaluate: (_cmd, _rest, b) => { b.addReason("truncate (in-place size change, can erase contents)"); b.setHigh(); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.high("truncate (in-place size change, can erase contents)"); } },
   // dd of=
   { match: (c) => c === "dd",
     evaluate: (_cmd, rest, b) => {
       if (rest.some(a => a.startsWith("of="))) {
-        b.addReason("dd with output file/device (can overwrite data)");
-        b.setHigh();
-        b.markDanger();
+        b.high("dd with output file/device (can overwrite data)");
       }
     } },
   // kill/pkill/killall
   { match: (c) => ["kill", "pkill", "killall"].includes(c),
     evaluate: (cmd, rest, b) => {
-      b.addReason(`${cmd} (process termination)`);
+      b.note(`${cmd} (process termination)`);
       if (rest.includes("-9")) {
-        b.setHigh();
-        b.markDanger();
-        b.addReason("SIGKILL (-9)");
+        b.high("SIGKILL (-9)");
       }
     } },
   // shutdown/reboot
   { match: (c) => ["shutdown", "reboot"].includes(c),
-    evaluate: (cmd, _rest, b) => { b.addReason(`${cmd} (system power operation)`); b.setHigh(); b.markDanger(); } },
+    evaluate: (cmd, _rest, b) => { b.high(`${cmd} (system power operation)`); } },
   // systemctl
   { match: (c) => c === "systemctl",
     evaluate: (_cmd, rest, b) => {
       if (rest.includes("stop") || rest.includes("disable")) {
-        b.addReason("systemctl stop/disable (service disruption)");
-        b.setMedium();
-        b.markDanger();
+        b.danger("systemctl stop/disable (service disruption)");
       }
     } },
   // crontab
   { match: (c) => c === "crontab",
-    evaluate: (_cmd, _rest, b) => { b.addMedium("crontab (scheduled task management)"); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.danger("crontab (scheduled task management)"); } },
   // nohup
   { match: (c) => c === "nohup",
-    evaluate: (_cmd, _rest, b) => { b.addMedium("nohup (persist process after shell exit)"); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.danger("nohup (persist process after shell exit)"); } },
   // screen
   { match: (c) => c === "screen",
-    evaluate: (_cmd, _rest, b) => { b.addMedium("screen (terminal multiplexer)"); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.danger("screen (terminal multiplexer)"); } },
   // ssh
   { match: (c) => c === "ssh",
-    evaluate: (_cmd, _rest, b) => { b.addMedium("ssh (remote command execution)"); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.danger("ssh (remote command execution)"); } },
   // scp/rsync
   { match: (c) => ["scp", "rsync"].includes(c),
-    evaluate: (_cmd, _rest, b) => { b.addMedium(`${_cmd} (remote file transfer)`); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.danger(`${_cmd} (remote file transfer)`); } },
   // patch
   { match: (c) => c === "patch",
-    evaluate: (_cmd, _rest, b) => { b.addMedium("patch (file patching)"); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.danger("patch (file patching)"); } },
   // install (not chmod install, which is cp-mode)
   { match: (c) => c === "install",
-    evaluate: (_cmd, _rest, b) => { b.addMedium("install (copy and set permissions)"); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.danger("install (copy and set permissions)"); } },
   // ln
   { match: (c) => c === "ln",
-    evaluate: (_cmd, _rest, b) => { b.addMedium("ln (link creation)"); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.danger("ln (link creation)"); } },
   // tee
   { match: (c) => c === "tee",
-    evaluate: (_cmd, _rest, b) => { b.addMedium("tee (file writing)"); b.markDanger(); } },
+    evaluate: (_cmd, _rest, b) => { b.danger("tee (file writing)"); } },
 ];
 
 /**
@@ -266,7 +256,7 @@ const SYSTEM_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: 
  */
 export const SystemEvaluator: RiskEvaluator = {
   name: "system",
-  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const rest = segment.trim().split(/\s+/).slice(1);

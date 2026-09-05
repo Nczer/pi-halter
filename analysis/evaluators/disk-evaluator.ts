@@ -1,5 +1,5 @@
 import { EvaluationBuilder } from "./builder";
-import { EvalCache, RiskEvaluator } from "./types";
+import { EvalCache, EvaluatorResult, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
 
 // ── Disk command handlers ──
@@ -46,7 +46,7 @@ export function rootScanTarget(segment: string): string | null {
  */
 export const DiskEvaluator: RiskEvaluator = {
   name: "disk",
-  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const rest = segment.trim().split(/\s+/).slice(1);
@@ -54,14 +54,10 @@ export const DiskEvaluator: RiskEvaluator = {
 
     for (const handler of DISK_HANDLERS) {
       if (handler.match(firstWord)) {
-        b.addReason(handler.reason(firstWord));
-        if (handler.extra) {
-          for (const extra of handler.extra(firstWord, rest)) {
-            b.addReason(extra);
-          }
-        }
-        b.setSeverity(handler.severity);
-        b.markDanger();
+        const extras = handler.extra ? handler.extra(firstWord, rest) : [];
+        if (handler.severity === "high") b.high(handler.reason(firstWord));
+        else b.danger(handler.reason(firstWord));
+        for (const extra of extras) b.note(extra);
         return b.build();
       }
     }
@@ -70,7 +66,7 @@ export const DiskEvaluator: RiskEvaluator = {
     if (scan) {
       // Medium, not dangerous: read-only traversal, but heavy and
       // conspicuous — the dspa floor stops it with the same dedicated reason.
-      b.addMedium(`full filesystem scan (${scan} /)`);
+      b.medium(`full filesystem scan (${scan} /)`);
       return b.build();
     }
 

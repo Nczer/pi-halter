@@ -1,5 +1,5 @@
 import { EvaluationBuilder } from "./builder";
-import { EvalCache, RiskEvaluator } from "./types";
+import { EvalCache, EvaluatorResult, RiskEvaluator } from "./types";
 import { getFirstWord, isGitDangerous, parseGitSubcommand } from "../segment-helpers";
 
 /**
@@ -7,7 +7,7 @@ import { getFirstWord, isGitDangerous, parseGitSubcommand } from "../segment-hel
  */
 export const GitEvaluator: RiskEvaluator = {
   name: "git",
-  evaluate(seg, cwd, cache): ReturnType<EvaluationBuilder["build"]> {
+  evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
     const b = new EvaluationBuilder();
@@ -23,18 +23,18 @@ export const GitEvaluator: RiskEvaluator = {
       const sub = parsed?.sub ?? "?";
       const subArgs = parsed?.subArgs ?? [];
       const forcePush = sub === "push" && (subArgs.includes("--force") || subArgs.includes("--force-with-lease") || subArgs.includes("-f"));
-      // Destructive git ops are high; a plain (non-force) push is a normal
-      // remote write — medium.
-      if (sub === "push" && !forcePush) b.setMedium(); else b.setHigh();
-      b.markDanger();
       // Include specific flag context so prompts show why it's dangerous
-      if (sub === "reset")      b.addReason(`git reset --hard (discards uncommitted changes)`);
-      else if (sub === "push")  b.addReason(forcePush ? `git push --force (rewrites remote history)` : `git push (writes to remote)`);
-      else if (sub === "clean") b.addReason(`git clean -fdx (deletes untracked files)`);
-      else if (sub === "rm")    b.addReason(`git rm (removes files from working tree)`);
-      else if (sub === "reflog") b.addReason(`git reflog expire (removes recovery history)`);
-      else if (sub === "gc")   b.addReason(`git gc --prune (permanently deletes objects)`);
-      else                      b.addReason(`git ${sub} (dangerous)`);
+      const reason =
+        sub === "reset" ? `git reset --hard (discards uncommitted changes)`
+        : sub === "push" ? (forcePush ? `git push --force (rewrites remote history)` : `git push (writes to remote)`)
+        : sub === "clean" ? `git clean -fdx (deletes untracked files)`
+        : sub === "rm" ? `git rm (removes files from working tree)`
+        : sub === "reflog" ? `git reflog expire (removes recovery history)`
+        : sub === "gc" ? `git gc --prune (permanently deletes objects)`
+        : `git ${sub} (dangerous)`;
+      // Destructive git ops are high; a plain (non-force) push is a normal
+      // remote write — medium, still dangerous.
+      if (sub === "push" && !forcePush) b.danger(reason); else b.high(reason);
     }
 
     return b.build();
