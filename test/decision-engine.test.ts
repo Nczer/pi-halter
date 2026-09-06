@@ -1807,3 +1807,36 @@ describe("Bash: D10 trusted package run forms", () => {
     expect(wrapped.kind).toBe("prompt");
   });
 });
+
+describe("Bare location tokens (FastAllow must not out-run the base)", () => {
+  // 2026-09-06: FastAllow's path-prefix checks missed the bare forms —
+  // `ls ..` and `ls ~`/`du ~` auto-allowed although the parser collects
+  // them as outside paths in the full pipeline.
+  it("ls .. prompts (parent of the contract cwd is outside the bar)", async () => {
+    const store = createStore();
+    const d = await decide({ type: "bash", command: "ls ..", cwd }, store);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("ls ~ prompts (word-initial tilde is $HOME — outside the bar)", async () => {
+    const store = createStore();
+    const d = await decide({ type: "bash", command: "ls ~", cwd }, store);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("du ~ prompts (recursive $HOME read)", async () => {
+    const store = createStore();
+    const d = await decide({ type: "bash", command: "du ~", cwd }, store);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("echo ~ auto-allows like its absolute twin (echo's args are not path references)", async () => {
+    // Control: echo is not path-aware — its arguments are never dereferenced,
+    // so a bare ~ in echo's args is not a location token (design, not a gap).
+    const store = createStore();
+    const twin = await decide({ type: "bash", command: `echo ${home}`, cwd }, store);
+    expect(twin.kind).toBe("auto-allow");
+    const d = await decide({ type: "bash", command: "echo ~", cwd }, store);
+    expect(d.kind).toBe("auto-allow");
+  });
+});
