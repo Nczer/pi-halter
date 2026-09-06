@@ -1840,3 +1840,23 @@ describe("Bare location tokens (FastAllow must not out-run the base)", () => {
     expect(d.kind).toBe("auto-allow");
   });
 });
+
+describe("= in a bare filename (symlink probe is existence-gated, not `=`-skipped)", () => {
+  it("a cwd symlink named a=b pointing outside prompts", async () => {
+    // 2026-09-06: checkBareSymlinkTokens skipped tokens containing `=`, so a
+    // symlink literally named `notes=v2.md → /home/u` bypassed the probe in
+    // every layer. The probe is existence-gated, so probing `=`-tokens is
+    // exact (a real K=V assignment names no file).
+    const link = path.join(cwd, "notes=v2.md");
+    try { fs.symlinkSync(home, link); } catch { /* exists already */ }
+    const store = createStore();
+    const d = await decide({ type: "bash", command: "cat notes=v2.md", cwd }, store);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("a non-existent =-named token still fast-allows", async () => {
+    const store = createStore();
+    const d = await decide({ type: "bash", command: "cat missing=x.log", cwd }, store);
+    expect(d.kind).toBe("auto-allow");
+  });
+});
