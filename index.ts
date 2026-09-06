@@ -4,7 +4,7 @@ import { handleBash, handleFile, handleTool } from "./handlers";
 import { loadPlugins, setLoadedPlugins } from "./plugins/loader";
 import { isDspActive, setDspActive } from "./modes/dsp-mode";
 import { isDspatActive, resetDspat, setDspatActive } from "./modes/dspat-mode";
-import { isDspaActive, resetDspa, setDspaActive } from "./modes/dspa-mode";
+import { isDspaActive, persistDspaMode, readPersistedMode, resetDspa, setDspaActive } from "./modes/dspa-mode";
 import { onStatusChange } from "./modes/status-bus";
 import { isDecisionLogEnabled, setDecisionLogEnabled } from "./gate/decision-log";
 import {readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, JudgeSettings} from "./judge/judge";
@@ -48,6 +48,25 @@ export default async function halterExtension(pi: ExtensionAPI) {
   // notifyStatus on state changes; the unified widget is the listener.
   // Without this registration the modes' state changes are silent (no UI).
   onStatusChange(updateWidget);
+
+  // ── Session start: restore the persistent startup mode ──
+  // /dspa is the only session-persistent mode (settings-ext.json,
+  // halter.mode): a /dspa toggle survives restart AND /reload (the module
+  // state is fresh on reload, so the restore re-applies exactly). /dsp and
+  // /dspat are session-scoped by design. Counters stay session-scoped even
+  // when the mode persists — they are session-health stats.
+  pi.on("session_start", async (_event, ctx) => {
+    if (readPersistedMode() === "dspa" && !isDspaActive()) {
+      applyMode(ctx, "dspa");
+      if (ctx.hasUI) {
+        try {
+          ctx.ui.notify("DSPA ON (restored from settings) — /dspa to toggle", "info");
+        } catch {
+          /* toast must never break startup */
+        }
+      }
+    }
+  });
 
   // ── Session shutdown ──
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -101,13 +120,15 @@ export default async function halterExtension(pi: ExtensionAPI) {
   // ── /dspa command (exclusive with /dspat and /dsp) ──
   pi.registerCommand("dspa", {
     description:
-      "Toggle judge auto-allow mode: operations passing the hard gate AND an approving low-risk judge verdict run without a prompt (visible toast); everything else prompts as usual. Exclusive with /dspat and /dsp",
+      "Toggle judge auto-allow mode: operations passing the hard gate AND an approving low-risk judge verdict run without a prompt (visible toast); everything else prompts as usual. Exclusive with /dspat and /dsp. The toggle persists across sessions (settings-ext.json)",
     handler: async (_args, ctx) => {
       const displaced = applyMode(ctx, isDspaActive() ? "manual" : "dspa");
+      // The toggle persists: the next session (and a /reload) starts here.
+      persistDspaMode(isDspaActive());
       ctx.ui.notify(
         isDspaActive()
-          ? `DSPA ON — gate+judge-approved operations auto-allow (toast per allow)${displaced ? ` (${displaced} off)` : ""}`
-          : "DSPA OFF — all prompts restored",
+          ? `DSPA ON (persists across sessions) — gate+judge-approved operations auto-allow (toast per allow)${displaced ? ` (${displaced} off)` : ""}`
+          : "DSPA OFF (persists across sessions) — all prompts restored",
         "info",
       );
     },

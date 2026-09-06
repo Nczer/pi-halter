@@ -67,7 +67,12 @@ pi tool call
 
 Mode switching resets the leaving judge mode's session stats. The regimes are
 one machine in `modes/`; `index.ts` enforces exclusivity at the commands
-(`/dsp`, `/dspa`, `/dspat`).
+(`/dsp`, `/dspa`, `/dspat`). The `/dspa` toggle is the only session-persistent
+mode: it is stored in `settings-ext.json` (`halter.mode`, written by the
+`/dspa` command, applied on `session_start` — restart and `/reload` both
+re-apply it). `/dsp` (the full bypass) and `/dspat` never touch the setting —
+a new session must never silently start with all checks skipped. Session-health
+counters stay session-scoped even when the mode persists.
 
 ## Manual regime (the contract)
 
@@ -428,7 +433,7 @@ judge/
   path-resolver.ts        LLM resolution of opaque tokens (advisory → binding)
 modes/
   dsp-mode.ts             /dsp toggle state
-  dspa-mode.ts            /dspa toggle + session-health counters
+  dspa-mode.ts            /dspa toggle + session-health counters + persistent startup mode (settings-ext.json)
   dspat-mode.ts           /dspat toggle + agreement stats
   status-bus.ts           notifyStatus(ctx); index.ts wires the widget refresh
 ui/

@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.18.0 — 2026-09-06
+
+`/dspa` persists across sessions; two cd-threading under-threads closed.
+
+- **`/dspa` persists across sessions** — the toggle is stored in
+  `settings-ext.json` (`halter.mode`, materialized alongside the judge
+  and decision-log settings) and restored on `session_start` — restart
+  and `/reload` both re-apply it (the toast says "restored from
+  settings"). `/dspa` off clears it; `/dsp` (the full bypass) and
+  `/dspat` (advisory) never touch the setting — a new session must never
+  silently start with all checks skipped. Session-health counters stay
+  session-scoped even when the mode persists; settings errors fail
+  closed to manual.
+- **A branch `cd` never recovers an unknown base** (analysis fix) — a
+  conditional-branch cd (if/else/case body) may not have run, so it now
+  threads only over a base that was already known. Pre-fix,
+  `cd $D; if [ -f x ]; then cd /inbar; fi; cat y` resolved `y` against
+  the in-bar target and auto-allowed, while at runtime (branch not run)
+  the cwd is wherever `$D` points — an unflagged access. Known-pre-base
+  threading (the `if [ -d ]`-then-cd pattern) and definite-cd recovery
+  are untouched.
+- **`&` after a `;` backgrounds the right list** (parser fix) — the
+  compound-body rework moved `;` out of the operator set without
+  advancing the `&` reach-back marker, so `a; b & c` backgrounded `a`
+  instead of `b`: `a`'s cd was skipped in cwd threading (under-thread)
+  while `b`'s (a subshell) threaded into the main base (over-thread).
+  The marker now advances at every chain-start boundary and is scoped
+  per container, so a body's `&` can no longer reach past its boundary.
+
 ## 3.17.0 — 2026-09-03
 
 Judge packet: edits show the after-edit file view; infra failures are

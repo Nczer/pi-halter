@@ -13,6 +13,7 @@
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { notifyStatus } from "./status-bus";
+import { readSettingsFile, writeSettings } from "../halter-settings";
 
 let active = false;
 let model: string | null = null;
@@ -34,6 +35,32 @@ let judging: 1 | 2 | null = null;
 export function setDspaActive(on: boolean): void {
   active = on;
   if (!on) resetCounters();
+}
+
+/**
+ * Persistent startup mode (settings-ext.json, `halter.mode`): the mode a
+ * NEW session starts in. /dspa is the only session-persistent mode — /dsp
+ * (the full bypass) and /dspat (advisory) are session-scoped by design,
+ * and a persisted /dsp must never be the silent default of a new session.
+ * The /dspa command is the only writer (index.ts); session_start applies it.
+ */
+export type PersistedMode = "manual" | "dspa";
+
+/**
+ * Read the persisted startup mode. Fail-closed on any settings error:
+ * a broken settings file must never start a session in dspa.
+ */
+export function readPersistedMode(filePath?: string): PersistedMode {
+  try {
+    return readSettingsFile(filePath).mode === "dspa" ? "dspa" : "manual";
+  } catch {
+    return "manual";
+  }
+}
+
+/** Persist the /dspa toggle ("dspa" when on, "manual" when off). */
+export function persistDspaMode(on: boolean, filePath?: string): void {
+  writeSettings({ mode: on ? "dspa" : "manual" }, filePath);
 }
 
 export function isDspaActive(): boolean {
