@@ -48,6 +48,21 @@ describe("sleep allowlist", () => {
   );
 });
 
+describe("`&` after a ; separator does not misbackground the first cd (53269a5 regression)", () => {
+  const d = (cmd: string) => decide({ type: "bash", command: cmd, cwd: CWD }, createStore());
+
+  it("the foreground cd threads; the backgrounded cd is skipped", async () => {
+    // Runtime: `cd /var/tmp` persists (foreground); `cd /tmp` runs in a
+    // subshell; `ls x` lists /var/tmp → outside prompt.
+    // Pre-fix: the `&` reach-back crossed the `;` boundary, backgrounding
+    // `cd /var/tmp` — ls resolved under the session cwd and auto-allowed.
+    const dec = await d("cd /var/tmp; cd /tmp & ls x");
+    expect(dec.kind).toBe("prompt");
+    if (dec.kind !== "prompt") return;
+    expect((dec.promptData as BashPromptData).outsideDirs).toContain("/var/tmp");
+  }, 15000);
+});
+
 describe("trackEffectiveCwd", () => {
   it("threads absolute cd to subsequent segments", () => {
     expect(trackEffectiveCwd([seg("cd /tmp"), seg("ls")], BASE)).toEqual([BASE, "/tmp"]);
