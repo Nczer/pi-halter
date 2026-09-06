@@ -74,6 +74,7 @@ import {
   NETWORK_URL_RE,
   NETWORK_URL_RE_GLOBAL,
   gitNetworkSubcommand,
+  goCargoFetchForm,
   skipEnvPrefixes,
 } from "../config";
 
@@ -190,6 +191,8 @@ function networkHit(command: string, segments: string[]): string | null {
     if (NETWORK_COMMANDS.has(first)) return first;
     const sub = gitNetworkSubcommand(words);
     if (sub) return `git ${sub}`;
+    const gc = goCargoFetchForm(words);
+    if (gc) return gc;
   }
   const m = command.match(NETWORK_URL_RE);
   return m ? m[0].slice(0, 60) : null;
