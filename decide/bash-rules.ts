@@ -99,6 +99,11 @@ export const FastAllowRule: BashRule = (req) => {
     if (token.startsWith("/") || token.startsWith("~/") || token.startsWith("./") || token.startsWith("../")) {
       return null;
     }
+    // Bare location tokens the prefix checks above miss: `..` (the parser
+    // collects it as a path — the full pipeline judges it against the base,
+    // so `ls ..` must not fast-allow) and word-initial `~`/`~user` (tilde
+    // expansion — `du ~` is a recursive $HOME read, outside the bar).
+    if (token === ".." || token.startsWith("~")) return null;
     // --flag=/abs/path embeds a path that isn't caught by the prefix checks above.
     // Fall through to SafetyRule so tree-sitter handles it properly.
     const eqIdx = token.indexOf("=");
