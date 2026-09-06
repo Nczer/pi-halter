@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.19.0 — 2026-09-06
+
+Pass-2 audit: five gaps where a command slipped past a layer its unquoted,
+bare, or reordered twin never would have. All fixes fail closed — more
+prompts, fewer auto-allows.
+
+- **The rm carve-out honors segment order** — the create-then-delete
+  exemption applied to a self-write ANYWHERE in the command, so
+  `rm f && echo x > f` (delete, then recreate outside the base) was
+  judgeable. A self-write now counts only for an rm in a LATER segment,
+  and every write must be cleaned by a later rm (`> f; rm f; > f` stops).
+- **The D14 loopback exemption accepts only strict loopback addresses** —
+  `startsWith("127.")` took DNS names (`127.0.0.1.attacker.com`) and
+  userinfo smuggling (`127.0.0.1@evil.com` — real host: evil.com) as
+  loopback, so curl to them was judgeable off-box egress. Now: strict
+  127.0.0.0/8 quads (octets ≤ 255), `::1` bare or [bracketed], or exact
+  `localhost`.
+- **Floor checks dequote command words** — the shell strips one quote pair,
+  but the floor compared raw tokens: `"git" push`, `"ssh" host`, and
+  `git "-C" dir push` evaded the egress stop, and `"$f" -rf` evaded the
+  obscured-command check. First words (egress, obscured, package-run forms)
+  are now dequoted; `findNetworkEgress`/`gitNetworkSubcommand` (shared with
+  the packet annotation) get the same treatment.
+- **FastAllow stops on bare location tokens** — the prefix checks missed
+  `..` and word-initial `~`: `ls ..` and `du ~` auto-allowed although the
+  full pipeline sees the parent / `$HOME` as outside. The tokens now fall
+  through to the pipeline.
+- **Bare `~` and `~user` join the path set** — `isPathCandidate` only
+  accepted `~/…`, so `du ~` (a recursive `$HOME` read) and `ls ~nczer`
+  auto-allowed in every layer while `ls /home/nczer` prompted. `expandTilde`
+  resolves `~user` (current user → `os.homedir()`, other users →
+  `/home/<user>` — conservative).
+
 ## 3.18.0 — 2026-09-06
 
 `/dspa` persists across sessions; two cd-threading under-threads closed.
