@@ -622,8 +622,19 @@ function checkRmTargets(
   cwd: string,
   isInsideBase: (p: string) => boolean,
 ): { reason: string | null; exempt: Set<string> } {
-  const written = new Set<string>();
-  const rmTargets = new Set<string>();
+  // ORDER matters for the carve-out (create-THEN-delete): a self-write
+  // counts only for rm targets in LATER segments, and a write is "cleaned"
+  // only by an rm in a LATER segment. `rm f && echo x > f` (delete-then-
+  // create) leaves f existing outside the base and gets no exemption — the
+  // contract (header, D8) is a write "in an earlier segment AND rms".
+  const writtenBefore = new Set<string>(); // writes from strictly earlier segments
+  const writesAt = new Map<string, number[]>(); // path → writing segment indices
+  const rmsAt = new Map<string, number[]>(); // path → rm segment indices
+  const record = (m: Map<string, number[]>, p: string, i: number) => {
+    const idxs = m.get(p);
+    if (idxs) idxs.push(i);
+    else m.set(p, [i]);
+  };
   const noPreserveRoot = () => ({ reason: "rm with --no-preserve-root" as string | null, exempt: new Set<string>() });
 
   // First pass: collect self-written paths (ordered by segment) and rm targets.
@@ -658,7 +669,7 @@ function checkRmTargets(
         if (recursive) {
           try {
             const st = fs.statSync(resolved);
-            const selfWritten = written.has(resolved);
+            const selfWritten = writtenBefore.has(resolved);
             if (!st.isDirectory() && !st.isFile() && !selfWritten) {
               return { reason: `rm -r target is not a file or directory (${a.slice(0, 60)})`, exempt: new Set() };
             }
@@ -669,10 +680,10 @@ function checkRmTargets(
             /* doesn't exist — nothing to delete */
           }
         }
-        rmTargets.add(resolved);
+        record(rmsAt, resolved, i);
         if (
           !isInsideBase(resolved) &&
-          !written.has(resolved) &&
+          !writtenBefore.has(resolved) &&
           !isTmpScratchTarget(resolved, recursive)
         ) {
           return { reason: `rm target outside base (${a.slice(0, 60)})`, exempt: new Set() };
@@ -693,7 +704,8 @@ function checkRmTargets(
         if (RM_FORBIDDEN_TARGET_RE.test(target)) continue; // glob/var/computed — never a concrete self-write
         const resolved = resolvePathReal(expandTilde(target), cwd);
         if (isDevNullish(resolved)) continue;
-        written.add(resolved);
+        writtenBefore.add(resolved);
+        record(writesAt, resolved, i);
       }
       // Self-write commands per pipeline stage — `a | tee f` hides tee
       // behind the segment's first word. splitOnPipe is quote-aware.
@@ -706,21 +718,31 @@ function checkRmTargets(
           if (t.startsWith("-") || /^[\d<>]/.test(t) || RM_FORBIDDEN_TARGET_RE.test(target)) continue;
           const resolved = resolvePathReal(expandTilde(target), cwd);
           if (isDevNullish(resolved)) continue;
-          written.add(resolved);
+          writtenBefore.add(resolved);
+          record(writesAt, resolved, i);
         }
       }
     }
   }
 
-  // Every self-written path must be in-base or cleaned up by this command.
-  for (const w of written) {
-    if (!isInsideBase(w) && !rmTargets.has(w)) {
+  // Every self-written path must be in-base or cleaned up by a LATER rm in
+  // this command (a write after its rm survives — the outside write stands).
+  for (const [w, idxs] of writesAt) {
+    // EVERY write instance must be followed by an rm — `> f; rm f; > f`
+    // leaves the last write standing outside the base.
+    const cleaned = idxs.every((i) => (rmsAt.get(w) ?? []).some((j) => j > i));
+    if (!isInsideBase(w) && !cleaned) {
       return { reason: `write-redirect outside base, not cleaned by this command (${w.slice(0, 60)})`, exempt: new Set() };
     }
   }
 
-  // Self-written targets are exempt from the floor's outside-base stop —
-  // the create-then-delete set is judgeable (D8 /tmp-scratch targets are
-  // inside the manual bar via config and never reach the outside set).
-  return { reason: null, exempt: new Set([...rmTargets].filter((t) => written.has(t))) };
+  // Self-written targets (written in an EARLIER segment) are exempt from
+  // the floor's outside-base stop — the create-then-delete set is judgeable
+  // (D8 /tmp-scratch targets are inside the manual bar via config and never
+  // reach the outside set).
+  const exempt = new Set<string>();
+  for (const [t, idxs] of rmsAt) {
+    if ((writesAt.get(t) ?? []).some((i) => idxs.some((j) => i < j))) exempt.add(t);
+  }
+  return { reason: null, exempt };
 }

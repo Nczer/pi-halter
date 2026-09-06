@@ -955,3 +955,33 @@ describe("D16: every floor stop is advisory (2026-09-02)", () => {
     }
   });
 });
+
+describe("rm carve-out — segment order (create-THEN-delete only)", () => {
+  it("delete-then-create is not the carve-out: the outside write stands", async () => {
+    // 2026-09-06: the carve-out exempted rm targets with a self-write ANYWHERE
+    // in the command — `rm f && echo x > f` (delete, then create outside) got
+    // the create-then-delete exemption. The contract is an EARLIER write.
+    const r = await checkDspaGate(bashPd("rm /home/u/out.log && echo x > /home/u/out.log"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("outside base");
+  });
+
+  it("a write with no rm still stops (outside write control)", async () => {
+    const r = await checkDspaGate(bashPd("echo x > /home/u/out.log"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("outside base");
+  });
+
+  it("a write surviving its rm (re-written after) still stops", async () => {
+    const r = await checkDspaGate(
+      bashPd("echo a > /home/u/out.log && rm /home/u/out.log && echo b > /home/u/out.log"), store,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("outside base");
+  });
+
+  it("create-then-delete of an outside file stays judgeable (contract control)", async () => {
+    const r = await checkDspaGate(bashPd("echo x > /home/u/out.log && rm /home/u/out.log"), store);
+    expect(r).toEqual({ ok: true });
+  });
+});
