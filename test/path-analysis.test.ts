@@ -32,6 +32,21 @@ describe("expandTilde", () => {
     expect(expandTilde("~")).toBe(home);
   });
 
+  it("expands ~<current user> to home", () => {
+    const me = require("os").userInfo().username;
+    expect(expandTilde(`~${me}`)).toBe(home);
+  });
+
+  it("expands ~<other user> to /home/<user> (conservative passwd model)", () => {
+    // 2026-09-06: the shell expands ~user via the passwd database; statically
+    // we model the current user (well-defined) and others as /home/<user>
+    // — a non-existent or elsewhere home still lands outside the base.
+    const me = require("os").userInfo().username;
+    if (me === "root") return; // running as root — ~root IS the current user
+    expect(expandTilde("~root")).toBe("/home/root");
+    expect(expandTilde("~root/.ssh")).toBe("/home/root/.ssh");
+  });
+
   it("leaves absolute paths alone", () => {
     expect(expandTilde("/absolute")).toBe("/absolute");
   });

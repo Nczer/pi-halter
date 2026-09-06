@@ -736,11 +736,13 @@ function isPathCandidate(token: string): boolean {
   // Bare slashes (// JS comments, lone /)
   if (BARE_SLASH_RE.test(token)) return false;
 
-  // Must look like a path
+  // Must look like a path. `~` covers every tilde-expansion form (bare `~`,
+  // `~/…`, `~user`, `~user/…` — expandTilde resolves each; a QUOTED `"~"`
+  // is a literal filename and arrives quoted, so it is not a candidate).
   return (
     token.startsWith("/") ||
     token.startsWith("./") ||
-    token.startsWith("~/") ||
+    token.startsWith("~") ||
     token.includes("..")
   );
 }

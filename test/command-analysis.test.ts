@@ -564,3 +564,28 @@ describe("confirmed resolutions converge the approval bar (D12)", () => {
     expect(a.prompt.outsideDirs).toContain(prefix);
   });
 });
+
+describe("Tilde path tokens (word-initial ~)", () => {
+  // 2026-09-06: isPathCandidate only accepted `~/…`, so bare `~` and
+  // `~user` never joined the path set — `du ~` was a recursive $HOME read
+  // the analyzer never saw.
+  it("bare ~ joins the path set (as $HOME)", async () => {
+    const a = await analyzeCommand("ls ~", cwd);
+    expect(a.paths).toContain(home);
+  });
+
+  it("~user joins the path set (/home/<user>)", async () => {
+    const a = await analyzeCommand("ls ~root", cwd);
+    expect(a.paths).toContain("/home/root");
+  });
+
+  it("~user/… resolves below the modeled home", async () => {
+    const a = await analyzeCommand("cat ~root/.bashrc", cwd);
+    expect(a.paths).toContain("/home/root/.bashrc");
+  });
+
+  it("cd ~ is navigation, not a path (control)", async () => {
+    const a = await analyzeCommand("cd ~", cwd);
+    expect(a.paths).not.toContain(home);
+  });
+});
