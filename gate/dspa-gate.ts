@@ -197,12 +197,29 @@ function urlHost(url: string): string {
   return url.replace(/^https?:\/\//, "").split("/")[0];
 }
 
-/** Loopback hosts: 127.0.0.0/8, ::1 (bare or [bracketed]), localhost. */
+/** Strict 127.0.0.0/8 quad (each octet ≤ 255). */
+const LOOPBACK_V4_RE = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+
+/**
+ * Loopback hosts: a STRICT 127.0.0.0/8 quad, ::1 (bare or [bracketed]), or
+ * localhost (exact). The old `startsWith("127.")` accepted hostnames that
+ * merely LOOK like loopback — `127.0.0.1.attacker.com` is a DNS name that
+ * can resolve anywhere, and `127.0.0.1@evil.com` carries evil.com as its
+ * real host behind a userinfo prefix. Both now fail the check (floor stop).
+ */
 function isLoopbackHost(hostWithPort: string): boolean {
-  const h = hostWithPort.startsWith("[")
-    ? hostWithPort.slice(1, hostWithPort.indexOf("]"))
-    : hostWithPort.split(":")[0];
-  return h === "localhost" || h === "::1" || h.startsWith("127.");
+  let h = hostWithPort;
+  if (h.startsWith("[")) {
+    const close = h.indexOf("]");
+    if (close < 0) return false;
+    return h.slice(1, close) === "::1";
+  }
+  const at = h.lastIndexOf("@");
+  if (at !== -1) h = h.slice(at + 1); // userinfo — the host is what follows
+  const noPort = h.split(":")[0];
+  if (noPort === "localhost" || noPort === "::1") return true;
+  if (!LOOPBACK_V4_RE.test(noPort)) return false;
+  return noPort.split(".").slice(1).every((o) => Number(o) <= 255);
 }
 
 /**
