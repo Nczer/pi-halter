@@ -88,6 +88,28 @@ describe("parseCommand: segments", () => {
   });
 });
 
+describe("parseCommand: `&` backgrounds exactly the preceding and-or list", () => {
+  const bg = (cmd: string) => parseCommand(cmd, cwd).then(r => r.segments.map(s => s.backgrounded ?? false));
+
+  it("after a ; separator — the first statement is NOT backgrounded (53269a5 regression)", async () => {
+    // `;` is a chain START, not an operator: prevStart must advance at it,
+    // or the `&` reach-back crosses the boundary and backgrounds statement 1.
+    expect(await bg("echo A; echo B & echo C && echo D")).toEqual([false, true, false, false]);
+  });
+
+  it("inside a nested compound body — no reach-back past the container boundary", async () => {
+    expect(await bg("echo A; for i in 1; do echo B & echo C; done")).toEqual([false, true, false]);
+  });
+
+  it("double & — each & backgrounds its own preceding list", async () => {
+    expect(await bg("a & b & c")).toEqual([true, true, false]);
+  });
+
+  it("chain head at container start (existing behavior)", async () => {
+    expect(await bg("sleep 1 & cd /tmp && ls")).toEqual([true, false, false]);
+  });
+});
+
 describe("parseCommand: paths", () => {
   it("keeps absolute paths", async () => {
     const r = await parseCommand("cat /etc/hosts", cwd);

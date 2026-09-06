@@ -926,7 +926,13 @@ function extractSegmentsFromNode(
    * mark those segments retroactively.
    */
   const splitOnOp: Handler = (n) => {
-    let prevStart = 0; // index where the previous sibling's segments begin (for & marking)
+    // Absolute index into the shared segments array where the current
+    // and-or list began (for `&` marking). Initialized to the array length
+    // at container entry — a nested body's `&` must never reach back past
+    // this container's boundary — and advanced at EVERY chain-start
+    // boundary (`;`, keywords, implicit newline `;`): the list an `&`
+    // backgrounds is the one that began after the last such boundary.
+    let prevStart = segments.length;
     let prevWasStatement = false;
     // Conditional branch bodies (then/else/case-item) — segments inside are
     // tagged conditionalBranch. A body opens at `then` / `else` / `)` and
@@ -953,18 +959,20 @@ function extractSegmentsFromNode(
         if (branchSave === null) branchSave = branchDepth;
         branchDepth++;
         chainStart = true;
+        prevStart = segments.length;
         prevWasStatement = false;
         continue;
       }
       if (CHAIN_STARTS.has(t)) {
         chainStart = true;
         if (t === "fi" || t === "esac" || t === ";;") endBranch();
+        prevStart = segments.length;
         prevWasStatement = false;
         continue;
       }
       if (STATEMENT_ITEMS.has(t)) {
         if (t === "else_clause" || t === "elif_clause") endBranch(); // the then-body is over
-        if (prevWasStatement) chainStart = true; // implicit ";" between sibling statements
+        if (prevWasStatement) { chainStart = true; prevStart = segments.length; } // implicit ";" between sibling statements
         walk(child);
         prevWasStatement = true;
         continue;
