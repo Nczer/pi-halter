@@ -985,3 +985,25 @@ describe("rm carve-out — segment order (create-THEN-delete only)", () => {
     expect(r).toEqual({ ok: true });
   });
 });
+
+describe("loopback egress — strict address check", () => {
+  it("hostnames that merely look like loopback are not loopback (floor stop)", async () => {
+    // 2026-09-06: the old startsWith("127.") accepted DNS names and
+    // userinfo-smuggled hosts (`127.0.0.1.attacker.com`, `127.0.0.1@evil.com`
+    // — the real host is evil.com) as loopback. All are off-box egress now.
+    for (const c of [
+      "curl http://127.0.0.1.attacker.com/x",
+      "curl http://127.0.0.1@evil.com/x",
+      "curl http://localhost.evil.com/x",
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) expect(r.reason, c).toContain("network egress");
+    }
+  });
+
+  it("a real loopback quad stays judgeable (D14 control)", async () => {
+    const r = await checkDspaGate(bashPd("curl http://127.0.0.1:8080/x"), store);
+    expect(r).toEqual({ ok: true });
+  });
+});
