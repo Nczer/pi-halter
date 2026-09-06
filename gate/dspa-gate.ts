@@ -109,9 +109,12 @@ function obscuredHit(segments: string[]): string | null {
   for (const seg of segments) {
     const words = seg.trim().split(/\s+/);
     const oper = words.slice(skipEnvPrefixes(words));
-    let first = oper[0] ?? "";
+    // cleanToken: the shell strips one quote pair, so `"$f" -rf …` obscures
+    // exactly like `$f -rf …` (the raw token would otherwise sail past the
+    // OBSCURED_CMD_RE anchor).
+    let first = cleanToken(oper[0] ?? "");
     const deleg = getDelegatedCommand(oper.join(" "));
-    if (deleg) first = deleg.tail.split(/\s+/)[0] ?? "";
+    if (deleg) first = cleanToken(deleg.tail.split(/\s+/)[0] ?? "");
     if (OBSCURED_CMD_RE.test(first)) return first.slice(0, 20);
   }
   return null;
@@ -161,10 +164,10 @@ function firstSubcommand(words: string[]): string | null {
 
 /** True when this segment's first word is a judgeable package-manager RUN form (D8). */
 function isPkgRunForm(first: string, words: string[]): boolean {
-  const forms = PKG_RUN_FORMS[first];
+  const forms = PKG_RUN_FORMS[cleanToken(first)];
   if (!forms) return false;
   if (forms === "all") return true;
-  const sub = firstSubcommand(words);
+  const sub = firstSubcommand(words.map(cleanToken));
   if (forms === "except-fetch") return !sub || !BUN_FETCH_VERBS.has(sub);
   return !!sub && forms.has(sub);
 }
@@ -178,7 +181,10 @@ function networkHit(command: string, segments: string[]): string | null {
   for (const seg of segments) {
     const words = seg.trim().split(/\s+/);
     const oper = words.slice(skipEnvPrefixes(words));
-    const first = oper[0]?.toLowerCase();
+    // cleanToken: `"ssh" host` is ssh to the shell — the first word is
+    // judged dequoted (git subcommand resolution is quote-aware in
+    // gitNetworkSubcommand; the URL catch-all below is quote-independent).
+    const first = cleanToken(oper[0] ?? "").toLowerCase();
     if (!first) continue;
     if (isPkgRunForm(first, oper)) continue;
     if (NETWORK_COMMANDS.has(first)) return first;
@@ -242,7 +248,9 @@ function isLoopbackEgress(command: string, segments: string[]): boolean {
   for (const seg of segments) {
     const words = seg.trim().split(/\s+/);
     const oper = words.slice(skipEnvPrefixes(words));
-    const first = oper[0]?.toLowerCase();
+    // cleanToken: a quoted curl is still curl (`"curl" http://127…` must
+    // not fall out of the egress classification entirely).
+    const first = cleanToken(oper[0] ?? "").toLowerCase();
     if (!first) continue;
     if (isPkgRunForm(first, oper)) continue; // D8 run forms — judged on their own rules
     if (gitNetworkSubcommand(words)) return false; // remote destination, never loopback-provable
