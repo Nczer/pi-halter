@@ -202,7 +202,11 @@ export function checkBareSymlinkTokens(
   const checkOne = (t: string): boolean => {
     if (!t || t === "." || t === "..") return false;
     if (t.startsWith("-")) return false;
-    if (t.includes("/") || t.includes("=")) return false;
+    if (t.includes("/")) return false;
+    // NOTE: tokens containing `=` are NOT skipped — a cwd file/symlink can
+    // literally be named `a=b` (the shell reads it as a plain filename in
+    // argument position). The probe below is existence-gated (lstat), so a
+    // real `K=V` assignment or `--flag=value` that names no file no-ops.
     if (/[*?\[\]]/.test(t)) return false; // glob — covered by the glob check
     const candidate = path.join(cwdReal, t);
     let st: fs.Stats;
