@@ -689,6 +689,24 @@ describe("compound-body chain boundaries (over-freeze fix: for/if/case bodies)",
   it("a definite cd after the compound clears the branch uncertainty", async () => {
     expect((await d('if true; then cd /var/tmp; fi; cd /tmp; ls')).kind).toBe("auto-allow");
   }, 15000);
+
+  it("a branch cd never recovers an unknown base (the branch may not have run)", async () => {
+    // Runtime cwd after the if: $D (branch not run) or /tmp (branch run).
+    // Threading /tmp would resolve ls against /tmp — an unflagged access to
+    // wherever $D points. Control without the branch: same prompt.
+    expect((await d('cd $D; cat y')).kind).toBe("prompt");
+    expect((await d('cd $D; if [ -f x ]; then cd /tmp; fi; cat y')).kind).toBe("prompt");
+    // Definite cd still recovers an unknown base (the branch cd didn't touch it).
+    expect((await d('cd $D; if [ -f x ]; then cd /var/tmp; fi; cd /tmp; ls')).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("trackEffectiveCwd: a branch cd threads over a known base, not an unknown one", () => {
+    const branch = (text: string): BashSegment => ({ ...seg(text), conditionalBranch: true });
+    // Known pre-cd base: the branch target threads (the other possibility is the in-bar base).
+    expect(trackEffectiveCwd([seg("cd /tmp"), branch("cd /var/tmp"), seg("ls")], BASE)).toEqual([BASE, "/tmp", "/var/tmp"]);
+    // Unknown pre-cd base: the branch target is only ONE runtime cwd — stays unknown.
+    expect(trackEffectiveCwd([seg("cd $D"), branch("cd /tmp"), seg("ls")], BASE)).toEqual([BASE, null, null]);
+  });
 });
 
 describe("unknown-cwd marker hygiene (log-review display FPs)", () => {

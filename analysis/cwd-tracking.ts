@@ -193,12 +193,14 @@ export function cdBaseBounds(
  *   • backgrounded segment → no change (subshell cd doesn't persist)
  *   • resolvable cd        → thread (absolute literal recovers an unknown base)
  *   • non-literal cd       → unknown (sticky until an absolute literal cd)
- *   • conditional-branch cd (if/elif/else then, case item) → thread, but the
- *     set of DISTINCT branch-cd targets since the last definite cd is
- *     tracked per depth: two or more make the base unknown — each branch may
- *     or may not have run, so "last one wins" would under-flag the other
- *     branch's runtime cwd. One distinct target keeps its base (conservative:
- *     the runtime cwd is that target or the in-bar pre-cd base).
+ *   • conditional-branch cd (if/elif/else then, case item) → thread over a
+ *     KNOWN pre-cd base, but the set of DISTINCT branch-cd targets since the
+ *     last definite cd is tracked per depth: two or more make the base
+ *     unknown — each branch may or may not have run, so "last one wins" would
+ *     under-flag the other branch's runtime cwd. One distinct target keeps
+ *     its base (conservative: the runtime cwd is that target or the in-bar
+ *     pre-cd base). A branch cd NEVER recovers an unknown base — the branch
+ *     may not have run, so the runtime cwd is {target, unknown}.
  */
 export function trackEffectiveCwd(segments: BashSegment[], baseCwd: string): CwdBase[] {
   const result: CwdBase[] = [];
@@ -224,14 +226,19 @@ export function trackEffectiveCwd(segments: BashSegment[], baseCwd: string): Cwd
     if (seg.backgrounded) continue;
     const r = resolveCdTarget(seg, bases[depth]);
     if (r.kind === "thread") {
-      bases[depth] = r.dir;
-      if (seg.conditionalBranch) {
-        // Branch-dependent cd: a second distinct target means the post-
-        // compound runtime cwd is unresolvable (either branch may have run).
-        branchCds[depth].add(r.dir);
-        if (branchCds[depth].size >= 2) bases[depth] = null;
-      } else {
-        branchCds[depth].clear(); // definite cd: the runtime cwd is now exactly r.dir
+      // A branch-dependent cd may not have run: it threads only over a base
+      // that was already known, and never recovers an unknown one (the
+      // branch's target would be just one of several runtime cwds).
+      if (!seg.conditionalBranch || bases[depth] !== null) {
+        bases[depth] = r.dir;
+        if (seg.conditionalBranch) {
+          // Branch-dependent cd: a second distinct target means the post-
+          // compound runtime cwd is unresolvable (either branch may have run).
+          branchCds[depth].add(r.dir);
+          if (branchCds[depth].size >= 2) bases[depth] = null;
+        } else {
+          branchCds[depth].clear(); // definite cd: the runtime cwd is now exactly r.dir
+        }
       }
     } else if (r.kind === "unknown") bases[depth] = null;
   }
