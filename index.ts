@@ -79,7 +79,6 @@ export default async function halterExtension(pi: ExtensionAPI) {
     ctx.ui.setWidget("dsp-warning", undefined);
     ctx.ui.setWidget("dspa", undefined);
     ctx.ui.setWidget("dspat", undefined);
-    ctx.ui.setWidget("dspa", undefined);
     ctx.ui.setWidget("judge", undefined);
   });
 

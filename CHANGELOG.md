@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.20.0 — 2026-09-06
+
+Closes three of the four report-only gaps from the 3.19.0 pass-2 audit (the
+subshell-assignment miss stays report-only: fail-closed, rare, and the fix
+touches the hardened var-resolution core).
+
+- **Explicit go/cargo fetch forms hit the egress floor** — `cargo fetch`,
+  `cargo add`, `cargo update`, `cargo vendor`, `go get`, `go install`,
+  `go mod download`, `go mod tidy` are the D8 fetch class (registry fetch +
+  build-script execution: cargo `build.rs`, go cgo) — previously judgeable
+  like `cargo build`, while the npm/pip equivalents are deterministic stops.
+  The CLIs themselves stay D1-judgeable (`cargo build`, `go run main.go`
+  unchanged); quote-aware, shared by the floor and the packet annotation.
+- **The bare-symlink probe no longer skips `=`-tokens** — a cwd symlink
+  literally named `notes=v2.md` pointing outside (or at a credential)
+  bypassed the probe in every layer. The probe is existence-gated, so
+  `K=V` assignments and `--flag=value` no-op.
+- index.ts: dropped a duplicate `setWidget("dspa")` in session_shutdown.
+
 ## 3.19.0 — 2026-09-06
 
 Pass-2 audit: five gaps where a command slipped past a layer its unquoted,
