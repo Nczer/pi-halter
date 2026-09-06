@@ -314,10 +314,13 @@ export const GIT_GLOBAL_FLAGS = new Set(["-c", "-C", "--git-dir", "--work-tree",
  */
 export function gitNetworkSubcommand(words: string[]): string | null {
   const start = skipEnvPrefixes(words);
-  if (words[start]?.toLowerCase() !== "git") return null;
+  // Quote-aware: the shell strips one pair of surrounding quotes, so
+  // `"git" push` and `git "-C" dir push` are egress exactly like their
+  // unquoted forms (the floor and the packet annotation share this).
+  if (stripQuotes(words[start])?.toLowerCase() !== "git") return null;
   let i = start + 1;
   while (i < words.length) {
-    const a = words[i];
+    const a = stripQuotes(words[i]);
     if (GIT_GLOBAL_FLAGS.has(a)) {
       // -c/-C and --git-dir/--work-tree consume a value argument.
       if (a === "-c" || a === "-C" || a.startsWith("--git-dir") || a.startsWith("--work-tree")) i++;
@@ -328,7 +331,7 @@ export function gitNetworkSubcommand(words: string[]): string | null {
     break;
   }
   if (i >= words.length) return null;
-  const sub = words[i].toLowerCase();
+  const sub = stripQuotes(words[i]).toLowerCase();
   return GIT_NETWORK_SUBCOMMANDS.has(sub) ? sub : null;
 }
 
@@ -363,7 +366,10 @@ export function findNetworkEgress(
   };
   for (const seg of segments) {
     const words = seg.trim().split(/\s+/);
-    const first = words[skipEnvPrefixes(words)]?.toLowerCase();
+    // stripQuotes: a quoted command word ("ssh" host) is the same egress to
+    // the shell — the first word is judged dequoted (git subcommand
+    // resolution is quote-aware in gitNetworkSubcommand).
+    const first = stripQuotes(words[skipEnvPrefixes(words)])?.toLowerCase();
     if (!first) continue;
     if (NETWORK_COMMANDS.has(first)) {
       add(first);

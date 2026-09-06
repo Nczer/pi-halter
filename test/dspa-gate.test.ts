@@ -1007,3 +1007,21 @@ describe("loopback egress — strict address check", () => {
     expect(r).toEqual({ ok: true });
   });
 });
+
+describe("quoted command words (floor quote-awareness)", () => {
+  it("a quoted egress command word is still egress", async () => {
+    // 2026-09-06: the shell strips one quote pair — `"git" push` and
+    // `git "-C" dir push` are egress exactly like their unquoted forms.
+    for (const c of ['"git" push origin main', '"ssh" host', 'git "-C" dir push']) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) expect(r.reason, c).toContain("network egress");
+    }
+  });
+
+  it("a quoted variable command position is obscured", async () => {
+    const r = await checkDspaGate(bashPd('f=rm; "$f" /home/u/notes.txt'), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("obscured");
+  });
+});
