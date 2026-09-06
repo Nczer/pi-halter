@@ -253,4 +253,13 @@ describe("findNetworkEgress", () => {
   it("finds nothing for offline commands", () => {
     expect(findNetworkEgress("ls -la", ["ls -la"])).toEqual({ commands: [], urls: [] });
   });
+
+  it("annotates explicit go/cargo fetch forms (D8 class) and nothing else", () => {
+    expect(findNetworkEgress("cargo fetch", ["cargo fetch"]).commands).toEqual(["cargo fetch"]);
+    expect(findNetworkEgress("go mod download", ["go mod download"]).commands).toEqual(["go mod download"]);
+    expect(findNetworkEgress("go get x", ["go get x"]).commands).toEqual(["go get"]);
+    // non-fetch forms stay clean (D1-judgeable)
+    expect(findNetworkEgress("cargo build", ["cargo build"]).commands).toEqual([]);
+    expect(findNetworkEgress("go run main.go", ["go run main.go"]).commands).toEqual([]);
+  });
 });

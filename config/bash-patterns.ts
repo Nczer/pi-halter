@@ -343,6 +343,46 @@ export const NETWORK_URL_RE = /https?:\/\/[^\s"'`)\]]+/;
 
 export const NETWORK_URL_RE_GLOBAL = new RegExp(NETWORK_URL_RE.source, "g");
 
+/** cargo subcommands that fetch from the crates registry. */
+const CARGO_FETCH_SUBS = new Set(["fetch", "add", "update", "vendor"]);
+
+/** go forms that fetch from the module proxy (`get`, `install`, and the
+ *  `mod` two-word forms `download`/`tidy`). */
+const GO_FETCH_FORMS = new Set(["get", "install", "mod download", "mod tidy"]);
+
+/**
+ * Explicit go/cargo fetch forms — the D8 fetch class (registry fetch +
+ *  build-script execution) the floor stops for npm/pip. go/cargo THEMSELVES
+ *  stay D1-judgeable dangerous commands (`cargo build` is pinned judgeable)
+ *  — only the explicit fetch forms hit the egress floor. Quote-aware like
+ *  gitNetworkSubcommand; go's `-C` consumes a value argument.
+ */
+export function goCargoFetchForm(words: string[]): string | null {
+  const start = skipEnvPrefixes(words);
+  const first = stripQuotes(words[start])?.toLowerCase();
+  if (first !== "cargo" && first !== "go") return null;
+  const sub: string[] = [];
+  let i = start + 1;
+  while (i < words.length && sub.length < 2) {
+    const w = stripQuotes(words[i]);
+    if (w.startsWith("-")) {
+      if (w === "-C") i++; // -C dir consumes its value
+      i++;
+      continue;
+    }
+    sub.push(w.toLowerCase());
+    i++;
+  }
+  if (first === "cargo") {
+    return sub[0] && CARGO_FETCH_SUBS.has(sub[0]) ? `cargo ${sub[0]}` : null;
+  }
+  for (const n of [2, 1]) {
+    const form = sub.slice(0, n).join(" ");
+    if (GO_FETCH_FORMS.has(form)) return `go ${form}`;
+  }
+  return null;
+}
+
 /**
  * All network egress in a command: per-segment OPERATIVE first words that can
  * open a network (or fetch/deploy — see NETWORK_COMMANDS), `git` remote
@@ -377,6 +417,8 @@ export function findNetworkEgress(
     }
     const sub = gitNetworkSubcommand(words);
     if (sub) add(`git ${sub}`);
+    const gc = goCargoFetchForm(words);
+    if (gc) add(gc);
   }
   const urls: string[] = [];
   for (const m of command.matchAll(NETWORK_URL_RE_GLOBAL)) {

@@ -1025,3 +1025,28 @@ describe("quoted command words (floor quote-awareness)", () => {
     if (!r.ok) expect(r.reason).toContain("obscured");
   });
 });
+
+describe("go/cargo explicit fetch forms (D8 class; the CLIs themselves stay D1-judgeable)", () => {
+  it("explicit fetch forms hit the egress floor", async () => {
+    for (const c of [
+      "cargo fetch",
+      "cargo add serde",
+      "cargo update",
+      "go get github.com/x/y",
+      "go install github.com/x/y@latest",
+      "go mod download",
+      "go mod tidy",
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) expect(r.reason, c).toContain("network egress");
+    }
+  });
+
+  it("non-fetch go/cargo forms stay judgeable (D1 control)", async () => {
+    for (const c of ["cargo build", "cargo check", "go build", "go run main.go"]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(true);
+    }
+  });
+});
