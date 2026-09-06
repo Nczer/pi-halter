@@ -59,10 +59,16 @@ export const JUDGE_DEFAULTS: {
   timeoutMs: 8000,
 };
 
-/** Default content of the halter namespace (materialized on first read). */
+/** Default content of the halter namespace (materialized on first read).
+ *
+ * `mode` — the persistent STARTUP mode (modes/dspa-mode.ts): which mode a
+ * new session starts in. Only /dspa is session-persistent ("manual" | "dspa")
+ * — /dsp (the full bypass) and /dspat (advisory) are deliberately
+ * session-scoped and never written here. */
 export const HALTER_DEFAULTS: Record<string, unknown> = {
   decisionLog: false,
   judge: JUDGE_DEFAULTS,
+  mode: "manual",
 };
 
 // Single-slot stat cache (production always reads SETTINGS_PATH; tests pass

@@ -52,6 +52,7 @@ describe("halter-settings", () => {
     expect(readSettingsFile(file)).toEqual({
       decisionLog: false,
       judge: { enabled: true, provider: null, model: null, thinking: "high", timeoutMs: 8000 },
+      mode: "manual",
     });
   });
 
@@ -64,6 +65,7 @@ describe("halter-settings", () => {
     expect(out).toEqual({
       decisionLog: false,
       judge: { enabled: true, provider: null, model: null, thinking: "high", timeoutMs: 8000 },
+      mode: "manual",
     });
     const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
     // The judge section survived the toggle write, and so did another

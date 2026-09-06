@@ -1,7 +1,10 @@
 /**
  * dspa-mode.ts — auto-allow mode state, model-scoped session counters, widget.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
@@ -13,7 +16,10 @@ import {
   getDspaStats,
   updateDspaWidget,
   setDspaJudging,
+  persistDspaMode,
+  readPersistedMode,
 } from "../modes/dspa-mode";
+import { resetSettingsCache } from "../halter-settings";
 import { onStatusChange } from "../modes/status-bus";
 import { updateWidget } from "../ui/widget";
 
@@ -255,5 +261,43 @@ describe("widget (unified halter widget — see widget.ts)", () => {
     setDspaActive(true);
     updateDspaWidget(ctx);
     expect(widgets).toHaveLength(0);
+  });
+});
+
+describe("persistent startup mode (settings-ext.json, halter.mode)", () => {
+  let tmp: string;
+  let file: string;
+
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dspa-persist-"));
+    file = path.join(tmp, "settings-ext.json");
+  });
+  afterAll(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  beforeEach(() => {
+    resetSettingsCache();
+    try { fs.unlinkSync(file); } catch { /* not created */ }
+  });
+
+  it("persist + read round-trip", () => {
+    persistDspaMode(true, file);
+    expect(readPersistedMode(file)).toBe("dspa");
+    persistDspaMode(false, file);
+    expect(readPersistedMode(file)).toBe("manual");
+  });
+
+  it("missing file → manual (fail-closed)", () => {
+    expect(readPersistedMode(file)).toBe("manual");
+  });
+
+  it("corrupt file → manual (fail-closed, never dspa)", () => {
+    fs.writeFileSync(file, "not json {");
+    expect(readPersistedMode(file)).toBe("manual");
+  });
+
+  it("a non-dspa mode value (e.g. hand-written \"dsp\") → manual", () => {
+    fs.writeFileSync(file, JSON.stringify({ halter: { mode: "dsp" } }));
+    expect(readPersistedMode(file)).toBe("manual");
   });
 });
