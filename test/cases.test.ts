@@ -50,6 +50,17 @@ describe("bare-token symlink escape (end-to-end decision)", () => {
     const decision = await decide({ type: "bash", command: "cat plain.txt", cwd: tmp }, createStore());
     expect(decision.kind).toBe("auto-allow");
   });
+
+  it("cat <glob> reaching a bare escaping symlink prompts (never silently allows)", async () => {
+    // The shipped-symlink attack through a natural glob: the repo carries a
+    // benign-named link to an outside file and the agent's `cat l*` would
+    // read the target (glob expansion happens at bash runtime, so the name
+    // decode check alone cannot see it).
+    fs.writeFileSync(path.join(tmp, "readme.md"), "x");
+    fs.symlinkSync("/etc/hostname", path.join(tmp, "lnk-benign"));
+    const decision = await decide({ type: "bash", command: "cat l*", cwd: tmp }, createStore());
+    expect(decision.kind).toBe("prompt");
+  });
 });
 
 // Loop in-list under an allowed root (/tmp): the values are statically

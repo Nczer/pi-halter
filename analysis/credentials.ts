@@ -189,6 +189,12 @@ export function stripShellComments(cmd: string): string {
  * through the normal path resolution, which already follows the parent chain.
  * Quoted names are covered too — quoting prevents glob expansion but not
  * symlink following (`cat "link"` still reads the target).
+ *
+ * Relative GLOBS are expanded at gate time and every match probed the same
+ * way as a bare name: bash expands `cat l*` at runtime, so a shipped symlink
+ * hiding behind a glob is the same threat as the literal name (the name-
+ * decode glob check in checkCommandForCredentialPaths covers only the glob's
+ * SPelling against credential patterns, never its filesystem expansion).
  */
 export function checkBareSymlinkTokens(
   tokens: string[],
@@ -199,16 +205,14 @@ export function checkBareSymlinkTokens(
   let cwdReal: string;
   try { cwdReal = fs.realpathSync(cwd); } catch { cwdReal = path.resolve(cwd); }
 
-  const checkOne = (t: string): boolean => {
-    if (!t || t === "." || t === "..") return false;
-    if (t.startsWith("-")) return false;
-    if (t.includes("/")) return false;
-    // NOTE: tokens containing `=` are NOT skipped — a cwd file/symlink can
-    // literally be named `a=b` (the shell reads it as a plain filename in
-    // argument position). The probe below is existence-gated (lstat), so a
-    // real `K=V` assignment or `--flag=value` that names no file no-ops.
-    if (/[*?\[\]]/.test(t)) return false; // glob — covered by the glob check
-    const candidate = path.join(cwdReal, t);
+  /**
+   * Probe one existing path: a symlink whose real target (or one-level
+   * textual target) matches a deny pattern → denied; escapes cwd → warned
+   * (the real target — same approval bar as reading the target directly);
+   * matches a warn pattern → warned. Regular files/dirs are trusted (they
+   * cannot escape their location). Returns true when a deny matched.
+   */
+  const probePath = (candidate: string, linkDir: string): boolean => {
     let st: fs.Stats;
     try { st = fs.lstatSync(candidate); } catch { return false; }
     if (!st.isSymbolicLink()) return false;
@@ -217,12 +221,13 @@ export function checkBareSymlinkTokens(
     //    catches credential names anywhere along the chain)
     //  - lex: one-level textual readlink (works for DANGLING links, where
     //    realpath cannot follow — a link to a not-yet-existing id_rsa is
-    //    still the attack shape and must be gated)
+    //    still the attack shape and must be gated). A relative target
+    //    resolves against the link's own directory.
     const real = resolvePathReal(candidate, cwd);
     let lex: string | null = null;
     try {
       const tgt = fs.readlinkSync(candidate);
-      lex = path.isAbsolute(tgt) ? path.resolve(tgt) : path.resolve(cwdReal, tgt);
+      lex = path.isAbsolute(tgt) ? path.resolve(tgt) : path.resolve(linkDir, tgt);
     } catch { /* target vanished mid-flight — real path already checked */ }
     const candidates = [real, lex].filter((r): r is string => !!r);
     for (const resolved of candidates) {
@@ -241,6 +246,51 @@ export function checkBareSymlinkTokens(
       if (warnedResult.warned && !warned) warned = warnedResult.matchedRule;
     }
     return false;
+  };
+
+  /**
+   * A relative glob token: bash expands it at runtime, so the set it can
+   * reach is its cwd-anchored expansion — probe every match like a bare
+   * name. Only plain glob characters are expanded: runtime expansions
+   * ($/`) and brace/extended groups are not statically expandable (the path
+   * layer keeps their prefixed forms opaque), and absolute/~/..-anchored
+   * patterns are already resolved (and failed closed on) by the path layer.
+   * Fail closed on expansion errors or >4096 matches — the same bar as
+   * isAllowedRootToken: an unverifiable glob prompts.
+   */
+  const checkGlob = (t: string): boolean => {
+    if (/[$`{}()]/.test(t)) return false;
+    if (t.startsWith("/") || t.startsWith("~")) return false;
+    if (/(^|\/)\.\.(\/|$)/.test(t)) return false; // .. segment → path layer
+    let matches: string[];
+    try {
+      matches = fs.globSync(path.join(cwdReal, t));
+    } catch {
+      if (!warned) warned = t; // can't verify the expansion — prompt
+      return false;
+    }
+    if (matches.length > 4096) {
+      if (!warned) warned = t; // too many to verify — prompt
+      return false;
+    }
+    for (const m of matches) {
+      if (probePath(m, path.dirname(m))) return true;
+    }
+    return false;
+  };
+
+  const checkOne = (t: string): boolean => {
+    if (!t || t === "." || t === "..") return false;
+    if (t.startsWith("-")) return false;
+    // Globs are expanded and probed below — bash expands them at runtime,
+    // so a shipped symlink behind a glob is the same threat as the name.
+    if (/[*?\[\]]/.test(t)) return checkGlob(t);
+    if (t.includes("/")) return false; // literal with a slash → path layer
+    // NOTE: tokens containing `=` are NOT skipped — a cwd file/symlink can
+    // literally be named `a=b` (the shell reads it as a plain filename in
+    // argument position). The probe below is existence-gated (lstat), so a
+    // real `K=V` assignment or `--flag=value` that names no file no-ops.
+    return probePath(path.join(cwdReal, t), cwdReal);
   };
 
   // Skip token 0 (the command name — a bare name is looked up in PATH, not
