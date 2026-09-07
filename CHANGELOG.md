@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.21.0 — 2026-09-06
+
+- **Simplified the DSP widget line** — `⚠ DSP MODE — all permissions
+  bypassed ⚠` → `⚠ DSP`; the warning is constant for the whole bypass,
+  so the glyph + name carry it. The DSPA/DSPAT line descriptions stay:
+  those fallbacks only render in the pre-first-op state (zero counters /
+  no recorded outcome — session start, re-arm, model switch), where the
+  description is the line's only content.
+
 ## 3.20.0 — 2026-09-06
 
 Closes three of the four report-only gaps from the 3.19.0 pass-2 audit (the

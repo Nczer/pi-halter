@@ -190,13 +190,15 @@ function displayPaths(paths: string[], cap: number): string {
 /**
  * The single halter status widget (below the editor):
  *
- *   ⚠ DSP MODE — all permissions bypassed ⚠        (DSP active — alone)
+ *   ⚠ DSP                                          (DSP active — alone)
  *   » DSPA: 79a 3g 2r 1c 2d — last: <target>        (DSPA active)
  *     (compact session-health counts, non-zero only: a auto-allowed,
  *      g floor stop, r judge reject, c declined (approve, risk too high),
- *      d defer/no verdict. A model tag `(Name)` appears only when the judge
- *      model differs from the session model — the status line below already
- *      names that one.)
+ *      d defer/no verdict. The description text shows while all counts are
+ *      zero — the pre-first-op state (session start, re-arm, model switch),
+ *      where it is the line's only content. A model tag `(Name)` appears
+ *      only when the judge model differs from the session model — the
+ *      status line below already names that one.)
  *   ◎ DSPAT: judge advises… — M/N agreed — last: …  (DSPAT active)
  *   · R/W: … · R: … · Bash: … · Pkg: … · Cwd: … · Tools: … (one line)
  *
@@ -250,7 +252,7 @@ export function updateWidget(ctx: ExtensionContext): void {
         // widget shows the warning line alone (pre-merge: "halter" was
         // cleared and a separate "dsp-warning" widget showed the same line).
         lines.push(
-          truncateToWidth(theme.fg("error", theme.bold("⚠ DSP MODE — all permissions bypassed ⚠")), width),
+          truncateToWidth(theme.fg("error", theme.bold("⚠ DSP")), width),
         );
         return lines;
       }
@@ -282,14 +284,12 @@ export function updateWidget(ctx: ExtensionContext): void {
         if (s.deny > 0) counts.push(`${s.deny}r`);
         if (s.declined > 0) counts.push(`${s.declined}c`);
         if (s.defer > 0) counts.push(`${s.defer}d`);
+        const stage = getDspaJudgingStage();
         const main =
           (counts.length > 0
             ? `» DSPA${modelTag}: ${counts.join(" ")}`
             : `» DSPA${modelTag}: auto-allowing gate+judge-approved operations`) +
-          (() => {
-            const st = getDspaJudgingStage();
-            return st ? ` — judging stage ${st}…` : "";
-          })();
+          (stage ? ` — judging stage ${stage}…` : "");
         lines.push(modeLine(width, theme, main, s.lastTarget ? [`last: ${s.lastTarget.replace(homedir() + "/", "~/")}`] : []));
       }
 
