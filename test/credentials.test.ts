@@ -332,6 +332,8 @@ describe("checkBareSymlinkTokens", () => {
     fs.symlinkSync(path.join(home, ".ssh"), path.join(tmp, "ssh-link"));
     fs.symlinkSync("/etc/hostname", path.join(tmp, "etc-link"));
     fs.symlinkSync("data.txt", path.join(tmp, "inner-link"));
+    fs.symlinkSync("/etc/hostname", path.join(tmp, "lnk-out"));
+    fs.symlinkSync("data.txt", path.join(tmp, "lnk-in"));
   });
   afterAll(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -353,10 +355,35 @@ describe("checkBareSymlinkTokens", () => {
     expect(r).toEqual({ denied: null, warned: null });
   });
 
-  it("skips regular files, flags, and globs", () => {
+  it("skips regular files and flags", () => {
     expect(checkBareSymlinkTokens(["cat", "data.txt"], tmp)).toEqual({ denied: null, warned: null });
     expect(checkBareSymlinkTokens(["grep", "-r", "foo", "data.txt"], tmp)).toEqual({ denied: null, warned: null });
-    expect(checkBareSymlinkTokens(["cat", ".s*sh"], tmp)).toEqual({ denied: null, warned: null });
+  });
+
+  it("expands bare relative globs and probes every match for symlink escapes", () => {
+    // The attack shape: the repo ships a benign-looking symlink; a natural
+    // `cat ln*` reaches it although no credential text is on the command line.
+    expect(checkBareSymlinkTokens(["cat", "ln*"], tmp)).toEqual({ denied: null, warned: "/etc/hostname" });
+  });
+
+  it("denies a glob whose match targets a deny pattern", () => {
+    expect(checkBareSymlinkTokens(["cat", "ssh-*"], tmp).denied).not.toBeNull();
+  });
+
+  it("keeps globs matching only regular files or in-cwd symlinks clean", () => {
+    expect(checkBareSymlinkTokens(["cat", "da*"], tmp)).toEqual({ denied: null, warned: null });
+    expect(checkBareSymlinkTokens(["cat", "inner-*"], tmp)).toEqual({ denied: null, warned: null });
+    expect(checkBareSymlinkTokens(["cat", ".s*sh"], tmp)).toEqual({ denied: null, warned: null }); // no match
+  });
+
+  it("probes relative globs below cwd (subdir symlinks)", () => {
+    fs.mkdirSync(path.join(tmp, "sub"));
+    fs.symlinkSync("/etc/hostname", path.join(tmp, "sub", "ln"));
+    expect(checkBareSymlinkTokens(["cat", "sub/ln*"], tmp)).toEqual({ denied: null, warned: "/etc/hostname" });
+  });
+
+  it("skips globs with runtime expansions (path layer keeps them opaque)", () => {
+    expect(checkBareSymlinkTokens(["cat", "$x*"], tmp)).toEqual({ denied: null, warned: null });
   });
 
   it("skips non-bare tokens (slashes, env assignments, command name)", () => {
