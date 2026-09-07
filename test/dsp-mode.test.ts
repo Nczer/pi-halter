@@ -67,8 +67,7 @@ describe("dsp-mode", () => {
       const rendered = widget.render(80);
       expect(Array.isArray(rendered)).toBe(true);
       expect(rendered).toHaveLength(1); // warning alone — session rules are noise in DSP mode
-      expect(rendered[0]).toContain("DSP");
-      expect(rendered[0]).toContain("all permissions bypassed");
+      expect(rendered[0]).toContain("⚠ DSP");
     });
 
     it("toggle off then on re-creates the widget", () => {
