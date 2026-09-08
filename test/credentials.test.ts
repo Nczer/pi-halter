@@ -1,13 +1,17 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, afterEach, vi } from "vitest";
 import {
   checkCommandForCredentialPaths,
   checkBareSymlinkTokens,
   stripHeredocBodies,
   stripShellComments,
+  GLOB_UNVERIFIED_PREFIX,
+  isGlobUnverified,
+  globUnverifiedToken,
 } from "../analysis/credentials";
+import { tokenizeSegmentQuoted, type QuotedToken } from "../analysis/tokenizer";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 const tmpdir = os.tmpdir();
@@ -395,5 +399,142 @@ describe("checkBareSymlinkTokens", () => {
   it("sees tokens glued to shell operators", () => {
     expect(checkBareSymlinkTokens(["cat", "ssh-link;ls"], tmp).denied).not.toBeNull();
     expect(checkBareSymlinkTokens(["cat", "ssh-link>x"], tmp).denied).not.toBeNull();
+  });
+});
+
+// ── Quoting facts (tokenizeSegmentQuoted) ───────────────────────────────────
+
+describe("tokenizeSegmentQuoted: quoting facts", () => {
+  it("a single-quoted script body is one quoted word (no operator split, no glob)", () => {
+    const t = tokenizeSegmentQuoted("node -e 'a; b* && c | d'")[2]; // 0=node 1=-e 2=body
+    expect(t.text).toBe("a; b* && c | d");
+    expect(t.quoted).toBe(true);
+    expect(t.unquotedGlob).toBe(false);
+  });
+
+  it("a double-quoted glob is quoted (never expands at runtime)", () => {
+    const t = tokenizeSegmentQuoted('cat "l*"')[1]; // 0=cat 1="l*"
+    expect(t.text).toBe("l*");
+    expect(t.quoted).toBe(true);
+    expect(t.unquotedGlob).toBe(false);
+  });
+
+  it("a glob char outside the quoted span keeps the expansion flag", () => {
+    const t = tokenizeSegmentQuoted("cat a*b'c'")[1]; // 0=cat 1=mixed word
+    // Quotes are syntax, not content: the expansion pattern is the stripped word.
+    expect(t.text).toBe("a*bc");
+    expect(t.unquotedGlob).toBe(true);
+  });
+
+  it("plain unquoted tokens are unquoted", () => {
+    const t = tokenizeSegmentQuoted("cat judge/*.ts")[1]; // 0=cat 1=glob
+    expect(t.quoted).toBe(false);
+    expect(t.unquotedGlob).toBe(true);
+  });
+
+  it("text output is identical to tokenizeSegment for mixed quoting", () => {
+    expect(tokenizeSegmentQuoted("node -e 'a; b* && c' | grep x").map((t) => t.text))
+      .toEqual(["node", "-e", "a; b* && c", "|", "grep", "x"]);
+  });
+});
+
+// ── Quoted-token probe semantics (3.22.0 field false-positive fix) ──────────
+
+describe("checkBareSymlinkTokens: quoted tokens", () => {
+  let tmp: string;
+  const q = (text: string): QuotedToken => ({ text, quoted: true, unquotedGlob: false });
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-symq-"));
+    fs.writeFileSync(path.join(tmp, "data.txt"), "hi\n");
+    fs.symlinkSync("/etc/hostname", path.join(tmp, "lnk-out"));
+    fs.symlinkSync("data.txt", path.join(tmp, "lnk-in"));
+    fs.symlinkSync("/etc/hostname", path.join(tmp, "lit*")); // literally named lit*
+  });
+  afterAll(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("a quoted literal name still follows symlinks (quoting does not stop it)", () => {
+    expect(checkBareSymlinkTokens(["cat", q("lnk-out")], tmp)).toEqual({ denied: null, warned: "/etc/hostname" });
+  });
+
+  it("a quoted glob never expands — cat \"l*\" is the literal name l*", () => {
+    expect(checkBareSymlinkTokens(["cat", q("ln*")], tmp)).toEqual({ denied: null, warned: null });
+  });
+
+  it("a quoted word that IS a literal glob-named symlink is still probed", () => {
+    expect(checkBareSymlinkTokens(["cat", q("lit*")], tmp)).toEqual({ denied: null, warned: "/etc/hostname" });
+  });
+
+  it("a quoted word is never operator-split (internal ; && | are data)", () => {
+    expect(checkBareSymlinkTokens(["cat", q("lnk-out; ls && lnk-out")], tmp)).toEqual({ denied: null, warned: null });
+    // Contrast: the same text UNQUOTED is a chain and reaches the symlink.
+    expect(checkBareSymlinkTokens(["cat", "lnk-out; ls"], tmp).warned).toBe("/etc/hostname");
+  });
+
+  it("a glob char outside the quoted span still expands and probes matches", () => {
+    expect(checkBareSymlinkTokens(["cat", { text: "lnk-out*", quoted: true, unquotedGlob: true }], tmp).warned)
+      .toBe("/etc/hostname");
+  });
+});
+
+// ── globSync failure semantics (honest marker + static-prefix guard) ────────
+
+describe("checkBareSymlinkTokens: glob-verify failures", () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-symg-"));
+    fs.mkdirSync(path.join(tmp, "exist-dir"));
+  });
+  afterAll(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("a missing static prefix is provably empty — no prompt even when globSync throws", () => {
+    // Field shape (Bun): every no-match glob threw → failed closed. The
+    // prefix is gone ⇒ the expansion is empty ⇒ nothing to verify.
+    vi.spyOn(fs, "globSync").mockImplementation(() => {
+      throw new Error("simulated no-match throw");
+    });
+    expect(checkBareSymlinkTokens(["grep", "x", "missing-dir/*.ts"], tmp)).toEqual({ denied: null, warned: null });
+  });
+
+  it("an existing prefix with an unverifiable expansion fails closed, marked honestly", () => {
+    vi.spyOn(fs, "globSync").mockImplementation(() => {
+      throw new Error("simulated");
+    });
+    expect(checkBareSymlinkTokens(["grep", "x", "exist-dir/*.zzz"], tmp)).toEqual({
+      denied: null,
+      warned: GLOB_UNVERIFIED_PREFIX + "exist-dir/*.zzz",
+    });
+  });
+
+  it("marker helpers round-trip", () => {
+    expect(isGlobUnverified(GLOB_UNVERIFIED_PREFIX + "x/*.ts")).toBe(true);
+    expect(isGlobUnverified(".env")).toBe(false);
+    expect(isGlobUnverified(null)).toBe(false);
+    expect(globUnverifiedToken(GLOB_UNVERIFIED_PREFIX + "x/*.ts")).toBe("x/*.ts");
+  });
+});
+
+// ── Entry-point regression: quoted script bodies are not probed as chains ──
+
+describe("checkCommandForCredentialPaths: quoted bodies (field regression)", () => {
+  it("does not operator-split a quoted node -e body (no bogus fragments)", () => {
+    const r = checkCommandForCredentialPaths("node -e 'const p = \"*.ts\"; a; b && c | d'", cwd);
+    expect(r).toEqual({ denied: null, warned: null });
+  });
+
+  it("the field repro: grep over missing-prefix globs no longer prompts", () => {
+    // This exact command spammed the gate (Bun globSync throw on no-match +
+    // operator-split garbage). Missing static prefixes ⇒ provably empty.
+    const r = checkCommandForCredentialPaths(
+      'cd ~/.pi/agent/extensions/halter && grep -n "misses" judge/*.ts gate/*.ts analysis/*.ts | head -30',
+      cwd,
+    );
+    expect(r).toEqual({ denied: null, warned: null });
   });
 });

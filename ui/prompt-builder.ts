@@ -3,6 +3,7 @@ import type {PromptDecision, PromptData, BashPromptData, FilePromptData, ToolPro
 
 import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./tmux-render";
 import { shortenToken } from "../analysis/path-util";
+import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import type { ResolutionMap } from "../judge/path-resolver";
 
 // ── Output types (match twoTierAlwaysPrompt's expected inputs) ──
@@ -306,7 +307,11 @@ function buildBashPrompt(
     body += `\n\u26a0\ufe0f Commands matching danger patterns always prompt, even after auto-allowing.`;
   }
   if (credentialRule) {
-    body += `\n\u26a0\ufe0f Matches credential pattern "${credentialRule}" \u2014 may contain secrets or tokens.`;
+    if (isGlobUnverified(credentialRule)) {
+      body += `\n\u26a0\ufe0f Glob "${globUnverifiedToken(credentialRule)}" could not be expanded and verified \u2014 may reach credential files; prompted for safety.`;
+    } else {
+      body += `\n\u26a0\ufe0f Matches credential pattern "${credentialRule}" \u2014 may contain secrets or tokens.`;
+    }
   }
   body += "\n";
 

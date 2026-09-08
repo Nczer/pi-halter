@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.22.0 — 2026-09-08
+
+Fixes the credential-pattern false positives on everyday relative globs
+(`grep … judge/*.ts` under Bun prompting `credential pattern
+("judge/*.ts")`). Two independent bugs, both in the bare-symlink probe:
+
+- **Quoted words are one shell word** — the probe operator-split every
+  token, so a `node -e 'a; b* && c'` body became garbage fragments that
+  were then fs-globbed; a failed expansion on any fragment was reported as
+  a matched credential pattern. `tokenizeSegmentQuoted` carries per-token
+  quoting facts (`tokenizeSegment` is now defined over it — output
+  identical); quoted words are probed as single literal names — never
+  split, and quoted globs (`"l*"`) never expansion-probed (they don't
+  expand at runtime). A glob char outside the quoted spans (`a*b'c'`)
+  still expands.
+- **Static search-directory guard** — glob chars never cross `/`, so a
+  pattern whose globs all sit after its last `/` searches exactly the
+  literal directory before it; a missing directory is a provably empty
+  expansion and now no-ops instead of failing closed. Required because pi
+  runs on Bun 1.3.14, whose `fs.globSync` throws on no-match (Node 26
+  returns `[]`) — every everyday no-match glob prompted since e1af428
+  introduced glob expansion.
+- **Honest unverifiable-glob stop** — a remaining expansion failure (a
+  real `globSync` throw / >4096 matches) is now marked
+  `glob-unverified:…` and rendered as `Glob "…" could not be expanded and
+  verified — may reach credential files`, with the gate reason
+  `unverifiable glob (…)` — no longer mislabeled as a credential-pattern
+  match. Fail-closed is unchanged.
+- **`.log/glob-err.jsonl`** — on-signal ledger of failed glob-expansion
+  probes (pattern, error name+message, cwd); a healthy run writes nothing.
+  `HALTER_GLOBERR_LOG` seams it (path / `off`) like the other ledgers.
+
 ## 3.21.0 — 2026-09-06
 
 - **Simplified the DSP widget line** — `⚠ DSP MODE — all permissions

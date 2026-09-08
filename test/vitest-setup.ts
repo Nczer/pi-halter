@@ -21,3 +21,4 @@
 process.env.HALTER_DECISION_LOG = "off";
 process.env.HALTER_UNRESOLVED_LOG = "off";
 process.env.HALTER_JUDGE_LOG = "off";
+process.env.HALTER_GLOBERR_LOG = "off";

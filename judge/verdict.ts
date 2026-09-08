@@ -23,6 +23,7 @@ import type {BashPromptData, PromptData} from "../decide/types";
 import type { Store } from "../gate/store";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { findExecutedScript } from "../analysis/script-payload";
+import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeResult, JudgeSettings} from "./judge";
 import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
@@ -77,7 +78,11 @@ async function buildJudgmentInput(
       riskReasons: analysis.risk.reasons,
       hasUnsafePattern: analysis.safety.hasUnsafePattern,
       hasParseError: analysis.hasParseError,
-      credentialRule: pd.credentialRule,
+      // An unverifiable glob is a verification failure, not a credential
+      // match — say so so the judge doesn't weight it as a pattern hit.
+      credentialRule: isGlobUnverified(pd.credentialRule)
+        ? `unverifiable glob (${globUnverifiedToken(pd.credentialRule)})`
+        : pd.credentialRule,
       paths: analysis.paths,
       outsidePaths: analysis.prompt.outsidePaths ?? [],
       script,

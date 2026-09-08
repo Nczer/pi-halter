@@ -934,6 +934,15 @@ describe("D16: every floor stop is advisory (2026-09-02)", () => {
     }
   });
 
+  it("names an unverifiable glob honestly (a verification failure, not a credential match)", async () => {
+    const r = await checkDspaGate(bashPd("grep x foo/*.ts", { credentialRule: "glob-unverified:foo/*.ts" }), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("unverifiable glob (foo/*.ts)");
+      expect(r.advisory).toBe(true);
+    }
+  });
+
   it("file credential stops are advisory", async () => {
     const r = await checkDspaGate(filePd({ warnedRule: ".env" }), store);
     expect(r.ok).toBe(false);

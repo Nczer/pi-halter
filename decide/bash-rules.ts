@@ -1,7 +1,7 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
 import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes, segmentFetchPackage } from "../analysis/segment-helpers";
 import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE, checkBareSymlinkTokens } from "../analysis/credentials";
-import { tokenizeSegment } from "../analysis/tokenizer";
+import { tokenizeSegment, tokenizeSegmentQuoted } from "../analysis/tokenizer";
 import type {Store, BashRequest, Decision} from "./types";
 import type { CommandAnalysis } from "../analysis/command-analysis";
 
@@ -81,13 +81,16 @@ export const FastAllowRule: BashRule = (req) => {
 
   // Use quote-aware tokenizer so quoted paths (e.g., "/etc/passwd", '/etc/passwd')
   // and flag=value with quotes (e.g., --file="/etc/passwd") are properly detected.
-  const tokens = tokenizeSegment(req.command);
+  const quotedTokens = tokenizeSegmentQuoted(req.command);
+  const tokens = quotedTokens.map((t) => t.text);
   // A bare token may be a symlink in cwd pointing OUTSIDE it (repo-shipped
   // `link → ~/.ssh/id_rsa`) — the literal name carries no path text for the
   // prefix checks below to see. Denied targets are blocked by
   // CredentialDenyRule (runs first); warned targets (credential name or
-  // outside cwd) must prompt via the analysis's credential check.
-  if (checkBareSymlinkTokens(tokens, req.cwd).warned) return null;
+  // outside cwd) must prompt via the analysis's credential check. Quoting
+  // facts keep quoted words (script bodies, "l*") from being operator-split
+  // or glob-expanded (see checkBareSymlinkTokens).
+  if (checkBareSymlinkTokens(quotedTokens, req.cwd).warned) return null;
   for (let i = 1; i < tokens.length; i++) {
     const token = tokens[i];
     // $VAR / $(…) / backtick arguments are computed values — the runtime
