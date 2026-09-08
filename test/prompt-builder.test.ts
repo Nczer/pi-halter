@@ -60,6 +60,16 @@ describe("bash body content", () => {
     expect(prompt.title).toBe("Bash");
   });
 
+  it("renders an unverifiable-glob stop honestly, not as a credential match", () => {
+    const prompt = buildPrompt(bashDecision({
+      needsCommandApproval: true,
+      credentialRule: "glob-unverified:judge/*.ts",
+    }));
+    expect(prompt.body).toContain("judge/*.ts");
+    expect(prompt.body).toContain("could not be expanded and verified");
+    expect(prompt.body).not.toContain("credential pattern");
+  });
+
   it("title is Path when only path needs approval", () => {
     const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], needsPathApproval: true, needsCommandApproval: false }));
     expect(prompt.title).toBe("Path");

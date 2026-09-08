@@ -12,10 +12,13 @@
  * Interface:
  *  - checkCommandForCredentialPaths(command, cwd) — the single entry point
  *    (a deny wins; warns accumulate to the first).
- *  - checkBareSymlinkTokens(tokens, cwd) — bare relative tokens whose cwd
- *    symlink escapes cwd or points at a credential (must run even when the
- *    string pre-scan early-returns: a symlink's literal name carries no
- *    credential text).
+ *  - checkBareSymlinkTokens(tokens, cwd) — bare relative tokens (plain
+ *    strings or QuotedToken) whose cwd symlink escapes cwd or points at a
+ *    credential (must run even when the string pre-scan early-returns: a
+ *    symlink's literal name carries no credential text). Quoted words are
+ *    probed as single literals — never operator-split or glob-expanded.
+ *  - GLOB_UNVERIFIED_PREFIX — the warn marker a failed glob-expansion probe
+ *    raises (an honest "unverifiable glob" stop, not a credential match).
  *  - CREDENTIAL_SCAN_RE — the fast pre-scan regex (FastAllowRule re-runs it
  *    on the dequoted form).
  *  - stripHeredocBodies / stripShellComments — text preprocessing (tests
@@ -24,8 +27,9 @@
 import path from "node:path";
 import fs from "node:fs";
 import { deniedPaths, warnPaths } from "../config";
+import { logGlobVerifyError } from "../config/logging";
 import { expandTilde } from "./path-util";
-import { tokenizeSegment } from "./tokenizer";
+import { tokenizeSegment, tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import {
   isChildOf,
   isPathDeniedResolved,
@@ -41,6 +45,24 @@ import {
  * standalone keyfile basenames (id_rsa), .envrc, and *.pem file names.
  */
 export const CREDENTIAL_SCAN_RE = /\.(?:ssh|gnupg|gpg|vault|secret|secrets|env|envrc|aws|gcloud|azure|git-credentials|hg|netrc|npmrc|pypirc|docker|pem)\b|\bid_(?:rsa|ed25519|ecdsa|dsa)\b/;
+
+/**
+ * Marker prefix for a warn raised by a FAILED GLOB-EXPANSION PROBE (the
+ * bare-symlink check could not verify what a relative glob reaches —
+ * globSync threw / is unavailable, or the expansion exceeds the probe cap).
+ * It is NOT a matched credential pattern: the display sites (dspa-gate
+ * stop reason, prompt-builder line) branch on the prefix and render an
+ * honest "unverifiable glob" stop.
+ */
+export const GLOB_UNVERIFIED_PREFIX = "glob-unverified:";
+
+export function isGlobUnverified(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(GLOB_UNVERIFIED_PREFIX);
+}
+
+export function globUnverifiedToken(value: string | null | undefined): string {
+  return typeof value === "string" ? value.slice(GLOB_UNVERIFIED_PREFIX.length) : "";
+}
 
 /**
  * Strip heredoc BODIES from a command so credential scanning doesn't flag
@@ -190,6 +212,15 @@ export function stripShellComments(cmd: string): string {
  * Quoted names are covered too — quoting prevents glob expansion but not
  * symlink following (`cat "link"` still reads the target).
  *
+ * QUOTED WORDS ARE ONE SHELL WORD: their internal `;`/`&&`/`|` are data, not
+ * operators (a `node -e 'a; b'` body is not a command chain), so quoted
+ * tokens are never operator-split, and their quoted glob chars never expand
+ * at runtime (`cat "l*"` is the literal name l*) — no expansion probe; the
+ * word is probed as a single literal name. A glob char OUTSIDE the quoted
+ * spans (`a*b'c'`) still expands: the quote-stripped word is exactly its
+ * expansion pattern, so that case keeps the expansion probe. Plain strings
+ * (no quoting facts) take the full unquoted treatment — fail-closed.
+ *
  * Relative GLOBS are expanded at gate time and every match probed the same
  * way as a bare name: bash expands `cat l*` at runtime, so a shipped symlink
  * hiding behind a glob is the same threat as the literal name (the name-
@@ -197,7 +228,7 @@ export function stripShellComments(cmd: string): string {
  * SPelling against credential patterns, never its filesystem expansion).
  */
 export function checkBareSymlinkTokens(
-  tokens: string[],
+  tokens: Array<string | QuotedToken>,
   cwd: string,
 ): { denied: string | null; warned: string | null } {
   let denied: string | null = null;
@@ -255,22 +286,43 @@ export function checkBareSymlinkTokens(
    * ($/`) and brace/extended groups are not statically expandable (the path
    * layer keeps their prefixed forms opaque), and absolute/~/..-anchored
    * patterns are already resolved (and failed closed on) by the path layer.
+   *
+   * Static search-directory guard: glob chars never cross "/", so a pattern
+   * whose glob chars all sit AFTER its last "/" searches exactly the literal
+   * directory before that slash — and if that directory is missing, the
+   * expansion is provably empty: nothing to probe, no prompt. (Patterns with
+   * no "/" search cwd itself; patterns with a glob char in the directory part
+   * are not statically verifiable and take the fail-closed path below.)
+   * Required because some runtimes' fs.globSync throws on no-match (observed
+   * in the field on Bun, which is what pi runs): without the guard the
+   * everyday no-match glob would fail closed every time.
+   *
    * Fail closed on expansion errors or >4096 matches — the same bar as
-   * isAllowedRootToken: an unverifiable glob prompts.
+   * isAllowedRootToken: an unverifiable glob prompts, marked with
+   * GLOB_UNVERIFIED_PREFIX so the stop renders honestly (and the error is
+   * recorded in .log/glob-err.jsonl for mining).
    */
   const checkGlob = (t: string): boolean => {
     if (/[$`{}()]/.test(t)) return false;
     if (t.startsWith("/") || t.startsWith("~")) return false;
     if (/(^|\/)\.\.(\/|$)/.test(t)) return false; // .. segment → path layer
+    const lastG = Math.max(t.lastIndexOf("*"), t.lastIndexOf("?"), t.lastIndexOf("["));
+    const lastSlash = t.lastIndexOf("/");
+    const staticDir = lastSlash >= 0 && lastG > lastSlash ? t.slice(0, lastSlash) : null;
+    if (staticDir !== null && !fs.existsSync(path.join(cwdReal, staticDir))) return false;
     let matches: string[];
     try {
+      if (typeof fs.globSync !== "function") {
+        throw new Error("fs.globSync unavailable in this runtime");
+      }
       matches = fs.globSync(path.join(cwdReal, t));
-    } catch {
-      if (!warned) warned = t; // can't verify the expansion — prompt
+    } catch (e) {
+      logGlobVerifyError(t, e, cwdReal);
+      if (!warned) warned = GLOB_UNVERIFIED_PREFIX + t; // can't verify — prompt
       return false;
     }
     if (matches.length > 4096) {
-      if (!warned) warned = t; // too many to verify — prompt
+      if (!warned) warned = GLOB_UNVERIFIED_PREFIX + t; // too many to verify
       return false;
     }
     for (const m of matches) {
@@ -279,25 +331,41 @@ export function checkBareSymlinkTokens(
     return false;
   };
 
-  const checkOne = (t: string): boolean => {
+  /** Probe a literal (non-glob) bare name: a symlink whose target denies/warns. */
+  const checkLiteral = (t: string): boolean => {
     if (!t || t === "." || t === "..") return false;
     if (t.startsWith("-")) return false;
-    // Globs are expanded and probed below — bash expands them at runtime,
-    // so a shipped symlink behind a glob is the same threat as the name.
-    if (/[*?\[\]]/.test(t)) return checkGlob(t);
     if (t.includes("/")) return false; // literal with a slash → path layer
     // NOTE: tokens containing `=` are NOT skipped — a cwd file/symlink can
     // literally be named `a=b` (the shell reads it as a plain filename in
-    // argument position). The probe below is existence-gated (lstat), so a
-    // real `K=V` assignment or `--flag=value` that names no file no-ops.
+    // argument position). The probe is existence-gated (lstat), so a real
+    // `K=V` assignment or `--flag=value` that names no file no-ops.
     return probePath(path.join(cwdReal, t), cwdReal);
   };
 
+  const checkOne = (t: string): boolean => {
+    // Globs are expanded and probed below — bash expands them at runtime,
+    // so a shipped symlink behind a glob is the same threat as the name.
+    if (/[*?\[\]]/.test(t)) return checkGlob(t);
+    return checkLiteral(t);
+  };
+
   // Skip token 0 (the command name — a bare name is looked up in PATH, not
-  // cwd). Mirror the scanner's operator split so `cat link;ls` and
-  // `cat link>x` still see the bare name.
+  // cwd). Unquoted tokens: mirror the scanner's operator split so
+  // `cat link;ls` and `cat link>x` still see the bare name. Quoted tokens
+  // are ONE shell word: no operator split (internal operators are data),
+  // no expansion probe for quoted globs (they never expand), but the word
+  // itself is probed as a literal name (quoting does not prevent symlink
+  // following — `cat "link"` reads the target).
   for (let i = 1; i < tokens.length; i++) {
-    const parts = tokens[i]
+    const raw = tokens[i];
+    const tok = typeof raw === "string" ? { text: raw, quoted: false, unquotedGlob: false } : raw;
+    if (tok.quoted) {
+      if (tok.unquotedGlob && checkGlob(tok.text)) return { denied, warned };
+      if (checkLiteral(tok.text)) return { denied, warned };
+      continue;
+    }
+    const parts = tok.text
       .split(/[;&|<>]+/)
       .map(p => p.replace(/\)+$/, ""))
       .filter(Boolean);
@@ -378,7 +446,9 @@ export function checkCommandForCredentialPaths(
   const hasGlob = /[*?\[\]]/.test(scanCmd);
   // Bare-token symlink check — must run even when the pre-scan below would
   // early-return (a symlink's literal name carries no credential text).
-  const symlinkCheck = checkBareSymlinkTokens(tokens, cwd);
+  // Quoting facts per token: quoted words (script bodies, "l*", …) must not
+  // be operator-split or glob-expanded (see checkBareSymlinkTokens).
+  const symlinkCheck = checkBareSymlinkTokens(tokenizeSegmentQuoted(scanCmd), cwd);
   if (symlinkCheck.denied) return { denied: symlinkCheck.denied, warned: null };
   if (
     !hasGlob &&

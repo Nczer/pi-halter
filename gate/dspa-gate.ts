@@ -64,6 +64,7 @@ import { resolveOpaqueRefs } from "../analysis/var-resolution";
 import { expandTilde, shortenToken } from "../analysis/path-util";
 import { resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
+import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { UNKNOWN_CWD_MARKER, cdBaseBounds, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
 import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
@@ -443,7 +444,14 @@ export async function checkDspaGate(
   // (obscured position, credentials, network, outside base) still apply.
   const obscured = obscuredHit(analysis.segments);
   if (obscured) return { ok: false, reason: `obscured command position (${obscured})`, advisory: true };
-  if (pd.credentialRule) return { ok: false, reason: `credential pattern (${pd.credentialRule})`, advisory: true };
+  if (pd.credentialRule) {
+    // An unverifiable glob is a verification failure, not a credential match
+    // — name it honestly (the prompt renders the same distinction).
+    if (isGlobUnverified(pd.credentialRule)) {
+      return { ok: false, reason: `unverifiable glob (${globUnverifiedToken(pd.credentialRule)})`, advisory: true };
+    }
+    return { ok: false, reason: `credential pattern (${pd.credentialRule})`, advisory: true };
+  }
   // D10 (docs/dspa-redesign.md): a fetchable run form names a package that
   // may be FETCHED (and executed) on cache miss — the same fetch class the
   // floor stops for fetch forms. Trust is per bare package name, granted

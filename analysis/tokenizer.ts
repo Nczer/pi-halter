@@ -335,11 +335,90 @@ export function tokenize(cmd: string): string[] {
 }
 
 /**
+ * A token plus its quoting facts (see tokenizeSegmentQuoted).
+ * quoted — some content came from a quoted span (single/double/ANSI-C):
+ *   shell operators and glob chars inside quoted spans are DATA, not syntax
+ *   (the `;` in `node -e '…'` is not a command separator).
+ * unquotedGlob — a glob char sits OUTSIDE the quoted spans: the word can
+ *   still expand at runtime even when partly quoted (`a*b'c'`).
+ */
+export interface QuotedToken {
+  text: string;
+  quoted: boolean;
+  unquotedGlob: boolean;
+}
+
+/**
+ * tokenizeSegment with per-token quoting facts. Output text is IDENTICAL to
+ * tokenizeSegment (quote chars stripped, ANSI-C decoded, input trimmed) —
+ * tokenizeSegment is defined over this — plus, per token, whether it
+ * contained quoted content and whether a glob char is unquoted. The
+ * permission checks need the facts because a quoted word is ONE shell word:
+ * its internal operators/globs are data, never runtime syntax.
+ */
+export function tokenizeSegmentQuoted(cmd: string): QuotedToken[] {
+  const parts: QuotedToken[] = [];
+  let current = "";
+  let quoted = false;
+  let unquotedGlob = false;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inAnsi = false;
+  const s = cmd.trim(); // tokenizeSegment's trimInput=true
+  const push = () => {
+    if (current) parts.push({ text: current, quoted, unquotedGlob });
+    current = "";
+    quoted = false;
+    unquotedGlob = false;
+  };
+  let i = 0;
+  while (i < s.length) {
+    const wasQuoted = inSingleQuote || inDoubleQuote || inAnsi;
+    const { append, advance, inSingleQuote: sq, inDoubleQuote: dq, inAnsi: an } = processChar(
+      s, i, inSingleQuote, inDoubleQuote, inAnsi, true, true, true,
+    );
+    inSingleQuote = sq;
+    inDoubleQuote = dq;
+    inAnsi = an;
+
+    // If inside quotes, just append (mirrors tokenizeWithSplit's null-split
+    // path — the post-state quoted check; a closing quote appends "").
+    if (sq || dq || an) {
+      current += append;
+      if (wasQuoted) quoted = true;
+      i += advance;
+      continue;
+    }
+
+    // Whitespace delimiter (outside quotes only — a decoded space INSIDE an
+    // ANSI-C string is word content, e.g. $'a b').
+    if (append !== "" && !wasQuoted && /\s/.test(append)) {
+      push();
+      i += advance;
+      continue;
+    }
+
+    // Skip empty append (quote boundaries / $ prefix when quotes are stripped).
+    if (append === "") { i += advance; continue; }
+
+    if (!wasQuoted) {
+      for (const c of append) if (c === "*" || c === "?" || c === "[") unquotedGlob = true;
+    } else {
+      quoted = true;
+    }
+    current += append;
+    i += advance;
+  }
+  push();
+  return parts;
+}
+
+/**
  * Tokenize a shell segment respecting quotes.
  * Strips quote characters and handles escape sequences in double quotes.
  */
 export function tokenizeSegment(cmd: string): string[] {
   // enableAnsi=true: decode $'...' (and $"...") content so runtime-decoded
   // paths/credentials are visible to permission checks.
-  return tokenizeWithSplit(cmd, null, true, true, true, false, true);
+  return tokenizeSegmentQuoted(cmd).map((t) => t.text);
 }
