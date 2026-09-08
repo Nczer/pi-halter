@@ -7,10 +7,11 @@
  * in gate() handles gate → judge → auto-allow / prompt-with-verdict
  * uniformly.
  *
- * An explicit SESSION GRANT is the user's own decision about that location
- * — it is NOT converted (the judge does not re-review writes the user
- * already allowed). Only default-bar auto-allows (project .pi paths,
- * static config paths, in-cwd writes) are judged.
+ * Session grants convert too (D3): the grant trusts the LOCATION, the
+ * content is still judged. Every manual write auto-allow (project .pi
+ * paths, session-granted dirs/files, static config paths) becomes a judged
+ * prompt; in-cwd writes need no probe — they prompt in manual already and
+ * take the normal dspa prompt → judge path.
  *
  * Payload-less commands, reads, and non-dspa modes are never converted.
  * Judge off/invalid → no conversion (the manual auto-allow stands — dspa
@@ -30,9 +31,9 @@ import type { Store } from "./store";
  * Run both dspa content-judgment probes over a manual auto-allow:
  *
  *  1. D3 file-write probe: a WRITE that manual mode would auto-allow is
- *     re-decided with judgeWriteAutoAllows — every default-bar write
- *     auto-allow converts to a prompt (reads are never judged; session-
- *     granted writes stay auto-allowed, see the module note).
+ *     re-decided with judgeWriteAutoAllows — every manual write auto-allow
+ *     converts to a prompt, session grants included (the grant trusts the
+ *     location, the content is judged, D3; reads are never judged).
  *  2. D11 bash conversion: an auto-allow that runs a reviewable script
  *     payload (granted interpreter execution) is judged — the grant
  *     trusts the command form, the content is still reviewed. The

@@ -76,8 +76,8 @@ export async function gate(
   // D3/D11 (docs/dspa-redesign.md): in dspa, reviewable manual auto-allows
   // are content-judged, not blind auto-allows — the location / command form
   // is trusted, the content goes through the same two-stage judge as a
-  // prompt (gate/conversions.ts). An explicit SESSION GRANT is the user's
-  // own decision about that location and stays auto-allowed. Judge
+  // prompt (gate/conversions.ts). Session grants convert too: the grant
+  // trusts the location, the content is still judged (D3). Judge
   // off/invalid → no conversion (dspa never adds a prompt on its own).
   decision = await applyDspaConversions(request, decision, store, ctx);
 
