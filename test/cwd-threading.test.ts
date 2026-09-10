@@ -430,6 +430,29 @@ describe("base-access flagging (cd is navigation, not access)", () => {
     expect((await d("cd /var/tmp && echo hi > out.txt")).kind).toBe("prompt");
   }, 15000);
 
+  it("redirects do not suppress the base flag (2>/dev/null, > file, 2>&1 — the D13 judgePaths===floorMisses hole)", async () => {
+    // A resolvable redirect target used to read as the segment's own target
+    // and silently drop the base flag: cd X && <path-aware> … 2>/dev/null
+    // flagged no path at all.
+    expect((await d("cd /var/tmp && ls 2>/dev/null")).kind).toBe("prompt");
+    expect((await d("cd /var/tmp && find . 2>/dev/null")).kind).toBe("prompt");
+    expect((await d("cd /var/tmp && ls footer/ 2>/dev/null | head")).kind).toBe("prompt");
+    expect((await d("cd /var/tmp && ls > /tmp/halter-probe-out.txt")).kind).toBe("prompt");
+    expect((await d("cd /var/tmp && cat main.txt 2>&1")).kind).toBe("prompt");
+    expect((await d("cd /var/tmp && cat main.txt > /tmp/halter-probe-out.txt")).kind).toBe("prompt");
+    expect((await d("D=/var/tmp && cd $D && ls 2>/dev/null")).kind).toBe("prompt");
+  }, 15000);
+
+  it("resolvable FILE arguments are unaffected (redirects are not arguments — no over-flag)", async () => {
+    // /tmp is an allowed read dir: the file argument is explicit, so the base
+    // must NOT be flagged — the redirect handling must not change this.
+    expect((await d("cd /var/tmp && cat /tmp/halter-probe.txt 2>/dev/null")).kind).toBe("auto-allow");
+  }, 15000);
+
+  it("bare input-redirect targets still flag the base (they ARE file arguments)", async () => {
+    expect((await d("cd /var/tmp && cat < main.txt")).kind).toBe("prompt");
+  }, 15000);
+
   it("du (cwd-defaulting) flags the base; df (system view) does not", async () => {
     expect((await d("cd /var/tmp && du -sh")).kind).toBe("prompt");
     expect((await d("cd /var/tmp && df")).kind).toBe("auto-allow");
