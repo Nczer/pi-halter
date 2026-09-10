@@ -112,7 +112,7 @@ export async function gate(
     dspaStopTag(dspaFallthrough),
     dspaJudgeDeny(dspaFallthrough),
     judgePathFields.judgePaths,
-    judgePathFields.judgePathMisses,
+    judgePathFields.floorMisses,
   );
 
   if (decision.kind === "auto-allow") return;

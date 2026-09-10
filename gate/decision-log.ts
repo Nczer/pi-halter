@@ -165,17 +165,19 @@ export interface DecisionLogEntry {
    * D13: the stage-2 judge's report of the paths the operation touches
    * (sanitized absolute paths, capped) — only when the final stage-2
    * verdict reported any. A second NOTE debug exception, and a parser-gap
-   * probe: paired with `judgePathMisses`, `log-inspect.mjs dspa --paths`
+   * probe: paired with `floorMisses`, `log-inspect.mjs dspa --paths`
    * lists every path the judge saw that the static floor never did.
    */
   judgePaths?: string[];
   /**
-   * D13: reported paths NOT covered by the floor's knowledge (analysis
-   * paths, outside list, confirmed dirs, cwd) — the parser-gap diagnostic
-   * (a miss is either a real static-analysis hole or a judge
-   * hallucination; both are worth mining). Only when non-empty.
+   * D13: judge-reported paths NOT covered by the floor's knowledge
+   * (analysis paths, outside list, confirmed dirs, cwd) — the FLOOR's
+   * blind spots, i.e. the floor's misses (the name says so: bare
+   * "misses" read as misses OF the judge, the opposite direction).
+   * Diagnostic only: each entry is either a real static-analysis hole or a
+   * judge hallucination; both are worth mining. Only when non-empty.
    */
-  judgePathMisses?: string[];
+  floorMisses?: string[];
 
   /** Block reason, or a one-line summary of why a prompt was needed; null for auto-allow. */
   reason: string | null;
@@ -208,7 +210,7 @@ export interface DecisionLogEntry {
  * `judgeDeny` carries a dspa REJECT verdict's explanation verbatim — a
  * raw debug aid for judge behavior, read by a human inspecting the log,
  * never aggregated into stats. Second exception (D13): `judgePaths` /
- * `judgePathMisses` carry the stage-2 judge's path report and its
+ * `floorMisses` carry the stage-2 judge's path report and its
  * cross-check against the floor's own knowledge — model output, but
  * sanitized, capped, and diagnostic-only: nothing in the gate reads these
  * fields back (the floor is never fed LLM output), they exist purely to be
@@ -238,8 +240,8 @@ export function resolveLogPath(): string | null {
  * @param judgePaths - D13: the stage-2 judge's path report (see
  *   DecisionLogEntry.judgePaths); omit unless a stage-2 verdict reported
  *   paths.
- * @param judgePathMisses - D13: reported paths the floor never saw (see
- *   DecisionLogEntry.judgePathMisses); omit when empty.
+ * @param floorMisses - D13: judge-reported paths the floor never saw (see
+ *   DecisionLogEntry.floorMisses); omit when empty.
  */
 export function logDecision(
   request: PermissionRequest,
@@ -248,7 +250,7 @@ export function logDecision(
   dspaStop?: string,
   judgeDeny?: string,
   judgePaths?: string[],
-  judgePathMisses?: string[],
+  floorMisses?: string[],
 ): void {
   try {
     const file = resolveLogPath();
@@ -262,7 +264,7 @@ export function logDecision(
       dspa: dspaStop,
       judgeDeny,
       judgePaths,
-      judgePathMisses,
+      floorMisses,
       reason:
         decision.kind === "block"
           ? decision.reason
@@ -384,9 +386,11 @@ export interface JudgeLogEntry {
   // kind: "infra" — the normalized sub-reason (JudgeResult.reason, ≤200ch):
   // "timeout" / "no-tool-call" / "bad-args: {…}" / "call-failed: <msg>".
   detail?: string;
-  // kind: "paths" — the report as sanitized, plus the floor mismatches.
+  // kind: "paths" — the report as sanitized, plus the floor's blind spots
+  // (judge-reported paths the floor never saw — "floorMisses": the floor's
+  // misses, not the judge's).
   judgePaths?: string[];
-  misses?: string[];
+  floorMisses?: string[];
 }
 
 /** The operation a log line is about (logJudge truncates to 200). */
@@ -462,14 +466,14 @@ export function logJudgePaths(
 ): void {
   if (pd.type !== "bash") return;
   const f = judgePathLogFields(pd, store, verdict.paths);
-  if (!f.judgePathMisses?.length) return;
+  if (!f.floorMisses?.length) return;
   logJudge({
     kind: "paths",
     mode,
     model: verdict.model,
     cmd: judgeCmdOf(pd),
     judgePaths: f.judgePaths,
-    misses: f.judgePathMisses,
+    floorMisses: f.floorMisses,
   });
 }
 

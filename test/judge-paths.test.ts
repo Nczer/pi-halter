@@ -66,22 +66,22 @@ describe("judgePathReport", () => {
       floor,
     );
     expect(r.paths).toHaveLength(5);
-    expect(r.misses).toBeUndefined();
+    expect(r.floorMisses).toBeUndefined();
   });
 
-  it("misses: unrelated paths (the parser-gap signal)", () => {
+  it("floorMisses: unrelated paths (the parser-gap signal)", () => {
     const r = judgePathReport(["/etc/shadow", "/home/u/project/target"], {
       cwd,
       floorPaths: ["/home/u/project/target"],
     });
     expect(r.paths).toEqual(["/etc/shadow", "/home/u/project/target"]);
-    expect(r.misses).toEqual(["/etc/shadow"]);
+    expect(r.floorMisses).toEqual(["/etc/shadow"]);
   });
 
   it("a literal floor path under the report is a miss (broader claim)", () => {
     // The floor saw /y/z; the judge claims the operation touches all of /y.
     const r = judgePathReport(["/y"], { cwd: "/x", floorPaths: ["/y/z"] });
-    expect(r.misses).toEqual(["/y"]);
+    expect(r.floorMisses).toEqual(["/y"]);
   });
 
   it("sentinels in the floor set are not knowledge", () => {
@@ -89,15 +89,15 @@ describe("judgePathReport", () => {
       cwd: "/x",
       floorPaths: [`${OPAQUE_VAR_DIR}/a`],
     });
-    expect(r.misses).toEqual(["/a"]);
+    expect(r.floorMisses).toEqual(["/a"]);
   });
 
-  it("caps misses at 5; {} when the model reported nothing", () => {
+  it("caps floorMisses at 5; {} when the model reported nothing", () => {
     const r = judgePathReport(
       Array.from({ length: 8 }, (_, i) => `/m${i}`),
       { cwd, floorPaths: [] },
     );
-    expect(r.misses).toHaveLength(5);
+    expect(r.floorMisses).toHaveLength(5);
     expect(judgePathReport(undefined, { cwd, floorPaths: [] })).toEqual({});
     expect(judgePathReport([], { cwd, floorPaths: [] })).toEqual({});
   });

@@ -711,7 +711,7 @@ describe("D3: granted-dir file writes are judged (dspa)", () => {
 // ── D13 — stage-2 judge path report (diagnostic log) ───────────────────
 
 describe("D13 — stage-2 path report (diagnostic log)", () => {
-  it("stage-2 auto-allow logs judgePaths + judgePathMisses", async () => {
+  it("stage-2 auto-allow logs judgePaths + floorMisses", async () => {
     await runAnalyzedGate(
       "ls /home/u/project/target",
       verdict({ risk: "medium" }), // stage 1: no auto-allow
@@ -721,7 +721,7 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
     expect(line).toBeDefined();
     if (!line) return;
     expect(line.judgePaths).toEqual(["/home/u/project/target", "/etc/hostname"]);
-    expect(line.judgePathMisses).toEqual(["/etc/hostname"]);
+    expect(line.floorMisses).toEqual(["/etc/hostname"]);
   });
 
   it("stage-1 auto-allow carries no path fields (stage 1 never reports)", async () => {
@@ -730,7 +730,7 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
     expect(line).toBeDefined();
     if (!line) return;
     expect(line.judgePaths).toBeUndefined();
-    expect(line.judgePathMisses).toBeUndefined();
+    expect(line.floorMisses).toBeUndefined();
   });
 
   it("floor-covered report logs paths without misses", async () => {
@@ -743,7 +743,7 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
     expect(line).toBeDefined();
     if (!line) return;
     expect(line.judgePaths).toEqual(["/home/u/project/target/release"]);
-    expect(line.judgePathMisses).toBeUndefined();
+    expect(line.floorMisses).toBeUndefined();
   });
 
   it("judge-declined fall-through logs the stage-2 report", async () => {
@@ -756,7 +756,7 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
     expect(line.kind).toBe("prompt");
     expect(line.dspa).toBe("judge: declined (stage 2)");
     expect(line.judgePaths).toEqual(["/home/u/project/target", "/var/log/syslog"]);
-    expect(line.judgePathMisses).toEqual(["/var/log/syslog"]);
+    expect(line.floorMisses).toEqual(["/var/log/syslog"]);
   });
 
   it("floor-stop fall-through logs misses (the parser-gap mining case)", async () => {
@@ -772,7 +772,7 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
     expect(line.kind).toBe("prompt");
     expect(String(line.dspa)).toContain("gate:");
     expect(line.judgePaths).toEqual(["/etc/hostname", "/etc/shadow"]);
-    expect(line.judgePathMisses).toEqual(["/etc/shadow"]);
+    expect(line.floorMisses).toEqual(["/etc/shadow"]);
   });
 });
 
@@ -835,7 +835,7 @@ describe("D17 — always-on judge ledger (judge.jsonl)", () => {
       expect.objectContaining({
         mode: "dspa",
         judgePaths: ["/etc/hostname", "/etc/shadow"],
-        misses: ["/etc/shadow"],
+        floorMisses: ["/etc/shadow"],
       }),
     );
   });
