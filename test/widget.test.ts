@@ -132,9 +132,8 @@ describe("updateStatus", () => {
     });
     store.trustPackage("vitest");
     updateStatus(ctx);
-    // /a/w is a write path, so it drops out of the read-only list. The full
-    // line (46) outgrows the 40 budget → Pkg drops behind the …+1 marker (38).
-    expect(status).toBe("· R/W: /a/w · R: /a/r · Bash: du · …+1");
+    // /a/w is a write path, so it drops out of the read-only list.
+    expect(status).toBe("· R/W: /a/w · R: /a/r · Bash: du · Pkg: vitest");
   });
 
   it("caps path lists at 3 with a …+N tail and sibling-combines the shown ones", () => {
@@ -145,17 +144,28 @@ describe("updateStatus", () => {
     expect(status).toBe("· R/W: /a/x1 & x2 & x3 …+1");
   });
 
-  it("drops whole low-priority segments behind …+N when a mode main eats the budget", () => {
+  it("drops whole low-priority segments behind …+N when they outgrow the budget", () => {
     setDspaActive(true);
     recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", "ls");
     store.addAllowed({
-      writePaths: ["/a/w"],
-      readPaths: ["/b/r"],
+      // Long enough that the Bash segment alone can't share the line with
+      // the path segments (budget 120, main 10 → 109 for rules).
+      writePaths: ["/mnt/Ndr/Projects/alpha/file1.ts", "/mnt/Ndr/Projects/beta/file2.ts"],
+      readPaths: ["/mnt/Ndr/Projects/delta/file4.ts"],
+      bashSigs: [
+        "npm run build --watch",
+        "npx vitest run --coverage",
+        'git commit -am "work"',
+      ],
     });
     store.trustPackage("vitest");
     updateStatus(ctx);
-    // Main (10) leaves 29 → Pkg (11) drops behind one marker (38 total).
-    expect(status).toBe("» DSPA: 1a · R/W: /a/w · R: /b/r · …+1");
+    // R/W + R fit; Bash + Pkg drop behind one marker (116 total ≤ 120).
+    // (Sibling paths share the /mnt/Ndr/Projects prefix → combined.)
+    expect(status).toBe(
+      "» DSPA: 1a · R/W: /mnt/Ndr/Projects/alpha/file1.ts & beta/file2.ts"
+        + " · R: /mnt/Ndr/Projects/delta/file4.ts · …+2",
+    );
   });
 
   it("shows no model tag when the judge model is the session model", () => {
