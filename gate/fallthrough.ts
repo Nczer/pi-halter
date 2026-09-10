@@ -107,7 +107,7 @@ export function dspaAutoAllowed(
     }
   }
   try {
-    ctx.ui.notify(`✓ Judge auto-allowed (stage ${stage}): ${verdict.explanation}`, "info");
+    ctx.ui.notify(`✓ Stage ${stage}: ${verdict.explanation}`, "info");
   } catch {
     /* toast must never break the allow */
   }

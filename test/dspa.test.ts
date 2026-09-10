@@ -197,7 +197,7 @@ describe("auto-allow path", () => {
       expect(promptFlow.showPrompt).not.toHaveBeenCalled();
       // The stage-1 happy path never reaches the intent pass.
       expect(judgePrompt.getStage2Verdict).not.toHaveBeenCalled();
-      expect(ctx.ui.notify).toHaveBeenCalledWith("✓ Judge auto-allowed (stage 1): builds the workspace", "info");
+      expect(ctx.ui.notify).toHaveBeenCalledWith("✓ Stage 1: builds the workspace", "info");
       expect(getDspaStats().autoAllowed).toBe(1);
       const lines = logLines();
       expect(lines).toHaveLength(1);
@@ -670,7 +670,7 @@ describe("D3: granted-dir file writes are judged (dspa)", () => {
     expect(promptFlow.showPrompt).not.toHaveBeenCalled();
     // Stage-1 happy path — the intent pass is never reached.
     expect(judgePrompt.getStage2Verdict).not.toHaveBeenCalled();
-    expect(ctx.ui.notify).toHaveBeenCalledWith("✓ Judge auto-allowed (stage 1): benign edit", "info");
+    expect(ctx.ui.notify).toHaveBeenCalledWith("✓ Stage 1: benign edit", "info");
     const line = logLines()[0];
     expect(line.kind).toBe("auto-allow");
     expect(line.mode).toBe("dspa");
