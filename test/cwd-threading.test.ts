@@ -578,6 +578,41 @@ describe("stale session-cwd resolutions drop out of post-cd segments (phantom pr
       fs.rmSync(path.join(CWD, "sub"), { recursive: true, force: true });
     }
   }, 15000);
+
+  it("multipipe: the first stage re-bases (`cat ../a | head | tail`)", async () => {
+    const paths = await pathsOf("cd /var/tmp && cat ../a.txt | head | tail");
+    expect(paths).toContain("/var/a.txt");
+    expect(paths).not.toContain(path.resolve(CWD, "../a.txt"));
+  }, 15000);
+
+  it("multipipe: a MIDDLE stage with a dot token re-bases too (all stages share the shell cwd)", async () => {
+    const paths = await pathsOf("cd /var/tmp && cat a.txt | cat ../b.txt | tail");
+    expect(paths).toContain("/var/b.txt");
+    expect(paths).not.toContain(path.resolve(CWD, "../b.txt"));
+  }, 15000);
+
+  it("$PWD tokens re-base on the effective base ($PWD form never reached the parser)", async () => {
+    const paths = await pathsOf("cd /var/tmp && cat $PWD/../x.txt");
+    expect(paths).toContain("/var/x.txt");
+  }, 15000);
+
+  it("subshell: the inner cd re-bases the dot token; the stale session-cwd resolution drops", async () => {
+    const paths = await pathsOf("(cd /var/tmp && cat ../x.txt)");
+    expect(paths).toContain("/var/x.txt");
+    expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+
+  it("subshell + twin: the OUTER segment's session-cwd resolution stays (keep-guard across depths)", async () => {
+    const paths = await pathsOf("cat ../x.txt; (cd /var/tmp && cat ../x.txt)");
+    expect(paths).toContain(path.resolve(CWD, "../x.txt")); // seg1's runtime location
+    expect(paths).toContain("/var/x.txt"); // subshell's runtime location
+  }, 15000);
+
+  it("|| inside a subshell after the inner cd: local branch cwd is unknown → marker", async () => {
+    const paths = await pathsOf("(cd /var/tmp && false || cat ../x.txt)");
+    expect(paths).toContain(`${UNKNOWN_CWD_MARKER}/../x.txt`);
+    expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
 });
 
 describe("$HOME expansion integration (P2)", () => {
