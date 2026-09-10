@@ -527,6 +527,57 @@ describe("stale session-cwd resolutions drop out of post-cd segments (phantom pr
     expect(paths).toContain("/var/x.txt");
     expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
   }, 15000);
+
+  it("pipe: `ls ../ | head` re-bases the first stage like the unglued form", async () => {
+    const paths = await pathsOf("cd /var/tmp && ls ../ | head");
+    expect(paths).toContain("/var");
+    expect(paths).not.toContain(os.homedir());
+  }, 15000);
+
+  it("|| after a cd in the statement: branch cwd is unknown → marker, stale gone", async () => {
+    const paths = await pathsOf("cd /var/tmp && false || cat ../x.txt");
+    expect(paths).toContain(`${UNKNOWN_CWD_MARKER}/../x.txt`);
+    expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+
+  it("|| without a cd on the left keeps the threaded base (no over-freeze)", async () => {
+    const paths = await pathsOf("cd /var/tmp && true; ls a || cat ../x.txt");
+    expect(paths).toContain("/var/x.txt");
+    expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+
+  it("failed cd (&&): the base never moved — the session-cwd resolution is legitimate and stays", async () => {
+    const paths = await pathsOf("cd /nonexistent-xyz && cat ../x.txt");
+    expect(paths).toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+
+  it("failed cd (;): the next segment runs in the session cwd too", async () => {
+    const paths = await pathsOf("cd /nonexistent-xyz; cat ../x.txt");
+    expect(paths).toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+
+  it("no path above the root: `cd / && cat ../x` clamps at /", async () => {
+    const paths = await pathsOf("cd / && cat ../x.txt");
+    expect(paths).toContain("/x.txt");
+    expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+
+  it("chained cds thread through every hop", async () => {
+    const paths = await pathsOf("cd /var && cd tmp && cat ../x.txt");
+    expect(paths).toContain("/var/x.txt");
+    expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+
+  it("relative cd success: `..` lands back in the cwd — auto-allow, no phantom", async () => {
+    fs.mkdirSync(path.join(CWD, "sub"));
+    try {
+      // Pre-fix this prompted on the $HOME/x.txt phantom; the real location
+      // (cwd/x.txt) is in-cwd, so the fixed decision is auto-allow.
+      expect((await d("cd sub && cat ../x.txt")).kind).toBe("auto-allow");
+    } finally {
+      fs.rmSync(path.join(CWD, "sub"), { recursive: true, force: true });
+    }
+  }, 15000);
 });
 
 describe("$HOME expansion integration (P2)", () => {

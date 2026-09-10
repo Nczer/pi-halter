@@ -1,14 +1,13 @@
 import path from "node:path";
 import { parseCommand, type OpaqueRef, type BashSegment } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
-import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath, staleCwdResolutions } from "./cwd-tracking";
+import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath, staleCwdResolutions, UNKNOWN_CWD_MARKER, type CwdBase } from "./cwd-tracking";
 import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
 import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs } from "./path-analysis";
 import { checkCommandForCredentialPaths } from "./credentials";
-import { UNKNOWN_CWD_MARKER } from "./cwd-tracking";
 import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
 
@@ -123,6 +122,52 @@ function normalizeTmuxPayload(keys: string | null): string {
  * through outside-cwd approval — a payload reading an outside path must
  * prompt exactly as the same command run directly would.
  */
+/**
+ * Apply cwd threading to a (sub)command's parser path set:
+ *  • DROP the stale session-cwd resolutions of post-cd segments' dot tokens
+ *    (./../) — under a literal cd that the gate stat'd, that location is
+ *    unreachable at runtime (a phantom outside-dir / dead grant).
+ *  • ADD the base-resolved locations (or the unknown-cwd marker), and flag
+ *    base access (a path-aware segment with no resolvable target of its own
+ *    operates on the base — `cd /var/tmp && ls`).
+ * parseCommand dedupes cross-segment, so a string may be stale for one
+ * segment AND the legitimate resolution of another (base === session cwd) —
+ * those are kept: removing them would under-flag the second segment.
+ * One derivation for the direct command and the tmux send-keys payload —
+ * both bars must converge identically. Mutates `paths`.
+ */
+function threadCwdPaths(
+  segments: BashSegment[],
+  effectiveCwds: CwdBase[],
+  normBase: string,
+  paths: string[],
+): void {
+  const keepStale = new Set<string>();
+  const dropStale = new Set<string>();
+  for (let i = 0; i < segments.length; i++) {
+    const stale = staleCwdResolutions(segments[i], normBase);
+    if (effectiveCwds[i] === normBase) { for (const s of stale) keepStale.add(s); }
+    else { for (const s of stale) dropStale.add(s); }
+  }
+  for (const s of dropStale) {
+    if (keepStale.has(s)) continue;
+    const idx = paths.indexOf(s);
+    if (idx !== -1) paths.splice(idx, 1);
+  }
+  for (let i = 0; i < segments.length; i++) {
+    const base = effectiveCwds[i];
+    if (base !== normBase) {
+      paths.push(...reResolveCwdDependentPaths(segments[i], base));
+      const basePath = baseAccessPath(segments[i], base);
+      if (basePath) paths.push(basePath);
+    } else {
+      // Base === session cwd: parseCommand already resolved ./../ tokens
+      // against it — collect only the $PWD tokens it never saw.
+      paths.push(...reResolveCwdDependentPaths(segments[i], base, { skipDotPaths: true }));
+    }
+  }
+}
+
 async function analyzeTmuxSendKeysPayload(
   payload: string,
   cwd: string,
@@ -134,13 +179,18 @@ async function analyzeTmuxSendKeysPayload(
   let unsafe = false;
   const paths: string[] = [];
   const reasons: string[] = [];
+  const normBase = path.resolve(expandTilde(cwd));
   for (const chunk of chunks) {
     const parsed = await parseCommand(chunk, cwd);
     if (parsed.hasParseError) return { simple: false, unsafe: true, paths: [], reasons: [] };
-    // The payload's opaque refs resolve against the payload's own segment
-    // bases (a cd inside the payload threads); the full outside-cwd bar
-    // (allowed roots, granted dirs) applies downstream at command level.
+    // Cwd threading (same bar as the direct command): a cd inside the payload
+    // re-bases later segments — re-resolve dot tokens against the effective
+    // base, drop the stale session-cwd resolutions, flag base access
+    // (`cd /var/tmp && ls` touches the base). The payload's opaque refs
+    // resolve against the payload's own segment bases; the full outside-cwd
+    // bar (allowed roots, granted dirs) applies downstream at command level.
     const payloadCwds = trackEffectiveCwd(parsed.segments, cwd);
+    threadCwdPaths(parsed.segments, payloadCwds, normBase, parsed.paths);
     const payloadOpaque = resolveOpaqueRefs(
       parsed.opaque,
       parsed.segments,
@@ -204,38 +254,12 @@ export async function analyzeCommand(
   // target of its own operates on the base itself (`cd /var/tmp && ls`,
   // `cd $D && find .`) → the base (or the unknown-cwd marker) joins the path
   // set. Inside-cwd/allowed bases are filtered out by getOutsideCwdPaths.
+  // Cwd threading (see threadCwdPaths): re-base post-cd segments' dot tokens
+  // on the effective base, drop the stale session-cwd resolutions, flag
+  // base access. Under an unknown base the tokens resolve to a marker path
+  // outside every allowed dir, forcing path approval.
   const normBase = path.resolve(expandTilde(cwd));
-  // Stale pre-cd resolutions: parseCommand resolved dot tokens (./../) against
-  // the session cwd. For a segment whose base moved off it, that location is
-  // unreachable at runtime (the cd was stat-verified at gate time) — drop the
-  // stale entries before the re-resolutions below add the real locations.
-  // parseCommand dedupes across segments, so a string may be stale for one
-  // segment AND the legitimate resolution of another (base === cwd) — keep
-  // those: removing them would under-flag the second segment.
-  const keepStale = new Set<string>();
-  const dropStale = new Set<string>();
-  for (let i = 0; i < segments.length; i++) {
-    const stale = staleCwdResolutions(segments[i], normBase);
-    if (effectiveCwds[i] === normBase) { for (const s of stale) keepStale.add(s); }
-    else { for (const s of stale) dropStale.add(s); }
-  }
-  for (const s of dropStale) {
-    if (keepStale.has(s)) continue;
-    const idx = paths.indexOf(s);
-    if (idx !== -1) paths.splice(idx, 1);
-  }
-  for (let i = 0; i < segments.length; i++) {
-    const base = effectiveCwds[i];
-    if (base !== normBase) {
-      paths.push(...reResolveCwdDependentPaths(segments[i], base));
-      const basePath = baseAccessPath(segments[i], base);
-      if (basePath) paths.push(basePath);
-    } else {
-      // Base === session cwd: parseCommand already resolved ./../ tokens
-      // against it — collect only the $PWD tokens it never saw.
-      paths.push(...reResolveCwdDependentPaths(segments[i], base, { skipDotPaths: true }));
-    }
-  }
+  threadCwdPaths(segments, effectiveCwds, normBase, paths);
 
   // Opaque references (an expansion in path position the parser could not
   // resolve on its own): bind them with the command's own dataflow — the
