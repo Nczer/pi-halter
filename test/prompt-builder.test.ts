@@ -454,7 +454,9 @@ describe("file body content", () => {
     const prompt = buildPrompt(fileDecision({ action: "Write", outsideDir: "/etc", isWriteOp: true, resolved: "/etc/config.conf" }));
     expect(prompt.title).toContain("⚠");
     expect(prompt.title).toContain("outside cwd");
-    expect(prompt.body).toContain("/etc");
+    // Flag rides the path line — the dir is the path prefix, not re-listed.
+    expect(prompt.body).toContain("⚠️ outside cwd");
+    expect(prompt.body).not.toContain("outside cwd: ");
   });
 
   it("shows symlink hint", () => {
