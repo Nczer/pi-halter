@@ -22,6 +22,16 @@
   key `ledgerLog`). All stay ON by default — this is a valve, not a
   behavior change. The `HALTER_*_LOG` env seams keep priority over the toggle
   (test hermeticity).
+- **tmux send-keys payloads get the same cwd threading** — payload chunks
+  used the parser's session-cwd paths as-is: a `cd` inside the payload never
+  re-based later segments (dot tokens resolved against the session cwd while
+  the real location was invisible), and base access (`cd /var/tmp && ls`) was
+  unseen — the payload auto-allowed what the identical direct command
+  prompts. Payloads now run through the same `threadCwdPaths` derivation as
+  direct commands: stale drop, base re-resolution, unknown-cwd marker, base
+  access. Residual: a cd does not persist ACROSS Enter chunks (the pane
+  shell would keep it) — conservative direction: the chunk's session-cwd
+  resolution stays, so it over-prompts, never under-flags.
 - **Stale pre-cwd resolutions drop out of post-cd segments** — the parser
   resolves `./`/`../` tokens against the session cwd, and the post-cd
   re-resolution ADDED the base-resolved locations without removing the

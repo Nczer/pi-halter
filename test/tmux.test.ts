@@ -9,6 +9,8 @@ import {
   tmuxNewSessionCommand,
   TMUX_SAFE_SUBCOMMANDS,
 } from "../analysis/tmux";
+import { resolvePathReal } from "../analysis/path-analysis";
+import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
 import { MIRROR_CASES } from "./shared-cases";
 
 const cwd = "/home/user/project";
@@ -174,6 +176,52 @@ describe("tmux: send-keys payload paths meet outside-cwd approval", () => {
   ] as [string, string, "prompt" | "auto-allow" | "block"][])("%s: %s", async (_label, cmd, expected) => {
     const { decision: dec } = await decision(cmd);
     expect(dec.kind, cmd).toBe(expected);
+  });
+});
+
+describe("tmux: send-keys payload cwd threading (a cd inside the payload re-bases later segments)", () => {
+  // The pane shell a payload is typed into starts in the session cwd, so a
+  // payload cd threads exactly like a direct command: dot tokens re-base on
+  // the effective base, the stale session-cwd resolutions drop, and base
+  // access is flagged — same bar, one derivation (threadCwdPaths).
+  const staleOf = (rel: string) => resolvePathReal(rel, cwd);
+
+  it("dot token re-bases on the payload cd; the session-cwd resolution drops", async () => {
+    const { analysis, decision: dec } = await decision("tmux send-keys -t foo 'cd /var/tmp && cat ../x.txt' Enter");
+    expect(analysis.paths).toContain("/var/x.txt");
+    expect(analysis.paths).not.toContain(staleOf("../x.txt"));
+    expect(isPrompt(dec)).toBe(true);
+  });
+
+  it("pipe inside the payload re-bases too (`ls ../ | head`)", async () => {
+    const { analysis, decision: dec } = await decision("tmux send-keys -t foo 'cd /var/tmp && ls ../ | head' Enter");
+    expect(analysis.paths).toContain("/var");
+    expect(analysis.paths).not.toContain(staleOf("../"));
+    expect(isPrompt(dec)).toBe(true);
+  });
+
+  it("|| after a cd in the payload: branch cwd is unknown → marker", async () => {
+    const { analysis } = await decision("tmux send-keys -t foo 'cd /var/tmp && false || cat ../x.txt' Enter");
+    expect(analysis.paths).toContain(`${UNKNOWN_CWD_MARKER}/../x.txt`);
+    expect(analysis.paths).not.toContain(staleOf("../x.txt"));
+  });
+
+  it("failed cd: the pane shell keeps the session cwd — that resolution is legitimate", async () => {
+    const { analysis } = await decision("tmux send-keys -t foo 'cd /nonexistent-xyz && cat ../x.txt' Enter");
+    expect(analysis.paths).toContain(staleOf("../x.txt"));
+  });
+
+  it("no path above the root: `cd / && cat ../x` clamps at /", async () => {
+    const { analysis, decision: dec } = await decision("tmux send-keys -t foo 'cd / && cat ../x.txt' Enter");
+    expect(analysis.paths).toContain("/x.txt");
+    expect(analysis.paths).not.toContain(staleOf("../x.txt"));
+    expect(isPrompt(dec)).toBe(true);
+  });
+
+  it("base access: `cd /var/tmp && ls` (no dot token at all) touches the base — prompt, not auto-allow", async () => {
+    const { analysis, decision: dec } = await decision("tmux send-keys -t foo 'cd /var/tmp && ls' Enter");
+    expect(analysis.paths).toContain("/var/tmp");
+    expect(isPrompt(dec)).toBe(true);
   });
 });
 
