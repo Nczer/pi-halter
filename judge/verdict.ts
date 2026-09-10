@@ -321,8 +321,15 @@ export async function getStage2Verdict(
  * presentation site (/dspat auto-advice, /dspa fall-through, on-demand
  * "💭 Explain"):
  *
- *   💭 Judge: <explanation>
- *    → suggests: APPROVE (low)
+ *      <explanation>
+ *    → suggests: APPROVE (low, stage 2)
+ *
+ * No "💭 Judge:" label — the suggests line is self-explanatory, and the
+ * explanation reads as a plain statement (it's the model's account of what
+ * the operation does). The stage rides in the parenthetical — the widget
+ * that used to show the in-flight stage is gone (footer migration), and
+ * the stage matters to the call: stage 2 has session context, stage 1
+ * is stateless.
  *
  * The suggests line uses the verdict's own word — a defer renders DEFER,
  * not REJECT: "the model could not verify" is a different signal from
@@ -335,11 +342,13 @@ export async function getStage2Verdict(
  */
 export function judgeVerdictBlock(
   verdict: JudgeResult,
+  stage: 1 | 2,
   note?: string,
 ): string {
   const suggestion =
     verdict.approve === "approve" ? "APPROVE"
     : verdict.approve === "defer" ? "DEFER"
     : "REJECT";
-  return `💭 Judge: ${verdict.explanation}\n   → suggests: ${suggestion} (${verdict.risk})${note ? ` ${note}` : ""}`;
+  const risk = verdict.risk ? `${verdict.risk}, ` : "";
+  return `   ${verdict.explanation}\n   → suggests: ${suggestion} (${risk}stage ${stage})${note ? ` ${note}` : ""}`;
 }

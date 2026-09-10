@@ -141,6 +141,44 @@ export function buildPrompt(
  * Shows first HEAD_LINES lines, ellipsis, last TAIL_LINES lines.
  * Full command is visible in chat history above the prompt.
  */
+/**
+ * Render risk reasons grouped by source tag. [Pattern] leads (the class
+ * reason — why this command prompts at all), then the other tags in
+ * first-seen order; single-line reasons of one tag MERGE into one line
+ * ("recursive delete (-r/-R), forced delete (-f)"), multi-line reasons
+ * keep their own block. Untagged reasons trail.
+ */
+function riskReasonLines(reasons: string[]): string[] {
+  const groups: { tag: string; items: string[] }[] = [];
+  const groupOf = (tag: string) => {
+    let g = groups.find((x) => x.tag === tag);
+    if (!g) { g = { tag, items: [] }; groups.push(g); }
+    return g;
+  };
+  for (const r of reasons) {
+    const m = /^\[([A-Za-z]+)\]\s?/.exec(r);
+    groupOf(m ? m[1] : "").items.push(r);
+  }
+  const ordered = [
+    ...groups.filter((g) => g.tag === "Pattern"),
+    ...groups.filter((g) => g.tag !== "Pattern" && g.tag !== ""),
+    ...groups.filter((g) => g.tag === ""),
+  ];
+  const lines: string[] = [];
+  for (const g of ordered) {
+    const single = g.items.filter((r) => !r.includes("\n"));
+    if (single.length) {
+      const text = single.map((r) => r.replace(/^\[[A-Za-z]+\]\s*/, "")).join(", ");
+      lines.push(`\u26a0\ufe0f ${g.tag ? `[${g.tag}] ` : ""}${text}\n`);
+    }
+    for (const r of g.items.filter((x) => x.includes("\n"))) {
+      const ls = r.split("\n");
+      lines.push(`\u26a0\ufe0f ${ls[0]}\n` + ls.slice(1).map((l) => `  ${l}\n`).join(""));
+    }
+  }
+  return lines;
+}
+
 function truncateLongCommand(command: string): string {
   const HEAD_LINES = 8;
   const TAIL_LINES = 4;
@@ -221,15 +259,14 @@ function buildBashPrompt(
     : titlePrefix;
 
   // Body — dense layout (the prompt dialog blocks the screen; every line
-  // must earn its place). The raw command leads — indented, unlabeled (the
-  // title already says Bash/Path/Credential). Each signal is ONE ⚠️ line:
-  // outside dirs, unresolved tokens (resolution inline), risk reasons
-  // (severity already in the title ⚠️), flagged segments, and the
-  // danger-pattern/credential notes. No section headers, no inter-section
-  // blank lines, no re-listing of unflagged segments — the raw command
-  // above carries them.
-  const rawDisplay = truncateLongCommand(command);
-  let body = `  ${rawDisplay}\n`;
+  // must earn its place). No re-listing of the command itself: the pending
+  // tool call above the prompt carries it, and each prompt sits directly
+  // under its own call, so the pairing is unambiguous. Each signal is ONE
+  // ⚠️ line: outside dirs, unresolved tokens (resolution inline), risk
+  // reasons (severity already in the title ⚠️), flagged segments, and the
+  // credential note. No section headers, no inter-section blank lines, no
+  // re-listing of unflagged segments — the command above carries them.
+  let body = "";
 
   if (needsPathApproval) {
     if (outsideDirs.length > 0) {
@@ -248,16 +285,13 @@ function buildBashPrompt(
     }
   }
   if (riskDangerous) {
-    for (const r of riskReasons) {
-      const lines = r.split("\n");
-      body += `\u26a0\ufe0f ${lines[0]}\n`;
-      for (let j = 1; j < lines.length; j++) body += `  ${lines[j]}\n`;
-    }
+    for (const line of riskReasonLines(riskReasons)) body += line;
   }
 
   // Segment breakdown — tmux chains keep the full formatted view (their
   // nesting is unreadable raw); plain chains list ONLY the flagged
-  // segments (indices stay true so they match the raw command above).
+  // segment texts (no indices — the raw command line is gone, the text
+  // stands on its own).
   if (segments.length > 1) {
     const hasTmuxSegment = segments.some(isTmuxCommand);
     if (hasTmuxSegment) {
@@ -268,16 +302,13 @@ function buildBashPrompt(
       const flagged = segments
         .map((s, i) => ({ s, i }))
         .filter(({ i }) => nonAllowedSet.has(i));
-      for (const { s, i } of flagged.slice(0, FLAGGED_MAX)) {
-        body += `\u26a0\ufe0f ${i + 1}. ${truncateSegmentDisplay(s.trimEnd())}\n`;
+      for (const { s } of flagged.slice(0, FLAGGED_MAX)) {
+        body += `\u26a0\ufe0f ${truncateSegmentDisplay(s.trimEnd())}\n`;
       }
       if (flagged.length > FLAGGED_MAX) {
         body += `\u26a0\ufe0f \u2026 ${flagged.length - FLAGGED_MAX} more flagged segments\n`;
       }
     }
-  }
-  if (hasUnsafePattern) {
-    body += `\u26a0\ufe0f danger pattern: always prompts, even after auto-allowing\n`;
   }
   if (credentialRule) {
     if (isGlobUnverified(credentialRule)) {
@@ -289,7 +320,7 @@ function buildBashPrompt(
 
   // Tier 2 — "always (everything)" confirmation (dense, same as the body)
   const dangerWarning = riskDangerous
-    ? "\n" + riskReasons.map(r => `\u26a0\ufe0f ${r}`).join("\n")
+    ? "\n" + riskReasonLines(riskReasons).join("")
     : "";
   const pathBullets = pathGrantDirs.map(d => `  \u2022 ${d}/*`).join("\n");
   const tier2Everything = hasBoth

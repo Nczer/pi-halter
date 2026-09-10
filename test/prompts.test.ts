@@ -73,11 +73,11 @@ beforeEach(() => {
   store.reset();
 });
 
-// ── Simple bash prompt (Yes / Always / No-reason / No) ─────────────────
+// ── Simple bash prompt (Yes / Always / No) ──────────────────────────────
 
 describe("twoTierAlwaysPrompt: simple bash layout", () => {
-  // choices = ["Yes", "Always: test *", "No (with reason)", "No"]
-  // indices:     0          1                 2                3
+  // choices = ["Yes", "Always: test *", "No"]
+  // indices:     0          1                 2
 
   it("returns 'yes' when index 0 is selected", async () => {
     const cb = makeCallbacks();
@@ -117,9 +117,9 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
     expect(store.incrementPromptCount().count).toBe(2); // 1 from twoTierAlwaysPrompt + 1 from this check
   });
 
-  it("returns {kind:'no', reason} when No-with-reason is selected", async () => {
+  it("returns {kind:'no', reason} when No is selected (No always asks)", async () => {
     const cb = makeCallbacks();
-    // tier-1: No with reason (2), editor: "because unsafe"
+    // tier-1: No (2), editor: "because unsafe"
     const result = await twoTierAlwaysPrompt(
       makePrompt(), store, makeCtx([2, "because unsafe"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
@@ -147,8 +147,8 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
 // ── Bash with paths ────────────────────────────────────────────────────
 
 describe("twoTierAlwaysPrompt: bash with paths", () => {
-  // choices = ["Yes", "Always: test *", "Always (paths): /path/*", "No (reason)", "No"]
-  // indices:     0          1                    2                           3           4
+  // choices = ["Yes", "Always: test *", "Always (paths): /path/*", "No"]
+  // indices:     0          1                    2                           3
 
   const prompt = makePrompt({ includePathsOption: true });
 
@@ -168,8 +168,8 @@ describe("twoTierAlwaysPrompt: bash with paths", () => {
 // ── File outside cwd with broader (path + file + broader) ──────────────
 
 describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
-  // choices = ["Yes", "Always (path): ...", "Always (file): ...", "Always (broader)", "No (reason)", "No"]
-  // indices:     0          1                     2                       3                    4               5
+  // choices = ["Yes", "Always (path): ...", "Always (file): ...", "Always (broader)", "No"]
+  // indices:     0          1                     2                       3                    4
   // entries:  [0]=primary, [1]=file, [2]=broader umbrella
 
   const prompt = makePrompt({
@@ -248,7 +248,7 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
     expect(result).toBe("no");
   });
 
-  it("returns reason at No-with-reason index", async () => {
+  it("returns reason when No is selected", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
       prompt, store, makeCtx([4, "outside"]),
@@ -261,8 +261,8 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
 // ── File outside cwd (path + file options, no broader) ─────────────────
 
 describe("twoTierAlwaysPrompt: file outside cwd layout", () => {
-  // choices = ["Yes", "Always (path): ...", "Always (file): ...", "No (reason)", "No"]
-  // indices:     0          1                     2                       3            4
+  // choices = ["Yes", "Always (path): ...", "Always (file): ...", "No"]
+  // indices:     0          1                     2                       3
 
   const prompt = makePrompt({
     includeFileOption: true,
@@ -296,8 +296,8 @@ describe("twoTierAlwaysPrompt: file outside cwd layout", () => {
 // ── Single Always option (no paths/file options) ───────────────────────
 
 describe("twoTierAlwaysPrompt: single Always option layout", () => {
-  // choices = ["Yes", "Always: example", "No (with reason)", "No"]
-  // indices:     0          1                2                3
+  // choices = ["Yes", "Always: example", "No"]
+  // indices:     0          1                2
 
   const singleAlwaysPrompt = makePrompt({
     includeAlwaysOption: true,
@@ -314,9 +314,9 @@ describe("twoTierAlwaysPrompt: single Always option layout", () => {
     expect(cb.onAlways).toHaveBeenCalledTimes(1);
   });
 
-  it("selecting index 2 triggers 'No with reason'", async () => {
+  it("selecting the last index (No) triggers the reason flow", async () => {
     const cb = makeCallbacks();
-    // tier-1: index 2 = "No with reason", editor: "reason"
+    // tier-1: index 2 = No, editor: "reason"
     const result = await twoTierAlwaysPrompt(
       singleAlwaysPrompt, store, makeCtx([2, "because unsafe"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
@@ -348,8 +348,8 @@ describe("twoTierAlwaysPrompt: single Always option layout", () => {
 
 describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
   // includeAlwaysOption: false →
-  // choices = ["Yes", "No (with reason)", "No"]
-  // indices:     0          1                2
+  // choices = ["Yes", "No"]
+  // indices:     0          1
 
   const prompt = makePrompt({ includeAlwaysOption: false });
 
@@ -361,7 +361,7 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
     expect(result).toBe("yes");
   });
 
-  it("returns {kind:'no', reason} at index 1 (No with reason)", async () => {
+  it("returns {kind:'no', reason} at index 1 (No)", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
       prompt, store, makeCtx([1, "unsafe"]),
@@ -382,7 +382,7 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 
   it("cancelled reason editor (null) loops back then selects Yes", async () => {
     const cb = makeCallbacks();
-    // tier-1: No with reason (1), editor: null (cancelled) → loops back
+    // tier-1: No (1), editor: null (cancelled) → loops back
     // tier-1: Yes (0)
     const result = await twoTierAlwaysPrompt(
       prompt, store, makeCtx([1, null, 0]),
@@ -407,7 +407,7 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
 
 describe("twoTierAlwaysPrompt: paths tier decoupled from unsafe command", () => {
   // includeAlwaysOption: false (unsafe pattern) + includePathsOption: true →
-  // choices = ["Yes", "Always (paths): /path/*", "No (reason)", "No"]
+  // choices = ["Yes", "Always (paths): /path/*", "No"]
   // indices:     0                   1                     2           3
   // The command tiers (primary, broader) stay suppressed; the dir grant
   // can never auto-allow the unsafe command, so it remains offerable.
@@ -420,7 +420,7 @@ describe("twoTierAlwaysPrompt: paths tier decoupled from unsafe command", () => 
       prompt, store, ctx, () => {}, () => {}, () => {},
     );
     const shown = ctx.__selects[0];
-    expect(shown).toEqual(["Yes", "Always (paths): /path/*", "No (with reason)", "No"]);
+    expect(shown).toEqual(["Yes", "Always (paths): /path/*", "No"]);
   });
 
   it("calls onAlwaysPaths when Always(paths) → Confirm", async () => {
@@ -453,7 +453,7 @@ describe("twoTierAlwaysPrompt: paths tier decoupled from unsafe command", () => 
     await twoTierAlwaysPrompt(
       suppressed, store, ctx, () => {}, () => {}, () => {},
     );
-    expect(ctx.__selects[0]).toEqual(["Yes", "Always: test *", "No (with reason)", "No"]);
+    expect(ctx.__selects[0]).toEqual(["Yes", "Always: test *", "No"]);
   });
 });
 
@@ -461,8 +461,8 @@ describe("twoTierAlwaysPrompt: paths tier decoupled from unsafe command", () => 
 
 describe("twoTierAlwaysPrompt: trust layout (fetchable forms)", () => {
   // includeAlwaysOption: true, trustPackages: ["tsc"]
-  // choices = ["Yes", "Always: test *", "Trust: tsc (session)", "No (reason)", "No"]
-  // indices:     0          1                    2                      3           4
+  // choices = ["Yes", "Always: test *", "Trust: tsc (session)", "No"]
+  // indices:     0          1                    2                      3
 
   const prompt = makePrompt({ trustPackages: ["tsc"] });
 
@@ -509,8 +509,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
   //   "Always (file): index.ts",         // 1  → Always file
   //   "Always (path): analysis/*",       // 2  → Always immediate parent
   //   "Always (broader)",                // 3  → umbrella → sub-menu
-  //   "No (with reason)",                // 4
-  //   "No"                               // 5
+  //   "No"                               // 3
   // ]
 
   const prompt = makePrompt({
@@ -644,8 +643,7 @@ describe("twoTierAlwaysPrompt: file broaderPaths (single level, no umbrella)", (
   //   "Yes",                      // 0
   //   "Always (file): hosts",      // 1
   //   "Always (path): /etc/*",     // 2  → immediate parent only
-  //   "No (with reason)",          // 3
-  //   "No"                         // 4
+  //   "No"                         // 3
   // ]
 
   const prompt = makePrompt({
@@ -684,8 +682,8 @@ describe("twoTierAlwaysPrompt: file broaderPaths (single level, no umbrella)", (
 
 describe("twoTierAlwaysPrompt: paths-only layout (bash no broader)", () => {
   // includePathsOption: true, includeBroaderOption: false
-  // choices = ["Yes", "Always: test *", "Always (paths): /path/*", "No (reason)", "No"]
-  // indices:     0          1                    2                         3           4
+  // choices = ["Yes", "Always: test *", "Always (paths): /path/*", "No"]
+  // indices:     0          1                    2                         3
 
   const prompt = makePrompt({ includePathsOption: true, includeBroaderOption: false, includeFileOption: false });
 
@@ -786,7 +784,7 @@ describe("twoTierAlwaysPrompt: Explain option", () => {
     expect(result).toBe("yes");
     expect(explain).toHaveBeenCalledTimes(1);
     // first tier-1: option in the choices, no judge block in the body yet
-    expect(calls[0].options).toEqual(["Yes", "Always: test *", "Explain", "No (with reason)", "No"]);
+    expect(calls[0].options).toEqual(["Yes", "Always: test *", "Explain", "No"]);
     expect(calls[0].title).not.toContain("💭 Judge:");
     // second tier-1: full verdict block in the body (explanation + suggests), option removed
     expect(calls[1].title).toContain("💭 Judge: Runs a local build script.");
@@ -864,7 +862,7 @@ describe("twoTierAlwaysPrompt: Judge again option", () => {
 
     expect(result).toBe("no");
     expect(retry).toHaveBeenCalledTimes(2); // repeatable — each pick is a fresh call
-    expect(calls[0].options).toEqual(["Yes", "Always: test *", "Judge again", "No (with reason)", "No"]);
+    expect(calls[0].options).toEqual(["Yes", "Always: test *", "Judge again", "No"]);
     expect(calls[0].title).not.toContain("💭 Judge:");
     expect(calls[1].title).toContain("💭 Judge: DEFER (medium)");
     expect(calls[2].title).toContain("💭 Judge: REJECT (high)");
@@ -897,9 +895,9 @@ describe("twoTierAlwaysPrompt: Judge again option", () => {
     );
 
     expect(result).toBe("no");
-    expect(calls[0].options).toEqual(["Yes", "Always: test *", "Explain", "Judge again", "No (with reason)", "No"]);
+    expect(calls[0].options).toEqual(["Yes", "Always: test *", "Explain", "Judge again", "No"]);
     expect(calls[1].title).toContain("💭 Judge: DEFER (low)");
-    expect(calls[1].options).toEqual(["Yes", "Always: test *", "Explain", "Judge again", "No (with reason)", "No"]);
+    expect(calls[1].options).toEqual(["Yes", "Always: test *", "Explain", "Judge again", "No"]);
   });
 
   it("no retry hook → no 'Judge again' option", async () => {
@@ -918,8 +916,8 @@ describe("twoTierAlwaysPrompt: D10 trust option", () => {
   it("shows Trust option and calls onTrust → 'always'", async () => {
     const cb = makeCallbacks();
     const onTrust = vi.fn();
-    // choices = ["Yes", "Always: test *", "Trust: tsc, ruff (session)", "No (with reason)", "No"]
-    // indices:     0           1                     2                        3                4
+    // choices = ["Yes", "Always: test *", "Trust: tsc, ruff (session)", "No"]
+    // indices:     0           1                     2                        3
     const result = await twoTierAlwaysPrompt(
       makePrompt({ trustPackages: ["tsc", "ruff"] }), store, makeCtx([2, 0]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader, undefined, onTrust,
@@ -932,8 +930,8 @@ describe("twoTierAlwaysPrompt: D10 trust option", () => {
   it("trust option is offered even when includeAlwaysOption is false", async () => {
     const cb = makeCallbacks();
     const onTrust = vi.fn();
-    // choices = ["Yes", "Trust: tsc (session)", "No (with reason)", "No"]
-    // indices:     0           1                  3
+    // choices = ["Yes", "Trust: tsc (session)", "No"]
+    // indices:     0           1
     const result = await twoTierAlwaysPrompt(
       makePrompt({ includeAlwaysOption: false, trustPackages: ["tsc"] }), store, makeCtx([1, 0]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader, undefined, onTrust,
@@ -945,7 +943,7 @@ describe("twoTierAlwaysPrompt: D10 trust option", () => {
   it("no trust option without packages (plain layout unchanged)", async () => {
     const cb = makeCallbacks();
     const onTrust = vi.fn();
-    // choices = ["Yes", "Always: test *", "No (with reason)", "No"] — no Trust
+    // choices = ["Yes", "Always: test *", "No"] — no Trust
     // Always → Back → No
     const result = await twoTierAlwaysPrompt(
       makePrompt(), store, makeCtx([1, 1, 3]),
@@ -983,7 +981,7 @@ describe("twoTierAlwaysPrompt: covered Always options are suppressed", () => {
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
     expect(result).toBe("yes");
-    expect(ctx.__selects[0]).toEqual(["Yes", "Always (broader)", "No (with reason)", "No"]);
+    expect(ctx.__selects[0]).toEqual(["Yes", "Always (broader)", "No"]);
   });
 
   it("umbrella sub-menu lists only the (pre-filtered) uncovered parents", async () => {
@@ -1016,7 +1014,7 @@ describe("twoTierAlwaysPrompt: covered Always options are suppressed", () => {
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
     expect(result).toBe("yes");
-    expect(ctx.__selects[0]).toEqual(["Yes", "No (with reason)", "No"]);
+    expect(ctx.__selects[0]).toEqual(["Yes", "No"]);
   });
 
   it("inside layout: covered file option drops only the file entry", async () => {
@@ -1040,7 +1038,6 @@ describe("twoTierAlwaysPrompt: covered Always options are suppressed", () => {
       "Yes",
       "Always (path): Read project/*",
       "Always (broader)",
-      "No (with reason)",
       "No",
     ]);
   });

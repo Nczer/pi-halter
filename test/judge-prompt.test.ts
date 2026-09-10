@@ -311,29 +311,29 @@ describe("judgeVerdictBlock", () => {
     ({ approve, risk, explanation: "Ex.", reason: "", latencyMs: 1, model: "m", cached: false }) as JudgeResult;
 
   it("approve → APPROVE with the verdict's own risk", () => {
-    expect(judgeVerdictBlock(v("approve", "low"))).toBe(
-      "💭 Judge: Ex.\n   → suggests: APPROVE (low)",
+    expect(judgeVerdictBlock(v("approve", "low"), 1)).toBe(
+      "   Ex.\n   → suggests: APPROVE (low, stage 1)",
     );
   });
 
   it("deny → REJECT", () => {
-    expect(judgeVerdictBlock(v("deny", "high"))).toContain("→ suggests: REJECT (high)");
+    expect(judgeVerdictBlock(v("deny", "high"), 2)).toContain("→ suggests: REJECT (high, stage 2)");
   });
 
   it("defer → DEFER (distinct from REJECT — 'could not verify' ≠ 'saw something bad')", () => {
-    const block = judgeVerdictBlock(v("defer", "medium"));
-    expect(block).toContain("→ suggests: DEFER (medium)");
+    const block = judgeVerdictBlock(v("defer", "medium"), 1);
+    expect(block).toContain("→ suggests: DEFER (medium, stage 1)");
     expect(block).not.toContain("REJECT");
   });
 
   it("risk is independent of the verdict word (defer can carry any risk)", () => {
-    expect(judgeVerdictBlock(v("defer", "low"))).toContain("→ suggests: DEFER (low)");
-    expect(judgeVerdictBlock(v("approve", "medium"))).toContain("→ suggests: APPROVE (medium)");
+    expect(judgeVerdictBlock(v("defer", "low"), 1)).toContain("→ suggests: DEFER (low, stage 1)");
+    expect(judgeVerdictBlock(v("approve", "medium"), 2)).toContain("→ suggests: APPROVE (medium, stage 2)");
   });
 
   it("note appends to the suggests line (the /dspa not-auto-allowed case)", () => {
-    expect(judgeVerdictBlock(v("approve", "medium"), "— not auto-allowed (risk must be low)")).toContain(
-      "→ suggests: APPROVE (medium) — not auto-allowed (risk must be low)",
+    expect(judgeVerdictBlock(v("approve", "medium"), 1, "— not auto-allowed (risk must be low)")).toContain(
+      "→ suggests: APPROVE (medium, stage 1) — not auto-allowed (risk must be low)",
     );
   });
 });

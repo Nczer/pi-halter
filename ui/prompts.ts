@@ -204,7 +204,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
 
 /** Show a tier-2 confirmation ("Always Yes" / "Back"). Returns true on confirm. */
 async function confirmAlways(ctx: ExtensionContext, title: string, body: string): Promise<boolean> {
-  const idx = await selectIndex(ctx, title + "\n---\n" + body, ["Always Yes", "Back"]);
+  const idx = await selectIndex(ctx, title + "\n" + body, ["Always Yes", "Back"]);
   return idx === Tier2.Confirm;
 }
 
@@ -280,12 +280,13 @@ export async function twoTierAlwaysPrompt(
   while (true) {
     const showJudge = !!judge && !judgeExplained;
     const showRetry = !!retryJudge;
+    // "No" is the with-reason path (it asks on pick); escape/cancel is the
+    // reason-less path (selectIndex null → "no" below). One No, not two.
     const choices = [
       "Yes",
       ...options.map(o => o.label),
       ...(showJudge ? ["Explain"] : []),
       ...(showRetry ? ["Judge again"] : []),
-      "No (with reason)",
       "No",
     ];
 
@@ -293,14 +294,12 @@ export async function twoTierAlwaysPrompt(
       ? `⚠️ High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
       : "";
 
-    const idx = await selectIndex(ctx, warningPrefix + activePrompt.title + "\n---\n" + activePrompt.body, choices);
-    if (idx === null) return "no"; // cancelled
+    const idx = await selectIndex(ctx, warningPrefix + activePrompt.title + "\n\n" + activePrompt.body, choices);
+    if (idx === null) return "no"; // cancelled — the reason-less No
 
     // ── Direct actions (no tier-2) ──
     if (idx === 0) return "yes";
-    if (idx === choices.length - 1) return "no";
-
-    if (idx === choices.length - 2) {
+    if (idx === choices.length - 1) {
       const reason = await ctx.ui.input("Reason for rejection:");
       if (reason === undefined) continue;
       return { kind: "no", reason: reason.trim() || "No reason provided" };
