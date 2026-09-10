@@ -142,11 +142,14 @@ export function buildPrompt(
  * Full command is visible in chat history above the prompt.
  */
 /**
- * Render risk reasons grouped by source tag. [Pattern] leads (the class
- * reason — why this command prompts at all), then the other tags in
- * first-seen order; single-line reasons of one tag MERGE into one line
- * ("recursive delete (-r/-R), forced delete (-f)"), multi-line reasons
- * keep their own block. Untagged reasons trail.
+ * Render risk reasons. Grouping is only for order and merging: [Pattern]
+ * leads (the class reason — why this command prompts at all), then the
+ * other source tags in first-seen order, untagged last; single-line
+ * reasons of one group MERGE into one line ("recursive delete (-r/-R),
+ * forced delete (-f)"), multi-line reasons keep their own block. The tags
+ * themselves are NOT rendered — every reason names its own command/flag,
+ * so the prefix is noise in the prompt (the tags stay in the stored
+ * reasons, where the log and the rejection message use them).
  */
 function riskReasonLines(reasons: string[]): string[] {
   const groups: { tag: string; items: string[] }[] = [];
@@ -169,11 +172,11 @@ function riskReasonLines(reasons: string[]): string[] {
     const single = g.items.filter((r) => !r.includes("\n"));
     if (single.length) {
       const text = single.map((r) => r.replace(/^\[[A-Za-z]+\]\s*/, "")).join(", ");
-      lines.push(`\u26a0\ufe0f ${g.tag ? `[${g.tag}] ` : ""}${text}\n`);
+      lines.push(`\u26a0\ufe0f ${text}\n`);
     }
     for (const r of g.items.filter((x) => x.includes("\n"))) {
       const ls = r.split("\n");
-      lines.push(`\u26a0\ufe0f ${ls[0]}\n` + ls.slice(1).map((l) => `  ${l}\n`).join(""));
+      lines.push(`\u26a0\ufe0f ${ls[0].replace(/^\[[A-Za-z]+\]\s*/, "")}\n` + ls.slice(1).map((l) => `  ${l}\n`).join(""));
     }
   }
   return lines;
