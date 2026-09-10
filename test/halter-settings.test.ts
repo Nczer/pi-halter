@@ -51,6 +51,7 @@ describe("halter-settings", () => {
     fs.writeFileSync(file, JSON.stringify({ halter: { judge: { thinking: "high" } } }));
     expect(readSettingsFile(file)).toEqual({
       decisionLog: false,
+      ledgerLog: true,
       judge: { enabled: true, provider: null, model: null, thinking: "high", timeoutMs: 8000 },
       mode: "manual",
     });
@@ -64,6 +65,7 @@ describe("halter-settings", () => {
     const out = writeSettings({ decisionLog: false }, file);
     expect(out).toEqual({
       decisionLog: false,
+      ledgerLog: true,
       judge: { enabled: true, provider: null, model: null, thinking: "high", timeoutMs: 8000 },
       mode: "manual",
     });

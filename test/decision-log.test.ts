@@ -25,13 +25,14 @@ import {
   MAX_LOG_BYTES,
   DEFAULT_LOG_FILE,
   resolveJudgeLogPath,
+  resolveUnresolvedLogPath,
   logJudge,
   logJudgeDiff,
   logJudgeInfra,
   logJudgePaths,
   type DecisionLogEntry,
 } from "../gate/decision-log";
-import { DECISION_LOG_ENABLED } from "../config/logging";
+import { DECISION_LOG_ENABLED, setLedgerLogEnabled } from "../config/logging";
 import type {BashRequest, Decision, FileRequest} from "../decide/types";
 import type {JudgeResult} from "../judge/judge";
 
@@ -264,12 +265,13 @@ describe("decision log", () => {
 
   it("settings round-trip: write → read, merge with other keys, missing file → default", () => {
     fs.writeFileSync(settingsFile, JSON.stringify({ halter: { otherHalterKey: 1 } }) + "\n");
-    writeToggleSetting(true, settingsFile);
-    expect(readToggleSetting(settingsFile)).toBe(true);
+    writeToggleSetting("decisionLog", true, settingsFile);
+    expect(readToggleSetting("decisionLog", settingsFile)).toBe(true);
     const saved = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
     expect(saved.halter.otherHalterKey).toBe(1);
     expect(saved.halter.decisionLog).toBe(true);
-    expect(readToggleSetting(path.join(tmp, "missing.json"))).toBe(DECISION_LOG_ENABLED);
+    expect(readToggleSetting("decisionLog", path.join(tmp, "missing.json"))).toBe(DECISION_LOG_ENABLED);
+    expect(readToggleSetting("ledgerLog", path.join(tmp, "missing.json"))).toBe(true); // ledgers default ON
   });
 
   it("never throws when the log path is impossible", () => {
@@ -288,6 +290,10 @@ describe("decision log", () => {
     expect(fs.statSync(logFile + ".1").size).toBe(MAX_LOG_BYTES);
     const [entry] = lines(logFile);
     expect(entry.kind).toBe("auto-allow");
+  });
+
+  it("ledgers default ON in the settings namespace (decisionLog stays OFF)", () => {
+    expect(readToggleSetting("ledgerLog", path.join(tmp, "missing.json"))).toBe(true);
   });
 });
 
@@ -310,6 +316,7 @@ describe("unresolved-token log (logUnresolved)", () => {
     process.env.HALTER_DECISION_LOG = path.join(tmp, "decisions.jsonl");
   });
   afterEach(() => {
+    setLedgerLogEnabled(true, settingsFile); // restore the on-by-default module state
     setDecisionLogEnabled(false, settingsFile);
     if (savedEnv === undefined) delete process.env.HALTER_UNRESOLVED_LOG;
     else process.env.HALTER_UNRESOLVED_LOG = savedEnv;
@@ -366,6 +373,27 @@ describe("unresolved-token log (logUnresolved)", () => {
     expect(fs.existsSync(unresolvedFile)).toBe(false);
   });
 
+  it("resolveUnresolvedLogPath: toggle off → null (no env), on → default file, seam wins", () => {
+    const orig = process.env.HALTER_UNRESOLVED_LOG;
+    try {
+      delete process.env.HALTER_UNRESOLVED_LOG;
+      setLedgerLogEnabled(false, settingsFile);
+      expect(resolveUnresolvedLogPath()).toBeNull();
+      logUnresolved({ cmd: "ls", cwd: "/c", token: "$FOO", persisted: false, outcome: "prompted" }); // must write nowhere
+      setLedgerLogEnabled(true, settingsFile);
+      expect(resolveUnresolvedLogPath()).toContain(path.join("halter", ".log", "unresolved.jsonl"));
+      // env seam still wins with the toggle off (test hermeticity)
+      process.env.HALTER_UNRESOLVED_LOG = unresolvedFile;
+      setLedgerLogEnabled(false, settingsFile);
+      logUnresolved({ cmd: "ls", cwd: "/c", token: "$BAR", persisted: false, outcome: "prompted" });
+      const last = fs.readFileSync(unresolvedFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).pop();
+      expect(last.token).toBe("$BAR");
+    } finally {
+      if (orig === undefined) delete process.env.HALTER_UNRESOLVED_LOG;
+      else process.env.HALTER_UNRESOLVED_LOG = orig;
+    }
+  });
+
   it("never throws when the log path is impossible", () => {
     const blocker = path.join(tmp, "blocker");
     fs.writeFileSync(blocker, "i am a file");
@@ -376,9 +404,10 @@ describe("unresolved-token log (logUnresolved)", () => {
   });
 });
 
-describe("judge ledger (logJudge, always-on, D17)", () => {
+describe("judge ledger (logJudge, on by default, D17)", () => {
   let tmp: string;
   let judgeFile: string;
+  let settingsFile: string;
   const savedEnv = process.env.HALTER_JUDGE_LOG;
 
   function v(approve: "approve" | "defer" | "deny", risk: "low" | "medium" | "high", paths?: string[]): JudgeResult {
@@ -396,6 +425,7 @@ describe("judge ledger (logJudge, always-on, D17)", () => {
   beforeAll(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-judge-"));
     judgeFile = path.join(tmp, "judge.jsonl");
+    settingsFile = path.join(tmp, "halter.json");
   });
   afterAll(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -404,6 +434,7 @@ describe("judge ledger (logJudge, always-on, D17)", () => {
     process.env.HALTER_JUDGE_LOG = judgeFile;
   });
   afterEach(() => {
+    setLedgerLogEnabled(true, settingsFile); // restore the on-by-default module state
     if (savedEnv === undefined) delete process.env.HALTER_JUDGE_LOG;
     else process.env.HALTER_JUDGE_LOG = savedEnv;
     for (const f of [judgeFile, judgeFile + ".1"]) {
@@ -422,6 +453,7 @@ describe("judge ledger (logJudge, always-on, D17)", () => {
   it("resolveJudgeLogPath: default file, scratch path, off → null", () => {
     const orig = process.env.HALTER_JUDGE_LOG;
     try {
+      setLedgerLogEnabled(true, settingsFile); // hermetic: do not depend on the live settings file
       delete process.env.HALTER_JUDGE_LOG;
       expect(resolveJudgeLogPath()).toContain(path.join("halter", ".log", "judge.jsonl"));
       process.env.HALTER_JUDGE_LOG = judgeFile;
@@ -487,5 +519,20 @@ describe("judge ledger (logJudge, always-on, D17)", () => {
     expect(() =>
       logJudgeDiff(bashPd, "dspa", v("approve", "low"), v("deny", "high")),
     ).not.toThrow();
+  });
+
+  it("toggle: off resolves null and writes nothing; env seam wins over the toggle", () => {
+    delete process.env.HALTER_JUDGE_LOG;
+    setLedgerLogEnabled(false, settingsFile);
+    expect(resolveJudgeLogPath()).toBeNull();
+    logJudgeDiff(bashPd, "dspa", v("approve", "low"), v("deny", "high"));
+    expect(fs.existsSync(judgeFile)).toBe(false);
+    setLedgerLogEnabled(true, settingsFile);
+    expect(resolveJudgeLogPath()).toContain(path.join("halter", ".log", "judge.jsonl"));
+    // env seam still wins with the toggle off (test hermeticity)
+    process.env.HALTER_JUDGE_LOG = judgeFile;
+    setLedgerLogEnabled(false, settingsFile);
+    logJudgeDiff(bashPd, "dspa", v("approve", "low"), v("deny", "high"));
+    expect(judgeLines()).toHaveLength(1);
   });
 });

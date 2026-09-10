@@ -4,9 +4,11 @@
  * extensions (pi owns settings.json, written under a lock; extensions keep
  * their own namespace here instead).
  *
- * The decision-log toggle (decision-log.ts) and the judge settings (judge.ts)
- * persist under the `halter` namespace. All reads and writes of the file go
- * through here so there is exactly one corrupt policy and one read path:
+ * The log toggles (decisionLog — gate/decision-log.ts; ledgerLog — the
+ * three diagnostic ledgers, config/logging.ts) and the judge settings
+ * (judge.ts) persist under the `halter` namespace. All reads and writes of
+ * the file go through here so there is exactly one corrupt policy and one
+ * read path:
  *
  *  • corrupt file (bad JSON or non-object top level) → copied to <file>.bak
  *    and defaults apply — user settings are preserved, never silently
@@ -29,7 +31,7 @@ import os from "node:os";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 
 /** Shared settings file; halter owns the "halter" namespace in it (the
- * /judge command and /halter-decision-log persist here; see README
+ * /judge command and the /halter-*-log toggles persist here; see README
  * "Decision log" / "Judge settings"). */
 export const SETTINGS_PATH = path.join(os.homedir(), ".pi", "agent", "settings-ext.json");
 
@@ -64,9 +66,14 @@ export const JUDGE_DEFAULTS: {
  * `mode` — the persistent STARTUP mode (modes/dspa-mode.ts): which mode a
  * new session starts in. Only /dspa is session-persistent ("manual" | "dspa")
  * — /dsp (the full bypass) and /dspat (advisory) are deliberately
- * session-scoped and never written here. */
+ * session-scoped and never written here.
+ *
+ * `ledgerLog` — the diagnostic-ledger toggle (the three ledgers: unresolved,
+ * judge, glob-err; config/logging.ts), ON by default; decisionLog stays off
+ * by default. */
 export const HALTER_DEFAULTS: Record<string, unknown> = {
   decisionLog: false,
+  ledgerLog: true,
   judge: JUDGE_DEFAULTS,
   mode: "manual",
 };

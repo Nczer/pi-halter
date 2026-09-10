@@ -7,6 +7,7 @@ import { isDspatActive, resetDspat, setDspatActive } from "./modes/dspat-mode";
 import { isDspaActive, persistDspaMode, readPersistedMode, resetDspa, setDspaActive } from "./modes/dspa-mode";
 import { onStatusChange } from "./modes/status-bus";
 import { isDecisionLogEnabled, setDecisionLogEnabled } from "./gate/decision-log";
+import { isLedgerLogEnabled, setLedgerLogEnabled } from "./config/logging";
 import {readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, JudgeSettings} from "./judge/judge";
 import {judgeStatus} from "./judge/verdict";
 import { store } from "./gate/store";
@@ -206,20 +207,46 @@ export default async function halterExtension(pi: ExtensionAPI) {
     },
   });
 
-  // ── /halter-decision-log command ──
-  pi.registerCommand("halter-decision-log", {
-    description: "Toggle the JSONL decision log (decisions.jsonl) on/off — the always-on ledgers (unresolved.jsonl, judge.jsonl) are not affected. Pass 'on', 'off', or nothing to toggle. Saved in ~/.pi/agent/settings-ext.json.",
-    handler: async (args, ctx) => {
-      const arg = (args ?? "").trim().toLowerCase();
-      const next =
-        arg === "on" || arg === "enable" ? true : arg === "off" || arg === "disable" ? false : !isDecisionLogEnabled();
-      setDecisionLogEnabled(next);
-      ctx.ui.notify(
-        `Halter: decision log ${next ? "enabled" : "disabled"} (${next ? ".log/decisions.jsonl" : "no logging"})`,
-        next ? "info" : "warning",
-      );
-    },
-  });
+  // ── Log toggles (decisions.jsonl off by default; the three ledgers ON
+  // by default — each has its own command, /halter-decision-log covers
+  // decisions.jsonl only) ──
+
+  const registerLogToggle = (
+    name: string,
+    file: string,
+    def: string,
+    read: () => boolean,
+    set: (enabled: boolean) => void,
+  ) => {
+    pi.registerCommand(name, {
+      description: `Toggle the ${def} on/off — .log/${file}. Pass 'on', 'off', or nothing to toggle. Saved in ~/.pi/agent/settings-ext.json.`,
+      handler: async (args, ctx) => {
+        const arg = (args ?? "").trim().toLowerCase();
+        const next =
+          arg === "on" || arg === "enable" ? true : arg === "off" || arg === "disable" ? false : !read();
+        set(next);
+        ctx.ui.notify(
+          `Halter: ${def} ${next ? "enabled" : "disabled"} (${next ? `.log/${file}` : "no logging"})`,
+          next ? "info" : "warning",
+        );
+      },
+    });
+  };
+
+  registerLogToggle(
+    "halter-decision-log",
+    "decisions.jsonl",
+    "JSONL decision log (off by default)",
+    isDecisionLogEnabled,
+    setDecisionLogEnabled,
+  );
+  registerLogToggle(
+    "halter-ledger-log",
+    "unresolved.jsonl, judge.jsonl, glob-err.jsonl",
+    "diagnostic ledgers (on by default)",
+    isLedgerLogEnabled,
+    setLedgerLogEnabled,
+  );
 
   // ── Tool call interception ──
   pi.on("tool_call", async (event, ctx) => {

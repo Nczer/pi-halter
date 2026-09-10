@@ -10,7 +10,7 @@ import { notifyStatus } from "./status-bus";
  * stage-1 approve+low — the cross-check of stage-1 lows is exactly the
  * data /dspa's auto-allow path cannot produce) and the FINAL verdict is
  * stage 2's, or stage 1's when stage 2 produced none; stage disagreement
- * is mirrored to the always-on judge ledger (.log/judge.jsonl). The human
+ * is mirrored to the on-by-default judge ledger (.log/judge.jsonl). The human
  * always takes the call — this mode never changes the gate's decision.
  *
  * The widget is the unified halter widget's mode line: an indicator plus

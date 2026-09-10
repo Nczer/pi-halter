@@ -22,9 +22,10 @@
  * A second file (logUnresolved) records unresolved-token outcomes:
  * <extension dir>/.log/unresolved.jsonl — the parser-convergence ledger
  * (the same token's outcome flipping prompted → gate-stop → auto-allowed).
- * ALWAYS ON (D17): it is small — one line per unresolved token, on signal
- * only — and the /halter-decision-log toggle deliberately does not cover
- * it.
+ * ON BY DEFAULT (D17): it is small — one line per unresolved token, on
+ * signal only. The /halter-decision-log toggle deliberately does not cover
+ * it; it and the judge ledger (and the glob-err ledger) share one toggle:
+ * /halter-ledger-log (key `ledgerLog`, state in config/logging.ts).
  *
  * A third file (logJudge) records judge diagnostics:
  * <extension dir>/.log/judge.jsonl — stage-2 TIGHTENINGS over stateless
@@ -32,20 +33,21 @@
  * direction for a stateless stage 1, not a line), judge infra failures (no-model /
  * no-auth / call-failed / no-explanation), and stage-2 path-report
  * mismatches (the D13 parser-gap signal, mirrored into decisions.jsonl
- * while that log is on). ALWAYS ON for the same reason.
+ * while that log is on). ON by default for the same reason; same shared
+ * toggle.
  *
  * Both ledgers are append-only and NOT version-bound (unlike
  * decisions.jsonl, which is reviewed per gate version).
  *
  * Test hermeticity: the vitest worker setup forces ALL THREE off —
  * HALTER_DECISION_LOG=off (decision log), plus HALTER_UNRESOLVED_LOG=off
- * and HALTER_JUDGE_LOG=off (the always-on ledgers). Test files that need
+ * and HALTER_JUDGE_LOG=off (the on-by-default ledgers). Test files that need
  * one set the matching env var to a tmp path per-test.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DECISION_LOG_ENABLED } from "../config/logging";
+import { DECISION_LOG_ENABLED, LEDGER_LOG_ENABLED, isLedgerLogEnabled } from "../config/logging";
 import { SETTINGS_PATH, readSettingsFile, writeSettings } from "../halter-settings";
 import { summarizePrompt } from "../ui/prompt-builder";
 import type {Decision, FilePromptData, PermissionRequest, PromptData} from "../decide/types";
@@ -57,29 +59,35 @@ import { judgePathLogFields } from "../judge/paths";
 // lives at <extension dir>/.log/ regardless of where the module lives.
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-// ── Persisted toggle ("decisionLog" in the halter namespace of
- // settings-ext.json, shared with the judge settings) ──
+// ── Persisted toggles (halter namespace of settings-ext.json, shared with
+ // the judge settings): decisionLog (this file) / ledgerLog (the three
+ // diagnostic ledgers, state lives in config/logging.ts) ──
 
-const SETTING_KEY = "decisionLog";
+export type LedgerToggle = "decisionLog" | "ledgerLog";
 
-/** Read the toggle from a settings file (missing file → compile-time default). */
-export function readToggleSetting(filePath: string = SETTINGS_PATH): boolean {
-  const value = readSettingsFile(filePath)[SETTING_KEY];
-  return value !== undefined ? value !== false : DECISION_LOG_ENABLED;
+const TOGGLE_DEFAULTS: Record<LedgerToggle, boolean> = {
+  decisionLog: DECISION_LOG_ENABLED,
+  ledgerLog: LEDGER_LOG_ENABLED,
+};
+
+/** Read one log toggle from a settings file (missing key → compile-time default). */
+export function readToggleSetting(which: LedgerToggle = "decisionLog", filePath: string = SETTINGS_PATH): boolean {
+  const value = readSettingsFile(filePath)[which];
+  return value !== undefined ? value !== false : TOGGLE_DEFAULTS[which];
 }
 
-/** Write the toggle to a settings file (merges with other halter keys). */
-export function writeToggleSetting(enabled: boolean, filePath: string = SETTINGS_PATH): void {
-  writeSettings({ [SETTING_KEY]: enabled }, filePath);
+/** Write one log toggle to a settings file (merges with other halter keys). */
+export function writeToggleSetting(which: LedgerToggle = "decisionLog", enabled: boolean, filePath: string = SETTINGS_PATH): void {
+  writeSettings({ [which]: enabled }, filePath);
 }
 
 // Module state — re-read from disk on every (re)load of the extension.
-let decisionLogEnabled = readToggleSetting();
+let decisionLogEnabled = readToggleSetting("decisionLog");
 
 /** Set the toggle (in-memory + persisted). The command handler calls this. */
 export function setDecisionLogEnabled(enabled: boolean, filePath: string = SETTINGS_PATH): void {
   decisionLogEnabled = enabled;
-  writeToggleSetting(enabled, filePath);
+  writeToggleSetting("decisionLog", enabled, filePath);
 }
 
 export function isDecisionLogEnabled(): boolean {
@@ -90,21 +98,22 @@ export const DEFAULT_LOG_FILE = path.join(root, ".log", "decisions.jsonl");
 const UNRESOLVED_LOG_FILE = path.join(root, ".log", "unresolved.jsonl");
 const JUDGE_LOG_FILE = path.join(root, ".log", "judge.jsonl");
 
-/** Resolve the unresolved-token log path. `HALTER_UNRESOLVED_LOG` is a
- * test seam (point the log at a scratch path); `off` disables it (vitest
- * hermeticity). Production never sets it. */
-function resolveUnresolvedLogPath(): string | null {
+/** Resolve the unresolved-token log path. No env var → the shared ledger
+ * toggle (/halter-ledger-log, on by default). `HALTER_UNRESOLVED_LOG` wins
+ * when set (point the log at a scratch path); `off` disables it (vitest
+ * hermeticity). */
+export function resolveUnresolvedLogPath(): string | null {
   const v = process.env.HALTER_UNRESOLVED_LOG;
-  if (v === undefined) return UNRESOLVED_LOG_FILE;
+  if (v === undefined) return isLedgerLogEnabled() ? UNRESOLVED_LOG_FILE : null;
   return v === "off" ? null : v;
 }
 
-/** Resolve the judge-ledger path. `HALTER_JUDGE_LOG` is a test seam
- * (scratch path); `off` disables it (vitest hermeticity). Production
- * never sets it. */
+/** Resolve the judge-ledger path. No env var → the shared ledger toggle
+ * (/halter-ledger-log, on by default). `HALTER_JUDGE_LOG` wins when set
+ * (scratch path); `off` disables it (vitest hermeticity). */
 export function resolveJudgeLogPath(): string | null {
   const v = process.env.HALTER_JUDGE_LOG;
-  if (v === undefined) return JUDGE_LOG_FILE;
+  if (v === undefined) return isLedgerLogEnabled() ? JUDGE_LOG_FILE : null;
   return v === "off" ? null : v;
 }
 export const MAX_LOG_BYTES = 5 * 1024 * 1024;
@@ -344,9 +353,10 @@ export interface UnresolvedLogEntry {
  */
 export function logUnresolved(e: UnresolvedLogEntry): void {
   try {
-    // Always-on (D17): the toggle covers decisions.jsonl only — the
-    // convergence ledger must not depend on it. The env seam is the only
-    // gate (vitest hermeticity).
+    // The /halter-decision-log toggle covers decisions.jsonl only — the
+    // convergence ledger must not depend on it. Its toggle is the shared
+    // /halter-ledger-log (on by default); the env seam wins when set
+    // (vitest hermeticity).
     const file = resolveUnresolvedLogPath();
     if (!file) return;
     const entry: UnresolvedLogEntry = {
@@ -360,7 +370,7 @@ export function logUnresolved(e: UnresolvedLogEntry): void {
   }
 }
 
-// ── Judge ledger (always-on, D17) ──────────────────────────────────────
+// ── Judge ledger (on by default, D17) ──────────────────────────────────────
 
 export type JudgeLogMode = "dspa" | "dspat" | "manual";
 
@@ -399,9 +409,9 @@ function judgeCmdOf(pd: PromptData): string {
 }
 
 /**
- * Append one line to the always-on judge ledger (see JudgeLogEntry). Only
- * on signal: diffs and mismatches, never the agreeing/covered majority.
- * Never throws.
+ * Append one line to the judge ledger (see JudgeLogEntry; on by default,
+ * /halter-ledger-log). Only on signal: diffs and mismatches, never the
+ * agreeing/covered majority. Never throws.
  */
 export function logJudge(e: Omit<JudgeLogEntry, "ts">): void {
   try {
@@ -454,7 +464,7 @@ export function logJudgeDiff(
 
 /**
  * D13: a stage-2 verdict whose path report the floor never saw — the
- * parser-gap / hallucination signal, mirrored to the always-on ledger so
+ * parser-gap / hallucination signal, mirrored to the on-by-default ledger so
  * it survives the decision log being off (or wiped on /reload). A no-op
  * when the report is absent or fully covered by the floor.
  */

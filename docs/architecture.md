@@ -257,8 +257,8 @@ fail-safe bucket. The widget renders non-zero counts in `g r c d` order after
 **Path report (D13).** A stage-2 verdict also reports the paths the operation
 touches; the gate cross-checks them against the floor's own knowledge and
 logs mismatches as `judgePathMisses` (diagnostic only; nothing in the gate reads
-model output back). Mismatches land in the decision log AND the always-on
-judge ledger (D17); mine with `tools/log-inspect.mjs judge` (or
+model output back). Mismatches land in the decision log AND the judge ledger
+(on by default, D17); mine with `tools/log-inspect.mjs judge` (or
 `dspa --paths` on a toggle-on decision log).
 
 **D4 (denials to the agent) is on HOLD**: the planned behavior where a
@@ -278,7 +278,7 @@ verdict — stage 2's, or stage 1's when stage 2 produced none
 (explanation + `→ suggests: APPROVE|REJECT|DEFER (<risk>)`). The user's
 choice is recorded against that final verdict as session agreement stats
 (widget line). Stage disagreements and stage-2 path mismatches are mirrored
-to the always-on judge ledger (D17). No auto-allow.
+to the judge ledger (on by default, D17). No auto-allow.
 An on-demand `💭 Explain` prompt option runs the judge in any regime without
 recording agreement stats (the human picks when to consult, so the subset is
 self-selected).
@@ -378,20 +378,25 @@ calls to its tool; the loader recovers the tool name from the plugin file's
   into `decide()` and the prompt flow; a runtime singleton.
 - **Decision log** (`.log/decisions.jsonl`, off by default): one line per tool
   call with kind, target, why/reason, regime tag, and dspa stop tag.
-  Version-bound: delete after a `/reload` of gate code. The
-  `/halter-decision-log` toggle covers THIS file only (D17 split). `tools/
-  log-inspect.mjs` does the recurring extractions (summary, audit, dspa,
-  dspa --paths, stats).
-- **Unresolved log** (`.log/unresolved.jsonl`, always-on): the fate of each
-  unbound token (outcome, LLM suggestion, user decision, whether it became a
-  confirmed resolution). Convergence is the token flipping from `prompted`
-  to `auto-allowed`.
-- **Judge ledger** (`.log/judge.jsonl`, always-on, D17): signal-only judge
-  diagnostics — stage-2 tightenings over stateless stage 1 (`diff` — a
+  Version-bound: delete after a `/reload` of gate code. The decision log has
+  its own toggle (`/halter-decision-log`); the three ledgers share one
+  (`/halter-ledger-log`; same arg handling; D17 split). `tools/log-inspect.mjs`
+  does the recurring extractions (summary, audit, dspa, dspa --paths, stats).
+- **Unresolved log** (`.log/unresolved.jsonl`, on by default): the fate of
+  each unbound token (outcome, LLM suggestion, user decision, whether it
+  became a confirmed resolution). Convergence is the token flipping from
+  `prompted` to `auto-allowed`.
+- **Judge ledger** (`.log/judge.jsonl`, on by default, D17): signal-only
+  judge diagnostics — stage-2 tightenings over stateless stage 1 (`diff` — a
   stage-2 loosening is the expected direction, not a line), stage
   failures (`infra`: no-model / no-auth / no-explanation / call-failed —
   no-explanation lines carry the normalized sub-reason in `detail`), and
   D13 path mismatches (`paths`). Mine with `tools/log-inspect.mjs judge`.
+- **Glob-err ledger** (`.log/glob-err.jsonl`, on by default): credential-scan
+  glob-verify failures only — a healthy run writes nothing. When a relative
+  glob's `fs.globSync` throws (or is missing in the runtime), the scan fails
+  closed with an honest `glob-unverified:` stop; this ledger keeps the error
+  for mining (the pattern, the error name+message, the cwd).
 - **Widget** (`ui/widget.ts`): one status widget. Mode lines pinned on top (one
   line each: dsp warning, dspa health counts, dspat agreement), then the
   session's active rules.
