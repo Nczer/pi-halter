@@ -222,7 +222,7 @@ describe("status (unified halter status — see widget.ts)", () => {
       reason: null,
     });
     updateDspaWidget(ctx);
-    expect(status()).toBe("» DSPA: auto-allowing");
+    expect(status()).toBe("» DSPA"); // bare name pre-first-op
   });
 
   it("clears when inactive", () => {
