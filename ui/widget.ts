@@ -191,7 +191,24 @@ function displayPaths(paths: string[], cap: number): string {
  * overview line): the judging stage, "last: <target>", the DSPAT
  * description and last disagreement.
  */
-const STATUS_BUDGET = 40; // visible chars, terminal-independent
+/**
+ * Generous on purpose: halter owns its own footer line, and BOTH footers
+ * (this ext's and pi's default) truncate it to the real terminal width.
+ * The budget only decides which rule segments drop behind …+N — it is the
+ * width a status is assumed to be read in.
+ */
+const STATUS_BUDGET = 120; // visible chars, terminal-independent
+
+// Legacy-widget cleanup ran once per module instance: setWidget(undefined)
+// rebuilds pi's widget containers AND requests a render, so it must not run
+// on every status update. /reload re-imports the module → fresh flag → the
+// old build's widgets are cleared again exactly when they could be stale.
+let legacyWidgetsCleared = false;
+
+/** Test seam: re-arm the legacy-widget clear (fresh module state). */
+export function resetLegacyWidgets(): void {
+  legacyWidgetsCleared = false;
+}
 
 export function updateStatus(ctx: ExtensionContext): void {
   const theme = ctx.ui.theme;
@@ -220,12 +237,16 @@ export function updateStatus(ctx: ExtensionContext): void {
     toolGrantItems.length > 0;
 
   // Legacy widget ids (pre-status migration, incl. the pre-merge per-mode
-  // ids): clear them so a same-process /reload from an old build cannot
-  // leave stale widgets where the status line now lives.
-  ctx.ui.setWidget("halter", undefined);
-  ctx.ui.setWidget("dsp-warning", undefined);
-  ctx.ui.setWidget("dspa", undefined);
-  ctx.ui.setWidget("dspat", undefined);
+  // ids): clear them once per module instance so a same-process /reload from
+  // an old build cannot leave stale widgets where the status line now lives
+  // (see the legacyWidgetsCleared flag above for why this is gated).
+  if (!legacyWidgetsCleared) {
+    legacyWidgetsCleared = true;
+    ctx.ui.setWidget("halter", undefined);
+    ctx.ui.setWidget("dsp-warning", undefined);
+    ctx.ui.setWidget("dspa", undefined);
+    ctx.ui.setWidget("dspat", undefined);
+  }
 
   if (isDspActive()) {
     // DSP bypasses the whole gate — the session rules are noise, so the
