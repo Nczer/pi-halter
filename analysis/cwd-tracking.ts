@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { expandTilde } from "./path-util";
+import { resolvePathReal } from "./path-analysis";
 import { tokenizeSegment } from "./tokenizer";
 import { pathAwareCommands } from "../config";
 import type { BashSegment } from "./bash-parser";
@@ -540,6 +541,29 @@ export function reResolveCwdDependentPaths(
     out.push(base === null
       ? (rel ? `${UNKNOWN_CWD_MARKER}/${rel.replace(/^\.\//, "")}` : UNKNOWN_CWD_MARKER)
       : path.resolve(base, rel));
+  }
+  return out;
+}
+
+/**
+ * The session-cwd resolutions parseCommand emits for a segment's cwd-dependent
+ * dot tokens (./../ relatives — the $PWD forms never reach the parser's path
+ * set). For dot tokens expandTilde/expandHomeToken are identity, so this is
+ * exactly the parser's own `resolvePathReal(expandTilde(arg), cwd)` per token.
+ *
+ * analyzeCommand removes these when the segment's effective base differs from
+ * the session cwd: the pre-cd resolution names a location the command never
+ * touches at runtime (the cd either ran or it did not — under a LITERAL cd
+ * that existed when the gate stat'd it, it ran). Kept, it is a phantom
+ * outside-dir (the prompt claims the pre-cd location) and a dead grant (an
+ * always-for-dir approval for a path the command cannot reach). The base
+ * resolution (or the unknown-cwd marker) replaces it.
+ */
+export function staleCwdResolutions(seg: BashSegment, sessionCwd: string): string[] {
+  const out: string[] = [];
+  for (const { isPwd, rel } of cwdDependentTokens(seg)) {
+    if (isPwd) continue;
+    out.push(resolvePathReal(rel, sessionCwd));
   }
   return out;
 }
