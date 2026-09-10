@@ -124,6 +124,13 @@ describe("assignment binding", () => {
     expect(r.unresolved[0].reason).toBe("var");
   });
 
+  it("a token used N times yields ONE sentinel (not N identical rows)", async () => {
+    // The shape that grew unresolved.jsonl: long scripts reference the same
+    // token in several args.
+    const r = await resolve('f=$g; echo "$f" && grep -n x "$f" | head -4 && sed -n "$f" file');
+    expect(r.unresolved.map(u => u.token)).toEqual(["$f"]);
+  });
+
   it("reassigned ref is ambiguous → sentinel", async () => {
     const r = await resolve("f=a; f=b; cat $f");
     expect(r.unresolved.map(u => u.token)).toEqual(["$f"]);
@@ -131,7 +138,10 @@ describe("assignment binding", () => {
 
   it("subshell-local assignment does not leak to the parent", async () => {
     const r = await resolve("(f=/etc/x; cat $f); cat $f");
-    expect(r.unresolved.map(u => u.token)).toEqual(["$f", "$f"]);
+    // Both occurrences are unbound sentinels — but the list is per token, not
+    // per occurrence (a grant/confirmation for "$f" covers both, and the
+    // ledger/prompt must not repeat the identical row).
+    expect(r.unresolved.map(u => u.token)).toEqual(["$f"]);
   });
 
   it("subshell inherits the parent assignment", async () => {

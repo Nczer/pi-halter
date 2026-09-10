@@ -332,10 +332,17 @@ export function resolveOpaqueRefs(
 ): OpaqueResolution {
   const paths = new Set<string>();
   const unresolved: UnresolvedRef[] = [];
+  // Per TOKEN, not per occurrence: a token written N times is one unit for
+  // every consumer (prompt lines, the gate's sentinel pass, the unresolved
+  // ledger — per-occurrence entries were N identical rows, the ledger's
+  // mysterious growth on long multi-line scripts).
+  const seenTokens = new Set<string>();
   for (const ref of refs) {
     const r = resolveOneRef(ref, segments, effectiveCwds, assignments, sessionCwd, isInside);
     if (r.kind === "outside") for (const p of r.paths) paths.add(p);
     else if (r.kind === "sentinel") {
+      if (seenTokens.has(ref.raw)) continue;
+      seenTokens.add(ref.raw);
       unresolved.push({
         token: ref.raw,
         reason: r.reason,
