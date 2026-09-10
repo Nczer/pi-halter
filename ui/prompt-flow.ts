@@ -87,23 +87,24 @@ export async function showPrompt(
   const baseBody = prompt.body;
 
   // /dspa fall-through: explain why the operation was not auto-allowed —
-  // the gate reason, and/or the judge verdict that declined to approve.
+  // the gate reason (the title — it is THE reason, and the title is what
+  // is visible when the body scrolls), and/or the judge verdict that
+  // declined to approve (leads the body).
   if (dspa) {
     if (!dspa.gate.ok) {
-      // The floor-stop line leads the body: appended, it sat after the
-      // command, path lists, and chain listing — off-screen on long
-      // prompts, so "what stopped the auto-allow" was invisible (the
-      // latency heuristic existed because of this).
       prompt = {
         ...prompt,
-        body: `🚧 DSPA: not auto-allowed — ${dspa.gate.reason}\n\n` + prompt.body,
+        title: `🚧 DSPA: ${dspa.gate.reason}`,
       };
       if (dspa.verdict) {
         // D10: untrusted-package stop — the judge ran anyway; its verdict is
         // advisory input for the Trust/Yes/No decision, not an auto-allow.
+        const rest = prompt.body;
         prompt = {
           ...prompt,
-          body: prompt.body + "\n" + judgeVerdictBlock(dspa.verdict, "— advisory (floor stop stands)"),
+          body:
+            judgeVerdictBlock(dspa.verdict, dspa.stage!, "— advisory (floor stop stands)") +
+            (rest ? `\n\n${rest}` : ""),
         };
       }
       if (dspa.note) {
@@ -122,14 +123,14 @@ export async function showPrompt(
           ? "— not auto-allowed (risk must be low or medium)"
           : "— not auto-allowed (risk must be low)"
         : undefined;
-      prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(dspa.verdict, note) };
+      prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(dspa.verdict, dspa.stage!, note) };
       if (dspa.note) {
         prompt = { ...prompt, body: prompt.body + `\n🚧 DSPA: ${dspa.note}` };
       }
     } else if (dspa.note) {
       prompt = {
         ...prompt,
-        body: prompt.body + `\n🚧 DSPA: not auto-allowed — ${dspa.note}`,
+        body: prompt.body + `\n🚧 DSPA: ${dspa.note}`,
       };
     }
   }
@@ -161,7 +162,7 @@ export async function showPrompt(
       const verdict = v2 ?? v1;
       if (verdict) {
         dspatVerdict = verdict;
-        prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(verdict) };
+        prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(verdict, v2 ? 2 : 1) };
       } else {
         // Both stages failed (auth, timeout, bad reply) — surface it
         // instead of silently showing a bare prompt.
@@ -190,7 +191,7 @@ export async function showPrompt(
       ? {
           explain: async () => {
             const verdict = await getJudgeVerdict(pd, ctx, store);
-            return verdict ? judgeVerdictBlock(verdict) : null;
+            return verdict ? judgeVerdictBlock(verdict, 1) : null;
           },
         }
       : undefined;
@@ -233,6 +234,7 @@ export async function showPrompt(
             const block = v2
               ? judgeVerdictBlock(
                   v2,
+                  2,
                   v2.approve === "approve"
                     ? "— not auto-allowed (risk must be low or medium)"
                     : undefined,

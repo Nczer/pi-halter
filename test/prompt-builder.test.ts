@@ -50,9 +50,9 @@ function fileDecision(overrides: Partial<FilePromptData> = {}): PromptDecision {
 // ── Bash: body content ─────────────────────────────────────────────────────
 
 describe("bash body content", () => {
-  it("shows command in body", () => {
+  it("no re-listing of the command in body (the transcript carries it)", () => {
     const prompt = buildPrompt(bashDecision({ needsCommandApproval: true }));
-    expect(prompt.body).toContain("ls -la");
+    expect(prompt.body).not.toContain("ls -la");
   });
 
   it("title is Bash when only command needs approval", () => {
@@ -120,11 +120,11 @@ describe("bash body content", () => {
     expect(prompt.body).toContain("/etc");
   });
 
-  it("truncates long multiline commands", () => {
+  it("long multiline commands are not re-listed (no truncation marker)", () => {
     const longCmd = Array.from({ length: 25 }, (_, i) => `echo line ${i}`).join("\n");
     const prompt = buildPrompt(bashDecision({ command: longCmd }));
-    expect(prompt.body).toContain("(+");
-    expect(prompt.body).toContain("more lines");
+    expect(prompt.body).not.toContain("(+");
+    expect(prompt.body).not.toContain("echo line 0");
   });
 
   it("shows formatted breakdown with numbered segments for tmux chains", () => {
@@ -146,23 +146,22 @@ describe("bash body content", () => {
     expect(segmentLines.some(l => l.includes("⚠"))).toBe(true);
   });
 
-  it("shows raw command for non-tmux chains (flagged segments only)", () => {
-    // Non-tmux chains: raw command leads, then only the flagged segments
-    // (the raw command above carries the unflagged ones — no re-listing).
+  it("non-tmux chains list only the flagged segments (no raw command)", () => {
+    // The transcript's pending tool call carries the raw chain; the body
+    // lists only the flagged segment texts (unflagged ones never repeat).
     const cmd = "ls && rm -rf /";
     const prompt = buildPrompt(bashDecision({ command: cmd, segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
-    expect(prompt.body).toContain("  ls && rm -rf /");
+    expect(prompt.body).not.toContain("  ls && rm -rf /");
     expect(prompt.body).not.toContain("bash (");
-    expect(prompt.body).toContain("⚠️ 2. rm -rf /");
-    expect(prompt.body).not.toContain("1. ls");
+    expect(prompt.body).toContain("⚠️ rm -rf /");
+    expect(prompt.body).not.toContain("⚠️ ls");
   });
 
   it("marks non-allowed segments with warning emoji in chain list", () => {
     const prompt = buildPrompt(bashDecision({ command: "ls && rm -rf /", segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
-    const segmentLines = prompt.body.split("\n").filter(l => l.includes("2."));
+    const segmentLines = prompt.body.split("\n").filter(l => l.includes("rm -rf /"));
     expect(segmentLines.length).toBe(1);
     expect(segmentLines[0]).toContain("⚠");
-    expect(segmentLines[0]).toContain("rm -rf /");
   });
 
   it("shows formatted breakdown even when tmux command has no boilerplate", () => {
@@ -188,8 +187,7 @@ describe("bash body content", () => {
       nonAllowedSegmentIndices: [1],
     }));
     // Flagged line shows the compressed form
-    const chainLines = prompt.body.split("\n").filter(l => l.includes("2."));
-    expect(chainLines[0]).toContain("cat <<'EOF'");
+    const chainLines = prompt.body.split("\n").filter(l => l.includes("cat <<'EOF'"));
     expect(chainLines[0]).toContain("(5 lines)"); // heredoc has 5 lines including EOF markers
     expect(chainLines[0]).not.toContain("line2");
   });
@@ -204,12 +202,12 @@ describe("bash body content", () => {
       needsPathApproval: true,
       outsideDirs: ["/home/nczer/.config/joplin-desktop"],
     }));
-    expect(prompt.body).toContain("⚠️ 10. head -30 ~/.config/joplin-desktop/userchrome.css");
-    expect(prompt.body).not.toContain("1. echo part 0");
-    expect(prompt.body).not.toContain("30. echo part 29");
+    expect(prompt.body).toContain("⚠️ head -30 ~/.config/joplin-desktop/userchrome.css");
+    expect(prompt.body).not.toContain("⚠️ echo part 0");
+    expect(prompt.body).not.toContain("⚠️ echo part 29");
   });
 
-  it("unflagged chains list no segments (the raw command carries them)", () => {
+  it("unflagged chains list no segments (nothing to show)", () => {
     const segs = Array.from({ length: 12 }, (_, i) => `echo part ${i}`);
     const prompt = buildPrompt(bashDecision({
       command: segs.join("\n"),
@@ -218,9 +216,9 @@ describe("bash body content", () => {
       needsPathApproval: true,
       outsideDirs: ["/etc"],
     }));
-    expect(prompt.body).toContain("echo part 0"); // raw command still shown
-    expect(prompt.body).not.toContain("1. echo part 0"); // but no numbered listing
-    expect(prompt.body).not.toContain("12. echo part 11");
+    expect(prompt.body).not.toContain("echo part 0"); // no re-listing at all
+    expect(prompt.body).not.toContain("echo part 11");
+    expect(prompt.body).toContain("⚠️ outside cwd: /etc"); // risk signal still shows
   });
 
   it("short chains list only the flagged segments", () => {
@@ -230,9 +228,9 @@ describe("bash body content", () => {
       segments: segs,
       nonAllowedSegmentIndices: [3],
     }));
-    expect(prompt.body).toContain("⚠️ 4. echo part 3");
-    expect(prompt.body).not.toContain("1. echo part 0");
-    expect(prompt.body).not.toContain("8. echo part 7");
+    expect(prompt.body).toContain("⚠️ echo part 3");
+    expect(prompt.body).not.toContain("⚠️ echo part 0");
+    expect(prompt.body).not.toContain("⚠️ echo part 7");
   });
 
   it("truncates long segment display in chain list", () => {
@@ -243,14 +241,15 @@ describe("bash body content", () => {
       nonAllowedSegmentIndices: [1],
     }));
     // Flagged segment display should be truncated to 80 chars
-    const segLines = prompt.body.split("\n").filter(l => l.includes("2."));
-    expect(segLines[0]).toContain("...");
-    expect(segLines[0].length).toBeLessThanOrEqual(80 + 8); // "⚠️ 2. " prefix
+    const segLines = prompt.body.split("\n").filter(l => l.includes("..."));
+    expect(segLines[0]).toContain("⚠️");
+    expect(segLines[0].length).toBeLessThanOrEqual(80 + 8); // "⚠️ " prefix + ellipsis
   });
 
-  it("shows hasUnsafePattern warning text (one line)", () => {
+  it("hasUnsafePattern no longer adds a note line (Always is withheld, not explained)", () => {
     const prompt = buildPrompt(bashDecision({ needsCommandApproval: true, hasUnsafePattern: true }));
-    expect(prompt.body).toContain("danger pattern: always prompts");
+    expect(prompt.body).not.toContain("danger pattern: always prompts");
+    expect(prompt.includeAlwaysOption).toBe(false);
   });
 });
 

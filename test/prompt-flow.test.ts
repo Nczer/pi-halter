@@ -170,8 +170,9 @@ describe("/dspat active", () => {
     await showPrompt(bashDecision(), ctx, store);
     expect(verdictMock).toHaveBeenCalledTimes(1);
     expect(stage2Mock).toHaveBeenCalledTimes(1);
-    // Final verdict = stage 2's.
-    expect(shownPrompt().body).toContain("💭 Judge: Confirmed: scoped temp cleanup.");
+    // Final verdict = stage 2's (the stage is the marker).
+    expect(shownPrompt().body).toContain("   Confirmed: scoped temp cleanup.");
+    expect(shownPrompt().body).toContain("→ suggests: APPROVE (low, stage 2)");
     expect(judgeArg()).toBeUndefined();
   });
 
@@ -190,8 +191,8 @@ describe("/dspat active", () => {
     });
     await showPrompt(bashDecision(), ctx, store);
     const body = shownPrompt().body;
-    expect(body).toContain("💭 Judge: Target escapes the cwd — unscoped delete.");
-    expect(body).toContain("→ suggests: REJECT (high)");
+    expect(body).toContain("   Target escapes the cwd — unscoped delete.");
+    expect(body).toContain("→ suggests: REJECT (high, stage 2)");
     expect(body).not.toContain("Looks like a temp cleanup.");
   });
 
@@ -204,8 +205,8 @@ describe("/dspat active", () => {
     });
     stage2Mock.mockResolvedValue(null);
     await showPrompt(bashDecision(), ctx, store);
-    expect(shownPrompt().body).toContain("💭 Judge: Removes a temp file.");
-    expect(shownPrompt().body).toContain("→ suggests: APPROVE (low)");
+    expect(shownPrompt().body).toContain("   Removes a temp file.");
+    expect(shownPrompt().body).toContain("→ suggests: APPROVE (low, stage 1)");
   });
 
   it("D17: stage 1 failed → stage 2 verdict shown", async () => {
@@ -217,8 +218,8 @@ describe("/dspat active", () => {
       risk: "medium",
     });
     await showPrompt(bashDecision(), ctx, store);
-    expect(shownPrompt().body).toContain("💭 Judge: Session context shows a bounded target.");
-    expect(shownPrompt().body).toContain("→ suggests: APPROVE (medium)");
+    expect(shownPrompt().body).toContain("   Session context shows a bounded target.");
+    expect(shownPrompt().body).toContain("→ suggests: APPROVE (medium, stage 2)");
   });
 
   it("defer verdict (final stage) → DEFER, not REJECT (the model could not verify — a different signal)", async () => {
@@ -230,7 +231,7 @@ describe("/dspat active", () => {
     });
     await showPrompt(bashDecision(), ctx, store);
     const body = shownPrompt().body;
-    expect(body).toContain("→ suggests: DEFER (medium)");
+    expect(body).toContain("→ suggests: DEFER (medium, stage 2)");
     expect(body).not.toContain("REJECT");
     expect(judgeArg()).toBeUndefined();
   });
@@ -298,18 +299,18 @@ describe("/dspa fall-through", () => {
     judgeStatusMock.mockReturnValue({ state: "invalid", modelLabel: null, reason: "session model not resolvable" });
     const dspa: DspaFallthrough = { gate: { ok: false, reason: "dangerous: rm" }, verdict: null, stage: null };
     await showPrompt(bashDecision(), ctx, store, dspa);
-    const body = shownPrompt().body;
-    expect(body).toContain("🚧 DSPA: not auto-allowed — dangerous: rm");
-    expect(body).not.toContain("Judge invalid");
+    // The floor stop is the title now — it leads the prompt; the body scrolls.
+    expect(shownPrompt().title).toBe("🚧 DSPA: dangerous: rm");
+    expect(shownPrompt().body).not.toContain("Judge invalid");
   });
 
   it("gate ok, judge unavailable → 🚧 note line", async () => {
     const dspa: DspaFallthrough = { gate: { ok: true }, verdict: null, stage: null, note: "judge invalid: session model not resolvable" };
     await showPrompt(bashDecision(), ctx, store, dspa);
-    expect(shownPrompt().body).toContain("🚧 DSPA: not auto-allowed — judge invalid: session model not resolvable");
+    expect(shownPrompt().body).toContain("🚧 DSPA: judge invalid: session model not resolvable");
   });
 
-  it("gate ok, verdict present → 💭 Judge line (unchanged)", async () => {
+  it("gate ok, verdict present → verdict block (stage in the suggests line)", async () => {
     const dspa: DspaFallthrough = {
       gate: { ok: true },
       // Stage 1: an approve/medium at stage 2 would have auto-allowed, so a
@@ -318,7 +319,7 @@ describe("/dspa fall-through", () => {
       stage: 1,
     };
     await showPrompt(bashDecision(), ctx, store, dspa);
-    expect(shownPrompt().body).toContain("APPROVE (medium) — not auto-allowed (risk must be low)");
+    expect(shownPrompt().body).toContain("→ suggests: APPROVE (medium, stage 1) — not auto-allowed (risk must be low)");
   });
 
   it("gate ok, deny verdict → REJECT without the not-auto-allowed note", async () => {
@@ -329,7 +330,7 @@ describe("/dspa fall-through", () => {
     };
     await showPrompt(bashDecision(), ctx, store, dspa);
     const body = shownPrompt().body;
-    expect(body).toContain("→ suggests: REJECT (high)");
+    expect(body).toContain("→ suggests: REJECT (high, stage 2)");
     expect(body).not.toContain("not auto-allowed (risk must be low)");
   });
 
@@ -364,9 +365,10 @@ describe("/dspa fall-through", () => {
     };
     await showPrompt(decision, ctx, store, dspa);
     const body = shownPrompt().body;
-    expect(body).toContain("🚧 DSPA: not auto-allowed — untrusted package (npx evil-pkg)");
-    expect(body).toContain("💭 Judge: Dev tool in use this session.");
-    expect(body).toContain("→ suggests: APPROVE (low) — advisory (floor stop stands)");
+    expect(shownPrompt().title).toBe("🚧 DSPA: untrusted package (npx evil-pkg)");
+    // The verdict block leads the body (the freshest word on the operation).
+    expect(body).toContain("   Dev tool in use this session.");
+    expect(body).toContain("→ suggests: APPROVE (low, stage 2) — advisory (floor stop stands)");
     // the prompt offers the Trust option for the fetchable form
     expect((shownPrompt() as any).trustPackages).toEqual(["evil-pkg"]);
   });
@@ -432,7 +434,7 @@ describe("Judge again wiring (dspa fall-through)", () => {
     await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, defer1, 1, "stage 2 unavailable"), request);
     const r = await retryArg()!.retry();
     expect(r.autoAllowed).toBe(false);
-    expect(r.body).toContain("APPROVE (high) — not auto-allowed (risk must be low or medium)");
+    expect(r.body).toContain("→ suggests: APPROVE (high, stage 2) — not auto-allowed (risk must be low or medium)");
   });
 
   it("retry() with a failed stage-2 call → replacement body with the failure note", async () => {
