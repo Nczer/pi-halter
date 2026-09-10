@@ -1,7 +1,7 @@
 import path from "node:path";
 import { parseCommand, type OpaqueRef, type BashSegment } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
-import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath } from "./cwd-tracking";
+import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath, staleCwdResolutions } from "./cwd-tracking";
 import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
 import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
@@ -205,6 +205,25 @@ export async function analyzeCommand(
   // `cd $D && find .`) → the base (or the unknown-cwd marker) joins the path
   // set. Inside-cwd/allowed bases are filtered out by getOutsideCwdPaths.
   const normBase = path.resolve(expandTilde(cwd));
+  // Stale pre-cd resolutions: parseCommand resolved dot tokens (./../) against
+  // the session cwd. For a segment whose base moved off it, that location is
+  // unreachable at runtime (the cd was stat-verified at gate time) — drop the
+  // stale entries before the re-resolutions below add the real locations.
+  // parseCommand dedupes across segments, so a string may be stale for one
+  // segment AND the legitimate resolution of another (base === cwd) — keep
+  // those: removing them would under-flag the second segment.
+  const keepStale = new Set<string>();
+  const dropStale = new Set<string>();
+  for (let i = 0; i < segments.length; i++) {
+    const stale = staleCwdResolutions(segments[i], normBase);
+    if (effectiveCwds[i] === normBase) { for (const s of stale) keepStale.add(s); }
+    else { for (const s of stale) dropStale.add(s); }
+  }
+  for (const s of dropStale) {
+    if (keepStale.has(s)) continue;
+    const idx = paths.indexOf(s);
+    if (idx !== -1) paths.splice(idx, 1);
+  }
   for (let i = 0; i < segments.length; i++) {
     const base = effectiveCwds[i];
     if (base !== normBase) {

@@ -22,6 +22,18 @@
   key `ledgerLog`). All stay ON by default — this is a valve, not a
   behavior change. The `HALTER_*_LOG` env seams keep priority over the toggle
   (test hermeticity).
+- **Stale pre-cwd resolutions drop out of post-cd segments** — the parser
+  resolves `./`/`../` tokens against the session cwd, and the post-cd
+  re-resolution ADDED the base-resolved locations without removing the
+  pre-cd ones: `cd ~/.pi/… && ls ../` flagged the session-cwd parent (a
+  location the command never touches at runtime) as outside while the real
+  location (an allowed dir) was filtered out — phantom outside-dirs, dead
+  grants, and the sole cause of a prompt on an otherwise-allowed command.
+  The stale entries are now removed before re-resolution; a string is kept
+  when it is the legitimate resolution of a segment whose base is still the
+  session cwd (the parser dedupes cross-segment, so the same string can be
+  stale for one segment and real for another); unknown-base segments keep
+  only the marker.
 
 ## 3.22.0 — 2026-09-08
 

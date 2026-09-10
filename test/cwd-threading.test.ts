@@ -484,6 +484,51 @@ describe("base-access flagging (cd is navigation, not access)", () => {
 
 });
 
+describe("stale session-cwd resolutions drop out of post-cd segments (phantom pre-cwd outside-dir)", () => {
+  const d = (cmd: string) => decide({ type: "bash", command: cmd, cwd: CWD }, createStore());
+  const pathsOf = async (cmd: string): Promise<string[]> => {
+    const dec = await d(cmd);
+    expect(dec.kind).toBe("prompt");
+    if (dec.kind !== "prompt") return [];
+    return ((dec.promptData as BashPromptData).analysis?.paths) ?? [];
+  };
+
+  it("cd <dir> && cat ../x: the pre-cwd resolution is gone, only the base one remains", async () => {
+    const paths = await pathsOf("cd /var/tmp && cat ../x.txt");
+    expect(paths).toContain("/var/x.txt");
+    expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+
+  it("`..` / `../..` tokens after a cd no longer name the pre-cwd dirs (the user-reported shape)", async () => {
+    const paths = await pathsOf(
+      "cd /var/tmp && ls ../ ; cat ../../x.txt 2>/dev/null || cat ../x.txt 2>/dev/null",
+    );
+    expect(paths).toContain("/var");
+    expect(paths).toContain("/var/x.txt");
+    // stale: CWD/.. (the `../`) and $HOME/x.txt (the `../x.txt`) must be gone
+    expect(paths).not.toContain(os.homedir());
+    expect(paths).not.toContain(path.join(os.homedir(), "x.txt"));
+  }, 15000);
+
+  it("unknown base: the marker replaces the stale resolution", async () => {
+    const paths = await pathsOf("cd $X && cat ../x.txt");
+    expect(paths).toContain(`${UNKNOWN_CWD_MARKER}/../x.txt`);
+    expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+
+  it("a base===cwd twin keeps its session-cwd resolution (stale for one segment, legitimate for the other)", async () => {
+    const paths = await pathsOf(`cd /var/tmp && cat ../x.txt; cd ${CWD} && cat ../x.txt`);
+    expect(paths).toContain(path.resolve(CWD, "../x.txt")); // seg4's runtime location
+    expect(paths).toContain("/var/x.txt"); // seg2's runtime location
+  }, 15000);
+
+  it("redirect dot targets are stale-resolutions too (`cat < ../x`)", async () => {
+    const paths = await pathsOf("cd /var/tmp && cat < ../x.txt");
+    expect(paths).toContain("/var/x.txt");
+    expect(paths).not.toContain(path.resolve(CWD, "../x.txt"));
+  }, 15000);
+});
+
 describe("$HOME expansion integration (P2)", () => {
   it("cat $HOME/<outside> prompts (resolves to the real home path)", async () => {
     const a = await analyzeCommand("cat $HOME/.halt-secret-probe.txt", CWD);
