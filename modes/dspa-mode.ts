@@ -28,8 +28,9 @@ let denials = 0;
 let declines = 0;
 let defers = 0;
 /** The in-flight judge stage (1: stateless check, 2: session-context
- *  intent pass), null when idle — rendered inline on this widget's line
- *  ("… — judging stage 2…") instead of a separate in-flight widget. */
+ *  intent pass), null when idle — in-flight state only; since the
+ *  status-line migration the stage itself is no longer painted, the
+ *  transition just refreshes the unified status. */
 let judging: 1 | 2 | null = null;
 
 export function setDspaActive(on: boolean): void {
@@ -121,16 +122,17 @@ export function recordDspaStop(kind: DspaStopKind, verdictModel: string | null):
 }
 
 /** The in-flight judge stage (1: stateless check, 2: session-context
- *  intent pass), null when idle — the unified widget renders it inline on
- *  the DSPA line ("… — judging stage 2…"). */
+ *  intent pass), null when idle — no longer painted since the
+ *  status-line migration (the status carries stats, not in-flight stage). */
 export function getDspaJudgingStage(): 1 | 2 | null {
   return judging;
 }
 
 /**
- * Set the inline judging stage (verdict.ts calls it at the start and end of
- * every judge stage while /dspa is active; null clears it). Re-renders the
- * widget so the change paints immediately (setWidget forces a TUI repaint).
+ * Set the in-flight judging stage (verdict.ts calls it at the start and end
+ * of every judge stage while /dspa is active; null clears it). Refreshes
+ * the unified status on every transition (the stage itself is no longer
+ * painted).
  */
 export function setDspaJudging(stage: 1 | 2 | null, ctx: ExtensionContext): void {
   if (judging === stage) return;
@@ -164,10 +166,9 @@ export function getDspaStats(): {
 }
 
 /**
- * Re-render the unified halter widget (widget.ts): the DSPA line is pinned
- * on top of it, ONE line (counter + `last: <target>` merged — the detail is
- * dropped from the tail before the line itself truncates). Hidden only while
- * the judge is invalid (see the unified widget's render).
+ * Refresh the unified status (widget.ts): the DSPA main carries the counter
+ * run ("» DSPA: 3a 2g") ahead of the rule segments; hidden only while the
+ * judge is invalid (see updateStatus).
  */
 export function updateDspaWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;

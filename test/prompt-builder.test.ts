@@ -109,9 +109,10 @@ describe("bash body content", () => {
     expect(prompt.title).toContain("⚠");
   });
 
-  it("includes danger flags in body", () => {
+  it("includes danger flags in body (one ⚠️ line per reason, no header)", () => {
     const prompt = buildPrompt(bashDecision({ riskDangerous: true, riskSeverity: "high", riskReasons: ["[System] sudo (privilege escalation)"] }));
-    expect(prompt.body).toContain("[System]  sudo (privilege escalation)");
+    expect(prompt.body).toContain("⚠️ [System] sudo (privilege escalation)");
+    expect(prompt.body).not.toContain("Danger flags");
   });
 
   it("includes paths outside cwd in body", () => {
@@ -145,20 +146,23 @@ describe("bash body content", () => {
     expect(segmentLines.some(l => l.includes("⚠"))).toBe(true);
   });
 
-  it("shows raw command for non-tmux chains", () => {
-    // Non-tmux chains keep raw command display + chain list
+  it("shows raw command for non-tmux chains (flagged segments only)", () => {
+    // Non-tmux chains: raw command leads, then only the flagged segments
+    // (the raw command above carries the unflagged ones — no re-listing).
     const cmd = "ls && rm -rf /";
     const prompt = buildPrompt(bashDecision({ command: cmd, segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
     expect(prompt.body).toContain("  ls && rm -rf /");
     expect(prompt.body).not.toContain("bash (");
-    expect(prompt.body).toContain("This chains 2 commands");
+    expect(prompt.body).toContain("⚠️ 2. rm -rf /");
+    expect(prompt.body).not.toContain("1. ls");
   });
 
   it("marks non-allowed segments with warning emoji in chain list", () => {
     const prompt = buildPrompt(bashDecision({ command: "ls && rm -rf /", segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
-    const segmentLines = prompt.body.split("\n").filter(l => l.includes("."));
-    expect(segmentLines.find(l => l.includes("1."))!).not.toContain("⚠");
-    expect(segmentLines.find(l => l.includes("2."))!).toContain("⚠");
+    const segmentLines = prompt.body.split("\n").filter(l => l.includes("2."));
+    expect(segmentLines.length).toBe(1);
+    expect(segmentLines[0]).toContain("⚠");
+    expect(segmentLines[0]).toContain("rm -rf /");
   });
 
   it("shows formatted breakdown even when tmux command has no boilerplate", () => {
@@ -175,23 +179,22 @@ describe("bash body content", () => {
   });
 
   it("compresses multi-line segments in non-tmux chain list", () => {
-    // Non-tmux chains use plain numbered list with multi-line compression
+    // Flagged-segment lines use the compressed display (raw command above
+    // still shows the full heredoc)
     const multiLine = "cat <<'EOF'\nline1\nline2\nline3\nEOF";
     const prompt = buildPrompt(bashDecision({
       command: `ls && ${multiLine}`,
       segments: ["ls", multiLine],
       nonAllowedSegmentIndices: [1],
     }));
-    expect(prompt.body).toContain("This chains 2 commands");
-    expect(prompt.body).toContain("(5 lines)"); // heredoc has 5 lines including EOF markers
-    // Chain list segment 2 shows compressed form (raw command above still shows full heredoc)
+    // Flagged line shows the compressed form
     const chainLines = prompt.body.split("\n").filter(l => l.includes("2."));
     expect(chainLines[0]).toContain("cat <<'EOF'");
-    expect(chainLines[0]).toContain("(5 lines)");
+    expect(chainLines[0]).toContain("(5 lines)"); // heredoc has 5 lines including EOF markers
     expect(chainLines[0]).not.toContain("line2");
   });
 
-  it("caps long chain listings to the flagged segments (no off-screen prompts)", () => {
+  it("long chains list only the flagged segments (no off-screen prompts)", () => {
     const segs = Array.from({ length: 30 }, (_, i) => `echo part ${i}`);
     segs[9] = 'head -30 ~/.config/joplin-desktop/userchrome.css';
     const prompt = buildPrompt(bashDecision({
@@ -201,14 +204,12 @@ describe("bash body content", () => {
       needsPathApproval: true,
       outsideDirs: ["/home/nczer/.config/joplin-desktop"],
     }));
-    expect(prompt.body).toContain("This chains 30 commands");
-    expect(prompt.body).toContain("10. ⚠️ head -30 ~/.config/joplin-desktop/userchrome.css");
-    expect(prompt.body).toContain("29 unflagged segments omitted");
+    expect(prompt.body).toContain("⚠️ 10. head -30 ~/.config/joplin-desktop/userchrome.css");
     expect(prompt.body).not.toContain("1. echo part 0");
     expect(prompt.body).not.toContain("30. echo part 29");
   });
 
-  it("long unflagged chain shows a head/tail sample", () => {
+  it("unflagged chains list no segments (the raw command carries them)", () => {
     const segs = Array.from({ length: 12 }, (_, i) => `echo part ${i}`);
     const prompt = buildPrompt(bashDecision({
       command: segs.join("\n"),
@@ -217,26 +218,21 @@ describe("bash body content", () => {
       needsPathApproval: true,
       outsideDirs: ["/etc"],
     }));
-    expect(prompt.body).toContain("This chains 12 commands");
-    expect(prompt.body).toContain("1. echo part 0");
-    expect(prompt.body).toContain("4. echo part 3");
-    expect(prompt.body).toContain("(+6 more)");
-    expect(prompt.body).toContain("11. echo part 10");
-    expect(prompt.body).toContain("12. echo part 11");
-    expect(prompt.body).not.toContain("5. echo part 4");
+    expect(prompt.body).toContain("echo part 0"); // raw command still shown
+    expect(prompt.body).not.toContain("1. echo part 0"); // but no numbered listing
+    expect(prompt.body).not.toContain("12. echo part 11");
   });
 
-  it("short chains (≤8) still list every segment", () => {
+  it("short chains list only the flagged segments", () => {
     const segs = Array.from({ length: 8 }, (_, i) => `echo part ${i}`);
     const prompt = buildPrompt(bashDecision({
       command: segs.join("\n"),
       segments: segs,
       nonAllowedSegmentIndices: [3],
     }));
-    expect(prompt.body).toContain("This chains 8 commands");
-    expect(prompt.body).toContain("1. echo part 0");
-    expect(prompt.body).toContain("4. ⚠️ echo part 3");
-    expect(prompt.body).toContain("8. echo part 7");
+    expect(prompt.body).toContain("⚠️ 4. echo part 3");
+    expect(prompt.body).not.toContain("1. echo part 0");
+    expect(prompt.body).not.toContain("8. echo part 7");
   });
 
   it("truncates long segment display in chain list", () => {
@@ -244,18 +240,17 @@ describe("bash body content", () => {
     const prompt = buildPrompt(bashDecision({
       command: `ls && ${longSegment}`,
       segments: ["ls", longSegment],
-      nonAllowedSegmentIndices: [],
+      nonAllowedSegmentIndices: [1],
     }));
-    expect(prompt.body).toContain("This chains 2 commands");
-    // Segment display should be truncated to 80 chars
+    // Flagged segment display should be truncated to 80 chars
     const segLines = prompt.body.split("\n").filter(l => l.includes("2."));
     expect(segLines[0]).toContain("...");
-    expect(segLines[0].length).toBeLessThanOrEqual(80 + 5); // "  2. " prefix = 5 chars
+    expect(segLines[0].length).toBeLessThanOrEqual(80 + 8); // "⚠️ 2. " prefix
   });
 
-  it("shows hasUnsafePattern warning text", () => {
+  it("shows hasUnsafePattern warning text (one line)", () => {
     const prompt = buildPrompt(bashDecision({ needsCommandApproval: true, hasUnsafePattern: true }));
-    expect(prompt.body).toContain("danger patterns always prompt");
+    expect(prompt.body).toContain("danger pattern: always prompts");
   });
 });
 
@@ -668,7 +663,7 @@ describe("edge cases", () => {
 
   it("handles empty command", () => {
     const prompt = buildPrompt(bashDecision({ command: "" }));
-    expect(prompt.body).toContain("Command:");
+    expect(prompt.body).not.toContain("undefined");
   });
 });
 
@@ -764,14 +759,13 @@ describe("buildPrompt: unresolved references", () => {
       unresolved: [{ token: "$f", reason: "var" }, { token: "$x/sub", reason: "base" }],
     });
     const b = buildPrompt(d);
-    expect(b.body).toContain("Unresolved references");
-    expect(b.body).toContain("  \u2022 $f\n");
-    expect(b.body).toContain("$x/sub \u2014 working directory not statically known");
+    expect(b.body).toContain("⚠️ unresolved $f\n");
+    expect(b.body).toContain("⚠️ unresolved $x/sub \u2014 working directory not statically known");
   });
 
   it("omits the section when everything resolved", () => {
     const d = bashDecision({ outsideDirs: ["/etc"], needsPathApproval: true, relativeToolIds: [] });
-    expect(buildPrompt(d).body).not.toContain("Unresolved references");
+    expect(buildPrompt(d).body).not.toContain("unresolved ");
   });
 
   it("never offers a sentinel dir in the Always grant label", () => {

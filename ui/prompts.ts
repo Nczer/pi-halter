@@ -43,7 +43,7 @@ enum Tier2 {
 }
 
 const SESSION_SCOPE_WARNING =
-  "\n\n⚠️ This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
+  "\n⚠️ This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
 
 // ── Data-driven tier-1 options ──
 
@@ -191,7 +191,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
         `Trust: ${prompt.trustPackages.join(", ")} (session)`,
         {
           title: "Confirm Trust Package",
-          body: `"Trust" will auto-allow run forms of these packages for the ENTIRE SESSION:\n\n${prompt.trustPackages.map(p => `  \u2022 ${p} (npx/uvx/dlx \u2026 any args)`).join("\n")}${SESSION_SCOPE_WARNING}`,
+          body: `"Trust" will auto-allow run forms of these packages for the ENTIRE SESSION:\n${prompt.trustPackages.map(p => `  \u2022 ${p} (npx/uvx/dlx \u2026 any args)`).join("\n")}${SESSION_SCOPE_WARNING}`,
         },
         () => { cb.onTrust?.(); return "always"; },
       ),
@@ -228,8 +228,8 @@ async function runBroaderUmbrella(
   const action = chosen.label.split(" ")[0];
   const isWrite = action !== "Read";
   const body = isWrite
-    ? `"Always Yes" will auto-allow ${action.toLowerCase()} for this directory this session (includes read):\n\n  ${chosen.dir}/*`
-    : `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n\n  ${chosen.dir}/*`;
+    ? `"Always Yes" will auto-allow ${action.toLowerCase()} for this directory this session (includes read):\n  ${chosen.dir}/*`
+    : `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n  ${chosen.dir}/*`;
 
   if (await confirmAlways(ctx, "Confirm Always Allow", body)) {
     onAlwaysBroader?.(chosen.dir);

@@ -3,7 +3,7 @@ import type {Decision, PermissionRequest} from "../decide/types";
 import type { Store } from "../gate/store";
 import { buildPrompt, pdTargetLabel } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
-import { updateWidget } from "./widget";
+import { updateStatus } from "./widget";
 import { RuleGenerator } from "../decide/rule-generator";
 import {getJudgeVerdict, getStage2Verdict, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
 import { dspaAutoAllowed } from "../gate/fallthrough";
@@ -271,7 +271,7 @@ export async function showPrompt(
     // what the confirmation showed.
     if (prompt.resolverDirs?.length) store.addAllowed({ readDirs: prompt.resolverDirs });
     persistResolutions(true);
-    updateWidget(ctx);
+    updateStatus(ctx);
   }, () => {
     // Always (paths): the concrete outside-cwd dirs plus the resolver dirs
     // — exactly the union the option label named (pathGrantDirs).
@@ -279,27 +279,27 @@ export async function showPrompt(
     const dirs = [...new Set([...concrete, ...(prompt.resolverDirs ?? [])])];
     if (dirs.length > 0) {
       store.addAllowed({ readDirs: dirs });
-      updateWidget(ctx);
+      updateStatus(ctx);
     }
     persistResolutions(true);
   }, () => {
     const rules = RuleGenerator.generateFileOnlyRules(decision.promptData);
     if (rules) {
       store.addAllowed(rules);
-      updateWidget(ctx);
+      updateStatus(ctx);
     }
   }, (dir?: string) => {
     const rules = RuleGenerator.generateBroaderRules(decision.promptData, dir);
     if (rules) {
       store.addAllowed(rules);
-      updateWidget(ctx);
+      updateStatus(ctx);
     }
   }, judge, () => {
     // D10: package trust is the grant for fetchable run forms — offered on
     // EVERY bash prompt that carries one (all modes), not just the /dspa
     // untrusted-package stop. The store check is session-global.
     for (const pkg of prompt.trustPackages ?? []) store.trustPackage(pkg);
-    updateWidget(ctx);
+    updateStatus(ctx);
   }, retryJudge);
 
   // /dspat: record the verdict paired with the human's decision —

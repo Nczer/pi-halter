@@ -3,8 +3,8 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { store } from "../gate/store";
 import { isDspActive } from "../modes/dsp-mode";
-import { isDspaActive, getDspaJudgingStage, getDspaStats } from "../modes/dspa-mode";
-import { isDspatActive, getDspatJudgingStage, getDspatStats } from "../modes/dspat-mode";
+import { isDspaActive, getDspaStats } from "../modes/dspa-mode";
+import { isDspatActive, getDspatStats } from "../modes/dspat-mode";
 import {judgeStatus} from "../judge/verdict";
 
 // ── Path deduplication ──
@@ -116,26 +116,7 @@ export function groupCommandVariants(items: string[]): string[] {
   return result;
 }
 
-// ── Widget rendering ──
-
-/**
- * One mode line = main (accent, bold) + details (muted), merged into ONE
- * screen row to keep the bottom bar compact. When the merged line exceeds
- * width, details are dropped from the tail first (the last-target, then the
- * counter) before the main itself is truncated — the detail is the
- * dispensable part.
- */
-function modeLine(width: number, theme: Pick<Theme, "fg" | "bold">, main: string, details: string[]): string {
-  const parts = [main, ...details];
-  while (parts.length > 1 && visibleWidth(parts.join(" — ")) > width) parts.pop();
-  if (parts.length === 1) {
-    return truncateToWidth(theme.fg("accent", theme.bold(main)), width);
-  }
-  const styled =
-    theme.fg("accent", theme.bold(main)) +
-    theme.fg("muted", " — " + parts.slice(1).join(" — "));
-  return truncateToWidth(styled, width);
-}
+// ── Status rendering ──
 
 /**
  * One session-rules line: `· R/W: … · R: … · Bash: … · Pkg: … · Cwd: … ·
@@ -188,26 +169,33 @@ function displayPaths(paths: string[], cap: number): string {
 }
 
 /**
- * The single halter status widget (below the editor):
+ * The single bounded halter status string, set via ctx.ui.setStatus(
+ * "halter", …). With the footer extension (separate ext) it gets its own
+ * line above the meta line; without it (pi's default footer) it renders on
+ * pi's extension-status line, key-sorted with the others. The budget is
+ * FIXED — setStatus has no width parameter — so the string trims itself:
  *
- *   ⚠ DSP                                          (DSP active — alone)
- *   » DSPA: 79a 3g 2r 1c 2d — last: <target>        (DSPA active)
- *     (compact session-health counts, non-zero only: a auto-allowed,
- *      g floor stop, r judge reject, c declined (approve, risk too high),
- *      d defer/no verdict. The description text shows while all counts are
- *      zero — the pre-first-op state (session start, re-arm, model switch),
- *      where it is the line's only content. A model tag `(Name)` appears
- *      only when the judge model differs from the session model — the
- *      status line below already names that one.)
- *   ◎ DSPAT: judge advises… — M/N agreed — last: …  (DSPAT active)
- *   · R/W: … · R: … · Bash: … · Pkg: … · Cwd: … · Tools: … (one line)
+ *   ⚠ DSP                                       (DSP active — alone, rules hidden)
+ *   » DSPA: 79a 3g 2r                           (DSPA: session-health counts,
+ *   » DSPA (Other-9B): 3a                        non-zero only, in stop-source
+ *   » DSPA: auto-allowing                        order: a auto-allowed, g floor stop,
+ *   ◎ DSPAT: 3/4 agreed                          r judge reject, c declined, d defer;
+ *   · R/W: … · R: … · Bash: … · Pkg: …           the description stands in while all
+ *   · R: … · Bash: …                             counts are zero (pre-first-op).
+ *                                                 The model tag shows only when the
+ *                                                 judge model differs from the session
+ *                                                 model. The rule segments ride the
+ *                                                 remaining budget, dropping whole
+ *                                                 low-priority segments behind …+N.)
  *
- * ONE widget, because pi renders same-placement widgets in set order and a
- * re-set moves the widget to the end — with separate "dspa"/"dspat" widgets
- * the mode lines floated below the rule lines after every rules update.
- * Merged here, the mode lines are pinned on top and each is one line.
+ * Dropped vs. the former widget (live in the prompts/toasts, not the
+ * overview line): the judging stage, "last: <target>", the DSPAT
+ * description and last disagreement.
  */
-export function updateWidget(ctx: ExtensionContext): void {
+const STATUS_BUDGET = 40; // visible chars, terminal-independent
+
+export function updateStatus(ctx: ExtensionContext): void {
+  const theme = ctx.ui.theme;
   const bashItems = [...store.listAllowedBash()];
   const readPathItems = filterSubPaths([...store.listAllowedReadPaths()]);
   const writePathItems = filterSubPaths([...store.listAllowedWritePaths()]);
@@ -232,113 +220,104 @@ export function updateWidget(ctx: ExtensionContext): void {
     pkgItems.length > 0 ||
     toolGrantItems.length > 0;
 
-  // Legacy per-mode widget ids (pre-merge): clear them so a same-process
-  // /reload cannot leave stale duplicates above or below this one.
+  // Legacy widget ids (pre-status migration, incl. the pre-merge per-mode
+  // ids): clear them so a same-process /reload from an old build cannot
+  // leave stale widgets where the status line now lives.
+  ctx.ui.setWidget("halter", undefined);
   ctx.ui.setWidget("dsp-warning", undefined);
   ctx.ui.setWidget("dspa", undefined);
   ctx.ui.setWidget("dspat", undefined);
 
-  if (!hasSessionRules && !isDspActive() && !isDspaActive() && !isDspatActive()) {
-    ctx.ui.setWidget("halter", undefined);
+  if (isDspActive()) {
+    // DSP bypasses the whole gate — the session rules are noise, so the
+    // warning stands alone.
+    ctx.ui.setStatus("halter", theme.fg("error", theme.bold("⚠ DSP")));
     return;
   }
 
-  ctx.ui.setWidget("halter", (_tui, theme) => {
-    const render = (width: number) => {
-      const lines: string[] = [];
+  // Judge-mode main: hidden only while the judge is invalid (the prompt
+  // body carries the "⚠️ Judge invalid" line there). judgeStatus is a live
+  // read (settings + session model), so a model switch is picked up on the
+  // next status update. The modes are mutually exclusive (index.ts), so
+  // if/else — one line can carry one main.
+  const judgeOk = judgeStatus(ctx).state !== "invalid";
+  let main = "";
+  if (isDspaActive() && judgeOk) {
+    const s = getDspaStats();
+    // `»` is a text-default glyph (monochrome in every terminal) — the mode
+    // follows the DSP style: no color emoji, all-caps name. The judge model
+    // tag only when it is NOT the session model (the stats line already
+    // names that one): `» DSPA:` bare, or `» DSPA (Other-9B):`.
+    const sessionRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null;
+    const modelTag =
+      s.model === null || s.model === sessionRef
+        ? ""
+        : ` (${s.model.split("/").pop()})`;
+    // Session health as compact counts (only non-zero), in stop-source
+    // order: a = auto-allowed, g = floor stop, r = judge REJECT,
+    // c = approve-but-above-authority (declined), d = DEFER/no verdict.
+    const counts: string[] = [];
+    if (s.autoAllowed > 0) counts.push(`${s.autoAllowed}a`);
+    if (s.gate > 0) counts.push(`${s.gate}g`);
+    if (s.deny > 0) counts.push(`${s.deny}r`);
+    if (s.declined > 0) counts.push(`${s.declined}c`);
+    if (s.defer > 0) counts.push(`${s.defer}d`);
+    const body = counts.length > 0 ? counts.join(" ") : "auto-allowing";
+    main = theme.fg("accent", theme.bold(`» DSPA${modelTag}: ${body}`));
+  } else if (isDspatActive() && judgeOk) {
+    const s = getDspatStats();
+    // Agreement counter only — updateStatus re-runs after every recorded
+    // outcome, so live.
+    main = theme.fg(
+      "accent",
+      theme.bold(s.total > 0 ? `◎ DSPAT: ${s.agreed}/${s.total} agreed` : "◎ DSPAT"),
+    );
+  }
 
-      if (isDspActive()) {
-        // DSP bypasses the whole gate — the session rules are noise, so the
-        // widget shows the warning line alone (pre-merge: "halter" was
-        // cleared and a separate "dsp-warning" widget showed the same line).
-        lines.push(
-          truncateToWidth(theme.fg("error", theme.bold("⚠ DSP")), width),
-        );
-        return lines;
+  if (hasSessionRules) {
+    // One segment per grant category, safety-priority order (the write
+    // boundary first, cosmetic tool grants last). Paths are ~-shortened
+    // and sibling-combined for display; command sigs keep their grouping.
+    const segments: { label: string; text: string }[] = [];
+    if (allWritePaths.length > 0) {
+      segments.push({ label: "R/W", text: displayPaths(allWritePaths.map(shortenHomePath), 3) });
+    }
+    if (readOnlyPaths.length > 0) {
+      segments.push({ label: "R", text: displayPaths(readOnlyPaths.map(shortenHomePath), 3) });
+    }
+    if (bashItems.length > 0) {
+      segments.push({ label: "Bash", text: capList(groupCommandVariants(bashItems), 5) });
+    }
+    if (pkgItems.length > 0) {
+      // D10: trusted packages (fetchable run forms — npx/uvx/dlx …)
+      segments.push({ label: "Pkg", text: capList(pkgItems, 5) });
+    }
+    if (cwdItems.length > 0) {
+      // Cwd-bound bash grants (relative-path tools): shown with the cwd
+      // they bind to, since the same sig is a different grant elsewhere.
+      segments.push({ label: "Cwd", text: capList(cwdItems.map(shortenHomePath), 2) });
+    }
+    if (toolGrantItems.length > 0) {
+      // Tool-plugin grants: `blender` (whole tool) or `blender:kind:read`.
+      segments.push({ label: "Tools", text: capList(toolGrantItems, 3) });
+    }
+
+    const remaining = STATUS_BUDGET - visibleWidth(main) - (main !== "" ? 1 : 0);
+    if (remaining >= 8) {
+      const ruleLine = renderRulesLine(remaining, theme, segments);
+      if (ruleLine) {
+        // renderRulesLine fits `remaining` except in the single-segment
+        // overflow case — cap that here so the whole status stays bounded.
+        const fitted =
+          visibleWidth(ruleLine) <= remaining ? ruleLine : truncateToWidth(ruleLine, remaining, "…");
+        main += (main !== "" ? " " : "") + fitted;
       }
+    }
+  }
 
-      // Judge-mode lines: hidden only while the judge is invalid (the prompt
-      // body carries the "⚠️ Judge invalid" line there). judgeStatus is a
-      // live read (settings + session model), so a model switch is picked up
-      // on the next repaint.
-      const judgeOk = judgeStatus(ctx).state !== "invalid";
-
-      if (isDspaActive() && judgeOk) {
-        const s = getDspaStats();
-        // `»` is a text-default glyph (monochrome in every terminal) — the
-        // mode follows the DSP widget's style: no color emoji, all-caps name.
-        // The judge model tag only when it is NOT the session model (pi's
-        // status line one row below already names that one): `» DSPA:` bare,
-        // or `» DSPA (Other-9B):` for a differently-configured judge.
-        const sessionRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null;
-        const modelTag =
-          s.model === null || s.model === sessionRef
-            ? ""
-            : ` (${s.model.split("/").pop()})`;
-        // Session health as compact counts (only non-zero), in stop-source
-        // order: a = auto-allowed, g = floor stop, r = judge REJECT,
-        // c = approve-but-above-authority (declined), d = DEFER/no verdict.
-        const counts: string[] = [];
-        if (s.autoAllowed > 0) counts.push(`${s.autoAllowed}a`);
-        if (s.gate > 0) counts.push(`${s.gate}g`);
-        if (s.deny > 0) counts.push(`${s.deny}r`);
-        if (s.declined > 0) counts.push(`${s.declined}c`);
-        if (s.defer > 0) counts.push(`${s.defer}d`);
-        const stage = getDspaJudgingStage();
-        const main =
-          (counts.length > 0
-            ? `» DSPA${modelTag}: ${counts.join(" ")}`
-            : `» DSPA${modelTag}: auto-allowing gate+judge-approved operations`) +
-          (stage ? ` — judging stage ${stage}…` : "");
-        lines.push(modeLine(width, theme, main, s.lastTarget ? [`last: ${s.lastTarget.replace(homedir() + "/", "~/")}`] : []));
-      }
-
-      if (isDspatActive() && judgeOk) {
-        const s = getDspatStats();
-        const stage = getDspatJudgingStage();
-        const main = `◎ DSPAT${stage ? ` — judging stage ${stage}…` : ""}: judge advises on every permission prompt`;
-        // Agreement counter + last disagreement, merged onto the mode line.
-        // updateWidget is re-run after every recorded outcome, so live.
-        const details =
-          s.total > 0
-            ? [`${s.agreed}/${s.total} agreed`, ...(s.lastDisagreement ? [`last: ${s.lastDisagreement}`] : [])]
-            : [];
-        lines.push(modeLine(width, theme, main, details));
-      }
-
-      if (hasSessionRules) {
-        // One line for every grant category, safety-priority order (the write
-        // boundary first, cosmetic tool grants last). Paths are ~-shortened
-        // and sibling-combined for display; command sigs keep their grouping.
-        const segments: { label: string; text: string }[] = [];
-        if (allWritePaths.length > 0) {
-          segments.push({ label: "R/W", text: displayPaths(allWritePaths.map(shortenHomePath), 3) });
-        }
-        if (readOnlyPaths.length > 0) {
-          segments.push({ label: "R", text: displayPaths(readOnlyPaths.map(shortenHomePath), 3) });
-        }
-        if (bashItems.length > 0) {
-          segments.push({ label: "Bash", text: capList(groupCommandVariants(bashItems), 5) });
-        }
-        if (pkgItems.length > 0) {
-          // D10: trusted packages (fetchable run forms — npx/uvx/dlx …)
-          segments.push({ label: "Pkg", text: capList(pkgItems, 5) });
-        }
-        if (cwdItems.length > 0) {
-          // Cwd-bound bash grants (relative-path tools): shown with the cwd
-          // they bind to, since the same sig is a different grant elsewhere.
-          segments.push({ label: "Cwd", text: capList(cwdItems.map(shortenHomePath), 2) });
-        }
-        if (toolGrantItems.length > 0) {
-          // Tool-plugin grants: `blender` (whole tool) or `blender:kind:read`.
-          segments.push({ label: "Tools", text: capList(toolGrantItems, 3) });
-        }
-        const ruleLine = renderRulesLine(width, theme, segments);
-        if (ruleLine) lines.push(ruleLine);
-      }
-
-      return lines.map(l => truncateToWidth(l, width));
-    };
-    return { render, invalidate: () => {} };
-  }, { placement: "belowEditor" });
+  if (main === "") {
+    ctx.ui.setStatus("halter", undefined);
+  } else {
+    ctx.ui.setStatus("halter", main);
+  }
 }

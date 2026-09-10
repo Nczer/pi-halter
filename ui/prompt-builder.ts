@@ -175,16 +175,6 @@ function buildBashPrompt(
     .sort();
   const nonAllowedSet = new Set(nonAllowedSegmentIndices);
 
-  // Pre-compute aligned risk reasons (reused in body and tier2)
-  const alignedReasons = riskDangerous
-    ? riskReasons.map(r => {
-        const m = r.match(/^(\[.+?\]\s*)(.*)/);
-        const tagLen = m ? m[1].length : 0;
-        return { tagLen, tag: m ? m[1] : "", rest: m ? m[2] : r };
-      })
-    : [];
-  const tagWidth = alignedReasons.length ? Math.max(...alignedReasons.map(r => r.tagLen)) : 0;
-
   const hasBoth = needsCommandApproval && needsPathApproval;
   const uniqueSigs = [...new Set(signatures)];
   // The root is never an Always grant (one click must not hand out the whole
@@ -230,118 +220,98 @@ function buildBashPrompt(
     ? `\u26a0\ufe0f ${titlePrefix}`
     : titlePrefix;
 
-  // Always show raw command first (truncated if long)
+  // Body — dense layout (the prompt dialog blocks the screen; every line
+  // must earn its place). The raw command leads — indented, unlabeled (the
+  // title already says Bash/Path/Credential). Each signal is ONE ⚠️ line:
+  // outside dirs, unresolved tokens (resolution inline), risk reasons
+  // (severity already in the title ⚠️), flagged segments, and the
+  // danger-pattern/credential notes. No section headers, no inter-section
+  // blank lines, no re-listing of unflagged segments — the raw command
+  // above carries them.
   const rawDisplay = truncateLongCommand(command);
-  let body = `Command:\n  ${rawDisplay}\n`;
+  let body = `  ${rawDisplay}\n`;
 
   if (needsPathApproval) {
     if (outsideDirs.length > 0) {
-      body += `\n\u26a0\ufe0f Paths outside cwd:\n${outsideDirs.map(d => `  \u2022 ${d}`).join("\n")}`;
+      body += `\u26a0\ufe0f outside cwd: ${outsideDirs.join(", ")}\n`;
     }
-    if (unresolved.length > 0) {
-      const lines = unresolved.map((u) => {
-        let line = `  \u2022 ${shortenToken(u.token)}`;
-        if (u.reason === "base") line += ` \u2014 working directory not statically known`;
-        const dirs = resolutions?.get(u.token);
-        if (dirs && dirs.length > 0) {
-          const source = confirmedTokens?.has(u.token) ? "confirmed" : "LLM";
-          const shown = dirs.slice(0, 3).join(", ");
-          line += `\n    \u2192 ${source}: ${shown}${dirs.length > 3 ? ` (+${dirs.length - 3} more)` : ""}`;
-        }
-        return line;
-      });
-      body += `\n\u26a0\ufe0f Unresolved references (runtime location not statically provable):\n${lines.join("\n")}`;
+    for (const u of unresolved) {
+      let line = `\u26a0\ufe0f unresolved ${shortenToken(u.token)}`;
+      if (u.reason === "base") line += ` \u2014 working directory not statically known`;
+      const dirs = resolutions?.get(u.token);
+      if (dirs && dirs.length > 0) {
+        const source = confirmedTokens?.has(u.token) ? "confirmed" : "LLM";
+        const shown = dirs.slice(0, 3).join(", ");
+        line += ` \u2192 ${source}: ${shown}${dirs.length > 3 ? ` (+${dirs.length - 3} more)` : ""}`;
+      }
+      body += line + "\n";
     }
   }
   if (riskDangerous) {
-    body += `\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n`;
-    for (let i = 0; i < alignedReasons.length; i++) {
-      const { tag, rest } = alignedReasons[i];
-      const lines = riskReasons[i].split("\n");
-      body += `  \u2022 ${tag.padEnd(tagWidth)} ${rest}\n`;
-      for (let j = 1; j < lines.length; j++) body += `    ${lines[j]}\n`;
+    for (const r of riskReasons) {
+      const lines = r.split("\n");
+      body += `\u26a0\ufe0f ${lines[0]}\n`;
+      for (let j = 1; j < lines.length; j++) body += `  ${lines[j]}\n`;
     }
   }
 
-  // Segment breakdown: formatted for tmux chains, plain list for others
+  // Segment breakdown — tmux chains keep the full formatted view (their
+  // nesting is unreadable raw); plain chains list ONLY the flagged
+  // segments (indices stay true so they match the raw command above).
   if (segments.length > 1) {
-    // Guard: skip expensive format pass when no segment is a tmux command
     const hasTmuxSegment = segments.some(isTmuxCommand);
     if (hasTmuxSegment) {
       const formattedCommand = formatBashCommand(command, nonAllowedSet, segments);
-      body += `\nSegments:\n${formattedCommand}\n`;
+      body += `Segments:\n${formattedCommand}\n`;
     } else {
-      // Non-tmux chain — numbered list. Long chains bloat the prompt past
-      // the visible screen, so above the cap only the segments that require
-      // approval are shown (the ⚠️ ones); a chain with none flagged gets a
-      // head/tail sample. Indices stay true so the list matches the raw
-      // command above.
-      const SHOW_ALL_MAX = 8;
+      const FLAGGED_MAX = 5;
       const flagged = segments
         .map((s, i) => ({ s, i }))
         .filter(({ i }) => nonAllowedSet.has(i));
-      body += `\nThis chains ${segments.length} commands:\n`;
-      if (segments.length <= SHOW_ALL_MAX) {
-        segments.forEach((s, i) => {
-          const marker = nonAllowedSet.has(i) ? " \u26a0\ufe0f" : "";
-          body += `  ${i + 1}.${marker} ${truncateSegmentDisplay(s.trimEnd())}\n`;
-        });
-      } else if (flagged.length > 0) {
-        for (const { s, i } of flagged) {
-          body += `  ${i + 1}. \u26a0\ufe0f ${truncateSegmentDisplay(s.trimEnd())}\n`;
-        }
-        const omitted = segments.length - flagged.length;
-        body += `  … ${omitted} unflagged segment${omitted === 1 ? "" : "s"} omitted\n`;
-      } else {
-        for (let i = 0; i < 4; i++) {
-          body += `  ${i + 1}. ${truncateSegmentDisplay(segments[i].trimEnd())}\n`;
-        }
-        body += `  … (+${segments.length - 6} more)…\n`;
-        for (let i = segments.length - 2; i < segments.length; i++) {
-          body += `  ${i + 1}. ${truncateSegmentDisplay(segments[i].trimEnd())}\n`;
-        }
+      for (const { s, i } of flagged.slice(0, FLAGGED_MAX)) {
+        body += `\u26a0\ufe0f ${i + 1}. ${truncateSegmentDisplay(s.trimEnd())}\n`;
+      }
+      if (flagged.length > FLAGGED_MAX) {
+        body += `\u26a0\ufe0f \u2026 ${flagged.length - FLAGGED_MAX} more flagged segments\n`;
       }
     }
   }
   if (hasUnsafePattern) {
-    body += `\n\u26a0\ufe0f Commands matching danger patterns always prompt, even after auto-allowing.`;
+    body += `\u26a0\ufe0f danger pattern: always prompts, even after auto-allowing\n`;
   }
   if (credentialRule) {
     if (isGlobUnverified(credentialRule)) {
-      body += `\n\u26a0\ufe0f Glob "${globUnverifiedToken(credentialRule)}" could not be expanded and verified \u2014 may reach credential files; prompted for safety.`;
+      body += `\u26a0\ufe0f glob "${globUnverifiedToken(credentialRule)}" could not be expanded and verified \u2014 may reach credential files; prompted for safety\n`;
     } else {
-      body += `\n\u26a0\ufe0f Matches credential pattern "${credentialRule}" \u2014 may contain secrets or tokens.`;
+      body += `\u26a0\ufe0f credential pattern "${credentialRule}" \u2014 may contain secrets or tokens\n`;
     }
   }
-  body += "\n";
 
-  // Tier 2 — "always (everything)" confirmation
-  let dangerWarning = "";
-  if (riskDangerous) {
-    const aligned = alignedReasons.map(({ tag, rest }) => `  \u2022 ${tag.padEnd(tagWidth)} ${rest}`);
-    dangerWarning = `\n\n\u26a0\ufe0f Danger flags (${riskSeverity?.toUpperCase()} risk):\n${aligned.join("\n")}`;
-  }
+  // Tier 2 — "always (everything)" confirmation (dense, same as the body)
+  const dangerWarning = riskDangerous
+    ? "\n" + riskReasons.map(r => `\u26a0\ufe0f ${r}`).join("\n")
+    : "";
   const pathBullets = pathGrantDirs.map(d => `  \u2022 ${d}/*`).join("\n");
   const tier2Everything = hasBoth
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow:\n\nCommands:\n${cmdBullets}${pathGrantDirs.length ? `\n\nPaths:\n${pathBullets}` : ""}${dangerWarning}`,
+        body: `"Always Yes" will auto-allow:\nCommands:\n${cmdBullets}${pathGrantDirs.length ? `\nPaths:\n${pathBullets}` : ""}${dangerWarning}`,
       }
     : needsPathApproval
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow read for these directories this session:\n\n${pathBullets}`,
+        body: `"Always Yes" will auto-allow read for these directories this session:\n${pathBullets}`,
       }
     : {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow these command signatures this session:\n\n${cmdBullets}${dangerWarning}`,
+        body: `"Always Yes" will auto-allow these command signatures this session:\n${cmdBullets}${dangerWarning}`,
       };
 
   // Tier 2 — "always (paths only)" confirmation
   const tier2Paths = hasBoth && pathGrantDirs.length > 0
     ? {
         title: `Confirm Always (paths only)`,
-        body: `"Always Yes" will auto-allow read for these directories this session:\n\n${pathBullets}\n\nThe command will still prompt next time`,
+        body: `"Always Yes" will auto-allow read for these directories this session:\n${pathBullets}\nThe command will still prompt next time`,
       }
     : undefined;
 
@@ -364,10 +334,10 @@ function buildFilePrompt(
   const { action, filePath, resolved, cwd, outsideDir, isWriteOp, warnedRule, symlinkHint, exists } = data;
   const insideCwd = outsideDir === null;
   const covered = (d: string) => (isCovered ? isCovered(d) : false);
-  const symlinkLine = symlinkHint ? `\n\n\u{1F517} Resolved via symlink: ${symlinkHint}` : "";
-  const warnLine = warnedRule ? `\n\n\u26a0\ufe0f Matches credential pattern "${warnedRule}" — may contain secrets or tokens.` : "";
+  const symlinkLine = symlinkHint ? `\n\u{1F517} Resolved via symlink: ${symlinkHint}` : "";
+  const warnLine = warnedRule ? `\n\u26a0\ufe0f credential pattern "${warnedRule}" — may contain secrets or tokens` : "";
   const existsNote = exists && action === "Write"
-    ? `\n\n\u2139\ufe0f File already exists at this path. Writing will overwrite it.`
+    ? `\n\u2139\ufe0f file exists — writing will overwrite`
     : "";
 
   if (insideCwd) {
@@ -412,11 +382,11 @@ function buildFilePrompt(
       body: `Path:\n  ${filePath}${warnLine}${symlinkLine}${existsNote}\n`,
       tier2Everything: {
         title: `Confirm Always Allow`,
-        body: `${scopeNote}\n\n  ${resolved}`,
+        body: `${scopeNote}\n  ${resolved}`,
       },
       tier2Broader: kept.length > 0 ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will ${dirScope}:\n\n  ${path.join(kept[0].dir, '*')}`,
+        body: `"Always Yes" will ${dirScope}:\n  ${path.join(kept[0].dir, '*')}`,
       } : undefined,
       includePathsOption: false,
       includeFileOption: false,
@@ -468,14 +438,14 @@ function buildFilePrompt(
 
   return {
     title: `\u26a0\ufe0f ${action} outside cwd`,
-    body: `Path:\n  ${filePath}\n\n\u26a0\ufe0f Outside cwd: ${outsideDir}${warnLine}${symlinkLine}${existsNote}\n`,
+    body: `Path:\n  ${filePath}\n\u26a0\ufe0f outside cwd: ${outsideDir}${warnLine}${symlinkLine}${existsNote}\n`,
     tier2Everything: {
       title: `Confirm Always Allow`,
-      body: `"Always Yes" will ${scope}:\n\n  ${outsideDirGlob}`,
+      body: `"Always Yes" will ${scope}:\n  ${outsideDirGlob}`,
     },
     tier2File: {
       title: `Confirm Always Allow`,
-      body: `"Always Yes" will ${fileScope}:\n\n  ${resolved}\n\nOther files in ${outsideDir} will still prompt.`,
+      body: `"Always Yes" will ${fileScope}:\n  ${resolved}\nOther files in ${outsideDir} will still prompt.`,
     },
     includePathsOption: false,
     includeFileOption: true,
@@ -529,16 +499,16 @@ function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
   if (gate === "exec") {
     if (data.script) body += `\nScript:\n${truncateLongCommand(data.script)}`;
     const args = data.argsPreview ? stripBraces(data.argsPreview) : "";
-    if (args) body += `\n\nArguments:\n${args}`;
-    body += `\n\n\u26a0\ufe0f ${note ?? "Executes code in an external tool."}`;
+    if (args) body += `\nArguments:\n${args}`;
+    body += `\n\u26a0\ufe0f ${note ?? "Executes code in an external tool."}`;
   } else {
     const target = data.resolved ?? "(unresolved)";
-    const outside = data.outsideDir ? `\n\n\u26a0\ufe0f Outside cwd: ${data.outsideDir}` : "";
+    const outside = data.outsideDir ? `\n\u26a0\ufe0f outside cwd: ${data.outsideDir}` : "";
     const existsNote = data.exists
-      ? `\n\n\u2139\ufe0f File already exists at this path. The tool will overwrite it.`
+      ? `\n\u2139\ufe0f file exists — the tool will overwrite it`
       : "";
     body += `\nPath:\n  ${target}${outside}${existsNote}`;
-    if (note) body += `\n\n\u26a0\ufe0f ${note}`;
+    if (note) body += `\n\u26a0\ufe0f ${note}`;
   }
 
   return {

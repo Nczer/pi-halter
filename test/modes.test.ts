@@ -70,6 +70,9 @@ function makeCtx(confirmResult: boolean = true) {
       confirm: vi.fn(async () => confirmResult),
       notify: vi.fn(),
       setWidget: vi.fn(),
+      setStatus: vi.fn(),
+      setFooter: vi.fn(),
+      theme: { fg: (_s: string, t?: string) => t ?? "", bold: (t?: string) => t ?? "" },
     },
   } as any;
 }

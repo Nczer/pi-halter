@@ -199,10 +199,12 @@ async function runJudgeStage(
   deps: JudgePromptDeps,
   stage: 1 | 2,
 ): Promise<JudgeResult | null> {
-  // The in-flight state folds into the active judge mode's widget line
-  // ("» DSPA … — judging…" / "◎ DSPAT … — judging…"); only manual mode
-  // (on-demand Explain) gets the standalone widget. Captured at call start
-  // so a mid-call mode toggle cannot route cleanup to the wrong widget.
+  // The in-flight judging stage is tracked on the active mode module
+  // (setDspaJudging/setDspatJudging) — no longer painted since the
+  // status-line migration; the transition just refreshes the unified
+  // status. Only manual mode (on-demand Explain) keeps a standalone
+  // widget. Captured at call start so a mid-call mode toggle cannot route
+  // cleanup to the wrong widget.
   const dspaMode = isDspaActive();
   const dspatMode = !dspaMode && isDspatActive();
   // Regime tag for the always-on judge ledger (infra lines).
