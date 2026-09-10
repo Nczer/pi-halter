@@ -109,10 +109,23 @@ describe("bash body content", () => {
     expect(prompt.title).toContain("⚠");
   });
 
-  it("includes danger flags in body (one ⚠️ line per reason, no header)", () => {
+  it("includes danger flags in body (one ⚠️ line per reason, no header, no source tags)", () => {
     const prompt = buildPrompt(bashDecision({ riskDangerous: true, riskSeverity: "high", riskReasons: ["[System] sudo (privilege escalation)"] }));
-    expect(prompt.body).toContain("⚠️ [System] sudo (privilege escalation)");
+    expect(prompt.body).toContain("⚠️ sudo (privilege escalation)");
+    expect(prompt.body).not.toContain("[System]");
     expect(prompt.body).not.toContain("Danger flags");
+  });
+
+  it("merges same-source single-line reasons and leads with the pattern class", () => {
+    const prompt = buildPrompt(bashDecision({
+      riskDangerous: true, riskSeverity: "high",
+      riskReasons: ["[System] forced delete (-f)", "[System] recursive delete (-r/-R)", "[Pattern] rm (any file deletion)"],
+    }));
+    const lines = prompt.body.split("\n").filter(l => l.startsWith("⚠️"));
+    expect(lines).toEqual([
+      "⚠️ rm (any file deletion)",
+      "⚠️ forced delete (-f), recursive delete (-r/-R)",
+    ]);
   });
 
   it("includes paths outside cwd in body", () => {
