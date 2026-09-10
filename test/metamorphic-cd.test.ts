@@ -46,6 +46,11 @@ const EXCEPTIONS: Record<string, string> = {
   // makes such a base unknown → prompt. Conservative, not a bypass — the
   // base row (no cd anywhere) keeps a known base and allows.
   "ls || cat a || echo ok": "cd left of || makes the branch cwd genuinely ambiguous (unknown base → prompt)",
+  // The no-redirect twin (`cd sub && ls a || ls b`) prompts identically — the
+  // divergence is the ||-ambiguity, not the redirect. The trailing 2>/dev/null
+  // used to suppress the unknown-base flag entirely (its target early-returned
+  // the base flag), letting the redirect-spelling bypass the ambiguity check.
+  "ls a || ls b 2>/dev/null": "cd left of || makes the ||-branch's runtime cwd genuinely ambiguous (unknown base → prompt)",
 };
 
 describe(`metamorphic: cd ${SUB} && <cmd> keeps the decision kind`, () => {

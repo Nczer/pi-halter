@@ -441,15 +441,24 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
 
   if (pathAware) {
     let sawBareArg = false;
-    for (const token of stage) {
-      if (BARE_REDIRECT_RE.test(token)) continue; // bare operator; target scanned separately
-      let t = token;
-      const m = t.match(OUT_REDIRECT_RE) ?? t.match(IN_REDIRECT_RE);
-      if (m) {
-        // Empty target (`> file`) or fd reference (2>&1): no file argument.
-        if (m[2] === "" || m[2].startsWith("&")) continue;
-        t = m[2]; // glued target (2>/dev/null)
+    for (let i = 0; i < stage.length; i++) {
+      const token = stage[i];
+      // Redirects are not file arguments — the command may still operate on
+      // the base (`ls 2>/dev/null`, `find . > /tmp/log`, `cat main.txt 2>&1`).
+      // A resolvable redirect target must not read as "own target" (it used to
+      // return null here, silently dropping the base flag — the 2>/dev/null
+      // hole behind the D13 judge-path lines with judgePaths === floorMisses).
+      // Output: skip the token, plus its unglued target (`> file`).
+      // Input: the target IS a file argument — unglued `<` skips only the
+      // operator (next token evaluated); glued `< file` evaluates `file`.
+      const mOut = token.match(OUT_REDIRECT_RE);
+      if (mOut) {
+        if (mOut[2] === "") i++; // unglued (`> file`): skip the target token too
+        continue;
       }
+      const mIn = token.match(IN_REDIRECT_RE);
+      if (mIn && mIn[2] === "") continue; // unglued `<`: operator only
+      let t = mIn ? mIn[2] : token;
       // Flag with an embedded value: the VALUE is the target (--file=/x).
       if (t.startsWith("-")) {
         const eq = t.indexOf("=");
