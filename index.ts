@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { updateWidget } from "./ui/widget";
+import { updateStatus } from "./ui/widget";
 import { handleBash, handleFile, handleTool } from "./handlers";
 import { loadPlugins, setLoadedPlugins } from "./plugins/loader";
 import { isDspActive, setDspActive } from "./modes/dsp-mode";
@@ -31,10 +31,10 @@ function applyMode(ctx: ExtensionContext, next: "manual" | "dsp" | "dspa" | "dsp
   if (next === "dsp") setDspActive(true);
   else if (next === "dspa") setDspaActive(true);
   else if (next === "dspat") setDspatActive(true);
-  // The unified widget (widget.ts) renders the active mode line pinned on
-  // top of the session rules; while DSP bypasses the gate it shows the
-  // warning line alone (rules restored on leaving DSP).
-  updateWidget(ctx);
+  // The unified status (widget.ts) renders the active mode main ahead of
+  // the session rule segments; while DSP bypasses the gate it shows the
+  // warning alone (rules restored on leaving DSP).
+  updateStatus(ctx);
   return displaced;
 }
 
@@ -45,9 +45,10 @@ export default async function halterExtension(pi: ExtensionAPI) {
   setLoadedPlugins(await loadPlugins());
 
   // Mode→UI edge (modes/status-bus.ts): the mode modules emit
-  // notifyStatus on state changes; the unified widget is the listener.
-  // Without this registration the modes' state changes are silent (no UI).
-  onStatusChange(updateWidget);
+  // notifyStatus on state changes; the unified status (widget.ts) is the
+  // listener. Without this registration the modes' state changes are
+  // silent (no UI).
+  onStatusChange(updateStatus);
 
   // ── Session start: restore the persistent startup mode ──
   // /dspa is the only session-persistent mode (settings-ext.json,
@@ -75,6 +76,9 @@ export default async function halterExtension(pi: ExtensionAPI) {
     resetDspat();
     resetDspa();
     resetJudgeCache();
+    ctx.ui.setStatus("halter", undefined);
+    // Defensive: same-process /reload from a pre-status build could still
+    // carry the old widgets (incl. the pre-merge per-mode ids).
     ctx.ui.setWidget("halter", undefined);
     ctx.ui.setWidget("dsp-warning", undefined);
     ctx.ui.setWidget("dspa", undefined);

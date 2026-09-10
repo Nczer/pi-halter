@@ -188,8 +188,8 @@ describe("buildPrompt: tool prompts", () => {
     const p = buildPrompt({ kind: "prompt", promptData: pd });
     expect(p.title).toContain("blender");
     expect(p.body).toContain("/etc/hosts");
-    expect(p.body).toContain("Outside cwd: /etc");
-    expect(p.body).toContain("already exists");
+    expect(p.body).toContain("outside cwd: /etc");
+    expect(p.body).toContain("file exists");
   });
 
   it("labels: pdTargetLabel / summarizePrompt", async () => {

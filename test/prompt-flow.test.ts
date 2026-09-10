@@ -45,7 +45,7 @@ vi.mock("../ui/prompt-builder", async (importOriginal) => ({
       : undefined,
   }),
 }));
-vi.mock("../ui/widget", () => ({ updateWidget: () => {} }));
+vi.mock("../ui/widget", () => ({ updateStatus: () => {} }));
 vi.mock("../decide/rule-generator", () => ({
   RuleGenerator: {
     generatePrimaryRules: () => [],

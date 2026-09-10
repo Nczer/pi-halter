@@ -22,10 +22,9 @@ import { notifyStatus } from "./status-bus";
  */
 
 let dspatActive = false;
-/** The judge stage in flight (1 | 2), or null — rendered inline on the
- *  widget line ("… — judging stage N…") instead of a separate in-flight
- *  widget. D17: dspat runs BOTH stages; the stage number is the progress
- *  the user sees while the second call is in flight. */
+/** The judge stage in flight (1 | 2), or null — in-flight state only; the
+ *  stage is no longer painted since the status-line migration. D17: dspat
+ *  runs BOTH stages. */
 let judging: 1 | 2 | null = null;
 
 interface DspatStats {
@@ -50,10 +49,10 @@ function resetStats(): void {
 }
 
 /**
- * Set the inline judging state (verdict.ts calls it with the stage at the
- * start of a judge stage while /dspat is active, and null at its end).
- * Re-sets the widget so the change paints immediately (setWidget forces a
- * TUI repaint).
+ * Set the in-flight judging state (verdict.ts calls it with the stage at
+ * the start of a judge stage while /dspat is active, and null at its end).
+ * Refreshes the unified status on every transition (the stage itself is
+ * no longer painted).
  */
 export function setDspatJudging(stage: 1 | 2 | null, ctx: ExtensionContext): void {
   if (judging === stage) return;
@@ -65,8 +64,8 @@ export function isDspatActive(): boolean {
   return dspatActive;
 }
 
-/** The judge stage in flight (the unified widget renders the
- *  "… — judging stage N…" tag inline on the DSPAT line); null = idle. */
+/** The judge stage in flight (no longer painted since the status-line
+ *  migration); null = idle. */
 export function getDspatJudgingStage(): 1 | 2 | null {
   return judging;
 }
@@ -110,11 +109,9 @@ export function getDspatStats(): DspatStats {
 // ── Widget ──
 
 /**
- * Re-render the unified halter widget (widget.ts): the DSPAT line is pinned
- * on top of it, ONE line (indicator + agreement counter + last disagreement
- * merged — details drop from the tail before the line truncates). Stays up
- * while the judge is off (the user's own choice), hidden only while the
- * judge is invalid (see the unified widget's render).
+ * Refresh the unified status (widget.ts): the DSPAT main carries the
+ * indicator + agreement counter ("◎ DSPAT: M/N agreed") ahead of the rule
+ * segments; hidden only while the judge is invalid (see updateStatus).
  */
 export function updateDspatWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;

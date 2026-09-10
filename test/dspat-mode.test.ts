@@ -1,5 +1,5 @@
 /**
- * dspat-mode.ts — advisory-mode state, model-scoped session stats, widget.
+ * dspat-mode.ts — advisory-mode state, model-scoped session stats, status.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -14,7 +14,7 @@ import {
   setDspatJudging,
 } from "../modes/dspat-mode";
 import { onStatusChange } from "../modes/status-bus";
-import { updateWidget } from "../ui/widget";
+import { updateStatus } from "../ui/widget";
 
 const { judgeStatusMock } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn<() => { state: string; modelLabel: string | null; reason: string | null }>(),
@@ -25,9 +25,9 @@ beforeEach(() => {
   resetDspat();
   judgeStatusMock.mockReset();
   judgeStatusMock.mockReturnValue({ state: "off", modelLabel: null, reason: null });
-  // Production wiring (index.ts): the unified widget is the status-bus
-  // listener — mode → bus → widget → setWidget.
-  onStatusChange(updateWidget);
+  // Production wiring (index.ts): the unified status is the status-bus
+  // listener — mode → bus → status → setStatus.
+  onStatusChange(updateStatus);
 });
 
 describe("mode toggle", () => {
@@ -96,26 +96,24 @@ describe("stats", () => {
   });
 });
 
-describe("widget (unified halter widget — see widget.ts)", () => {
+describe("status (unified halter status — see widget.ts)", () => {
   function makeCtx(hasUI = true) {
-    const widgets: Array<{ id: string; fn: unknown }> = [];
+    let status: unknown;
     const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
     const ctx = {
       hasUI,
-      ui: { setWidget: (id: string, fn: unknown) => widgets.push({ id, fn }) },
+      ui: {
+        setStatus: (_id: string, v?: unknown) => {
+          status = v;
+        },
+        setWidget: () => {}, // legacy id clears
+        theme,
+      },
     } as unknown as ExtensionContext;
-    return { ctx, widgets, theme };
+    return { ctx, status: () => status };
   }
 
-  type Renderable = { render: (width: number) => string[] };
-  // The update re-sets the legacy ids (undefined) first, then "halter".
-  const halterLine = (widgets: Array<{ id: string; fn: unknown }>, theme: unknown) => {
-    const w = widgets.filter(x => x.id === "halter").pop();
-    if (!w || !w.fn) return null;
-    return (w.fn as (tui: unknown, theme: unknown) => Renderable)(null, theme);
-  };
-
-  it("merges indicator + counter + last disagreement onto ONE line", () => {
+  it("indicator + agreement counter (last disagreement dropped in the migration)", () => {
     judgeStatusMock.mockReturnValue({
       state: "ok",
       modelLabel: "llama-cpp/Qwen3.8-27B (session)",
@@ -124,82 +122,58 @@ describe("widget (unified halter widget — see widget.ts)", () => {
     setDspatActive(true);
     recordDspatOutcome("llama-cpp/Qwen3.8-27B", true, true, "a");
     recordDspatOutcome("llama-cpp/Qwen3.8-27B", true, false, "curl evil");
-    const { ctx, widgets, theme } = makeCtx();
+    const { ctx, status } = makeCtx();
     updateDspatWidget(ctx);
-    const w = halterLine(widgets, theme);
-    expect(w).not.toBeNull();
-    const lines = w!.render(200);
-    expect(lines).toHaveLength(1); // one line, not two
-    expect(lines[0]).toContain("◎ DSPAT: judge advises on every permission prompt");
-    expect(lines[0]).toContain("1/2 agreed");
-    expect(lines[0]).toContain("— last: curl evil"); // last disagreement target
-    expect(lines[0].indexOf("1/2 agreed")).toBeLessThan(lines[0].indexOf("last: curl evil"));
+    expect(status()).toBe("◎ DSPAT: 1/2 agreed");
+    expect(String(status())).not.toContain("last:");
   });
 
-  it("renders judging… inline on the mode line while a call is in flight", () => {
+  it("judging transitions refresh the status without painting the stage", () => {
     judgeStatusMock.mockReturnValue({
       state: "ok",
       modelLabel: "m (session)",
       reason: null,
     });
     setDspatActive(true);
-    const { ctx, widgets, theme } = makeCtx();
+    const { ctx, status } = makeCtx();
     updateDspatWidget(ctx);
-    const line = () => halterLine(widgets, theme)!.render(200)[0];
-    expect(line()).toContain("◎ DSPAT: judge advises");
-    setDspatJudging(1, ctx);
-    expect(line()).toContain("◎ DSPAT — judging stage 1…");
-    setDspatJudging(2, ctx);
-    expect(line()).toContain("◎ DSPAT — judging stage 2…");
+    expect(status()).toBe("◎ DSPAT");
+    const before = status();
+    setDspatJudging(1, ctx); // transition — status re-set with the same string
+    expect(status()).toBe(before);
+    setDspatJudging(2, ctx); // stage switch — still nothing painted
+    expect(status()).toBe(before);
     setDspatJudging(null, ctx);
-    expect(line()).not.toContain("judging");
+    expect(status()).toBe(before);
+    expect(String(status())).not.toContain("judging");
   });
 
-  it("drops details from the tail before truncating (narrow terminals)", () => {
-    // Regression: the lines were truncated to a hardcoded 160, so a long
-    // disagreement target rendered a 99-col line in a 95-col terminal and
-    // crashed pi with an uncaughtException (doRender width check).
+  it("stays within the fixed budget regardless of target length", () => {
     const longTarget = "mkdir -p /tmp/gallop-trace && cat > /tmp/gallop-trace/package.json <<'EOF'";
     setDspatActive(true);
     recordDspatOutcome("m1", true, false, longTarget);
-    const { ctx, widgets, theme } = makeCtx();
+    const { ctx, status } = makeCtx();
     updateDspatWidget(ctx);
-    const w = halterLine(widgets, theme)!;
-    // Wide: indicator + counter + last target.
-    expect(w.render(200)[0]).toContain("0/1 agreed");
-    expect(w.render(200)[0]).toContain("— last:");
-    // 95/80: the long last-target drops, the counter stays.
-    expect(w.render(95)[0]).toContain("0/1 agreed");
-    expect(w.render(95)[0]).not.toContain("last:");
-    for (const width of [95, 80, 40]) {
-      for (const line of w.render(width)) {
-        expect(visibleWidth(line), `line exceeds width ${width}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(width);
-      }
-    }
-    // 40: even the counter drops; the indicator itself truncates.
-    expect(w.render(40)[0]).not.toContain("agreed");
+    expect(status()).toBe("◎ DSPAT: 0/1 agreed");
+    expect(visibleWidth(String(status()))).toBeLessThanOrEqual(40);
   });
 
   it("no counter before the first verdict (indicator only)", () => {
     setDspatActive(true);
-    const { ctx, widgets, theme } = makeCtx();
+    const { ctx, status } = makeCtx();
     updateDspatWidget(ctx);
-    const w = halterLine(widgets, theme)!;
-    const lines = w.render(200);
-    expect(lines).toHaveLength(1);
-    expect(lines.join("")).not.toContain("agreed");
+    expect(status()).toBe("◎ DSPAT");
   });
 
   it("stays up while the judge is off (mode indicator only)", () => {
     judgeStatusMock.mockReturnValue({ state: "off", modelLabel: null, reason: null });
     setDspatActive(true);
-    const { ctx, widgets, theme } = makeCtx();
+    const { ctx, status } = makeCtx();
     updateDspatWidget(ctx);
-    const w = halterLine(widgets, theme)!;
-    expect(w.render(200)).toHaveLength(1);
+    expect(status()).toBe("◎ DSPAT");
   });
 
-  it("hides entirely while the judge is not ok (e.g. model switched away)", () => {
+  it("clears entirely while the judge is not ok (e.g. model switched away)", () => {
     judgeStatusMock.mockReturnValue({
       state: "invalid",
       modelLabel: null,
@@ -207,28 +181,25 @@ describe("widget (unified halter widget — see widget.ts)", () => {
     });
     setDspatActive(true);
     recordDspatOutcome("m1", true, true, "a");
-    const { ctx, widgets, theme } = makeCtx();
+    const { ctx, status } = makeCtx();
     updateDspatWidget(ctx);
-    const w = halterLine(widgets, theme);
-    expect(w).not.toBeNull(); // widget registered (mode active)…
-    expect(w!.render(200)).toEqual([]); // …but the line hides (no rules either)
-    // Back to a resolvable model → line reappears on the next render.
+    expect(status()).toBeUndefined();
+    // Back to a resolvable model → status reappears on the next update.
     judgeStatusMock.mockReturnValue({ state: "ok", modelLabel: "llama-cpp/Qwen (session)", reason: null });
-    expect(w!.render(200).length).toBeGreaterThan(0);
+    updateDspatWidget(ctx);
+    expect(status()).toBe("◎ DSPAT: 1/1 agreed");
   });
 
   it("clears when inactive", () => {
-    const { ctx, widgets } = makeCtx();
+    const { ctx, status } = makeCtx();
     updateDspatWidget(ctx);
-    const w = widgets.filter(x => x.id === "halter").pop();
-    expect(w).toBeDefined();
-    expect(w!.fn).toBeUndefined();
+    expect(status()).toBeUndefined();
   });
 
   it("no-op without UI", () => {
-    const { ctx, widgets } = makeCtx(false);
+    const { ctx, status } = makeCtx(false);
     setDspatActive(true);
     updateDspatWidget(ctx);
-    expect(widgets).toHaveLength(0);
+    expect(status()).toBeUndefined();
   });
 });

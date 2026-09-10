@@ -6,7 +6,7 @@ import {
   groupCommandVariants,
   renderRulesLine,
   shortenHomePath,
-  updateWidget,
+  updateStatus,
 } from "../ui/widget";
 import { store } from "../gate/store";
 import { resetDspa, recordDspaAutoAllowed, setDspaActive } from "../modes/dspa-mode";
@@ -79,17 +79,20 @@ describe("groupCommandVariants", () => {
   });
 });
 
-describe("updateWidget", () => {
-  // The widget reads the module singleton store; tests in this file own it.
-  let widgetFn: ((tui: unknown, theme: unknown) => { render: (w: number) => string[]; invalidate: () => void }) | null;
-  let setWidgetCalled = false;
+describe("updateStatus", () => {
+  // The status reads the module singleton store; tests in this file own it.
+  // The budget is FIXED (setStatus has no width parameter), so the string
+  // trims itself — expectations below are exact strings.
+  let status: string | undefined;
   const theme = { fg: (_style: string, text?: string) => text ?? "", bold: (t?: string) => t ?? "" };
   const ctx = {
+    hasUI: true,
     ui: {
-      setWidget: (_id: string, fn: unknown) => {
-        setWidgetCalled = true;
-        widgetFn = (fn ?? null) as typeof widgetFn;
+      setStatus: (_id: string, value?: string) => {
+        status = value;
       },
+      setWidget: () => {}, // legacy id clears
+      theme,
     },
     // Session model for the DSPA tag comparison (provider/id ref).
     model: { provider: "llama-cpp", id: "Qwen3.8-27B" },
@@ -98,100 +101,77 @@ describe("updateWidget", () => {
   beforeEach(() => {
     store.reset();
     resetDspa();
-    widgetFn = null;
-    setWidgetCalled = false;
+    status = undefined;
   });
 
-  it("cwd-bound grants render on the merged rules line with the bound cwd", () => {
-    store.addAllowed({ bashSigCwds: [{ sig: "./node_modules/.bin/mytool --do", cwd: "/home/u/proj1" }] });
-    updateWidget(ctx);
-    expect(widgetFn).not.toBeNull();
-    const lines = widgetFn!(null, theme).render(200);
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toBe("· Cwd: ./node_modules/.bin/mytool --do @ /home/u/proj1");
+  it("renders cwd-bound grants on the status line with the bound cwd", () => {
+    store.addAllowed({ bashSigCwds: [{ sig: "./tool", cwd: "/a" }] });
+    updateStatus(ctx);
+    expect(status).toBe("· Cwd: ./tool @ /a");
   });
 
-  it("keeps unbound Bash sigs and cwd-bound grants on the one rules line", () => {
+  it("keeps unbound Bash sigs and cwd-bound grants on the one line", () => {
     store.addAllowed({
       bashSigs: ["du"],
-      bashSigCwds: [{ sig: "./node_modules/.bin/mytool --do", cwd: "/home/u/proj1" }],
+      bashSigCwds: [{ sig: "./tool", cwd: "/a" }],
     });
-    updateWidget(ctx);
-    const lines = widgetFn!(null, theme).render(200);
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toBe("· Bash: du · Cwd: ./node_modules/.bin/mytool --do @ /home/u/proj1");
+    updateStatus(ctx);
+    expect(status).toBe("· Bash: du · Cwd: ./tool @ /a");
   });
 
-  it("cwd-bound grants alone keep the widget visible", () => {
-    store.addAllowed({ bashSigCwds: [{ sig: "./tool", cwd: "/a" }] });
-    updateWidget(ctx);
-    expect(widgetFn).not.toBeNull();
-    expect(widgetFn!(null, theme).render(200)).toHaveLength(1);
+  it("hides the status with no rules at all", () => {
+    updateStatus(ctx);
+    expect(status).toBeUndefined();
   });
 
-  it("hides the widget with no rules at all", () => {
-    updateWidget(ctx);
-    expect(setWidgetCalled).toBe(true);
-    expect(widgetFn).toBeNull();
-  });
-
-  it("merges rule categories onto one line in safety-priority order", () => {
+  it("merges rule categories in safety-priority order (the budget trims the tail)", () => {
     store.addAllowed({
       writePaths: ["/a/w"],
       readPaths: ["/a/r", "/a/w"],
       bashSigs: ["du"],
     });
     store.trustPackage("vitest");
-    updateWidget(ctx);
-    const lines = widgetFn!(null, theme).render(200);
-    expect(lines).toHaveLength(1);
-    // /a/w is a write path, so it drops out of the read-only list.
-    expect(lines[0]).toBe("· R/W: /a/w · R: /a/r · Bash: du · Pkg: vitest");
+    updateStatus(ctx);
+    // /a/w is a write path, so it drops out of the read-only list. The full
+    // line (46) outgrows the 40 budget → Pkg drops behind the …+1 marker (38).
+    expect(status).toBe("· R/W: /a/w · R: /a/r · Bash: du · …+1");
   });
 
   it("caps path lists at 3 with a …+N tail and sibling-combines the shown ones", () => {
-    const home = os.homedir();
     store.addAllowed({
-      writePaths: [
-        `${home}/pi/agent/extensions/filechanges`,
-        `${home}/pi/agent/extensions/gallop`,
-        `${home}/pi/agent/extensions/halter`,
-        `${home}/pi/agent/extensions/memory`,
-      ],
+      writePaths: ["/a/x1", "/a/x2", "/a/x3", "/a/x4"],
     });
-    updateWidget(ctx);
-    const lines = widgetFn!(null, theme).render(300);
-    expect(lines[0]).toBe("· R/W: ~/pi/agent/extensions/filechanges & gallop & halter …+1");
+    updateStatus(ctx);
+    expect(status).toBe("· R/W: /a/x1 & x2 & x3 …+1");
   });
 
-  it("drops whole low-priority segments behind one …+N marker on narrow widths", () => {
+  it("drops whole low-priority segments behind …+N when a mode main eats the budget", () => {
+    setDspaActive(true);
+    recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", "ls");
     store.addAllowed({
       writePaths: ["/a/w"],
       readPaths: ["/b/r"],
     });
     store.trustPackage("vitest");
-    updateWidget(ctx);
-    // Width fits only the R/W segment plus the …+N marker (17 cols), not the
-    // R or Pkg segments (27 / 35) — they drop behind one marker.
-    const lines = widgetFn!(null, theme).render(20);
-    expect(lines[0]).toBe("· R/W: /a/w · …+2");
+    updateStatus(ctx);
+    // Main (10) leaves 29 → Pkg (11) drops behind one marker (38 total).
+    expect(status).toBe("» DSPA: 1a · R/W: /a/w · R: /b/r · …+1");
   });
 
   it("shows no model tag when the judge model is the session model", () => {
     setDspaActive(true);
     recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", `Edit ${os.homedir()}/x/f.ts`);
-    updateWidget(ctx);
-    const lines = widgetFn!(null, theme).render(200);
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toBe("» DSPA: 1a — last: Edit ~/x/f.ts");
+    updateStatus(ctx);
+    // No "— last:" target, no judging stage — dropped by the status-line
+    // migration (counts only).
+    expect(status).toBe("» DSPA: 1a");
   });
 
   it("shows the short model name when the judge model differs from the session model", () => {
     setDspaActive(true);
     recordDspaAutoAllowed("ollama/Other-9B", "Edit f.ts");
-    updateWidget(ctx);
-    const lines = widgetFn!(null, theme).render(200);
-    expect(lines[0]).toBe("» DSPA (Other-9B): 1a — last: Edit f.ts");
+    updateStatus(ctx);
+    expect(status).toBe("» DSPA (Other-9B): 1a");
   });
 });
 

@@ -1,15 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { isDspActive, setDspActive } from "../modes/dsp-mode";
 import { notifyStatus, onStatusChange } from "../modes/status-bus";
-import { updateWidget } from "../ui/widget";
+import { updateStatus } from "../ui/widget";
+
+const theme = { fg: (_c: string, t?: string) => t ?? "", bold: (t?: string) => t ?? "" };
 
 describe("dsp-mode", () => {
   beforeEach(() => {
     setDspActive(false);
-    // Production wiring (index.ts): the unified widget is the status-bus
-    // listener. The widget-delegation tests below exercise mode → bus →
-    // widget → setWidget through that real edge.
-    onStatusChange(updateWidget);
+    // Production wiring (index.ts): the unified status is the status-bus
+    // listener. The delegation tests below exercise mode → bus → status →
+    // setStatus through that real edge.
+    onStatusChange(updateStatus);
   });
 
   afterEach(() => {
@@ -33,61 +35,42 @@ describe("dsp-mode", () => {
     });
   });
 
-  describe("mode → status bus → unified widget (widget.ts)", () => {
-    it("sets the unified widget when dsp is active", () => {
-      const setWidget = vi.fn();
-      const ctx = { hasUI: true, ui: { setWidget } } as any;
+  describe("mode → status bus → unified status (widget.ts)", () => {
+    it("sets the warning status when dsp is active", () => {
+      const setStatus = vi.fn();
+      const ctx = { hasUI: true, ui: { setStatus, setWidget: vi.fn(), theme } } as any;
       setDspActive(true);
       notifyStatus(ctx);
-      expect(setWidget).toHaveBeenCalledWith("halter", expect.any(Function), { placement: "belowEditor" });
-      // The legacy per-mode ids are cleared (no stale duplicate warning).
-      expect(setWidget).toHaveBeenCalledWith("dsp-warning", undefined);
+      // The DSP bypass hides the session rules — the warning stands alone.
+      expect(setStatus).toHaveBeenCalledWith("halter", "⚠ DSP");
     });
 
-    it("clears the widget when dsp is inactive and no rules exist", () => {
-      const setWidget = vi.fn();
-      const ctx = { hasUI: true, ui: { setWidget } } as any;
+    it("clears the status when dsp is inactive and no rules exist", () => {
+      const setStatus = vi.fn();
+      const ctx = { hasUI: true, ui: { setStatus, setWidget: vi.fn(), theme } } as any;
       setDspActive(false);
       notifyStatus(ctx);
-      expect(setWidget).toHaveBeenLastCalledWith("halter", undefined);
+      expect(setStatus).toHaveBeenLastCalledWith("halter", undefined);
     });
 
-    it("widget render returns the warning line alone when active (rules hidden)", () => {
-      const setWidget = vi.fn();
-      const ctx = { hasUI: true, ui: { setWidget } } as any;
-      setDspActive(true);
-      notifyStatus(ctx);
-
-      // Extract the unified widget builder and call it
-      const builder = setWidget.mock.calls.find((c: unknown[]) => c[0] === "halter")![1];
-      const theme = { fg: (c: string, t: string) => `[${c}]${t}`, bold: (t: string) => t };
-      const widget = builder(null, theme);
-
-      expect(typeof widget.render).toBe("function");
-      const rendered = widget.render(80);
-      expect(Array.isArray(rendered)).toBe(true);
-      expect(rendered).toHaveLength(1); // warning alone — session rules are noise in DSP mode
-      expect(rendered[0]).toContain("⚠ DSP");
-    });
-
-    it("toggle off then on re-creates the widget", () => {
-      const setWidget = vi.fn();
-      const ctx = { hasUI: true, ui: { setWidget } } as any;
+    it("toggle off then on re-sets the status", () => {
+      const setStatus = vi.fn();
+      const ctx = { hasUI: true, ui: { setStatus, setWidget: vi.fn(), theme } } as any;
 
       // Toggle ON
       setDspActive(true);
       notifyStatus(ctx);
-      expect(setWidget).toHaveBeenLastCalledWith("halter", expect.any(Function), { placement: "belowEditor" });
+      expect(setStatus).toHaveBeenLastCalledWith("halter", "⚠ DSP");
 
       // Toggle OFF (no rules) → cleared
       setDspActive(false);
       notifyStatus(ctx);
-      expect(setWidget).toHaveBeenLastCalledWith("halter", undefined);
+      expect(setStatus).toHaveBeenLastCalledWith("halter", undefined);
 
       // Toggle ON again
       setDspActive(true);
       notifyStatus(ctx);
-      expect(setWidget).toHaveBeenLastCalledWith("halter", expect.any(Function), { placement: "belowEditor" });
+      expect(setStatus).toHaveBeenLastCalledWith("halter", "⚠ DSP");
     });
   });
 });
