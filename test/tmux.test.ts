@@ -223,6 +223,32 @@ describe("tmux: send-keys payload cwd threading (a cd inside the payload re-base
     expect(analysis.paths).toContain("/var/tmp");
     expect(isPrompt(dec)).toBe(true);
   });
+
+  it("multipipe: first AND middle stages re-base (all stages share the pane shell cwd)", async () => {
+    const { analysis } = await decision("tmux send-keys -t foo 'cd /var/tmp && cat ../a.txt | cat ../b.txt | tail' Enter");
+    expect(analysis.paths).toContain("/var/a.txt");
+    expect(analysis.paths).toContain("/var/b.txt");
+    expect(analysis.paths).not.toContain(staleOf("../a.txt"));
+    expect(analysis.paths).not.toContain(staleOf("../b.txt"));
+  });
+
+  it("subshell: the inner cd re-bases; the outer pane base is untouched", async () => {
+    const { analysis, decision: dec } = await decision("tmux send-keys -t foo '(cd /var/tmp && cat ../x.txt)' Enter");
+    expect(analysis.paths).toContain("/var/x.txt");
+    expect(analysis.paths).not.toContain(staleOf("../x.txt"));
+    expect(isPrompt(dec)).toBe(true);
+  });
+
+  it("subshell + outer segment: the outer session-cwd resolution stays (keep-guard across depths)", async () => {
+    const { analysis } = await decision("tmux send-keys -t foo 'cat ../x.txt; (cd /var/tmp && cat ../x.txt)' Enter");
+    expect(analysis.paths).toContain(staleOf("../x.txt"));
+    expect(analysis.paths).toContain("/var/x.txt");
+  });
+
+  it("$PWD tokens re-base on the payload cd", async () => {
+    const { analysis } = await decision("tmux send-keys -t foo 'cd /var/tmp && cat $PWD/../x.txt' Enter");
+    expect(analysis.paths).toContain("/var/x.txt");
+  });
 });
 
 describe("tmux: send-keys prompts for dangerous keys", () => {
