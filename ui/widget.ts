@@ -178,11 +178,10 @@ function displayPaths(paths: string[], cap: number): string {
  *   ⚠ DSP                                       (DSP active — alone, rules hidden)
  *   » DSPA: 79a 3g 2r                           (DSPA: session-health counts,
  *   » DSPA (Other-9B): 3a                        non-zero only, in stop-source
- *   » DSPA: auto-allowing                        order: a auto-allowed, g floor stop,
+ *   » DSPA                                       order: a auto-allowed, g floor stop,
  *   ◎ DSPAT: 3/4 agreed                          r judge reject, c declined, d defer;
- *   · R/W: … · R: … · Bash: … · Pkg: …           the description stands in while all
- *   · R: … · Bash: …                             counts are zero (pre-first-op).
- *                                                 The model tag shows only when the
+ *   · R/W: … · R: … · Bash: … · Pkg: …           bare name pre-first-op, like ◎ DSPAT.
+ *   · R: … · Bash: …                             The model tag shows only when the
  *                                                 judge model differs from the session
  *                                                 model. The rule segments ride the
  *                                                 remaining budget, dropping whole
@@ -262,8 +261,10 @@ export function updateStatus(ctx: ExtensionContext): void {
     if (s.deny > 0) counts.push(`${s.deny}r`);
     if (s.declined > 0) counts.push(`${s.declined}c`);
     if (s.defer > 0) counts.push(`${s.defer}d`);
-    const body = counts.length > 0 ? counts.join(" ") : "auto-allowing";
-    main = theme.fg("accent", theme.bold(`» DSPA${modelTag}: ${body}`));
+    // Bare name pre-first-op (like "◎ DSPAT") — what DSPA is lives in /dspa;
+    // the counts appear as they happen.
+    const body = counts.length > 0 ? `: ${counts.join(" ")}` : "";
+    main = theme.fg("accent", theme.bold(`» DSPA${modelTag}${body}`));
   } else if (isDspatActive() && judgeOk) {
     const s = getDspatStats();
     // Agreement counter only — updateStatus re-runs after every recorded
