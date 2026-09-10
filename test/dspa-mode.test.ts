@@ -186,7 +186,7 @@ describe("status (unified halter status — see widget.ts)", () => {
     expect(status()).toContain("» DSPA");
   });
 
-  it("judging transitions refresh the status without painting the stage", () => {
+  it("judging transitions refresh the status and paint the stage inline", () => {
     judgeStatusMock.mockReturnValue({
       state: "ok",
       modelLabel: "llama-cpp/Qwen3.8-27B (session)",
@@ -197,13 +197,12 @@ describe("status (unified halter status — see widget.ts)", () => {
     const { ctx, status } = makeCtx();
     updateDspaWidget(ctx);
     const before = status();
-    setDspaJudging(1, ctx); // transition — status re-set with the same string
+    setDspaJudging(1, ctx); // transition — the stage paints inline
+    expect(status()).toBe(before + " — judging stage 1…");
+    setDspaJudging(2, ctx); // stage switch — the painted stage follows
+    expect(status()).toBe(before + " — judging stage 2…");
+    setDspaJudging(null, ctx); // cleared — counts-only line returns
     expect(status()).toBe(before);
-    setDspaJudging(2, ctx); // stage switch — still nothing painted
-    expect(status()).toBe(before);
-    setDspaJudging(null, ctx);
-    expect(status()).toBe(before);
-    expect(String(status())).not.toContain("judging");
   });
 
   it("clears while the judge is invalid, reappears when it is ok again", () => {

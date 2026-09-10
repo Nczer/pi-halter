@@ -128,7 +128,7 @@ describe("status (unified halter status — see widget.ts)", () => {
     expect(String(status())).not.toContain("last:");
   });
 
-  it("judging transitions refresh the status without painting the stage", () => {
+  it("judging transitions refresh the status and paint the stage inline", () => {
     judgeStatusMock.mockReturnValue({
       state: "ok",
       modelLabel: "m (session)",
@@ -139,13 +139,12 @@ describe("status (unified halter status — see widget.ts)", () => {
     updateDspatWidget(ctx);
     expect(status()).toBe("◎ DSPAT");
     const before = status();
-    setDspatJudging(1, ctx); // transition — status re-set with the same string
+    setDspatJudging(1, ctx); // transition — the stage paints inline
+    expect(status()).toBe(before + " — judging stage 1…");
+    setDspatJudging(2, ctx); // stage switch — the painted stage follows
+    expect(status()).toBe(before + " — judging stage 2…");
+    setDspatJudging(null, ctx); // cleared — bare line returns
     expect(status()).toBe(before);
-    setDspatJudging(2, ctx); // stage switch — still nothing painted
-    expect(status()).toBe(before);
-    setDspatJudging(null, ctx);
-    expect(status()).toBe(before);
-    expect(String(status())).not.toContain("judging");
   });
 
   it("stays within the fixed budget regardless of target length", () => {

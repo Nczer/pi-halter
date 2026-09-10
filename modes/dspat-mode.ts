@@ -22,9 +22,8 @@ import { notifyStatus } from "./status-bus";
  */
 
 let dspatActive = false;
-/** The judge stage in flight (1 | 2), or null — in-flight state only; the
- *  stage is no longer painted since the status-line migration. D17: dspat
- *  runs BOTH stages. */
+/** The judge stage in flight (1 | 2), or null — painted inline on the
+ *  status line ("— judging stage 2…"). D17: dspat runs BOTH stages. */
 let judging: 1 | 2 | null = null;
 
 interface DspatStats {
@@ -51,8 +50,8 @@ function resetStats(): void {
 /**
  * Set the in-flight judging state (verdict.ts calls it with the stage at
  * the start of a judge stage while /dspat is active, and null at its end).
- * Refreshes the unified status on every transition (the stage itself is
- * no longer painted).
+ * Refreshes the unified status on every transition, which paints the stage
+ * inline on the mode line ("— judging stage 2…").
  */
 export function setDspatJudging(stage: 1 | 2 | null, ctx: ExtensionContext): void {
   if (judging === stage) return;
@@ -64,8 +63,8 @@ export function isDspatActive(): boolean {
   return dspatActive;
 }
 
-/** The judge stage in flight (no longer painted since the status-line
- *  migration); null = idle. */
+/** The judge stage in flight (painted inline on the status line);
+ *  null = idle. */
 export function getDspatJudgingStage(): 1 | 2 | null {
   return judging;
 }

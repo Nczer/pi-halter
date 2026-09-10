@@ -200,10 +200,9 @@ async function runJudgeStage(
   stage: 1 | 2,
 ): Promise<JudgeResult | null> {
   // The in-flight judging stage is tracked on the active mode module
-  // (setDspaJudging/setDspatJudging) — no longer painted since the
-  // status-line migration; the transition just refreshes the unified
-  // status. Only manual mode (on-demand Explain) keeps a standalone
-  // widget. Captured at call start so a mid-call mode toggle cannot route
+  // (setDspaJudging/setDspatJudging) and painted inline on the status line
+  // ("— judging stage 2…"). Only manual mode (on-demand Explain) keeps a
+  // standalone widget. Captured at call start so a mid-call mode toggle cannot route
   // cleanup to the wrong widget.
   const dspaMode = isDspaActive();
   const dspatMode = !dspaMode && isDspatActive();

@@ -9,7 +9,8 @@ import {
   updateStatus,
 } from "../ui/widget";
 import { store } from "../gate/store";
-import { resetDspa, recordDspaAutoAllowed, setDspaActive } from "../modes/dspa-mode";
+import { resetDspa, recordDspaAutoAllowed, setDspaActive, setDspaJudging } from "../modes/dspa-mode";
+import { setDspatActive, setDspatJudging } from "../modes/dspat-mode";
 
 // The widget calls judgeStatus(ctx) per render; the real one reads the user's
 // live settings + model registry — mock it so mode-line tests are hermetic.
@@ -172,8 +173,7 @@ describe("updateStatus", () => {
     setDspaActive(true);
     recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", `Edit ${os.homedir()}/x/f.ts`);
     updateStatus(ctx);
-    // No "— last:" target, no judging stage — dropped by the status-line
-    // migration (counts only).
+    // No "— last:" target; idle = no judging tail (counts only).
     expect(status).toBe("» DSPA: 1a");
   });
 
@@ -182,6 +182,27 @@ describe("updateStatus", () => {
     recordDspaAutoAllowed("ollama/Other-9B", "Edit f.ts");
     updateStatus(ctx);
     expect(status).toBe("» DSPA (Other-9B): 1a");
+  });
+
+  it("paints the in-flight judging stage inline on the DSPA line (restored indicator)", () => {
+    setDspaActive(true);
+    recordDspaAutoAllowed("llama-cpp/Qwen3.8-27B", "ls");
+    setDspaJudging(2, ctx);
+    updateStatus(ctx);
+    expect(status).toBe("» DSPA: 1a — judging stage 2…");
+    setDspaJudging(null, ctx);
+    updateStatus(ctx);
+    expect(status).toBe("» DSPA: 1a");
+  });
+
+  it("paints the in-flight judging stage inline on the DSPAT line", () => {
+    setDspatActive(true);
+    setDspatJudging(1, ctx);
+    updateStatus(ctx);
+    expect(status).toBe("◎ DSPAT — judging stage 1…");
+    setDspatJudging(null, ctx);
+    updateStatus(ctx);
+    expect(status).toBe("◎ DSPAT");
   });
 });
 
