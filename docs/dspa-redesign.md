@@ -609,21 +609,29 @@ LLM call) and mines the diff:
   cwd, deduped, capped at 8). A path is COVERED by the floor's own
   knowledge — the analysis's paths, the outside list, confirmed
   resolution dirs, the cwd — when it equals a floor path or lies under
-  one, or lies under a GLOB floor path. Uncovered = a **miss**.
+  one, or lies under a GLOB floor path. Uncovered = a **floor miss** —
+  a path the JUDGE saw that the FLOOR never did (the floor's blind spot;
+  the field is named `floorMisses` so the direction survives a raw read
+  of the ledger — bare "misses" read as misses of the judge).
 - **Logged only** (decision log, final stage-2 verdict — auto-allow and
   fall-through lines alike): `judgePaths` (sanitized report, capped) and
-  `judgePathMisses` (capped at 5). Nothing in the gate reads these fields
+  `floorMisses` (capped at 5). Nothing in the gate reads these fields
   back — the runtime decision is untouched. D17: mismatches are ALSO
   mirrored to the always-on judge ledger (judge.jsonl) — the decision log
   is toggle-gated and version-bound, so the ledger is the durable home.
 - **View**: `log-inspect.mjs dspa --paths` lists the mismatch entries
   (the summary and `dspa --reasons` count them).
 
-The durable value: every miss line is either a real static-parser gap —
+The durable value: every floor-miss line is either a real static-parser
+gap —
 the exact workflow that produced D7–D12 — or a hallucination (a
 reliability datum for the field). The enforcement floor is unchanged;
 the only live effect is the judge's own handling of unexplained paths
 (deny/defer → prompt), which is advisory like all judge output.
+
+Renamed 2026-09-21: the field was `judgePathMisses` (decisions.jsonl)
+/ `misses` (judge.jsonl); pre-rename lines carry the old keys, and
+log-inspect.mjs reads both.
 
 Coverage note: pure read-only commands without content never reach the
 judge, so their paths are not reported — acceptable, because a read can
@@ -834,7 +842,7 @@ class"). Suite 3229.
   `.log/unresolved.jsonl`). Suite 3464.
 - **Phase 3i — done** (2026-08-27): D13 (judge path report — the stage-2
   verdict carries an optional `paths` report; deterministic cross-check
-  against the floor's own knowledge; `judgePaths` / `judgePathMisses`
+  against the floor's own knowledge; `judgePaths` / `floorMisses`
   decision-log fields; `log-inspect.mjs dspa --paths` view). Suite 3486.
 - **Phase 3j — done** (2026-08-31): D15 (parser resolutions — script-body
   paths join the path set; glob-tail assignment values bind to their

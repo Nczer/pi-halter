@@ -12,14 +12,15 @@
  *   dspa      every judge-regime entry (dspa/dspat) with stop tag
  *   dspa --paths   D13 parser-gap view: judge-regime entries whose stage-2
  *             path report has paths the static floor never saw
- *             (judgePathMisses) — each miss is a parser hole or a judge
+ *             (floorMisses — the floor's blind spots, not misses of the
+ *             judge) — each entry is a parser hole or a judge
  *             hallucination; both worth mining
  *   dspa --reasons   why judge-regime entries auto-allowed / stopped — the
  *             reason rollup (auto-allow reasons, stop tags, judge denials,
  *             each with counts + a first-seen example)
  *   judge     the always-on judge ledger (.log/judge.jsonl, D17): stage-1/
  *             stage-2 verdict disagreements, infra failures, D13 path
- *             mismatches — with error/miss rollups. Reads the ledger
+ *             mismatches — with error/floor-miss rollups. Reads the ledger
  *             directly (not decisions.jsonl), so --file is rarely needed
  *   stats     per-target aggregation — who prompts repeatedly, who auto-allows
  *   audit     anomaly scan: known bug classes (test-fixture pollution,
@@ -172,8 +173,8 @@ function summary() {
   const stops = F.filter((e) => e.kind === "prompt" && e.dspa);
   if (!stops.length) console.log("  (none)");
   for (const [r, n] of counts(stops, (e) => e.dspa)) console.log(`  ${String(n).padStart(4)}  ${trunc(r, 100)}`);
-  const pathMissN = F.filter((e) => e.judgePathMisses?.length).length;
-  console.log(`  judge path misses (dspa --paths): ${pathMissN}`);
+  const pathMissN = F.filter((e) => (e.floorMisses ?? e.judgePathMisses)?.length).length;
+  console.log(`  floor misses (dspa --paths): ${pathMissN}`);
   console.log("");
 
   const blocks = F.filter((e) => e.kind === "block");
@@ -227,14 +228,18 @@ function dspaCmd() {
 
 /** D13 parser-gap view: judge-regime entries with stage-2 path reports,
  *  flagged where the report contains paths the static floor never saw.
- *  The misses are the mining target — a miss is either a real
+ *  The floor misses are the mining target — a miss is either a real
  *  static-analysis hole (fix the parser) or a judge hallucination (a
- *  reliability data point for the report field). */
+ *  reliability data point for the report field). Legacy lines (pre-rename)
+ *  carry judgePathMisses / misses — read both. */
+function floorMissesOf(e) {
+  return e.floorMisses ?? e.judgePathMisses ?? e.misses;
+}
 function dspaPaths() {
   const ds = F.filter(
-    (e) => (e.mode === "dspa" || e.mode === "dspat") && (e.judgePaths?.length || e.judgePathMisses?.length),
+    (e) => (e.mode === "dspa" || e.mode === "dspat") && (e.judgePaths?.length || floorMissesOf(e)?.length),
   );
-  const withMisses = ds.filter((e) => e.judgePathMisses?.length);
+  const withMisses = ds.filter((e) => floorMissesOf(e)?.length);
   console.log(`# dspa --paths — ${withMisses.length} entries with floor mismatches, ${ds.length} with any stage-2 path report`);
   if (!ds.length) {
     console.log("(none — the judge reported no paths in this window)");
@@ -279,7 +284,7 @@ function dspaReasons() {
   section("auto-allow reasons", ds.filter((e) => e.kind === "auto-allow"), (e) => e.reason ?? "(no reason)");
   section("stop tags (fall-through prompts)", ds.filter((e) => e.kind === "prompt"), (e) => e.dspa ?? "(no stop tag)");
   section("judge denials (the LLM's words)", ds, (e) => e.judgeDeny);
-  section("D13 judge path misses (parser gaps)", ds, (e) => e.judgePathMisses?.join(", "));
+  section("D13 floor misses (judge-reported, floor never saw)", ds, (e) => floorMissesOf(e)?.join(", "));
 }
 
 function stats() {
@@ -534,9 +539,9 @@ function judgeCmd() {
     for (const [k, n] of Object.entries(errCount).sort((a, b) => b[1] - a[1])) console.log(`  ${n}× ${k}`);
   }
   const missCount = {};
-  for (const e of pathLines) for (const m of e.misses ?? []) missCount[m] = (missCount[m] ?? 0) + 1;
+  for (const e of pathLines) for (const m of floorMissesOf(e) ?? []) missCount[m] = (missCount[m] ?? 0) + 1;
   if (Object.keys(missCount).length) {
-    console.log("\npath misses (top 10 — parser gaps or hallucinations):");
+    console.log("\nfloor misses (top 10 — judge-reported, floor never saw; parser gaps or hallucinations):");
     for (const [m, n] of Object.entries(missCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
   }
   if (F.length) {

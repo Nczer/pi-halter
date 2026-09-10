@@ -15,9 +15,14 @@
  *    unexplained path is a hidden effect — deny/defer per its rules), but
  *    this module changes no gate decision.
  *
- * The value is in the log: each `judgePathMisses` line is either a real
+ * The value is in the log: each `floorMisses` line is either a real
  * static-parser gap (mine it — that is how D7–D12 were found) or a judge
  * hallucination (also worth mining — it measures the report's reliability).
+ *
+ * Wording: the name names the SUBJECT — `floorMisses` = paths the JUDGE
+ * reported that the FLOOR never saw (the floor's blind spots), not misses
+ * of the judge. Bare "miss" read as the judge missing something, which is
+ * the opposite direction.
  * tools/log-inspect.mjs `dspa --paths` lists them.
  */
 import path from "node:path";
@@ -29,7 +34,7 @@ import type { Store } from "../gate/store";
 
 /** Log economy: cap the stored report. */
 const JUDGE_PATHS_MAX = 8;
-/** Log economy: cap the stored misses. */
+/** Log economy: cap the stored floor misses. */
 const JUDGE_MISSES_MAX = 5;
 
 /** Glob characters — a floor entry containing these covers its expansions. */
@@ -81,8 +86,9 @@ function isCovered(p: string, known: string[]): boolean {
 export interface JudgePathReport {
   /** The model's touched paths, sanitized (omitted when empty). */
   paths?: string[];
-  /** Paths not covered by the floor's knowledge (omitted when empty). */
-  misses?: string[];
+  /** Judge-reported paths not covered by the floor's knowledge — the
+   *  floor's blind spots (omitted when empty). */
+  floorMisses?: string[];
 }
 
 export interface JudgePathFloor {
@@ -110,10 +116,10 @@ export function judgePathReport(
     ...(floor.confirmedDirs ?? []),
     ...floor.floorPaths.filter((p) => p.startsWith("/") && !isSentinel(p)),
   ];
-  const misses = paths
+  const floorMisses = paths
     .filter((p) => !isCovered(p, known))
     .slice(0, JUDGE_MISSES_MAX);
-  return misses.length > 0 ? { paths, misses } : { paths };
+  return floorMisses.length > 0 ? { paths, floorMisses } : { paths };
 }
 
 /**
@@ -125,7 +131,7 @@ export function judgePathLogFields(
   pd: PromptData,
   store: Store,
   reported: string[] | undefined,
-): { judgePaths?: string[]; judgePathMisses?: string[] } {
+): { judgePaths?: string[]; floorMisses?: string[] } {
   if (pd.type !== "bash" || !reported?.length || !pd.analysis) return {};
   const analysis = pd.analysis;
   // Confirmed dirs are the floor's own (deterministic) knowledge — the
@@ -141,5 +147,5 @@ export function judgePathLogFields(
     floorPaths: [...analysis.paths, ...(analysis.prompt.outsidePaths ?? [])],
     confirmedDirs,
   });
-  return { judgePaths: r.paths, judgePathMisses: r.misses };
+  return { judgePaths: r.paths, floorMisses: r.floorMisses };
 }
