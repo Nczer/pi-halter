@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.23.0 — 2026-09-10
+
+- **Base-access flag survives redirects** — a glued output-redirect target
+  (`2>/dev/null`) was read by `baseAccessPath` as the segment's own
+  resolvable file target, and the early `return null` suppressed the base
+  flag for the WHOLE command: `cd X && ls 2>/dev/null` flagged nothing,
+  auto-allowing an outside base. This is the shape judge.jsonl caught as
+  `judgePaths` === `floorMisses` (the judge saw paths the floor never
+  flagged). Redirects are now operators, not arguments: an output target
+  (glued or the token after an unglued `2>`) is skipped; a glued input
+  target (`cat < f`) IS a file argument and still evaluates; resolvable
+  file arguments keep their own verdict (no over-flag).
+  Consequence: `cd sub && ls a || ls b 2>/dev/null` now prompts, like its
+  no-redirect twin — a `cd` left of `||` makes the `||`-branch's runtime
+  cwd genuinely ambiguous; the old auto-allow was the hole (documented as
+  a legitimate EXCEPTION in the metamorphic suite).
+- **The three ledgers are toggleable** — one shared `/halter-ledger-log`
+  toggle for all three (same arg handling as `/halter-decision-log`: `on|off`,
+  bare = toggle; persisted in the `halter` namespace of `settings-ext.json`,
+  key `ledgerLog`). All stay ON by default — this is a valve, not a
+  behavior change. The `HALTER_*_LOG` env seams keep priority over the toggle
+  (test hermeticity).
+
 ## 3.22.0 — 2026-09-08
 
 Fixes the credential-pattern false positives on everyday relative globs

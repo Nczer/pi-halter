@@ -83,7 +83,7 @@ export function dspaAutoAllowed(
   // the floor never saw) — the parser-gap probe. Stage 1 never reports.
   const jp = stage === 2 ? judgePathLogFields(pd, store, verdict.paths) : {};
   logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (stage ${stage}, ${verdict.model})` }, "dspa", undefined, undefined, jp.judgePaths, jp.floorMisses);
-  // D17: the same path report also goes to the always-on judge ledger
+  // D17: the same path report also goes to the on-by-default judge ledger
   // (decisions.jsonl is toggle-gated and version-bound; the ledger is the
   // durable home for D13 mining).
   if (stage === 2) logJudgePaths(pd, store, verdict, "dspa");
@@ -179,7 +179,7 @@ export async function tryDspaAutoAllow(
   // carries the FINAL verdict (stage 2 when it rendered one); when a stage
   // produced no verdict, say WHY so the prompt is never silently bare.
   const final = (v2 ?? v1) ?? null;
-  // D17: stage-2 path report → always-on judge ledger (the auto-allow
+  // D17: stage-2 path report → on-by-default judge ledger (the auto-allow
   // branch logs it in dspaAutoAllowed — each stage-2 verdict exactly once).
   if (v2) logJudgePaths(pd, store, v2, "dspa");
   let note: string | undefined;

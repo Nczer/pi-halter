@@ -800,6 +800,11 @@ Decisions:
   per unresolved token / per signal, 5 MiB rotation each). Test
   hermeticity moves to per-file env seams (HALTER_UNRESOLVED_LOG, the new
   HALTER_JUDGE_LOG; the vitest worker setup forces all three off).
+  - 3.23.0 addendum: the "always-on" ledgers became toggleable, still on
+    by default — one shared `/halter-ledger-log` toggle for all three (incl.
+    the credential-scan glob-err.jsonl ledger), persisted in the `halter`
+    namespace (key `ledgerLog`) like the decision-log toggle. The env seams
+    keep priority (hermeticity).
 
 ## 4. Phasing
 

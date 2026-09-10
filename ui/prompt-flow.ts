@@ -142,7 +142,7 @@ export async function showPrompt(
   // cross-check of stage-1 lows is the data /dspa's auto-allow path cannot
   // produce. The final verdict is stage 2's, or stage 1's when stage 2
   // produced none; stage disagreement and stage-2 path mismatches are
-  // mirrored to the always-on judge ledger. The human always takes the
+  // mirrored to the on-by-default judge ledger. The human always takes the
   // call; the verdict + decision feed the session stats (model-scoped,
   // never persisted). The `!dspa?.verdict` guard is defensive — the modes
   // are exclusive (index.ts), so a dspa fall-through never coexists with

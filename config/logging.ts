@@ -10,37 +10,66 @@
  * auto-allow, or mine repeatedly-prompting commands into contract rows.
  *
  * D17 toggle split: this toggle covers decisions.jsonl ONLY. The small
- * diagnostic ledgers — unresolved.jsonl (parser convergence) and
- * judge.jsonl (stage diffs / infra failures / D13 path mismatches) — are
- * ALWAYS ON; their env seams (HALTER_UNRESOLVED_LOG, HALTER_JUDGE_LOG)
- * accept `off` for test hermeticity only.
+ * diagnostic ledgers (unresolved.jsonl, judge.jsonl, glob-err.jsonl) are ON
+ * BY DEFAULT but user-toggleable together — one /halter-ledger-log (key
+ * `ledgerLog` in the same settings file); the env seams (HALTER_UNRESOLVED_LOG,
+ * HALTER_JUDGE_LOG, HALTER_GLOBERR_LOG) accept `off` for test hermeticity and
+ * win over the toggle when set.
  *
  * Transient override: HALTER_DECISION_LOG=<path> (enables at that path) or
  * HALTER_DECISION_LOG=off (forces off).
  */
 export const DECISION_LOG_ENABLED = false;
 
-// ── Glob-verify error ledger (always-on, on-signal only) ───────────────
+/** Compile-time default for the diagnostic ledgers — ON by default,
+ *  user-toggleable together (see the D17 split note above). */
+export const LEDGER_LOG_ENABLED = true;
+
+// ── Diagnostic-ledger toggle (the three ledgers, on by default) ────────
 //
-// A fourth small ledger: <extension dir>/.log/glob-err.jsonl — one line per
-// failed relative-glob expansion probe (fs.globSync threw or is unavailable).
-// On-signal only — a healthy run writes nothing. The bare-symlink check
-// fails closed on such errors, and the error is otherwise swallowed, so
-// this is the mineable record of WHY (e.g. a runtime whose globSync throws
-// on no-match). Test seam HALTER_GLOBERR_LOG (scratch path / `off`), same
-// convention as the other ledgers.
+// The three small ledgers share ONE toggle: /halter-ledger-log —
+//   .log/unresolved.jsonl (unresolved-token fate), .log/judge.jsonl (judge
+//   signal), .log/glob-err.jsonl (failed glob-expansion probes — on-signal
+//   only, a healthy run writes nothing). ON by default, persisted like the
+//   decision log (key `ledgerLog`). Test seams HALTER_UNRESOLVED_LOG /
+//   HALTER_JUDGE_LOG / HALTER_GLOBERR_LOG (scratch path / `off`) win over
+//   the toggle, same convention per file.
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SETTINGS_PATH, readSettingsFile, writeSettings } from "../halter-settings";
 
 // Anchored to the extension ROOT (one level above config/).
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const GLOBERR_LOG_FILE = path.join(ROOT, ".log", "glob-err.jsonl");
 
-function resolveGlobErrLogPath(): string | null {
+// Module state — re-read from the settings file on every (re)load of the
+// extension, like the decision-log toggle in gate/decision-log.ts.
+let ledgerLogEnabled = readLedgerToggleSetting();
+
+/** Read the ledger toggle (missing key → compile-time default). */
+export function readLedgerToggleSetting(filePath: string = SETTINGS_PATH): boolean {
+  const value = readSettingsFile(filePath)["ledgerLog"];
+  return value !== undefined ? value !== false : LEDGER_LOG_ENABLED;
+}
+
+/** Set the toggle (in-memory + persisted). The command handler calls this. */
+export function setLedgerLogEnabled(enabled: boolean, filePath: string = SETTINGS_PATH): void {
+  ledgerLogEnabled = enabled;
+  writeSettings({ ledgerLog: enabled }, filePath);
+}
+
+export function isLedgerLogEnabled(): boolean {
+  return ledgerLogEnabled;
+}
+
+/** Resolve the glob-err log path. No env var → the live toggle
+ * (/halter-ledger-log, on by default). `HALTER_GLOBERR_LOG` wins when set
+ * (scratch path); `off` disables it (vitest hermeticity). */
+export function resolveGlobErrLogPath(): string | null {
   const v = process.env.HALTER_GLOBERR_LOG;
-  if (v === undefined) return GLOBERR_LOG_FILE;
+  if (v === undefined) return ledgerLogEnabled ? GLOBERR_LOG_FILE : null;
   return v === "off" ? null : v;
 }
 

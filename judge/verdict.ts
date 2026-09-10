@@ -206,7 +206,7 @@ async function runJudgeStage(
   // cleanup to the wrong widget.
   const dspaMode = isDspaActive();
   const dspatMode = !dspaMode && isDspatActive();
-  // Regime tag for the always-on judge ledger (infra lines).
+  // Regime tag for the on-by-default judge ledger (infra lines).
   const logMode: "dspa" | "dspat" | "manual" = dspaMode ? "dspa" : dspatMode ? "dspat" : "manual";
   let widgetShown = false;
   try {
