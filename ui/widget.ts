@@ -3,8 +3,8 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { store } from "../gate/store";
 import { isDspActive } from "../modes/dsp-mode";
-import { isDspaActive, getDspaStats } from "../modes/dspa-mode";
-import { isDspatActive, getDspatStats } from "../modes/dspat-mode";
+import { isDspaActive, getDspaStats, getDspaJudgingStage } from "../modes/dspa-mode";
+import { isDspatActive, getDspatStats, getDspatJudgingStage } from "../modes/dspat-mode";
 import {judgeStatus} from "../judge/verdict";
 
 // ── Path deduplication ──
@@ -179,17 +179,20 @@ function displayPaths(paths: string[], cap: number): string {
  *   » DSPA: 79a 3g 2r                           (DSPA: session-health counts,
  *   » DSPA (Other-9B): 3a                        non-zero only, in stop-source
  *   » DSPA                                       order: a auto-allowed, g floor stop,
- *   ◎ DSPAT: 3/4 agreed                          r judge reject, c declined, d defer;
- *   · R/W: … · R: … · Bash: … · Pkg: …           bare name pre-first-op, like ◎ DSPAT.
- *   · R: … · Bash: …                             The model tag shows only when the
- *                                                 judge model differs from the session
- *                                                 model. The rule segments ride the
- *                                                 remaining budget, dropping whole
- *                                                 low-priority segments behind …+N.)
+ *   » DSPA: 3a — judging stage 2…                r judge reject, c declined, d defer;
+ *   ◎ DSPAT: 3/4 agreed                          bare name pre-first-op, like ◎ DSPAT.
+ *   · R/W: … · R: … · Bash: … · Pkg: …           The model tag shows only when the
+ *   · R: … · Bash: …                             judge model differs from the session
+ *                                                 model. The in-flight judging stage
+ *                                                 rides the mode line inline (the
+ *                                                 widget's indicator, restored). The
+ *                                                 rule segments ride the remaining
+ *                                                 budget, dropping whole low-priority
+ *                                                 segments behind …+N.)
  *
  * Dropped vs. the former widget (live in the prompts/toasts, not the
- * overview line): the judging stage, "last: <target>", the DSPAT
- * description and last disagreement.
+ * overview line): "last: <target>", the DSPAT description and last
+ * disagreement.
  */
 /**
  * Generous on purpose: halter owns its own footer line, and BOTH footers
@@ -285,14 +288,21 @@ export function updateStatus(ctx: ExtensionContext): void {
     // Bare name pre-first-op (like "◎ DSPAT") — what DSPA is lives in /dspa;
     // the counts appear as they happen.
     const body = counts.length > 0 ? `: ${counts.join(" ")}` : "";
-    main = theme.fg("accent", theme.bold(`» DSPA${modelTag}${body}`));
+    // The in-flight judging stage, inline on the mode line — the widget's
+    // indicator, restored on the status line (setDspaJudging refreshes the
+    // status at every transition).
+    const judgingStage = getDspaJudgingStage();
+    const judgingTail = judgingStage !== null ? ` — judging stage ${judgingStage}…` : "";
+    main = theme.fg("accent", theme.bold(`» DSPA${modelTag}${body}${judgingTail}`));
   } else if (isDspatActive() && judgeOk) {
     const s = getDspatStats();
     // Agreement counter only — updateStatus re-runs after every recorded
-    // outcome, so live.
+    // outcome, so live. The judging tail works the same as the DSPA line.
+    const judgingStage = getDspatJudgingStage();
+    const judgingTail = judgingStage !== null ? ` — judging stage ${judgingStage}…` : "";
     main = theme.fg(
       "accent",
-      theme.bold(s.total > 0 ? `◎ DSPAT: ${s.agreed}/${s.total} agreed` : "◎ DSPAT"),
+      theme.bold((s.total > 0 ? `◎ DSPAT: ${s.agreed}/${s.total} agreed` : "◎ DSPAT") + judgingTail),
     );
   }
 

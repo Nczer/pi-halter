@@ -28,9 +28,8 @@ let denials = 0;
 let declines = 0;
 let defers = 0;
 /** The in-flight judge stage (1: stateless check, 2: session-context
- *  intent pass), null when idle — in-flight state only; since the
- *  status-line migration the stage itself is no longer painted, the
- *  transition just refreshes the unified status. */
+ *  intent pass), null when idle — painted inline on the status line
+ *  ("— judging stage 2…"); the transition refreshes the unified status. */
 let judging: 1 | 2 | null = null;
 
 export function setDspaActive(on: boolean): void {
@@ -131,8 +130,8 @@ export function getDspaJudgingStage(): 1 | 2 | null {
 /**
  * Set the in-flight judging stage (verdict.ts calls it at the start and end
  * of every judge stage while /dspa is active; null clears it). Refreshes
- * the unified status on every transition (the stage itself is no longer
- * painted).
+ * the unified status on every transition, which paints the stage inline
+ * on the mode line ("— judging stage 2…").
  */
 export function setDspaJudging(stage: 1 | 2 | null, ctx: ExtensionContext): void {
   if (judging === stage) return;
