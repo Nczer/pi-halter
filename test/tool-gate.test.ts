@@ -188,7 +188,8 @@ describe("buildPrompt: tool prompts", () => {
     const p = buildPrompt({ kind: "prompt", promptData: pd });
     expect(p.title).toContain("blender");
     expect(p.body).toContain("/etc/hosts");
-    expect(p.body).toContain("outside cwd: /etc");
+    expect(p.body).toContain("⚠️ outside cwd");
+    expect(p.body).not.toContain("outside cwd: "); // dir is the path prefix — not re-listed
     expect(p.body).toContain("file exists");
   });
 

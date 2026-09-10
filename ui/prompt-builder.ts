@@ -472,7 +472,10 @@ function buildFilePrompt(
 
   return {
     title: `\u26a0\ufe0f ${action} outside cwd`,
-    body: `Path:\n  ${filePath}\n\u26a0\ufe0f outside cwd: ${outsideDir}${warnLine}${symlinkLine}${existsNote}\n`,
+    // The flag rides the path line as a suffix — the dir itself is the path
+    // prefix (and the Always (path) option shows it globbed), so a separate
+    // "⚠️ outside cwd: <dir>" line was pure duplication.
+    body: `Path:\n  ${filePath} \u26a0\ufe0f outside cwd${warnLine}${symlinkLine}${existsNote}\n`,
     tier2Everything: {
       title: `Confirm Always Allow`,
       body: `"Always Yes" will ${scope}:\n  ${outsideDirGlob}`,
@@ -537,7 +540,9 @@ function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
     body += `\n\u26a0\ufe0f ${note ?? "Executes code in an external tool."}`;
   } else {
     const target = data.resolved ?? "(unresolved)";
-    const outside = data.outsideDir ? `\n\u26a0\ufe0f outside cwd: ${data.outsideDir}` : "";
+    // Suffix on the path line — the dir is the path prefix (no separate
+    // line; see buildFilePrompt's note).
+    const outside = data.outsideDir ? ` \u26a0\ufe0f outside cwd` : "";
     const existsNote = data.exists
       ? `\n\u2139\ufe0f file exists — the tool will overwrite it`
       : "";
