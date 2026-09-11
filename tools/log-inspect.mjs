@@ -20,8 +20,10 @@
  *             each with counts + a first-seen example)
  *   judge     the always-on judge ledger (.log/judge.jsonl, D17): stage-1/
  *             stage-2 verdict disagreements, infra failures, D13 path
- *             mismatches — with error/floor-miss rollups. Reads the ledger
- *             directly (not decisions.jsonl), so --file is rarely needed
+ *             disagreements (both sides on the line: floorPaths +
+ *             judgePaths + floorMisses — the fault is the miner's call)
+ *             — with error/floor-miss rollups. Reads the ledger directly
+ *             (not decisions.jsonl), so --file is rarely needed
  *   stats     per-target aggregation — who prompts repeatedly, who auto-allows
  *   audit     anomaly scan: known bug classes (test-fixture pollution,
  *             contradictions, phantom root paths, misleading outside-base
@@ -541,7 +543,7 @@ function judgeCmd() {
   const missCount = {};
   for (const e of pathLines) for (const m of floorMissesOf(e) ?? []) missCount[m] = (missCount[m] ?? 0) + 1;
   if (Object.keys(missCount).length) {
-    console.log("\nfloor misses (top 10 — judge-reported, floor never saw; parser gaps or hallucinations):");
+    console.log("\nfloor misses (top 10 — ran through the floor; judge-reported, floor never saw):");
     for (const [m, n] of Object.entries(missCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
   }
   if (F.length) {
@@ -550,7 +552,12 @@ function judgeCmd() {
       const parts = [String(e.ts ?? "").slice(5, 16), e.kind, e.mode, e.model ?? "?"];
       if (e.s1) parts.push(`${e.s1} → ${e.s2}`);
       if (e.error) parts.push(e.error);
-      if (e.misses?.length) parts.push(`misses: ${e.misses.join(", ")}`);
+      if (e.kind === "paths") {
+        if (e.floorPaths?.length) parts.push(`floor:  ${trunc(e.floorPaths.join(", "), 100)}`);
+        if (e.judgePaths?.length) parts.push(`judge:  ${trunc(e.judgePaths.join(", "), 100)}`);
+        const mm = floorMissesOf(e);
+        if (mm?.length) parts.push(`MISS:   ${trunc(mm.join(", "), 100)}`);
+      } else if (e.misses?.length) parts.push(`misses: ${e.misses.join(", ")}`);
       if (e.cmd) parts.push(trunc(e.cmd, 80));
       console.log(`  ${parts.join("  ")}`);
     }

@@ -616,17 +616,26 @@ LLM call) and mines the diff:
 - **Logged only** (decision log, final stage-2 verdict — auto-allow and
   fall-through lines alike): `judgePaths` (sanitized report, capped) and
   `floorMisses` (capped at 5). Nothing in the gate reads these fields
-  back — the runtime decision is untouched. D17: mismatches are ALSO
-  mirrored to the always-on judge ledger (judge.jsonl) — the decision log
-  is toggle-gated and version-bound, so the ledger is the durable home.
+  back — the runtime decision is untouched. D17: mismatches that RAN
+  THROUGH the floor (the gate passed — auto-allow or judge-declined
+  prompt; a floor STOP writes no ledger line — the miss never ran
+  through, and the prompt's decision line still carries the report) are
+  ALSO mirrored to the always-on judge ledger (judge.jsonl) with BOTH
+  SIDES on the line: `floorPaths` (the floor's own path set, sentinels
+  included, capped at 8) + `judgePaths` + `floorMisses` — the fault (the
+  floor's blind spot vs judge reach) is the miner's call. The decision
+  log is toggle-gated and version-bound, so the ledger is the durable
+  home.
 - **View**: `log-inspect.mjs dspa --paths` lists the mismatch entries
   (the summary and `dspa --reasons` count them).
 
-The durable value: every floor-miss line is either a real static-parser
-gap —
-the exact workflow that produced D7–D12 — or a hallucination (a
-reliability datum for the field). The enforcement floor is unchanged;
-the only live effect is the judge's own handling of unexplained paths
+The durable value: a floor-miss line is either a real floor blind spot —
+the miss sits in the command text (a static-parser gap — the exact
+workflow that produced D7–D12) or at the tracked cd base (an unmodeled
+implicit base access) — or judge reach: context knowledge (no fault) or a
+hallucination (a reliability datum for the field). Both sides on the line
+let the miner tell them apart. The enforcement floor is unchanged; the
+only live effect is the judge's own handling of unexplained paths
 (deny/defer → prompt), which is advisory like all judge output.
 
 Renamed 2026-09-21: the field was `judgePathMisses` (decisions.jsonl)
@@ -852,6 +861,13 @@ class"). Suite 3229.
 - **Phase 3j — done** (2026-08-31): D15 (parser resolutions — script-body
   paths join the path set; glob-tail assignment values bind to their
   directory; literal-path loop in-lists name every word). Suite 3444.
+- **Phase 3k — done** (2026-09-10): D13 ledger semantics (the paths line
+  is a floor↔judge disagreement that RAN THROUGH the floor — a floor stop
+  writes no ledger line; the line carries BOTH sides — `floorPaths` +
+  `judgePaths` + `floorMisses` — so the fault, the floor's blind spot vs
+  judge reach, is the miner's call; the retry double-log is fixed — a
+  stage-2 verdict that auto-allows via the retry hook was written to the
+  ledger twice).
 
 ## 5. Open questions (grill order)
 

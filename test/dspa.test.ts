@@ -824,18 +824,31 @@ describe("D17 — always-on judge ledger (judge.jsonl)", () => {
     expect(fs.existsSync(judgeLog)).toBe(false);
   });
 
-  it("dspa: D13 floor mismatch → paths line (the durable parser-gap home)", async () => {
+  it("dspa: floor-STOP mismatch → no ledger paths line (the miss never ran through the floor)", async () => {
+    // cat /etc/hostname: concrete outside base → advisory gate stop. The
+    // judge's extra path (/etc/shadow) still rides the prompt's decision
+    // line — but the ledger records only misses that ran through the floor.
     await runAnalyzedGate(
       "cat /etc/hostname",
       verdict(),
       verdict({ approve: "deny", paths: ["/etc/hostname", "/etc/shadow"] }),
     );
+    expect(judgeLines().find((l) => l.kind === "paths")).toBeUndefined();
+  });
+
+  it("dspa: floor-PASSED mismatch → paths line with both sides (the durable parser-gap home)", async () => {
+    await runAnalyzedGate(
+      "ls /home/u/project/target",
+      verdict({ risk: "medium" }),
+      verdict({ paths: ["/home/u/project/target", "/etc/hostname"] }),
+    );
     const pathsLine = judgeLines().find((l) => l.kind === "paths");
     expect(pathsLine).toEqual(
       expect.objectContaining({
         mode: "dspa",
-        judgePaths: ["/etc/hostname", "/etc/shadow"],
-        floorMisses: ["/etc/shadow"],
+        floorPaths: ["/home/u/project/target"],
+        judgePaths: ["/home/u/project/target", "/etc/hostname"],
+        floorMisses: ["/etc/hostname"],
       }),
     );
   });

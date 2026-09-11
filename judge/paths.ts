@@ -15,9 +15,16 @@
  *    unexplained path is a hidden effect — deny/defer per its rules), but
  *    this module changes no gate decision.
  *
- * The value is in the log: each `floorMisses` line is either a real
- * static-parser gap (mine it — that is how D7–D12 were found) or a judge
- * hallucination (also worth mining — it measures the report's reliability).
+ * The value is in the log (judge.jsonl, kind "paths"): a line is a
+ * floor↔judge disagreement that RAN THROUGH the floor (the gate passed —
+ * auto-allow or judge-declined prompt; a floor stop writes no ledger line,
+ * the prompt's decision line still carries the report). Both sides sit on
+ * the line — floorPaths (the floor's own path set, sentinels included) and
+ * judgePaths — plus the mismatch (floorMisses), so the miner can attribute
+ * the fault: a miss present in the command text or at the tracked cd base
+ * is the floor's blind spot (mine it — that is how D7–D12 were found); a
+ * miss nowhere in the command is judge reach — context knowledge (no
+ * fault) or a hallucination (the judge's fault).
  *
  * Wording: the name names the SUBJECT — `floorMisses` = paths the JUDGE
  * reported that the FLOOR never saw (the floor's blind spots), not misses
@@ -123,15 +130,17 @@ export function judgePathReport(
 }
 
 /**
- * Decision-log fields for a judged operation (gate.ts calls this with the
- * FINAL stage-2 verdict). `{}` unless a stage-2 bash verdict reported
- * paths — stage 1 never asks for them, file ops have no path list.
+ * Path-report fields for a judged operation (gate.ts calls this with the
+ * FINAL stage-2 verdict for the decision line — judgePaths + floorMisses;
+ * the ledger (logJudgePaths) also takes floorPaths — the floor's own side
+ * of the disagreement). `{}` unless a stage-2 bash verdict reported paths
+ * — stage 1 never asks for them, file ops have no path list.
  */
 export function judgePathLogFields(
   pd: PromptData,
   store: Store,
   reported: string[] | undefined,
-): { judgePaths?: string[]; floorMisses?: string[] } {
+): { judgePaths?: string[]; floorPaths?: string[]; floorMisses?: string[] } {
   if (pd.type !== "bash" || !reported?.length || !pd.analysis) return {};
   const analysis = pd.analysis;
   // Confirmed dirs are the floor's own (deterministic) knowledge — the
@@ -142,10 +151,18 @@ export function judgePathLogFields(
   for (const u of analysis.prompt.unresolved) {
     for (const d of store.getConfirmedResolution(u.token) ?? []) confirmedDirs.push(d);
   }
+  // The floor's own side, as raw knowledge (sentinels included — an
+  // unbound-var marker is the floor's limited knowledge of that location).
+  // The coverage check below still ignores non-absolute/sentinel entries.
+  const floorPaths = [...analysis.paths, ...(analysis.prompt.outsidePaths ?? [])];
   const r = judgePathReport(reported, {
     cwd: pd.cwd,
-    floorPaths: [...analysis.paths, ...(analysis.prompt.outsidePaths ?? [])],
+    floorPaths,
     confirmedDirs,
   });
-  return { judgePaths: r.paths, floorMisses: r.floorMisses };
+  return {
+    judgePaths: r.paths,
+    floorPaths: floorPaths.slice(0, JUDGE_PATHS_MAX),
+    floorMisses: r.floorMisses,
+  };
 }
