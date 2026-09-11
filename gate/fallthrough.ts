@@ -142,8 +142,12 @@ export async function tryDspaAutoAllow(
     if (gateResult.advisory) {
       const v1 = await getJudgeVerdict(pd, ctx, store);
       const v2 = await getStage2Verdict(pd, ctx, store);
+      // Judge-self disagreement is still logged (the judge ran, whatever
+      // the floor's stop) — but NO paths line: the floor stopped the
+      // command, so the miss never ran through the floor. The ledger
+      // records faults that ran through; the prompt's decision line still
+      // carries the report (gate.ts).
       logJudgeDiff(pd, "dspa", v1, v2);
-      if (v2) logJudgePaths(pd, store, v2, "dspa");
       const final = (v2 ?? v1) ?? null;
       // The stop is the FLOOR's (any verdict here is advisory) — count it as
       // a gate stop, with the verdict's model for counter scoping.

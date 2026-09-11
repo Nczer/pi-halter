@@ -396,9 +396,14 @@ export interface JudgeLogEntry {
   // kind: "infra" — the normalized sub-reason (JudgeResult.reason, ≤200ch):
   // "timeout" / "no-tool-call" / "bad-args: {…}" / "call-failed: <msg>".
   detail?: string;
-  // kind: "paths" — the report as sanitized, plus the floor's blind spots
-  // (judge-reported paths the floor never saw — "floorMisses": the floor's
-  // misses, not the judge's).
+  // kind: "paths" — both sides of the floor↔judge disagreement: the floor's
+  // own path set (sentinels included), the report as sanitized, and the
+  // floor's blind spots (judge-reported paths the floor never saw —
+  // "floorMisses": the floor's misses, not the judge's). Written only when
+  // the command PASSED the floor (auto-allow or judge-declined prompt) —
+  // fault (floor's blind spot vs judge reach) is the miner's call; the
+  // line carries both sides for it.
+  floorPaths?: string[];
   judgePaths?: string[];
   floorMisses?: string[];
 }
@@ -463,9 +468,11 @@ export function logJudgeDiff(
 }
 
 /**
- * D13: a stage-2 verdict whose path report the floor never saw — the
- * parser-gap / hallucination signal, mirrored to the on-by-default ledger so
- * it survives the decision log being off (or wiped on /reload). A no-op
+ * D13: a stage-2 verdict with a path the floor's path model never saw — the
+ * floor↔judge disagreement line, mirrored to the on-by-default ledger so it
+ * survives the decision log being off (or wiped on /reload). Both sides sit
+ * on the line (floorPaths + judgePaths + floorMisses) so the fault — the
+ * floor's blind spot vs judge reach — is analysable by the miner. A no-op
  * when the report is absent or fully covered by the floor.
  */
 export function logJudgePaths(
@@ -482,6 +489,7 @@ export function logJudgePaths(
     mode,
     model: verdict.model,
     cmd: judgeCmdOf(pd),
+    floorPaths: f.floorPaths,
     judgePaths: f.judgePaths,
     floorMisses: f.floorMisses,
   });

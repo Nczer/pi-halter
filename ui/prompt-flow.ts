@@ -226,8 +226,12 @@ export async function showPrompt(
             // D17: the retry's stage-2 verdict vs the carried stage-1
             // verdict is a stage pair too — log its disagreement.
             if (dspa.stage === 1 && dspa.verdict) logJudgeDiff(pd, "dspa", dspa.verdict, v2);
-            if (v2) logJudgePaths(pd, store, v2, "dspa");
-            if (v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium")) {
+            const allows =
+              v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium");
+            // dspaAutoAllowed logs the path report itself — logging it here
+            // too would write the same stage-2 verdict to the ledger twice.
+            if (v2 && !allows) logJudgePaths(pd, store, v2, "dspa");
+            if (allows) {
               dspaAutoAllowed(request, pd, ctx, store, v2, 2);
               return { autoAllowed: true, body: null };
             }
