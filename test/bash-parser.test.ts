@@ -160,6 +160,18 @@ describe("parseCommand: paths", () => {
     expect(r.paths).toContain("/etc/passwd");
   });
 
+  it("keeps ~ in heredoc body paths so expandTilde resolves it (D13 ledger 2026-09-11)", async () => {
+    // The regex's dead `(?:~\/)?` group used to drop the tilde: the
+    // expanduser("~/.thunderbird/…") body scanned to
+    // /.thunderbird/… — a nonexistent path that still outside-stopped but
+    // named the wrong dir.
+    const r = await parseCommand(
+      "python3 - << 'EOF'\nimport os\np = os.path.expanduser(\"~/.cache/a/b.txt\")\nEOF", cwd);
+    expect(r.paths).toContain(realPath(path.join(home, ".cache/a/b.txt")));
+    // The old mangled form (tilde dropped) must not appear.
+    expect(r.paths).not.toContain("/.cache/a/b.txt");
+  });
+
   it("heredoc body noise is not a path (URLs, single-segment tokens)", async () => {
     const r = await parseCommand(
       "python3 - << 'EOF'\nprint('http://x.io/y/z')\nprint(a / b)\nEOF", cwd);
