@@ -80,7 +80,9 @@ the full command + analysis + content and decides.
 
 - inline script execution: `python3 -c …`, `python3 - <<EOF … EOF` (full
   body visible in the command text / packet)
-- write/input redirects to in-base paths (`> f`, `<<EOF`)
+- write/input redirects to in-base paths (`> f`, `<<EOF`) — to a re-based
+  base lacking a write grant, the floor stops instead (D18); the judge
+  sees such a write only when the user granted it
 - pipes and subshells whose content is visible (command substitution with a
   literal body)
 - in-base `cp`/`mv`/`sed -i` file-modification patterns
@@ -815,6 +817,59 @@ Decisions:
     namespace (key `ledgerLog`) like the decision-log toggle. The env seams
     keep priority (hermeticity).
 
+### D18. Write-mode base access: re-based bases face the WRITE bar (2026-09-12)
+
+**Incident.** `cd ~/.pi/agent/extensions/halter && python3 - <<'PYEOF' …
+open(p, "w").write(s) …` auto-allowed under /dspa — the heredoc rewrote an
+extension source file. The floor passed it: the `cd` re-based the working
+directory, `baseAccessPath` flagged the base as an undifferentiated touch,
+and the floor's base-access bar is the **READ** bar — `~/.pi` is read-
+allowed in config, so the base was not "outside". The dangerous digest
+(severity high: script execution + input redirection) is judgeable (D1),
+and the judge's system prompt says "judge BEHAVIOR, not location — do not
+deny for scope alone" — with no grant state in the packet, the judge had
+no scope fact it was allowed to rest on, and missed the write.
+
+**Decision ("similar to the write/edit tool").** A segment that WRITES its
+re-based base faces the manual **WRITE** bar — the exact predicate the file
+branch applies to writes (`insideManualWriteBar`: session write dirs/
+paths + config write paths + project-pi). Stop: `write outside base
+(<dir>)`, advisory (D16), `writeOutside` on the gate result.
+
+- **Trigger classes (deterministic — `baseWriteAccess`):**
+  1. a bare output-redirect target (`echo x > f`, `cmd >> f`, `cmd 2> f`)
+     — the file lands in the base. Resolvable targets and fd references
+     (`2>&1`, `>&1`) don't count; input redirects (`<`) read the base.
+  2. opaque inline-code execution: an interpreter (script or shell) fed by
+     a heredoc or a `-c`/`-e` payload — the floor does not interpret
+     script bodies (D1), so the code may write anywhere under the base.
+     The check is SCOPE, not content: `python3 - <<EOF print(1)` under an
+     ungranted base stops exactly like the incident.
+- **Out of scope (stay judgeable / unchanged):** base READS (`cd X && ls`);
+  inline code under the SESSION cwd (the working set — bases inside the
+  session cwd are skipped, mirroring the file branch, which never stops a
+  write into cwd); a bare script FILE (`cd X && python3 fix.py`) — the
+  script's content rides fenced in the packet (`findExecutedScript`), so
+  the judge sees exactly what it writes; that trigger class is a one-line
+  extension if data shows it's needed. Subshell-internal writes are not
+  modeled (`baseAccessPath`'s subshell scan still flags their base for the
+  read bar).
+- **Precedence:** the read-bar stop (non-read-allowed base) and the D7
+  sentinel (unknown base) fire first — the write check adds stops only for
+  bases that pass the read bar.
+- **Grant option (steady state).** The fall-through prompt offers `Allow
+  writes: <dir> (session)` — mirroring the D10 Trust option: a session
+  write grant (write implies read) for EXACTLY the `writeOutside` dirs,
+  deterministic, no LLM call. Root and sentinels are never grantable
+  (D9's rule). After the grant, the identical run passes the floor and the
+  judge decides — with the facts.
+- **Packet hygiene (part B).** The risk line carries severity (`risk
+  flags: high — …`); the Operation section reports `effective base: <dir>
+  (after cd) — read: granted|NOT granted, write: granted|NOT granted`
+  whenever a re-based base exists. Facts, not instructions: the system
+  prompt's "do not deny for scope alone" stands — what changed is that the
+  judge can finally see the write state.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -868,6 +923,11 @@ class"). Suite 3229.
   judge reach, is the miner's call; the retry double-log is fixed — a
   stage-2 verdict that auto-allows via the retry hook was written to the
   ledger twice).
+- **Phase 3l — done** (2026-09-12): D18 (write-mode base access — bare
+  output redirects and opaque inline code under a re-based base face the
+  manual WRITE bar; `write outside base (…)` stop with the `Allow writes:
+  <dir> (session)` grant option; the packet carries the risk severity and
+  the effective base's read/write grant state). Suite 3728.
 
 ## 5. Open questions (grill order)
 

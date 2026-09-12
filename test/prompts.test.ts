@@ -954,6 +954,40 @@ describe("twoTierAlwaysPrompt: D10 trust option", () => {
   });
 });
 
+// ── D18: Allow-writes option (the floor stopped a base write) ──
+
+describe("twoTierAlwaysPrompt: D18 Allow-writes option", () => {
+  it("offers the option and grants on confirm → 'always'", async () => {
+    const cb = makeCallbacks();
+    const onWriteGrant = vi.fn();
+    // choices = ["Yes", "Allow writes: /a/b, /c/d (session)", "No"]
+    // indices:     0                    1                                2
+    const result = await twoTierAlwaysPrompt(
+      makePrompt({ includeAlwaysOption: false, writeGrantDirs: ["/a/b", "/c/d"] }),
+      store, makeCtx([1, 0]),
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      undefined, undefined, undefined, onWriteGrant,
+    );
+    expect(result).toBe("always");
+    expect(onWriteGrant).toHaveBeenCalledTimes(1);
+    expect(cb.onAlways).not.toHaveBeenCalled();
+  });
+
+  it("no option without writeGrantDirs (plain layout unchanged)", async () => {
+    const cb = makeCallbacks();
+    const onWriteGrant = vi.fn();
+    const ctx = makeCtx([1, 1, 3]); // Always → Back → No
+    const result = await twoTierAlwaysPrompt(
+      makePrompt(), store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      undefined, undefined, undefined, onWriteGrant,
+    );
+    expect(result).toBe("no");
+    expect(onWriteGrant).not.toHaveBeenCalled();
+    expect(ctx.__selects[0]).toEqual(["Yes", "Always: test *", "No"]);
+  });
+});
+
 // ── Covered scopes: Always options suppressed (standing session grant) ──
 
 describe("twoTierAlwaysPrompt: covered Always options are suppressed", () => {

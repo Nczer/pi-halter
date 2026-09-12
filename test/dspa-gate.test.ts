@@ -1059,3 +1059,110 @@ describe("go/cargo explicit fetch forms (D8 class; the CLIs themselves stay D1-j
     }
   });
 });
+
+// ── D18: write-mode base access (2026-09-12 incident) ──
+//
+// baseAccessPath flags a re-based base as an undifferentiated touch and the
+// read bar admits read-allowed bases (~/.pi is read-allowed in config). A
+// segment that WRITES its base — a bare output redirect, or opaque inline
+// code (heredoc / -c / -e) the floor does not interpret (D1) — must face
+// the WRITE bar, exactly like a file-op write. The 2026-09-12 incident: a
+// heredoc python rewrote a source file under a read-allowed, non-write-
+// granted extension dir and the floor passed it (read semantics), and the
+// judge — which may not rule on scope — saw no grant state.
+
+describe("D18: write-mode base access (2026-09-12 incident)", () => {
+  // ~/.pi is read-allowed but NOT write-allowed (config/path-rules) — the
+  // exact incident shape: a re-based base the read bar admits.
+  const HOME_PI = path.join(os.homedir(), ".pi");
+
+  it("a heredoc python that writes its read-allowed base stops (writeOutside set)", async () => {
+    const r = await checkDspaGate(
+      bashPd(`cd ${HOME_PI} && python3 - <<'PYEOF'\nopen("probe.txt","w").write("x")\nPYEOF`),
+      store,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe(`write outside base (${HOME_PI})`);
+      expect(r.writeOutside).toEqual([HOME_PI]);
+      expect(r.advisory).toBe(true);
+    }
+  });
+
+  it("the stop clears with a session write grant for that base (steady state)", async () => {
+    store.addAllowed({ writeDirs: [HOME_PI] });
+    const r = await checkDspaGate(
+      bashPd(`cd ${HOME_PI} && python3 - <<'PYEOF'\nopen("probe.txt","w").write("x")\nPYEOF`),
+      store,
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("a bare output redirect under the base stops", async () => {
+    const r = await checkDspaGate(bashPd(`cd ${HOME_PI} && echo hi > probe.txt`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe(`write outside base (${HOME_PI})`);
+  });
+
+  it("inline -c/-e and heredoc scripts stop; the floor does not read the code", async () => {
+    // Even an innocent-looking inline body triggers — this is a SCOPE check,
+    // not a content check (the judge reads the code).
+    for (const c of [
+      `cd ${HOME_PI} && sh -c 'echo hi'`,
+      `cd ${HOME_PI} && python3 - <<'PYEOF'\nprint(1)\nPYEOF`,
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) expect(r.reason, c).toBe(`write outside base (${HOME_PI})`);
+    }
+  });
+
+  it("read-only base access is unchanged (ls, fd dups, resolvable targets, input redirects)", async () => {
+    for (const c of [
+      `cd ${HOME_PI} && ls`,
+      `cd ${HOME_PI} && echo hi 2>&1`,
+      `cd ${HOME_PI} && echo hi > /tmp/probe-d18`,
+      `cd ${HOME_PI} && cat < probe.txt`,
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(true);
+    }
+  });
+
+  it("inline code at the session cwd (no re-base) is the working set", async () => {
+    const r = await checkDspaGate(
+      bashPd(`python3 - <<'PYEOF'\nopen("probe.txt","w").write("x")\nPYEOF`),
+      store,
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("a base inside the session cwd is the working set (cd subdir)", async () => {
+    const r = await checkDspaGate(bashPd(`cd one && echo hi > probe.txt`), store);
+    expect(r.ok).toBe(true);
+  });
+
+  it("a non-read-allowed base stops on the READ bar first (writeOutside unset)", async () => {
+    const r = await checkDspaGate(bashPd(`cd /etc && python3 - <<'PYEOF'\nopen("x","w")\nPYEOF`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("touches paths outside base (/etc)");
+      expect(r.writeOutside).toBeUndefined();
+    }
+  });
+
+  it("an unknown base (cd $D) keeps the D7 sentinel stop", async () => {
+    const r = await checkDspaGate(bashPd(`cd $D && echo hi > probe.txt`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("unresolvable");
+  });
+
+  it("a bare script FILE under the base stays judgeable (D1 — content rides the packet)", async () => {
+    // python3 fix.py: the code is a file in the base, not inline — the judge
+    // sees its content (findExecutedScript) and decides. Inline code and
+    // bare redirects are the floor's two trigger classes; file scripts are
+    // the adjacent judgeable class.
+    const r = await checkDspaGate(bashPd(`cd ${HOME_PI} && python3 fix.py`), store);
+    expect(r.ok).toBe(true);
+  });
+});

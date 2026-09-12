@@ -42,6 +42,16 @@ export interface JudgmentBashInput {
   outsidePaths?: string[];
   /** Untrusted local script the command executes, if any. */
   script?: JudgmentScript | null;
+  /** halter's risk severity for the whole command (low/medium/high/null) —
+   *  rendered as the risk line's prefix so a high-severity reason list
+   *  reads as a verdict input, not a footnote. */
+  severity?: string | null;
+  /** The command's effective base after a re-basing cd, with the grant
+   *  state the floor applies to it (D18: the read bar admits read-allowed
+   *  bases that carry no write grant — the judge needs the fact, since it
+   *  may not rule on scope). Absent when every segment runs under the
+   *  session cwd. */
+  effectiveBase?: { dir: string; read: boolean; write: boolean } | null;
 }
 
 /** A file read/write/edit operation under review. */
@@ -227,6 +237,17 @@ function buildBashPacket(input: JudgmentBashInput): string {
     "## Command",
     `cwd:  ${input.cwd}`,
     `base: ${input.cwd}`,
+  );
+  if (input.effectiveBase) {
+    // D18: the judge sees the base the command actually operates under and
+    // whether writes there are granted — facts, not instructions. The
+    // system prompt's "do not deny for scope alone" stays; this is what a
+    // "writes where not granted" judgment can rest on.
+    parts.push(
+      `effective base: ${input.effectiveBase.dir} (after cd) — read: ${input.effectiveBase.read ? "granted" : "NOT granted"}, write: ${input.effectiveBase.write ? "granted" : "NOT granted"}`,
+    );
+  }
+  parts.push(
     `$ ${input.command}`,
     "",
   );
@@ -240,8 +261,9 @@ function buildBashPacket(input: JudgmentBashInput): string {
     lines.push(`  ${i + 1}. ${s.text}${s.cut ? " …" : ""}`);
   }
   const reasons = input.riskReasons.slice(0, REASONS_MAX);
+  const sev = input.severity ? `${input.severity} — ` : "";
   lines.push(
-    `risk flags: ${reasons.length > 0 ? reasons.join("; ") + (input.riskReasons.length > REASONS_MAX ? " (…)" : "") : "none"}`,
+    `risk flags: ${sev}${reasons.length > 0 ? reasons.join("; ") + (input.riskReasons.length > REASONS_MAX ? " (…)" : "") : "none"}`,
   );
   lines.push(
     `obfuscation: ${input.hasUnsafePattern ? "yes (unsafe patterns present)" : "no"} | parse error: ${input.hasParseError ? "yes" : "no"}`,

@@ -16,6 +16,7 @@
  * judge fenced as untrusted data (trusted skill scripts are excluded — the
  * user already vouches for that directory).
  */
+import path from "node:path";
 import { stream } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -24,6 +25,8 @@ import type { Store } from "../gate/store";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { findExecutedScript } from "../analysis/script-payload";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
+import { expandTilde } from "../analysis/path-util";
+import { makeManualBar, insideManualWriteBar } from "../gate/dspa-gate";
 import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeResult, JudgeSettings} from "./judge";
 import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
@@ -71,11 +74,26 @@ async function buildJudgmentInput(
         getConfirmedResolution: (t) => store.getConfirmedResolution(t),
       }));
     const script = findExecutedScript(analysis, pd.cwd);
+    // D18: the base the command actually operates under (after a re-basing
+    // cd) and the floor's bars against it — the judge may not rule on
+    // scope, but it should see whether writes there are granted.
+    const normBase = path.resolve(expandTilde(pd.cwd));
+    let effectiveBase: { dir: string; read: boolean; write: boolean } | null = null;
+    for (const b of analysis.effectiveCwds) {
+      if (b !== null && b !== normBase) {
+        effectiveBase = {
+          dir: b,
+          read: makeManualBar(store, pd.cwd)(b),
+          write: insideManualWriteBar(store, b, pd.cwd),
+        };
+      }
+    }
     const input: JudgmentBashInput = {
       command: pd.command,
       cwd: pd.cwd,
       segments: analysis.segments,
       riskReasons: analysis.risk.reasons,
+      severity: analysis.risk.severity,
       hasUnsafePattern: analysis.safety.hasUnsafePattern,
       hasParseError: analysis.hasParseError,
       // An unverifiable glob is a verification failure, not a credential
@@ -86,6 +104,7 @@ async function buildJudgmentInput(
       paths: analysis.paths,
       outsidePaths: analysis.prompt.outsidePaths ?? [],
       script,
+      effectiveBase,
     };
     return input;
   }

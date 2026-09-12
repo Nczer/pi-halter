@@ -40,6 +40,11 @@ export interface BuiltPrompt {
   /** D10: bare package names of fetchable run forms in the command — tier-1
    *  offers a "Trust" option (session grant) when set. */
   trustPackages?: string[];
+  /** D18: re-based bases the command writes that lack a write grant (from
+   *  the dspa gate's writeOutside) — tier-1 offers a session WRITE grant
+   *  for exactly these (sanitized: no root, no sentinels). Bash dspa
+   *  fall-through only; empty elsewhere. */
+  writeGrantDirs?: string[];
   /** Directories the "Always (paths)" option would grant — the concrete
    *  outside-cwd dirs plus any LLM-resolved token dirs (bash prompts only;
    *  empty elsewhere). The prompt flow grants EXACTLY these on that option. */
@@ -121,12 +126,14 @@ export function buildPrompt(
   /** A dir is "covered" when a standing session grant already covers it —
    *  file prompts suppress Always options whose scope is covered. */
   isCovered?: (dir: string) => boolean,
+  /** D18: bases the dspa gate stopped for a write without grant (bash only). */
+  writeGrantDirs?: string[],
 ): BuiltPrompt {
   const { promptData } = decision;
 
   switch (promptData.type) {
     case "bash":
-      return buildBashPrompt(promptData, resolutions, confirmedTokens);
+      return buildBashPrompt(promptData, resolutions, confirmedTokens, writeGrantDirs);
     case "file":
       return buildFilePrompt(promptData, isCovered);
     case "tool":
@@ -202,6 +209,8 @@ function buildBashPrompt(
   data: BashPromptData,
   resolutions?: ResolutionMap,
   confirmedTokens?: Set<string>,
+  /** D18: bases the dspa gate stopped for a write without grant. */
+  writeGrantDirs?: string[],
 ): BuiltPrompt {
   const { command, cwd, outsideDirs, segments, signatures,
           riskDangerous, riskSeverity, riskReasons, hasUnsafePattern,
@@ -287,6 +296,12 @@ function buildBashPrompt(
       body += line + "\n";
     }
   }
+  // D18: the floor stopped a base write that lacks a write grant — the
+  // title names it; this line is the body's grant state (the command itself
+  // looks benign, so the ⚠️ line carries the why).
+  if (writeGrantDirs && writeGrantDirs.length > 0) {
+    body += `\u26a0\ufe0f writes not granted: ${writeGrantDirs.join(", ")}\n`;
+  }
   if (riskDangerous) {
     for (const line of riskReasonLines(riskReasons)) body += line;
   }
@@ -356,7 +371,7 @@ function buildBashPrompt(
     ? pathGrantDirs.map(d => `Read ${d}/*`).join(", ")
     : undefined;
 
-  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption: false, includeAlwaysOption, alwaysLabel, alwaysPathsLabel, pathGrantDirs, trustPackages: trustPackages.length > 0 ? trustPackages : undefined, resolverDirs: resolverDirs.length > 0 ? resolverDirs : undefined };
+  return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption: false, includeAlwaysOption, alwaysLabel, alwaysPathsLabel, pathGrantDirs, trustPackages: trustPackages.length > 0 ? trustPackages : undefined, resolverDirs: resolverDirs.length > 0 ? resolverDirs : undefined, writeGrantDirs: writeGrantDirs && writeGrantDirs.length > 0 ? writeGrantDirs : undefined };
 }
 
 // ── File prompt ──

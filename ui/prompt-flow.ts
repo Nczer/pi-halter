@@ -81,7 +81,15 @@ export async function showPrompt(
   // Coverage predicate: "read" checks read+write grants, so a standing
   // session grant that covers a prompt's scope suppresses its Always option.
   const isCovered = (dir: string) => store.isInsideAllowedDir(dir, "read");
-  let prompt = buildPrompt(decision, resolutions ?? undefined, confirmedTokens, isCovered);
+  // D18: the floor stopped a base write lacking a write grant — the prompt
+  // offers a session write grant for EXACTLY those dirs (deterministic; no
+  // LLM call). Root/sentinels are never grantable (same rule as
+  // pathGrantDirs) — a root-only stop gets no option, only the title.
+  const writeGrantDirs =
+    pd.type === "bash" && dspa && !dspa.gate.ok
+      ? (dspa.gate.writeOutside ?? []).filter((d) => d !== "/" && !d.startsWith("<"))
+      : undefined;
+  let prompt = buildPrompt(decision, resolutions ?? undefined, confirmedTokens, isCovered, writeGrantDirs);
   // The body before any dspa/dspat verdict lines — the "Judge again" retry
   // re-renders from this base so re-retries never stack stale verdicts.
   const baseBody = prompt.body;
@@ -306,7 +314,15 @@ export async function showPrompt(
     // untrusted-package stop. The store check is session-global.
     for (const pkg of prompt.trustPackages ?? []) store.trustPackage(pkg);
     updateStatus(ctx);
-  }, retryJudge);
+  }, retryJudge, () => {
+    // D18: the floor stopped a base write lacking a write grant — grant it
+    // (write implies read) for the session; the next identical run passes
+    // the floor and the judge decides.
+    if (writeGrantDirs?.length) {
+      store.addAllowed({ writeDirs: writeGrantDirs });
+      updateStatus(ctx);
+    }
+  });
 
   // /dspat: record the verdict paired with the human's decision —
   // session-scoped stats only (judge quality is model-dependent).
