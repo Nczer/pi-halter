@@ -792,4 +792,46 @@ describe("D13 — stage-2 path report", () => {
     expect(r2.paths).toBeUndefined();
     expect(r2.approve).toBe("approve");
   });
+
+  it("D19: stage 2 also asks for writes; stage 1 does not", () => {
+    expect(JUDGE_STAGE2_SYSTEM_PROMPT).toContain("report `writes`");
+    expect(JUDGE_SYSTEM_PROMPT).not.toContain("report `writes`");
+  });
+
+  it("D19: parses a writes array (strings only, trimmed, non-empty kept)", async () => {
+    const r = await judge(
+      baseInput,
+      {
+        ...baseOpts,
+        uncached: true,
+        stream: fixedStream(
+          () => toolCallReply({ ...VERDICT, paths: ["/a/b"], writes: ["/a/b", "  /a/c  ", 42, ""] }),
+          [],
+        ),
+      },
+    );
+    expect(r.writes).toEqual(["/a/b", "/a/c"]);
+  });
+
+  it("D19: tolerates missing or malformed writes — the verdict still stands", async () => {
+    const r1 = await judge(
+      baseInput,
+      {
+        ...baseOpts,
+        uncached: true,
+        stream: fixedStream(() => toolCallReply({ ...VERDICT, paths: ["/a/b"] }), []),
+      },
+    );
+    expect(r1.writes).toBeUndefined();
+    const r2 = await judge(
+      baseInput,
+      {
+        ...baseOpts,
+        uncached: true,
+        stream: fixedStream(() => toolCallReply({ ...VERDICT, writes: "nope" }), []),
+      },
+    );
+    expect(r2.writes).toBeUndefined();
+    expect(r2.approve).toBe("approve");
+  });
 });

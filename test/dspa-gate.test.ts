@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkDspaGate } from "../gate/dspa-gate";
+import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside } from "../gate/dspa-gate";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../gate/store";
 import type {BashPromptData, FilePromptData, ToolPromptData} from "../decide/types";
@@ -1164,5 +1164,87 @@ describe("D18: write-mode base access (2026-09-12 incident)", () => {
     // the adjacent judgeable class.
     const r = await checkDspaGate(bashPd(`cd ${HOME_PI} && python3 fix.py`), store);
     expect(r.ok).toBe(true);
+  });
+});
+
+// ── D19: the write bar on the stage-2 judge's FRESH write report ──
+//
+// judgeWriteOutside is the deterministic bar applied to the report in the
+// SAME PASS as the auto-allow decision (fallthrough.ts wires it — no
+// learned state, no gate involvement): a reported write outside the manual
+// write bar (and outside the session cwd) yields the D18 stop dirs. The
+// intent-pass escalation (hasFileScriptOutsideCwd) keeps the file-script
+// class on the stage that actually reports paths, from the first run.
+
+describe("D19: judgeWriteOutside — the write bar on the fresh report", () => {
+  // NOT /tmp (a config-allowed write path): use ~/.pi, which the read bar
+  // admits by config and the write bar does not.
+  const PI = path.join(os.homedir(), ".pi");
+
+  it("a reported write outside the manual write bar yields its dir", () => {
+    expect(judgeWriteOutside(bashPd("ls"), store, [`${PI}/out.txt`])).toEqual([PI]);
+  });
+
+  it("a session write grant passes the bar (steady state)", () => {
+    store.addAllowed({ writeDirs: [PI] });
+    expect(judgeWriteOutside(bashPd("ls"), store, [`${PI}/out.txt`])).toEqual([]);
+  });
+
+  it("a write inside the session cwd is the working set", () => {
+    expect(judgeWriteOutside(bashPd("ls"), store, [`${BASE}/out.txt`, "out2.txt"])).toEqual([]);
+  });
+
+  it("no report, nothing usable, or a file op → no stop", () => {
+    expect(judgeWriteOutside(bashPd("ls"), store, undefined)).toEqual([]);
+    expect(judgeWriteOutside(bashPd("ls"), store, [])).toEqual([]);
+    expect(
+      judgeWriteOutside({ type: "file", action: "Write", filePath: "f", resolved: "/a/f", cwd: BASE, isWriteOp: true } as any, store, [`${PI}/out.txt`]),
+    ).toEqual([]);
+  });
+
+  it("dedupes dirs and keeps each distinct outside dir", () => {
+    const a = path.join(PI, "a");
+    const b = path.join(PI, "b");
+    expect(judgeWriteOutside(bashPd("ls"), store, [`${a}/x.txt`, `${a}/y.txt`, `${b}/z.txt`])).toEqual([a, b]);
+  });
+});
+
+describe("D19: hasFileScriptOutsideCwd — intent-pass escalation", () => {
+  // A real base: the parser tracks a cd only into an existing directory.
+  const PI = path.join(os.homedir(), ".pi");
+
+  async function pd(command: string) {
+    const p = bashPd(command);
+    p.analysis = await analyzeCommand(command, BASE, {
+      isInsideAllowedDir: (d) => store.isInsideAllowedDir(d, "read"),
+      getConfirmedResolution: (t) => store.getConfirmedResolution(t),
+    });
+    return p;
+  }
+
+  it("a file script under a re-based base outside the cwd escalates", async () => {
+    expect(await hasFileScriptOutsideCwd(await pd(`cd ${PI} && python3 fix.py`))).toBe(true);
+  });
+
+  it("an absolute script path outside the cwd escalates", async () => {
+    expect(await hasFileScriptOutsideCwd(await pd(`python3 ${PI}/job.py`))).toBe(true);
+  });
+
+  it("a script inside the session cwd (working set) does not", async () => {
+    expect(await hasFileScriptOutsideCwd(await pd("python3 scripts/job.py"))).toBe(false);
+  });
+
+  it("inline code and non-script commands do not", async () => {
+    expect(await hasFileScriptOutsideCwd(await pd("ls"))).toBe(false);
+    expect(await hasFileScriptOutsideCwd(await pd(`python3 - <<'EOF'\nopen(\"f\",\"w\")\nEOF`))).toBe(false);
+  });
+
+  it("trusted skill scripts resolve to null (trust covers the script)", async () => {
+    const SKILL = path.join(os.homedir(), ".pi", "agent", "skills");
+    expect(await hasFileScriptOutsideCwd(await pd(`python3 ${SKILL}/foo/job.py`))).toBe(false);
+  });
+
+  it("no analysis (nothing to scan) does not", () => {
+    expect(hasFileScriptOutsideCwd(bashPd("python3 x.py"))).toBe(false);
   });
 });

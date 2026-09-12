@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
-import { findExecutedScript } from "../analysis/script-payload";
+import { findExecutedScript, scriptFilePathInSegment } from "../analysis/script-payload";
 import { analyzeCommand } from "../analysis/command-analysis";
 
 let tmp: string;
@@ -66,5 +66,26 @@ describe("findExecutedScript", () => {
 
   it("returns null when the file does not exist", async () => {
     expect(findExecutedScript(await analyze("python3 missing.py"), tmp)).toBeNull();
+  });
+});
+
+describe("scriptFilePathInSegment (D19 — pure, no file read)", () => {
+  it("interpreter-run and direct-exec forms resolve against the base", () => {
+    expect(scriptFilePathInSegment("python3 job.py", tmp)).toBe(path.join(tmp, "job.py"));
+    expect(scriptFilePathInSegment("./job.sh", tmp)).toBe(path.join(tmp, "job.sh"));
+    expect(scriptFilePathInSegment("/abs/dir/job.py", tmp)).toBe("/abs/dir/job.py");
+  });
+
+  it("flags and non-script tokens are skipped or stop the scan", () => {
+    expect(scriptFilePathInSegment("python3 -u job.py", tmp)).toBe(path.join(tmp, "job.py"));
+    expect(scriptFilePathInSegment("python3 -m x", tmp)).toBeNull();
+    expect(scriptFilePathInSegment("python3 -c 'print(1)'", tmp)).toBeNull();
+  });
+
+  it("computed paths, bare commands, and trusted skill scripts are null", () => {
+    expect(scriptFilePathInSegment("python3 $SCRIPT", tmp)).toBeNull();
+    expect(scriptFilePathInSegment("ls job.py", tmp)).toBeNull();
+    const skill = path.join(os.homedir(), ".pi", "agent", "skills");
+    expect(scriptFilePathInSegment(`python3 ${skill}/foo/job.py`, tmp)).toBeNull();
   });
 });

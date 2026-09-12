@@ -63,6 +63,8 @@ import { analyzeCommand } from "../analysis/command-analysis";
 import { resolveOpaqueRefs } from "../analysis/var-resolution";
 import { expandTilde, shortenToken } from "../analysis/path-util";
 import { resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
+import { scriptFilePathInSegment } from "../analysis/script-payload";
+import { sanitizeJudgePaths } from "../judge/paths";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { UNKNOWN_CWD_MARKER, cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
@@ -116,6 +118,62 @@ export function insideManualWriteBar(store: Store, p: string, cwd: string): bool
     isAllowedWritePath(p) ||
     isProjectPiPathResolved(p, cwd)
   );
+}
+
+/**
+ * D19 (docs/dspa-redesign.md): the deterministic WRITE BAR applied to the
+ * stage-2 judge's FRESH `writes` report — in the same pass as the
+ * auto-allow decision, first run included. Nothing is learned or
+ * persisted: every run re-judges the fresh script content (fenced in the
+ * packet), so a changed script re-reports and is judged fresh; a stale
+ * copy of a previous run's report could only stop a later run on data
+ * that may no longer be true.
+ * A reported write outside the manual write bar (and outside the session
+ * cwd — the working set, as with the D18 bases) fails the check: the
+ * caller synthesizes the exact D18 advisory stop (`write outside base`
+ * with the failing dirs on `writeOutside`), so the `Allow writes` grant
+ * option and the post-grant steady state work unchanged. The bar only
+ * narrows auto-allow — a hallucinated path can cause one advisory stop
+ * the user dismisses, never a false allow. Reads stay with the judge and
+ * the ledger (a read path has no deterministic bar to act on).
+ */
+export function judgeWriteOutside(
+  pd: PromptData,
+  store: Store,
+  writes: string[] | undefined,
+): string[] {
+  if (pd.type !== "bash" || !writes?.length) return [];
+  const normCwd = path.resolve(expandTilde(pd.cwd));
+  const out: string[] = [];
+  for (const p of sanitizeJudgePaths(writes, pd.cwd)) {
+    if (isInsideCwd(p, normCwd)) continue;
+    if (!insideManualWriteBar(store, p, pd.cwd)) out.push(path.dirname(p));
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * D19: an executed script FILE outside the session cwd (the working set)
+ * never auto-allows on the stateless pass — stage 1 is eval-locked out
+ * of path reports, so its writes surface only in the stage-2 report, and
+ * the write bar has to check that report in the same pass (see
+ * judgeWriteOutside). The caller escalates such operations to the intent
+ * pass from the first run. Trusted skill scripts resolve to null (trust
+ * covers the script — the packet carries no content for them); direct
+ * exec and interpreter forms both count; computed paths don't resolve
+ * (the gate's own sentinel logic owns those).
+ */
+export function hasFileScriptOutsideCwd(pd: PromptData): boolean {
+  if (pd.type !== "bash" || !pd.analysis) return false;
+  const analysis = pd.analysis;
+  const normCwd = path.resolve(expandTilde(pd.cwd));
+  for (let i = 0; i < analysis.parsedSegments.length; i++) {
+    const seg = analysis.parsedSegments[i]?.text.trim() ?? "";
+    if (!seg) continue;
+    const sp = scriptFilePathInSegment(seg, analysis.effectiveCwds[i] ?? pd.cwd);
+    if (sp && !isInsideCwd(sp, normCwd)) return true;
+  }
+  return false;
 }
 
 /**
