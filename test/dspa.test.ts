@@ -274,6 +274,112 @@ describe("auto-allow path", () => {
   });
 });
 
+// ── D19: the write bar on the judge's FRESH write report — same pass ──
+//
+// The file-script class the floor cannot see (its writes surface only in
+// the stage-2 report) is checked in the SAME PASS as the auto-allow
+// decision — first run included, nothing learned or persisted: every run
+// re-judges the fresh script content. ~/.pi is the incident base: the
+// read bar admits it (config), the write bar does not (not /tmp, which
+// is a config-allowed write path).
+describe("D19: same-pass write bar on the stage-2 report", () => {
+  const PI = path.join(os.homedir(), ".pi");
+  const INCIDENT = `cd ${PI} && python3 fix.py`;
+
+  /** The decision the way the decision engine builds it: the prompt data
+   * carries its analysis (single analysis per decision) — the gate and the
+   * D19 escalation both trust it. */
+  async function runAnalyzed(command: string, v1: JudgeResult | null, v2: JudgeResult | null, store?: ReturnType<typeof createStore>) {
+    const s = store ?? createStore();
+    const decision = bashDecision(command) as { kind: "prompt"; promptData: BashPromptData };
+    const pd = decision.promptData;
+    pd.analysis = await analyzeCommand(command, pd.cwd, {
+      isInsideAllowedDir: (p) => s.isInsideAllowedDir(p, "read"),
+      getConfirmedResolution: (t) => s.getConfirmedResolution(t),
+    });
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(v1);
+    vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(v2);
+    const ctx = makeCtx();
+    const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
+    try {
+      await gate({ type: "bash", command, cwd: pd.cwd }, ctx, s, (d, r) => rejectBash(d, r, s, ctx));
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("run 1: file script outside cwd, stage 2 reports an outside write → NO auto-allow, the write stop + Allow-writes", async () => {
+    await runAnalyzed(
+      INCIDENT,
+      verdict(),
+      verdict({ explanation: "rewrites a sibling source file", writes: [`${PI}/out.txt`] }),
+    );
+    expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+    const f = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
+    const g = f?.gate;
+    expect(g?.ok).toBe(false);
+    if (g && !g.ok) {
+      expect(g.advisory).toBe(true);
+      expect(g.reason).toBe(`write outside base (${PI})`);
+      expect(g.writeOutside).toEqual([PI]);
+    }
+    // The stage-2 verdict rides along as the advisory input to the prompt.
+    expect(f?.verdict?.explanation).toBe("rewrites a sibling source file");
+    expect(f?.stage).toBe(2);
+    expect(getDspaStats().autoAllowed).toBe(0);
+    // The stop tag says the write bar stopped it (the floor layer).
+    expect(logLines()[0].dspa).toBe(`gate: write outside base (${PI})`);
+  });
+
+  it("after a session write grant: the identical run re-reports and auto-allows (steady state)", async () => {
+    const store = createStore();
+    store.addAllowed({ writeDirs: [PI] });
+    await runAnalyzed(INCIDENT, verdict(), verdict({ writes: [`${PI}/out.txt`] }), store);
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    expect(getDspaStats().autoAllowed).toBe(1);
+  });
+
+  it("file script outside cwd NEVER auto-allows on stage 1 — the intent pass runs from the first run", async () => {
+    await runAnalyzed(
+      INCIDENT,
+      verdict(),
+      verdict({ explanation: "read-only" }),
+    );
+    // Read-only report: the bar passes, the stage-2 approve auto-allows —
+    // but only AFTER the intent pass rendered (stage 1 alone could not).
+    expect(judgePrompt.getStage2Verdict).toHaveBeenCalledTimes(1);
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    expect(getDspaStats().autoAllowed).toBe(1);
+    expect(String(logLines()[0].reason)).toContain("stage 2");
+  });
+
+  it("a script inside the session cwd (working set) stays on the stateless fast path", async () => {
+    await runAnalyzed("python3 scripts/job.py", verdict(), null);
+    expect(judgePrompt.getStage2Verdict).not.toHaveBeenCalled();
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    expect(getDspaStats().autoAllowed).toBe(1);
+  });
+
+  it("a DECLINED stage-2 verdict with an outside write still carries the write stop + grant option", async () => {
+    await runAnalyzed(
+      INCIDENT,
+      verdict({ risk: "medium" }),
+      verdict({ approve: "deny", explanation: "rewrites the source tree", writes: [`${PI}/out.txt`] }),
+    );
+    expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+    const f = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
+    const g2 = f?.gate;
+    if (g2 && !g2.ok) {
+      expect(g2.reason).toBe(`write outside base (${PI})`);
+      expect(g2.writeOutside).toEqual([PI]);
+    }
+    expect(f?.verdict?.approve).toBe("deny");
+    // The LLM's reject words still ride in the log (debug aid).
+    expect(logLines()[0].judgeDeny).toBe("rewrites the source tree");
+  });
+});
+
 describe("D11: content review of manual auto-alls (clause A extension)", () => {
   /** A real script the command would execute — the payload extract reads it. */
   function scriptCwd(): string {

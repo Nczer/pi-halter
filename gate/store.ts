@@ -55,7 +55,7 @@ export interface Store {
   getConfirmedResolution(token: string): string[] | null;
   /** Persist a user-confirmed token → dirs resolution for the session. */
   confirmResolution(token: string, dirs: string[]): void;
-  addAllowed(rules: AllowRules): void;
+    addAllowed(rules: AllowRules): void;
   recordAbort(command: string): void;
   getLastAbort(command: string): number | null;
   incrementPromptCount(): { over: boolean; count: number };

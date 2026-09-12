@@ -16,7 +16,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {PermissionRequest, Decision, PromptData} from "../decide/types";
 import type { Store } from "./store";
 import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decision-log";
-import { checkDspaGate, type DspaGateResult } from "./dspa-gate";
+import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, type DspaGateResult } from "./dspa-gate";
 import {getJudgeVerdict, getStage2Verdict, judgeStatus} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
 import { pdTargetLabel } from "../ui/prompt-builder";
@@ -86,7 +86,9 @@ export function dspaAutoAllowed(
   // D17: the same path report also goes to the on-by-default judge ledger
   // (decisions.jsonl is toggle-gated and version-bound; the ledger is the
   // durable home for D13 mining).
-  if (stage === 2) logJudgePaths(pd, store, verdict, "dspa");
+  if (stage === 2) {
+    logJudgePaths(pd, store, verdict, "dspa");
+  }
   // Unresolved-token log: an auto-allow of a command WITH unresolved tokens
   // — either their resolutions were already user-confirmed (the convergence
   // end-state, persisted) or the floor passed on bounded candidates with no
@@ -168,13 +170,44 @@ export async function tryDspaAutoAllow(
   }
   // Stage 1 — stateless (the packet's static analysis is the whole input).
   const v1 = await getJudgeVerdict(pd, ctx, store);
-  if (v1 && v1.approve === "approve" && v1.risk === "low") {
+  // D19: a file script OUTSIDE the working set never auto-allows here —
+  // its writes surface only in the stage-2 report, which the write bar
+  // checks in the same pass (the stateless pass is eval-locked out of
+  // path reports). Deterministic + LLM from the first run.
+  if (v1 && v1.approve === "approve" && v1.risk === "low" && !hasFileScriptOutsideCwd(pd)) {
     dspaAutoAllowed(request, pd, ctx, store, v1, 1);
     return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v1, stage: 1 } };
   }
   // Stage 2 — intent pass (session context, uncached, final verdict).
   const v2 = await getStage2Verdict(pd, ctx, store);
   logJudgeDiff(pd, "dspa", v1, v2);
+  // D19: the deterministic write bar on the judge's FRESH write report —
+  // same pass, first run included, nothing learned or persisted. A
+  // reported write outside the manual write bar synthesizes the exact
+  // D18 advisory stop: no auto-allow, the prompt carries the verdict +
+  // the `Allow writes` option, and after the grant the identical run
+  // re-reports the same writes — now inside the bar — and auto-allows.
+  const writeOutside = judgeWriteOutside(pd, store, v2?.writes);
+  if (writeOutside.length > 0) {
+    const writeStop: DspaGateResult = {
+      ok: false,
+      advisory: true,
+      reason: `write outside base (${writeOutside.slice(0, 2).join(", ")})`,
+      writeOutside,
+    };
+    // D17: the report RAN THROUGH the floor — the ledger line stands
+    // (each stage-2 verdict logs exactly once; the auto-allow and the
+    // judge-declined branches below log their own).
+    logJudgePaths(pd, store, v2!, "dspa");
+    // The stop is the write bar's (the floor layer) — count it as a gate
+    // stop, with the verdict's model for counter scoping.
+    recordDspaStop("gate", v2?.model ?? v1?.model ?? null);
+    updateDspaWidget(ctx);
+    return {
+      autoAllowed: false,
+      fallthrough: { gate: writeStop, verdict: (v2 ?? v1) ?? null, stage: v2 ? 2 : v1 ? 1 : null },
+    };
+  }
   if (v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium")) {
     dspaAutoAllowed(request, pd, ctx, store, v2, 2);
     return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v2, stage: 2 } };
@@ -184,8 +217,11 @@ export async function tryDspaAutoAllow(
   // produced no verdict, say WHY so the prompt is never silently bare.
   const final = (v2 ?? v1) ?? null;
   // D17: stage-2 path report → on-by-default judge ledger (the auto-allow
-  // branch logs it in dspaAutoAllowed — each stage-2 verdict exactly once).
-  if (v2) logJudgePaths(pd, store, v2, "dspa");
+  // branch logs it in dspaAutoAllowed, the write-stop branch above logs
+  // its own — each stage-2 verdict exactly once).
+  if (v2) {
+    logJudgePaths(pd, store, v2, "dspa");
+  }
   let note: string | undefined;
   if (!v2 && !v1) {
     const jstatus = judgeStatus(ctx);

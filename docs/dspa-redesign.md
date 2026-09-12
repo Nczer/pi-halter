@@ -850,10 +850,11 @@ paths + config write paths + project-pi). Stop: `write outside base
   session cwd are skipped, mirroring the file branch, which never stops a
   write into cwd); a bare script FILE (`cd X && python3 fix.py`) — the
   script's content rides fenced in the packet (`findExecutedScript`), so
-  the judge sees exactly what it writes; that trigger class is a one-line
-  extension if data shows it's needed. Subshell-internal writes are not
-  modeled (`baseAccessPath`'s subshell scan still flags their base for the
-  read bar).
+  the judge sees exactly what it writes (D19 makes the judge's fresh
+  report of that write face the deterministic write bar in the same
+  pass). Subshell-internal
+  writes are not modeled (`baseAccessPath`'s subshell scan still flags
+  their base for the read bar).
 - **Precedence:** the read-bar stop (non-read-allowed base) and the D7
   sentinel (unknown base) fire first — the write check adds stops only for
   bases that pass the read bar.
@@ -869,6 +870,67 @@ paths + config write paths + project-pi). Stop: `write outside base
   whenever a re-based base exists. Facts, not instructions: the system
   prompt's "do not deny for scope alone" stands — what changed is that the
   judge can finally see the write state.
+
+### D19. The write bar on the judge's fresh report — same pass (2026-09-12)
+
+The file-script class D18 left judgeable becomes deterministic — but with
+**no learned state**. The floor is fed by the LLM in the same pass, first
+run included: the stage-2 report already comes out of the pass that makes
+the auto-allow decision, so the deterministic bar checks THAT report THERE
+— and every later run re-judges the fresh script content (fenced in the
+packet), so a changed script re-reports and is judged fresh.
+
+**Why not learned.** Persisting run N's report to stop run N+1 would run a
+deterministic stop on non-deterministic input: the data is stale the
+moment the script changes, and run 1 — the run that actually needs the
+stop — sails through. The report exists in the pass that needs it; use it
+there.
+
+**Mechanism.**
+- **Report.** The stage-2 judge's path report carries a `writes` field
+  (the write/creating/deleting subset of `paths`) — same tolerant
+  parsing, stage 1 never asks for it.
+- **Check (same pass).** In the /dspa auto-allow flow (fallthrough.ts),
+  right after the stage-2 verdict renders and before the auto-allow
+  decision, `judgeWriteOutside` (dspa-gate.ts) sanitizes the report and
+  faces each write with the manual WRITE bar: a write outside the bar (and
+  outside the session cwd — the working set) synthesizes the exact D18
+  advisory stop — `write outside base (<dir>)` with the dirs on
+  `writeOutside`. No auto-allow; the prompt carries the stage-2 verdict as
+  advisory input plus the `Allow writes` grant option. After the grant the
+  identical run re-reports the same writes — now inside the bar — and
+  auto-allows. The stop tag says `gate:` (the write bar is the floor
+  layer); a DECLINED verdict with outside writes carries the same stop +
+  option (the LLM's reject words still ride in the log).
+- **Escalation.** A file script OUTSIDE the session cwd never auto-allows
+  on the stateless pass: stage 1 is eval-locked out of path reports, so
+  that class's writes surface only in the stage-2 report
+  (hasFileScriptOutsideCwd — token-level, no file read). The intent pass
+  runs
+  for this class from the first run. Cost: one stage-2 call per such
+  execution (the rare class — ls/git/reads stay on the fast path); the
+  common trusted-skill scripts resolve to null (trust covers the script
+  — the packet carries no content for them) and stay fast.
+- **No persistence.** Nothing is learned, keyed, or stored: the store has
+  no write-knowledge map, /dspat never vetoes (pure measurement), and a
+  session restart changes nothing — the next run re-judges from content.
+
+**Trust decision (deliberate amendment of D13's contract).** D13's rule
+"the floor is never fed LLM output" is relaxed for exactly this: a
+deterministic bar is applied to the LLM's per-run report. The feed is
+per-run, never accumulated — the LLM output never becomes floor knowledge,
+only an input to a floor predicate in the same pass. The bar only narrows
+auto-allow: a hallucinated write can cause ONE advisory stop the user
+dismisses (or grants past), never a false auto-allow. Unreported writes
+(no report, no executed script, chained-command gaps) stay with the
+judge and the ledger (D13), unchanged.
+
+**What stays judgeable / unchanged:** scripts with an empty or missing
+report (read-only scripts, stage-2 infra failure → the existing
+fall-through, never an auto-allow); scripts inside the session cwd
+(working set — stage 1 fast path, no check); reads (no deterministic bar
+acts on them); script content itself (D1 — the floor never interprets
+bodies).
 
 ## 4. Phasing
 
@@ -928,6 +990,12 @@ class"). Suite 3229.
   manual WRITE bar; `write outside base (…)` stop with the `Allow writes:
   <dir> (session)` grant option; the packet carries the risk severity and
   the effective base's read/write grant state). Suite 3728.
+- **Phase 3m — done** (2026-09-12): D19 (same-pass write bar — the
+  stage-2 judge's `writes` report faces the manual WRITE bar in the SAME
+  PASS as the auto-allow decision, first run included: the exact D18 stop
+  + `Allow writes` option, no learned state, nothing persisted; a file
+  script outside the working set escalates to the intent pass from run
+  one, since only that pass reports paths). Suite 3750.
 
 ## 5. Open questions (grill order)
 

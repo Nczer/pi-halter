@@ -9,11 +9,23 @@
  * and the cwd are all the floor's own knowledge).
  *
  * The mismatch is a DIAGNOSTIC, not enforcement:
- *  - the floor is never fed LLM output (it must stay untrusting — a
- *    hallucinated path must not be able to stop an auto-allow);
  *  - the judge stays advisory: the report may inform its verdict (an
  *    unexplained path is a hidden effect — deny/defer per its rules), but
  *    this module changes no gate decision.
+ *
+ * ONE DELIBERATE AMENDMENT (D19, 2026-09-12): the floor was "never fed
+ * LLM output" — a hallucinated path must not stop an auto-allow. The
+ * user's trust decision relaxed this for exactly one class: the
+ * stage-2 report's `writes` field (write/creating/deleting paths) faces
+ * the deterministic WRITE BAR in the SAME PASS as the auto-allow decision
+ * (gate/dspa-gate.ts `judgeWriteOutside`, applied in gate/fallthrough.ts).
+ * The feed is per-run, never persisted: every run re-judges the fresh
+ * script content (fenced in the packet), so a changed script re-reports
+ * and is judged fresh — there is no learned state that could go stale.
+ * A reported write outside the manual write bar can only cause a
+ * FALSE STOP (the advisory stop the user can dismiss or grant past),
+ * never a false auto-allow — the bar only narrows, grants stay
+ * user-only. /dspat never vetoes (it is pure measurement).
  *
  * The value is in the log (judge.jsonl, kind "paths"): a line is a
  * floor↔judge disagreement that RAN THROUGH the floor (the gate passed —
@@ -38,6 +50,7 @@ import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
 import type {PromptData} from "../decide/types";
 import type { Store } from "../gate/store";
+import type { JudgeResult } from "./judge";
 
 /** Log economy: cap the stored report. */
 const JUDGE_PATHS_MAX = 8;

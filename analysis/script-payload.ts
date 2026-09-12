@@ -34,6 +34,40 @@ export interface ExecutedScript {
 }
 
 /**
+ * The script file ONE segment executes (if any): resolved absolute path.
+ * The per-segment half of findExecutedScript, shared with the D19
+ * intent-pass escalation (hasFileScriptOutsideCwd in gate/dspa-gate.ts
+ * decides without reading the content). Null for forms without a
+ * resolvable file (`bash -c`, computed paths), trusted scripts, and
+ * non-script tokens.
+ */
+export function scriptFilePathInSegment(
+  seg: string,
+  base: string,
+): string | null {
+  const tokens = tokenizeSegment(seg);
+  if (tokens.length < 1) return null;
+  // Raw first token (getFirstWord returns the basename — /bin/bash must
+  // still count as an interpreter).
+  const firstToken = tokens[0].toLowerCase();
+  const isInterp = SCRIPT_INTERPRETERS.has(path.basename(firstToken));
+  // Direct exec (./scripts/job.sh) or interpreter (python3 job.py).
+  if (!isInterp && !(firstToken.includes("/") || firstToken.startsWith("~"))) return null;
+  if (isTrustedScriptCommand(seg, base)) return null;
+
+  // First non-flag token that looks like a script file.
+  const startIdx = isInterp ? 1 : 0;
+  for (let j = startIdx; j < tokens.length; j++) {
+    const token = tokens[j];
+    if (token.startsWith("-")) continue;
+    if (token.includes("$") || token.includes("`")) break; // computed — unresolvable
+    if (!SCRIPT_EXT_RE.test(token)) break;
+    return path.resolve(base, expandTilde(token));
+  }
+  return null;
+}
+
+/**
  * Find the local script a command executes (if any) and read its content.
  * Null for interpreter forms without a resolvable file (`bash -c`,
  * `python3 -`, `python3 -m x`, computed paths), trusted skill scripts,
@@ -46,27 +80,8 @@ export function findExecutedScript(
   for (let i = 0; i < analysis.segments.length; i++) {
     const seg = analysis.segments[i].trim();
     if (!seg) continue;
-    const tokens = tokenizeSegment(seg);
-    if (tokens.length < 1) continue;
-    // Raw first token (getFirstWord returns the basename — /bin/bash must
-    // still count as an interpreter).
-    const firstToken = tokens[0].toLowerCase();
-    const isInterp = SCRIPT_INTERPRETERS.has(path.basename(firstToken));
-    // Direct exec (./scripts/job.sh) or interpreter (python3 job.py).
-    if (!isInterp && !(firstToken.includes("/") || firstToken.startsWith("~"))) continue;
-    if (isTrustedScriptCommand(seg, analysis.effectiveCwds[i] ?? cwd)) continue;
-
-    const base = analysis.effectiveCwds[i] ?? cwd;
-    // First non-flag token that looks like a script file.
-    const startIdx = isInterp ? 1 : 0;
-    for (let j = startIdx; j < tokens.length; j++) {
-      const token = tokens[j];
-      if (token.startsWith("-")) continue;
-      if (token.includes("$") || token.includes("`")) break; // computed — unresolvable
-      if (!SCRIPT_EXT_RE.test(token)) break;
-      const resolved = path.resolve(base, expandTilde(token));
-      return readScriptFile(resolved);
-    }
+    const p = scriptFilePathInSegment(seg, analysis.effectiveCwds[i] ?? cwd);
+    if (p) return readScriptFile(p);
   }
   return null;
 }
