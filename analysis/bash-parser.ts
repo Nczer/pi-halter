@@ -1445,9 +1445,13 @@ function isAwkScriptArg(arg: string): boolean {
  *
  * Shape: ~ or / start, ≥2 segments (one-segment tokens are almost always
  * regex/division noise), word chars only. The lookbehind rejects URL tails
- * (the second slash of http://…) and paths glued to a word char.
+ * (the second slash of http://…) and paths glued to a word char. `~` is
+ * optional BEFORE the required slash (a `(?:~\/)?` group needs a second
+ * slash and can never match — it silently dropped the tilde, so `~/a/b`
+ * landed as `/.thunderbird/a/b`, a nonexistent outside path: D13 ledger
+ * 2026-09-11). With the tilde kept, expandTilde in bodyPaths resolves it.
  */
-const BODY_PATH_RE = /(?<![\w:/.-])(?:~\/)?\/[\w.-]+(?:\/[\w.-]+)+/g;
+const BODY_PATH_RE = /(?<![\w:/.-])(?:~)?\/[\w.-]+(?:\/[\w.-]+)+/g;
 
 /** Scan script body text for path-like literals, resolved like any other
  *  extracted path (SAFE_SYSTEM_PATHS filter + dedup apply downstream). */
