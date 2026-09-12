@@ -109,6 +109,24 @@ describe("bash body content", () => {
     expect(prompt.title).toContain("⚠");
   });
 
+  it("D18: renders the write-grant gap line and exposes writeGrantDirs", () => {
+    const prompt = buildPrompt(
+      bashDecision({
+        command: "cd ~/.pi && python3 - <<'PYEOF'\nopen('x','w')\nPYEOF",
+        segments: ["cd ~/.pi", "python3 - <<'PYEOF'"],
+      }),
+      undefined, undefined, undefined, ["/home/u/.pi"],
+    );
+    expect(prompt.body).toContain("⚠️ writes not granted: /home/u/.pi");
+    expect(prompt.writeGrantDirs).toEqual(["/home/u/.pi"]);
+  });
+
+  it("D18: no write-grant line when the gate stopped for another reason", () => {
+    const prompt = buildPrompt(bashDecision());
+    expect(prompt.body).not.toContain("writes not granted");
+    expect(prompt.writeGrantDirs).toBeUndefined();
+  });
+
   it("includes danger flags in body (one ⚠️ line per reason, no header, no source tags)", () => {
     const prompt = buildPrompt(bashDecision({ riskDangerous: true, riskSeverity: "high", riskReasons: ["[System] sudo (privilege escalation)"] }));
     expect(prompt.body).toContain("⚠️ sudo (privilege escalation)");

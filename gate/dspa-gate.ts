@@ -65,7 +65,7 @@ import { expandTilde, shortenToken } from "../analysis/path-util";
 import { resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
-import { UNKNOWN_CWD_MARKER, cdBaseBounds, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
+import { UNKNOWN_CWD_MARKER, cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
 import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { getDelegatedCommand, segmentFetchPackage } from "../analysis/segment-helpers";
@@ -95,7 +95,28 @@ export type DspaGateResult =
        *  outside the base — the fall-through prompt offers a grant for
        *  EXACTLY these dirs (deterministic; no LLM call needed). */
       confirmedOutside?: Array<{ token: string; dirs: string[] }>;
+      /** D18: re-based bases the command WRITES that lack a write grant —
+       *  the fall-through prompt offers a session write grant for EXACTLY
+       *  these dirs (deterministic; no LLM call needed). */
+      writeOutside?: string[];
     };
+
+/**
+ * The manual WRITE bar — the predicate the file branch applies to a write
+ * (D3/D11): session-granted write dirs/paths, config-allowed write paths,
+ * project-pi. The read bar (makeManualBar) admits read-allowed dirs (~/.pi
+ * is read-allowed in config) that carry no write grant; a bash base write
+ * must face THIS bar (D18) — "similar to the write/edit tool": the floor
+ * stops a write the manual mode would prompt for, and only that.
+ */
+export function insideManualWriteBar(store: Store, p: string, cwd: string): boolean {
+  return (
+    store.isInsideAllowedDir(p, "write") ||
+    store.hasAllowedWritePath(p) ||
+    isAllowedWritePath(p) ||
+    isProjectPiPathResolved(p, cwd)
+  );
+}
 
 /**
  * Command position obscured by variable indirection, subshell, or backtick
@@ -384,17 +405,13 @@ export async function checkDspaGate(
     // is judgeable: the location is already user-trusted, the content is
     // judged in full (the D3 probe converts that auto-allow to this prompt).
     // Only truly outside-base writes stop (Q1: scope is the user's call).
-    const insideManualWriteBar =
-      pd.isWriteOp &&
-      (store.isInsideAllowedDir(pd.resolved, "write") ||
-        store.hasAllowedWritePath(pd.resolved) ||
-        isAllowedWritePath(pd.resolved) ||
-        isProjectPiPathResolved(pd.resolved, pd.cwd));
+    const writeBarOk =
+      pd.isWriteOp && insideManualWriteBar(store, pd.resolved, pd.cwd);
     // Name the violated base (the session cwd), not outsideDir — the
     // target's own parent (the grant-offer unit): `outside base (/a/b/config)`
     // read as though the file were outside its parent dir. The grant dir
     // stays visible in the same log line (promptDir/target).
-    if (!insideManualWriteBar && pd.outsideDir) {
+    if (!writeBarOk && pd.outsideDir) {
       return { ok: false, reason: `outside base (session ${pd.cwd})`, advisory: true };
     }
     if (pd.warnedRule) return { ok: false, reason: `credential pattern (${pd.warnedRule})`, advisory: true };
@@ -577,6 +594,31 @@ export async function checkDspaGate(
       reason: `touches paths outside base (${shown.join(", ")})`,
       advisory: true,
       ...(confirmedOutside.length > 0 ? { confirmedOutside } : {}),
+    };
+  }
+  // D18 (2026-09-12): write-mode base access. baseAccessPath flags the
+  // re-based base as an undifferentiated touch, and the read bar above
+  // admits read-allowed bases (~/.pi is read-allowed in config). A segment
+  // that WRITES its base — a bare output redirect, or opaque inline code
+  // (heredoc / -c / -e) the floor does not interpret (D1) — must face the
+  // WRITE bar, exactly like a file-op write (the file branch above).
+  // Bases inside the session cwd are the working set (the file branch never
+  // stops a write into cwd); unknown bases (cd $D) are already stopped by
+  // the D7 sentinel pass.
+  const normBase = path.resolve(expandTilde(pd.cwd));
+  const writeBases: string[] = [];
+  for (let i = 0; i < analysis.parsedSegments.length; i++) {
+    const base = analysis.effectiveCwds[i];
+    if (base === null || isInsideCwd(base, normBase)) continue;
+    if (baseWriteAccess(analysis.parsedSegments[i])) writeBases.push(base);
+  }
+  const writeOutside = [...new Set(writeBases)].filter((b) => !insideManualWriteBar(store, b, pd.cwd));
+  if (writeOutside.length > 0) {
+    return {
+      ok: false,
+      reason: `write outside base (${writeOutside.slice(0, 2).join(", ")})`,
+      advisory: true,
+      writeOutside,
     };
   }
   return { ok: true };

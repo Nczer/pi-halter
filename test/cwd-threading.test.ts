@@ -5,6 +5,7 @@ import fs from "node:fs";
 import {
   trackEffectiveCwd,
   reResolveCwdDependentPaths,
+  baseWriteAccess,
   UNKNOWN_CWD_MARKER,
 } from "../analysis/cwd-tracking";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
@@ -894,4 +895,74 @@ describe("unknown-cwd marker hygiene (log-review display FPs)", () => {
     expect(await resolvePathsToDirs([`${UNKNOWN_CWD_MARKER}/../node_modules/x`, UNKNOWN_CWD_MARKER]))
       .toEqual([UNKNOWN_CWD_MARKER]);
   }, 15000);
+});
+
+// ── baseWriteAccess (D18 — the write-mode twin of baseAccessPath) ──
+//
+// baseAccessPath models "operates on the base" as an undifferentiated touch
+// (read bar). A segment that WRITES its base — a bare output redirect or
+// opaque inline code (heredoc / -c / -e) — faces the WRITE bar instead
+// (2026-09-12 incident: heredoc python rewrote a file under a read-allowed,
+// non-write-granted base and the floor passed it).
+
+describe("baseWriteAccess (D18)", () => {
+  it("bare output-redirect targets are base writes", () => {
+    for (const t of [
+      "echo hi > f",
+      "echo hi >> f",
+      "echo hi >f",
+      "echo hi 2> f",
+      "cmd > f",
+      "F=1 echo hi > f",
+    ]) {
+      expect(baseWriteAccess(seg(t)), t).toBe(true);
+    }
+  });
+
+  it("resolvable targets and fd references are not base writes", () => {
+    for (const t of [
+      "cmd > /abs/f",
+      "echo hi > /dev/null",
+      "echo hi > ./f",
+      "echo hi 2>&1",
+      "echo hi > &1",
+      "cmd >&1",
+    ]) {
+      expect(baseWriteAccess(seg(t)), t).toBe(false);
+    }
+  });
+
+  it("input redirects read the base, not write it", () => {
+    expect(baseWriteAccess(seg("cat < f"))).toBe(false);
+    expect(baseWriteAccess(seg("cat <f"))).toBe(false);
+  });
+
+  it("opaque inline code (heredoc / -c / -e) is a base write", () => {
+    expect(baseWriteAccess(seg("python3 - <<'EOF'", ["<<"]))).toBe(true);
+    expect(baseWriteAccess(seg("python3 <<'EOF'", ["<<"]))).toBe(true);
+    expect(baseWriteAccess(seg("python3 -c 'x'"))).toBe(true);
+    expect(baseWriteAccess(seg("perl -e 'x'"))).toBe(true);
+    expect(baseWriteAccess(seg("node -e 'x'"))).toBe(true);
+    expect(baseWriteAccess(seg("sh -c 'x'"))).toBe(true);
+    // Conservative: a heredoc is present even next to a path-qualified
+    // script arg — the code may still touch the base.
+    expect(baseWriteAccess(seg("python3 /abs/s.py <<'EOF'", ["<<"]))).toBe(true);
+  });
+
+  it("plain commands, file scripts, and non-interpreters are not base writes", () => {
+    for (const t of [
+      "ls",
+      "grep pat f",
+      "python3 script.py",
+      "python3 /abs/s.py",
+      "git -c user.name=x commit",
+      "cat f | tee g",
+    ]) {
+      expect(baseWriteAccess(seg(t)), t).toBe(false);
+    }
+  });
+
+  it("subshells are not modeled here (baseAccessPath flags their base for the read bar)", () => {
+    expect(baseWriteAccess(seg("(cd x && echo hi > f)", [], true))).toBe(false);
+  });
 });

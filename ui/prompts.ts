@@ -55,6 +55,9 @@ interface AlwaysCallbacks {
   onAlwaysBroader?: (dir?: string) => void;
   /** D10: trust the prompt's untrusted packages (session grant). */
   onTrust?: () => void;
+  /** D18: grant write (implies read) for the stopped base dirs (session).
+   *  Allow-writes option. */
+  onWriteGrant?: () => void;
 }
 
 /** A tier-1 "Always" option that confirms via a standard tier-2 prompt. */
@@ -99,7 +102,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
   // suppressed. The command tier is not. (File prompts' dir umbrella and
   // bash's package-trust option are independent too — the umbrella needs
   // broaderPaths, Trust needs trustPackages.)
-  if (!prompt.includeAlwaysOption && !prompt.includePathsOption && !prompt.trustPackages?.length) return [];
+  if (!prompt.includeAlwaysOption && !prompt.includePathsOption && !prompt.trustPackages?.length && !prompt.writeGrantDirs?.length) return [];
 
   const { broaderPaths } = prompt;
   const hasBroaderPaths = !!(prompt.includeBroaderOption && broaderPaths && broaderPaths.length > 0);
@@ -197,6 +200,22 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
       ),
     );
   }
+  if (prompt.writeGrantDirs?.length && cb.onWriteGrant) {
+    // D18: the floor stopped a bash base write lacking a write grant —
+    // granting it is what makes the next identical run pass the floor
+    // (the judge then sees the write state and decides). Session scope,
+    // said in full in the tier-2.
+    options.push(
+      confirmOpt(
+        `Allow writes: ${prompt.writeGrantDirs.join(", ")} (session)`,
+        {
+          title: "Confirm Write Grant",
+          body: `"Allow writes" will grant WRITE (and read) for these directories for the ENTIRE SESSION:\n${prompt.writeGrantDirs.map(d => `  • ${d}/*`).join("\n")}${SESSION_SCOPE_WARNING}`,
+        },
+        () => { cb.onWriteGrant?.(); return "always"; },
+      ),
+    );
+  }
   return options;
 }
 
@@ -267,8 +286,9 @@ export async function twoTierAlwaysPrompt(
   judge?: JudgeExplain,
   onTrust?: () => void,
   retryJudge?: JudgeRetry,
+  onWriteGrant?: () => void,
 ): Promise<PromptResult> {
-  const options = buildAlwaysOptions(prompt, { onAlways, onAlwaysPaths, onAlwaysFile, onAlwaysBroader, onTrust });
+  const options = buildAlwaysOptions(prompt, { onAlways, onAlwaysPaths, onAlwaysFile, onAlwaysBroader, onTrust, onWriteGrant });
 
   // Count this prompt once — not once per loop iteration (Back from tier-2
   // shouldn't inflate the frequency warning).

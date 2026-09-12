@@ -241,6 +241,40 @@ describe("judgment packet", () => {
     const b = buildJudgmentPacket({ ...baseInput, segments: [...baseInput.segments] });
     expect(a).toBe(b);
   });
+
+  it("D18: renders the effective base with its grant state after a re-basing cd", () => {
+    const p = buildJudgmentPacket({
+      command: "cd ~/.pi && python3 - <<'PYEOF'\nopen('x','w').write('s')\nPYEOF",
+      cwd: "/mnt/Ndr/Projects",
+      segments: ["cd ~/.pi", "python3 - <<'PYEOF'"],
+      riskReasons: ["[Tool] python (script execution)"],
+      severity: "high",
+      hasUnsafePattern: true,
+      paths: ["/home/u/.pi"],
+      outsidePaths: [],
+      effectiveBase: { dir: "/home/u/.pi", read: true, write: false },
+    });
+    expect(p).toContain("effective base: /home/u/.pi (after cd) — read: granted, write: NOT granted");
+    expect(p).toContain("risk flags: high — [Tool] python (script execution)");
+  });
+
+  it("D18: a write-granted base renders granted, and an absent effective base adds no line", () => {
+    const granted = buildJudgmentPacket({
+      command: "cd /work && python3 -c 'x'",
+      cwd: "/home/u/project",
+      segments: ["cd /work", "python3 -c 'x'"],
+      riskReasons: ["[Tool] python (script execution)"],
+      severity: "medium",
+      hasUnsafePattern: true,
+      effectiveBase: { dir: "/work", read: true, write: true },
+    });
+    expect(granted).toContain("effective base: /work (after cd) — read: granted, write: granted");
+    expect(granted).toContain("risk flags: medium — [Tool] python (script execution)");
+
+    const none = buildJudgmentPacket(baseInput);
+    expect(none).not.toContain("effective base:");
+    expect(none).toContain("risk flags: none");
+  });
 });
 
 // ── Judge call ──

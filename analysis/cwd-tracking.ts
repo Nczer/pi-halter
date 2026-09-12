@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { expandTilde } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
 import { tokenizeSegment } from "./tokenizer";
-import { pathAwareCommands } from "../config";
+import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS } from "../config";
 import type { BashSegment } from "./bash-parser";
 
 // ── cwd tracking across `cd` ───────────────────────────────────────────────
@@ -474,6 +474,66 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
     return CWD_DEFAULT_COMMANDS.has(first) ? (base === null ? UNKNOWN_CWD_MARKER : base) : null;
   }
   return base === null ? UNKNOWN_CWD_MARKER : base;
+}
+
+/**
+ * True when a segment WRITES its base (the cwd it runs under) instead of a
+ * resolvable target of its own — the write-mode twin of baseAccessPath.
+ * baseAccessPath models "operates on the base" as an undifferentiated touch
+ * and is checked against the READ bar; a write on a base that is read-
+ * allowed but not write-granted would sail through (2026-09-12 dspa
+ * incident: a heredoc python rewrote a source file under a read-allowed,
+ * non-write-granted extension dir; Q1 says scope grants are the user's
+ * call, never the judge's). Two deterministic classes:
+ *  - a bare output-redirect target (`echo x > f`, `cmd >> f`, `cmd 2> f`)
+ *    — the file lands in the base. Resolvable targets and fd references
+ *    (2>&1, >&1) don't count; input redirects (`<`) read the base.
+ *  - opaque inline-code execution: an interpreter (script or shell) fed by
+ *    a heredoc or a -c/-e payload. The floor does not interpret script
+ *    bodies (D1), so the code may write anywhere under the base. A path-
+ *    qualified script FILE is not inline code — its content rides fenced
+ *    in the judge packet (findExecutedScript), which stays the backstop.
+ * Subshells are not modeled here (baseAccessPath's subshell scan already
+ * flags their base for the read bar).
+ */
+export function baseWriteAccess(seg: BashSegment): boolean {
+  const tokens = tokenizeSegment(seg.text);
+  let ti = 0;
+  while (ti < tokens.length && ENV_ASSIGN_RE.test(tokens[ti])) ti++;
+  const first = tokens[ti] ? path.basename(tokens[ti]).toLowerCase() : "";
+  if (seg.hasSubshell || first === "(" || first === "{") return false;
+
+  // Only the first pipeline stage targets the base (same as baseAccessPath).
+  const stage: string[] = [];
+  for (const t of tokens.slice(ti + 1)) {
+    if (t === "|" || t === "|&") break;
+    stage.push(t);
+  }
+
+  // (1) Bare output-redirect target: the file lands in the base.
+  for (let i = 0; i < stage.length; i++) {
+    const tok = stage[i];
+    const mOut = tok.match(OUT_REDIRECT_RE);
+    if (mOut) {
+      const target = mOut[2] !== "" ? mOut[2] : (stage[i + 1] ?? null);
+      if (target === null || target.startsWith("&") || /^\d+$/.test(target)) continue; // fd duplication
+      if (!isResolvableTarget(target)) return true;
+      continue;
+    }
+    if (BARE_REDIRECT_RE.test(tok)) {
+      // Bare `<` is an input redirect (a read); only the `>` forms write.
+      if (tok.includes(">")) {
+        const target = stage[i + 1] ?? null;
+        if (target !== null && !target.startsWith("&") && !/^\d+$/.test(target) && !isResolvableTarget(target)) return true;
+      }
+    }
+  }
+
+  // (2) Opaque inline-code execution under the base.
+  if (!SCRIPT_INTERPRETERS.has(first) && !SHELL_INTERPRETERS.has(first)) return false;
+  const hasHeredoc = seg.ops.includes("<<") || stage.some((t) => t.startsWith("<<"));
+  const hasInlineFlag = stage.includes("-c") || stage.includes("-e");
+  return hasHeredoc || hasInlineFlag;
 }
 
 /**

@@ -199,6 +199,30 @@ describe("getJudgeVerdict", () => {
     expect(r).toBeNull();
   });
 
+  it("D18: the packet carries the re-based base's grant state and the risk severity", async () => {
+    // The 2026-09-12 incident shape: re-based base that is read-allowed but
+    // NOT write-granted — the judge must see both facts (it may not rule
+    // on scope, but it should not decide blind).
+    const calls: CapturedCall[] = [];
+    const { ctx } = makeCtx(fakeModel());
+    const homePi = path.join(os.homedir(), ".pi");
+    const cmd = `cd ${homePi} && python3 - <<'PYEOF'\nopen("probe.txt","w").write("x")\nPYEOF`;
+    const r = await getJudgeVerdict(makePd(cmd, tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    expect(r).not.toBeNull();
+    expect(calls).toHaveLength(1);
+    const text = (calls[0].context as any).messages
+      .map((m: any) =>
+        Array.isArray(m.content)
+          ? m.content.map((c: any) => c.text ?? "").join("")
+          : String(m.content ?? ""))
+      .join("\n");
+    expect(text).toContain(`effective base: ${homePi} (after cd) — read: granted, write: NOT granted`);
+    expect(text).toContain("risk flags: high —");
+  });
+
   it("the packet includes an untrusted script payload when the command runs one", async () => {
     fs.writeFileSync(path.join(tmp, "job.py"), "import os\nprint('job')\n");
     const calls: CapturedCall[] = [];
