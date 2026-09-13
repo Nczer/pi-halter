@@ -36,13 +36,14 @@ export class RuleGenerator {
   }
 
   /**
-   * Tool-plugin grants. Consent prompts grant the KIND only (a read consent
-   * can never cover the tool's exec actions); exec/file prompts grant the
-   * WHOLE tool (the tier-2 confirmation names the exec risk).
+   * Tool-plugin grants. Consent and egress prompts grant the KIND only (a
+   * read consent can never cover the tool's exec actions; the egress kind
+   * is the "no prompts, no judge" override, T1); exec/file prompts grant
+   * the WHOLE tool (the tier-2 confirmation names the exec risk).
    */
   private static generateToolPrimaryRules(data: ToolPromptData): AllowRules {
     const grant =
-      data.gate === "consent" && data.consentKind
+      (data.gate === "consent" || data.gate === "egress") && data.consentKind
         ? `${data.tool}:kind:${data.consentKind}`
         : data.tool;
     return { toolGrants: [grant] };

@@ -262,6 +262,10 @@ async function runBroaderUmbrella(
  *
  * Tier 1: Ask user Yes / Always… / No (options derived data-driven from the BuiltPrompt).
  * Tier 2: If user selects an "Always" option, confirm with a second prompt.
+ * Session consent (T4, content-classes): single tier — the prompt's only
+ * choice IS the session grant (`sessionConsent.label` → onAlways), plus
+ * "No". No one-shot Yes, no tier-2 (the explicit label + session lifetime
+ * is the boundary).
  *
  * Consumes a BuiltPrompt for all content — no string concatenation at call sites.
  * Calls the appropriate mutation callback on confirmed "always".
@@ -299,6 +303,44 @@ export async function twoTierAlwaysPrompt(
 
   while (true) {
     const showJudge = !!judge && !judgeExplained;
+
+    const warningPrefix = over
+      ? `⚠️ High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
+      : "";
+
+    // ── Session consent (T4): single tier — the grant IS the choice ──
+    if (activePrompt.sessionConsent) {
+      const sc = activePrompt.sessionConsent;
+      const choices = [
+        sc.label,
+        ...(showJudge ? ["Explain"] : []),
+        "No",
+      ];
+      const idx = await selectIndex(ctx, warningPrefix + activePrompt.title + "\n\n" + activePrompt.body, choices);
+      if (idx === null) return "no"; // cancelled — the reason-less No
+      if (idx === 0) {
+        onAlways();
+        return "always";
+      }
+      if (idx === choices.length - 1) {
+        const reason = await ctx.ui.input("Reason for rejection:");
+        if (reason === undefined) continue;
+        return { kind: "no", reason: reason.trim() || "No reason provided" };
+      }
+      if (showJudge && idx === 1) {
+        const block = await judge!.explain();
+        activePrompt = {
+          ...activePrompt,
+          body: block
+            ? activePrompt.body + "\n" + block
+            : activePrompt.body + "\n⚠️ Judge: no verdict (call failed or reply unparseable)",
+        };
+        judgeExplained = true;
+        continue;
+      }
+      continue; // defensive: index/choice count mismatch
+    }
+
     const showRetry = !!retryJudge;
     // "No" is the with-reason path (it asks on pick); escape/cancel is the
     // reason-less path (selectIndex null → "no" below). One No, not two.
@@ -309,10 +351,6 @@ export async function twoTierAlwaysPrompt(
       ...(showRetry ? ["Judge again"] : []),
       "No",
     ];
-
-    const warningPrefix = over
-      ? `⚠️ High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
-      : "";
 
     const idx = await selectIndex(ctx, warningPrefix + activePrompt.title + "\n\n" + activePrompt.body, choices);
     if (idx === null) return "no"; // cancelled — the reason-less No

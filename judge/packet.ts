@@ -76,16 +76,18 @@ export interface JudgmentFileInput {
 }
 
 /**
- * A plugin-gated tool call under review (ToolRequest, gate exec/file/consent).
- * The exec gate carries the FINAL script payload — byte-identical to what the
- * tool executes (payload identity, enforced by the plugin importing the tool
- * ext's own payload builder).
+ * A plugin-gated tool call under review (ToolRequest, gate exec/file/
+ * consent/egress). The exec gate carries the FINAL script payload —
+ * byte-identical to what the tool executes (payload identity, enforced by
+ * the plugin importing the tool ext's own payload builder). The egress gate
+ * carries the FULL outgoing args in argsPreview (T1: the judge sees exactly
+ * what goes out).
  */
 export interface JudgmentToolInput {
   kind: "tool";
   tool: string;
   label: string;
-  gate: "exec" | "file" | "consent";
+  gate: "exec" | "file" | "consent" | "egress";
   note?: string;
   /** exec: the final script payload. */
   script?: string;

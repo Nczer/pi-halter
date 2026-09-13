@@ -43,6 +43,19 @@ function consentReq(overrides: Partial<ToolRequest> = {}): ToolRequest {
   };
 }
 
+function egressReq(overrides: Partial<ToolRequest> = {}): ToolRequest {
+  return {
+    type: "tool",
+    tool: "exa",
+    label: 'search "pi coding agent" (query → exa.ai)',
+    gate: "egress",
+    consentKind: "web",
+    cwd: base,
+    argsPreview: '{\n  "query": "pi coding agent"\n}',
+    ...overrides,
+  };
+}
+
 function fileReq(overrides: Partial<ToolRequest> = {}): ToolRequest {
   return {
     type: "tool",
@@ -128,6 +141,40 @@ describe("decide: tool requests", () => {
     store.addAllowed({ toolGrants: ["blender"] });
     expect((await decide(fileReq(), store)).kind).toBe("auto-allow");
   });
+
+  it("egress auto-allows only with its own kind (or whole-tool) grant (T1)", async () => {
+    const kindStore = createStore();
+    kindStore.addAllowed({ toolGrants: ["exa:kind:web"] });
+    expect((await decide(egressReq(), kindStore)).kind).toBe("auto-allow");
+
+    // a DIFFERENT kind does not cover this one; no grant → prompt
+    const other = createStore();
+    other.addAllowed({ toolGrants: ["exa:kind:search"] });
+    expect((await decide(egressReq(), other)).kind).toBe("prompt");
+    expect((await decide(egressReq(), createStore())).kind).toBe("prompt");
+
+    const whole = createStore();
+    whole.addAllowed({ toolGrants: ["exa"] });
+    expect((await decide(egressReq(), whole)).kind).toBe("auto-allow");
+  });
+
+  it("kind grants are fresh only under the granting model (T5 — model switch re-prompts)", async () => {
+    const grant = (modelId: string | null) => {
+      const store = createStore();
+      store.addAllowed({ toolGrants: ["exa:kind:web"] });
+      if (modelId) store.recordToolGrantModel("exa:kind:web", modelId);
+      return store;
+    };
+    // same model → auto-allow
+    expect((await decide(egressReq(), grant("prov/a"), { modelId: "prov/a" })).kind).toBe("auto-allow");
+    // model switched → the grant is stale → prompt
+    expect((await decide(egressReq(), grant("prov/a"), { modelId: "prov/b" })).kind).toBe("prompt");
+    // unrecorded (pre-T5) grant → stays valid; no current model → stays valid
+    expect((await decide(egressReq(), grant(null), { modelId: "prov/a" })).kind).toBe("auto-allow");
+    expect((await decide(egressReq(), grant("prov/a"), { modelId: null })).kind).toBe("auto-allow");
+    // consent kind grants take the same freshness rule
+    expect((await decide(consentReq({ tool: "exa", consentKind: "web" }), grant("prov/a"), { modelId: "prov/b" })).kind).toBe("prompt");
+  });
 });
 
 // ── rule generator + round-trip ───────────────────────────────────────
@@ -145,8 +192,13 @@ describe("rules: tool grants", () => {
     expect(RuleGenerator.generatePrimaryRules(pd)).toEqual({ toolGrants: ["blender:kind:read"] });
   });
 
-  it("round-trip: prompt → Always → auto-allow (all three gates)", async () => {
-    for (const req of [execReq(), consentReq(), fileReq()]) {
+  it("egress prompts grant the kind only (the no-prompts/no-judge override, T1)", async () => {
+    const pd = promptOf(await decide(egressReq(), createStore())).promptData;
+    expect(RuleGenerator.generatePrimaryRules(pd)).toEqual({ toolGrants: ["exa:kind:web"] });
+  });
+
+  it("round-trip: prompt → Always → auto-allow (all four gates)", async () => {
+    for (const req of [execReq(), consentReq(), fileReq(), egressReq()]) {
       const store = createStore();
       const d1 = await decide(req, store);
       expect(d1.kind).toBe("prompt");
@@ -174,13 +226,29 @@ describe("buildPrompt: tool prompts", () => {
     expect(p.includeFileOption).toBe(false);
   });
 
-  it("consent: plain title, kind-scoped Always that cannot cover exec", async () => {
+  it("consent: session-scoped trust prompt (T4) — single tier, kind-scoped grant", async () => {
     const pd = promptOf(await decide(consentReq(), createStore())).promptData;
     const p = buildPrompt({ kind: "prompt", promptData: pd });
-    expect(p.title).toBe("blender");
+    expect(p.title).toBe("Allow blender read this session?");
     expect(p.body).toContain("(read)");
     expect(p.alwaysLabel).toBe("blender (read)");
-    expect(p.tier2Everything.body).toContain("including code execution) still prompt");
+    expect(p.sessionConsent?.label).toBe("Allow read this session");
+    expect(p.includeAlwaysOption).toBe(false);
+    expect(p.includePathsOption).toBe(false);
+    expect(p.includeFileOption).toBe(false);
+  });
+
+  it("egress: warning title, FULL args in the body, kind-scoped Always (T1)", async () => {
+    const pd = promptOf(await decide(egressReq(), createStore())).promptData;
+    const p = buildPrompt({ kind: "prompt", promptData: pd });
+    expect(p.title).toBe("⚠️ exa (egress)");
+    expect(p.body).toContain('search "pi coding agent" (query → exa.ai)');
+    expect(p.body).toContain('"query": "pi coding agent"'); // full args — not a label
+    expect(p.body).toContain("Data egress");
+    expect(p.alwaysLabel).toBe("exa (web)");
+    expect(p.tier2Everything.body).toContain("no prompts, no judge");
+    expect(p.includeAlwaysOption).toBe(true);
+    expect(p.sessionConsent).toBeUndefined();
   });
 
   it("file: target path, outside-cwd warning, exists note", async () => {
@@ -221,6 +289,24 @@ describe("buildJudgmentPacket: tool packets", () => {
     expect(packet).toContain("line59 = 59"); // tail present — not head-cut
   });
 
+  it("egress carries the FULL outgoing args (T1 — the judge sees exactly what goes out)", () => {
+    const preview = JSON.stringify({ query: "a very long sensitive query about internal projects ".repeat(3), includeDomains: ["example.com"] }, null, 2);
+    const packet = buildJudgmentPacket({
+      kind: "tool",
+      tool: "exa",
+      label: 'search "…" (query → exa.ai)',
+      gate: "egress",
+      argsPreview: preview,
+    });
+    expect(packet).toContain("gate: egress");
+    expect(packet).toContain("## Arguments");
+    // the FULL query reaches the judge — no head cut at the label width
+    expect(packet).toContain(preview.split("\n")[1].trim());
+    expect(packet).toContain(`"includeDomains": [
+    "example.com"
+  ]`);
+  });
+
   it("file carries target + outside-base fact", () => {
     const packet = buildJudgmentPacket({
       kind: "tool",
@@ -240,6 +326,12 @@ describe("buildJudgmentPacket: tool packets", () => {
 describe("checkDspaGate: tool prompts", () => {
   it("exec is judgeable (the payload IS the model)", async () => {
     const pd = promptOf(await decide(execReq(), createStore())).promptData;
+    const r = await checkDspaGate(pd, createStore());
+    expect(r.ok).toBe(true);
+  });
+
+  it("egress is judgeable (the outgoing payload IS the effect — C1, T1)", async () => {
+    const pd = promptOf(await decide(egressReq(), createStore())).promptData;
     const r = await checkDspaGate(pd, createStore());
     expect(r.ok).toBe(true);
   });

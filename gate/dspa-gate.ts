@@ -9,9 +9,7 @@
  * most produce a prompt, never an auto-allowed operation the floor forbids.
  *
  * Hard floor (fail closed on any):
- *  - bash: parseable, no obscured command position (variable indirection —
- *    NOT flagged by halter's own analysis, checked here explicitly), no
- *    credential-pattern paths, no network egress — except loopback-only
+ *  - bash: no credential-pattern paths, no network egress — except loopback-only
  *    curl/wget (D14: every URL in the command is 127.0.0.0/8, ::1, or
  *    localhost; a local call can't exfiltrate, the judge reviews the full
  *    text) — no paths outside the
@@ -33,6 +31,13 @@
  *    Package-manager RUN forms (npx, `uv run`, `bun <script>`, …) are
  *    judgeable too (D8) — they execute local/cached code the judge can see;
  *    FETCH forms (`npm install`, `uv sync`, `bun add`, …) stay on the floor.
+ *    Detection-limited conditions are judgeable (content-classes T2):
+ *    an obscured command position (variable indirection — not flagged by
+ *    halter's own analysis) and an unparseable command pass to the judge —
+ *    the packet carries the full raw text plus both flags (obfuscation /
+ *    parse error), so the judge has strictly more information than the
+ *    static pass. Policy stops (above) and unresolvable sentinels (D7)
+ *    stay absolute.
  *  - rm carve-out (dspa only): halter always flags rm as dangerous, and
  *    danger patterns always prompt even after Always grants. An rm command
  *    may reach the judge only when every rm target is explicit, not the
@@ -51,7 +56,10 @@
  *  - tool (plugin-gated calls): the exec gate is fully JUDGEABLE — its
  *    script payload is opaque to static analysis by construction (the
  *    judge IS the model for it; D11 content review, untrimmed packet).
- *    The file/consent gates are never auto-allowed: low-risk prompts whose
+ *    The egress gate is JUDGEABLE too (content-classes T1) — the outgoing
+ *    payload IS the effect (C1): no deterministic floor on it, the full
+ *    args ride in the packet, the two-stage cascade decides. The
+ *    file/consent gates are never auto-allowed: low-risk prompts whose
  *    repetition session grants cover — they stop like every other floor
  *    stop, advisory (D16).
  */
@@ -174,31 +182,6 @@ export function hasFileScriptOutsideCwd(pd: PromptData): boolean {
     if (sp && !isInsideCwd(sp, normCwd)) return true;
   }
   return false;
-}
-
-/**
- * Command position obscured by variable indirection, subshell, or backtick
- * (e.g. `f=rm; $f -rf ./build`). halter's own analysis does not flag this,
- * so the gate checks it explicitly — an obscured command can never be
- * verified for auto-allow. Inline env-assignment prefixes and prefix/wrapper
- * delegation are resolved first (`FOO=bar $f …`, `env $f …` obscure exactly
- * like `$f …`).
- */
-const OBSCURED_CMD_RE = /^(?:\$\w|\$\(|`)/;
-
-function obscuredHit(segments: string[]): string | null {
-  for (const seg of segments) {
-    const words = seg.trim().split(/\s+/);
-    const oper = words.slice(skipEnvPrefixes(words));
-    // cleanToken: the shell strips one quote pair, so `"$f" -rf …` obscures
-    // exactly like `$f -rf …` (the raw token would otherwise sail past the
-    // OBSCURED_CMD_RE anchor).
-    let first = cleanToken(oper[0] ?? "");
-    const deleg = getDelegatedCommand(oper.join(" "));
-    if (deleg) first = cleanToken(deleg.tail.split(/\s+/)[0] ?? "");
-    if (OBSCURED_CMD_RE.test(first)) return first.slice(0, 20);
-  }
-  return null;
 }
 
 /**
@@ -441,7 +424,7 @@ export async function checkDspaGate(
   store: Store,
 ): Promise<DspaGateResult> {
   if (pd.type === "tool") {
-    if (pd.gate !== "exec") {
+    if (pd.gate === "file" || pd.gate === "consent") {
       return {
         ok: false,
         reason: `tool ${pd.gate} never auto-allows (session grants cover its repetition)`,
@@ -450,6 +433,8 @@ export async function checkDspaGate(
     }
     // exec: the payload is the whole model — no deterministic floor applies
     // (it's opaque by construction); the two-stage judge decides (D11).
+    // egress (content-classes T1): the outgoing payload IS the effect (C1)
+    // — the judge sees the full args (packet) and the cascade decides.
     return { ok: true };
   }
 
@@ -484,7 +469,11 @@ export async function checkDspaGate(
       isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
       getConfirmedResolution: (t) => store.getConfirmedResolution(t),
     }));
-  if (analysis.hasParseError) return { ok: false, reason: "unparseable command", advisory: true };
+  // T2 (content-classes): an unparseable command is JUDGEABLE — the packet
+  // carries the full raw text plus the parse-error flag; the checks below
+  // run on the (degraded) segments as best effort, the judge reads the raw
+  // text. Q1's policy stops (credentials, egress, outside base, sentinels)
+  // still apply wherever they can see.
 
   // D11 (2026-08-26 re-alignment): the floor's bar is the MANUAL bar — the
   // same predicate the analysis uses for prompt.outsidePaths
@@ -515,10 +504,10 @@ export async function checkDspaGate(
   // Non-rm: unsafe patterns and risk reasons are JUDGEABLE (D1) — inline
   // scripts, redirects, pipes, subshells, file-modification patterns. The
   // packet carries the full command text (heredoc bodies included) plus
-  // halter's analysis digest; the judge decides. The floor checks below
-  // (obscured position, credentials, network, outside base) still apply.
-  const obscured = obscuredHit(analysis.segments);
-  if (obscured) return { ok: false, reason: `obscured command position (${obscured})`, advisory: true };
+  // halter's analysis digest; the judge decides. An OBSCURED command
+  // position (variable indirection) is judgeable too (T2) — the packet
+  // carries the full raw text plus the obfuscation flag. The floor checks
+  // below (credentials, network, outside base) still apply.
   if (pd.credentialRule) {
     // An unverifiable glob is a verification failure, not a credential match
     // — name it honestly (the prompt renders the same distinction).

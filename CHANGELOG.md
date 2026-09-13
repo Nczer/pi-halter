@@ -1,5 +1,55 @@
 # Changelog
 
+## 3.24.0 — 2026-09-12
+
+**Content classes** (grill-resolved; spec: `docs/dspa-content-classes.md`). An
+operation's safety reduces to exactly one thing; that thing selects the judge
+pipeline. The changes:
+
+- **New `egress` gate kind (T1)** — the call carries an outgoing payload (a
+  web query, a url list): the payload IS the effect (C1), so it is
+  JUDGEABLE, not a consent stop. No deterministic floor on the payload; the
+  FULL args ride in the judge packet (previously such prompts only saw a
+  label); standard cascade — stage-1 approve+low auto-allows in one call,
+  stage 2 (session context) guards the not-low path; the
+  `<tool>:kind:<k>` session grant stays the override (no prompts, no judge).
+  The exa plugin (separate ext) moves consent → egress with this.
+- **Detection-limited floor stops are judgeable (T2)** — an obscured command
+  position (`f=rm; $f -rf ./build`) and an unparseable command no longer stop
+  the auto-allow: the packet carries the full raw text plus both flags, so
+  the judge has strictly more information than the static pass. Policy stops
+  (credentials, network egress, outside-base scope, rm, root scans,
+  untrusted fetch forms, unresolvable sentinels) stay absolute — the
+  2026-08-24 data (floor stopped 7/26, judge stopped 0) was the precedent;
+  blanket S1-low-skips-floor was rejected (it would hand egress/scope to the
+  LLM).
+- **File scripts skip stage 1 (T3)** — a bash command that executes a file
+  script (the D3/D11 `findExecutedScript` identification) goes straight to
+  stage 2: the class always escalates, so stage 1 would only add a call (the
+  script content already rides in the stage-2 packet). Accepted cost: the
+  ledger loses stage-1-vs-2 `diff` lines for this class.
+- **Session-scoped consent prompts (T4)** — consent prompts change from
+  "prompt every op until Always" to ONE prompt per kind per session:
+  "Allow <kind> this session?" — yes IS the session grant, no blocks that
+  op, single tier (the explicit prompt + session lifetime is the boundary),
+  and the prompt NAMES THE MODEL (the trust decision is made at the prompt).
+  Applies to every consenting tool, identical in manual and dspa.
+- **Kind grants reset on model switch (T5)** — a consent/egress kind grant
+  records the model identity that granted it; a mid-session switch
+  invalidates it (the trust decision was about a specific model), the next
+  op re-prompts. Whole-tool grants untouched (parked). Unrecorded (pre-3.24)
+  grants stay valid; a missing model identity keeps the check open.
+- **Contract docs: the paths** — the plugin contract now names what a kind
+  selects: content-judge (`exec`, `egress` — the /dspa cascade can
+  auto-allow) vs human-gated (`file`, `consent` — the prompt is the gate);
+  classification is PER CALL, so a tool's actions mix paths as their
+  payloads demand (grant scopes stay separate per kind).
+- Joplin stays C3 (T6): content-bearing pre-fetch of note bodies was
+  REJECTED (intent without context is unjudgeable; the local/cloud reader
+  distinction already enforces the egress policy). T7 (a future destructive
+  content-bearing tool) stays parked: judgeable-authority-never when it
+  exists.
+
 ## 3.23.0 — 2026-09-10
 
 - **Base-access flag survives redirects** — a glued output-redirect target

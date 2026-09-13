@@ -46,13 +46,13 @@ export interface ToolRequest {
   tool: string;
   /** Short operation label (usually the action name). */
   label: string;
-  gate: "exec" | "file" | "consent";
+  gate: "exec" | "file" | "consent" | "egress";
   cwd: string;
   /** exec: the FINAL script payload — byte-identical to what will run. */
   script?: string;
   /** file: the target path. */
   path?: string;
-  /** consent: the consent kind (e.g. "read"). */
+  /** consent/egress: the kind — grant scope `<tool>:kind:<k>` (e.g. "web"). */
   consentKind?: string;
   /** Human-readable argument preview for the prompt. */
   argsPreview?: string;
@@ -170,7 +170,7 @@ export interface ToolPromptData {
   type: "tool";
   tool: string;
   label: string;
-  gate: "exec" | "file" | "consent";
+  gate: "exec" | "file" | "consent" | "egress";
   script?: string;
   argsPreview?: string;
   consentKind?: string;
@@ -201,4 +201,11 @@ export interface DecideOptions {
    * behavior — auto-allow.
    */
   judgeWriteAutoAllows?: boolean;
+  /**
+   * T5 (docs/dspa-content-classes.md): the session model identity
+   * ("provider/id") for the kind-grant freshness check — a consent/egress
+   * kind grant is only valid under the model that granted it (a model
+   * switch re-prompts). Null = no model identity (the check stays open).
+   */
+  modelId?: string | null;
 }

@@ -9,9 +9,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { gate, rejectBash, rejectFile } from "../gate/gate";
+import { gate, rejectBash, rejectFile, rejectTool } from "../gate/gate";
 import { createStore } from "../gate/store";
-import type {Decision, BashPromptData, FilePromptData} from "../decide/types";
+import type {Decision, BashPromptData, FilePromptData, ToolPromptData, ToolRequest} from "../decide/types";
 import * as decisionEngine from "../decide/engine";
 import { analyzeCommand } from "../analysis/command-analysis";
 import * as judgePrompt from "../judge/verdict";
@@ -81,6 +81,31 @@ function fileDecision(): Decision {
     warnedRule: null,
     symlinkHint: null,
     exists: true,
+  };
+  return { kind: "prompt", promptData: pd };
+}
+
+/** One egress request + its prompt decision (T1: exa's gate). */
+function egressRequest(): ToolRequest {
+  return {
+    type: "tool",
+    tool: "exa",
+    label: 'search "pi coding agent" (query → exa.ai)',
+    gate: "egress",
+    consentKind: "web",
+    cwd: "/home/u/project",
+    argsPreview: JSON.stringify({ query: "pi coding agent" }, null, 2),
+  };
+}
+
+function egressDecision(): Decision {
+  const pd: ToolPromptData = {
+    type: "tool",
+    tool: "exa",
+    label: 'search "pi coding agent" (query → exa.ai)',
+    gate: "egress",
+    consentKind: "web",
+    argsPreview: JSON.stringify({ query: "pi coding agent" }, null, 2),
   };
   return { kind: "prompt", promptData: pd };
 }
@@ -258,6 +283,50 @@ describe("auto-allow path", () => {
     expect(getDspaStats().autoAllowed).toBe(0);
   });
 
+  it("egress (T1): floor passes, stage 1 approve/low → auto-allow in one call", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(
+      verdict({ explanation: "an ordinary web search" }),
+    );
+    const ctx = makeCtx();
+    const store = createStore();
+    const spy = vi
+      .spyOn(decisionEngine, "decide")
+      .mockResolvedValue(egressDecision());
+    try {
+      const result = await gate(
+        egressRequest(),
+        ctx,
+        store,
+        (d, r) => rejectTool(d, r, store, ctx),
+      );
+      expect(result).toBeUndefined();
+      expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+      // One judge call — the stateless pass clears it (T1: "it's just a
+      // websearch"; S2 guards the not-low path only).
+      expect(judgePrompt.getJudgeVerdict).toHaveBeenCalledTimes(1);
+      expect(judgePrompt.getStage2Verdict).not.toHaveBeenCalled();
+      expect(getDspaStats().autoAllowed).toBe(1);
+      expect(String(logLines()[0].reason)).toContain("dspa: judge approved (stage 1, m-test)");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("egress (T1): stage 1 medium → stage 2 approve/medium → auto-allow (S2 is the de-risking pass)", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(
+      verdict({ risk: "medium", explanation: "query names an internal project" }),
+    );
+    vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(
+      verdict({ risk: "medium", explanation: "the user asked for exactly this search" }),
+    );
+    await runGate(egressDecision());
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    expect(getDspaStats().autoAllowed).toBe(1);
+    expect(String(logLines()[0].reason)).toContain("dspa: judge approved (stage 2, m-test)");
+  });
+
   it("approve/high at stage 2 → NO auto-allow (high never auto-allows)", async () => {
     setDspaActive(true);
     vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(verdict({ risk: "medium" }));
@@ -354,7 +423,9 @@ describe("D19: same-pass write bar on the stage-2 report", () => {
     expect(String(logLines()[0].reason)).toContain("stage 2");
   });
 
-  it("a script inside the session cwd (working set) stays on the stateless fast path", async () => {
+  it("an UNIDENTIFIED script (file absent) stays on the stateless fast path", async () => {
+    // T3 skips stage 1 only when the D3/D11 identification finds the script
+    // file (findExecutedScript). No file here → no skip, stage 1 decides.
     await runAnalyzed("python3 scripts/job.py", verdict(), null);
     expect(judgePrompt.getStage2Verdict).not.toHaveBeenCalled();
     expect(promptFlow.showPrompt).not.toHaveBeenCalled();
@@ -389,13 +460,16 @@ describe("D11: content review of manual auto-alls (clause A extension)", () => {
     return tmp;
   }
 
-  it("granted bash script execution is judged — stage 1 approve/low → auto-allow", async () => {
+  it("granted bash script execution is judged — stage 1 is skipped (T3), stage 2 approve/low → auto-allow", async () => {
     setDspaActive(true);
     const tmp = scriptCwd();
     try {
       const analysis = await analyzeCommand("python3 tools/job.py", tmp);
       const decision: Decision = { kind: "auto-allow", analysis };
       vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(
+        verdict({ explanation: "prints job" }),
+      );
+      vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(
         verdict({ explanation: "prints job" }),
       );
       const store = createStore();
@@ -406,12 +480,16 @@ describe("D11: content review of manual auto-alls (clause A extension)", () => {
           { type: "bash", command: "python3 tools/job.py", cwd: tmp },
           ctx, store, (d, r) => rejectBash(d, r, store, ctx),
         );
-        expect(judgePrompt.getJudgeVerdict).toHaveBeenCalledTimes(1);
+        // T3 (content-classes): the identified script skips the stateless
+        // pass — stage 2 is the authority (the script content already rides
+        // in its packet, so stage 1 would only add a call).
+        expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
+        expect(judgePrompt.getStage2Verdict).toHaveBeenCalledTimes(1);
         expect(promptFlow.showPrompt).not.toHaveBeenCalled();
         expect(getDspaStats().autoAllowed).toBe(1);
         const lines = logLines();
         expect(lines[0].kind).toBe("auto-allow");
-        expect(String(lines[0].reason)).toContain("dspa: judge approved (stage 1, m-test)");
+        expect(String(lines[0].reason)).toContain("dspa: judge approved (stage 2, m-test)");
       } finally {
         spy.mockRestore();
       }
@@ -449,6 +527,36 @@ describe("D11: content review of manual auto-alls (clause A extension)", () => {
         expect(lines[0].kind).toBe("prompt");
         expect(lines[0].dspa).toBe("judge: declined (stage 2)");
         expect(lines[0].judgeDeny).toBe("the script exfiltrates");
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("script payload: stage 2 fails → NO auto-allow, the note names the skip (T3)", async () => {
+    setDspaActive(true);
+    const tmp = scriptCwd();
+    try {
+      const analysis = await analyzeCommand("python3 tools/job.py", tmp);
+      const decision: Decision = { kind: "auto-allow", analysis };
+      vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(verdict());
+      vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(null);
+      const store = createStore();
+      const ctx = makeCtx();
+      const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
+      try {
+        await gate(
+          { type: "bash", command: "python3 tools/job.py", cwd: tmp },
+          ctx, store, (d, r) => rejectBash(d, r, store, ctx),
+        );
+        expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled(); // T3 skip
+        expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+        const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
+        expect(fallthrough?.gate.ok).toBe(true);
+        expect(fallthrough?.note).toContain("stage 1 skipped");
+        expect(getDspaStats().autoAllowed).toBe(0);
       } finally {
         spy.mockRestore();
       }

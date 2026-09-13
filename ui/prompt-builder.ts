@@ -53,6 +53,11 @@ export interface BuiltPrompt {
    *  resolver ran nothing or found nothing) — persisted as confirmed
    *  resolutions when the user accepts a paths grant. */
   resolverDirs?: string[];
+  /** T4 (content-classes): session-scoped consent prompt — single tier.
+   *  The first prompt per kind per session IS the trust decision:
+   *  `label` ("Allow <kind> this session") grants the kind, "No" blocks.
+   *  No one-shot Yes, no tier-2. tier2Everything is unused when set. */
+  sessionConsent?: { label: string };
 }
 
 /**
@@ -516,12 +521,14 @@ function buildFilePrompt(
 // ── Tool prompt (plugin-gated tool calls) ────────────────────────────
 
 /**
- * Prompt for a gated tool call (ToolPromptData). Single "Always" option,
- * the old MCP prompt's layout. Grant scope per gate:
+ * Prompt for a gated tool call (ToolPromptData). Grant scope per gate:
+ *  - consent → T4 session-scoped trust prompt (single tier): "Allow
+ *    <kind> this session" IS the kind grant, "No" blocks. The prompt flow
+ *    appends the model line (the trust decision is about the model);
+ *  - egress  → standard layout: one-shot Yes + "Always" for the kind
+ *    (the no-prompts/no-judge override, T1), tier-2 confirms;
  *  - exec / file → the WHOLE tool (`<tool>:*`) — the tier-2 confirmation
- *    names the code-execution risk explicitly;
- *  - consent     → the consent kind only (`<tool> (<kind>)`) — a kind grant
- *    can never cover the tool's exec actions.
+ *    names the code-execution risk explicitly.
  */
 function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
   const { tool, label, gate, note } = data;
@@ -531,11 +538,31 @@ function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
     const args = data.argsPreview ? stripBraces(data.argsPreview) : "";
     if (args) body += `\nArguments:\n${args}`;
     return {
-      title: tool,
+      title: `Allow ${tool} ${data.consentKind} this session?`,
+      body,
+      // Unused — the session-consent prompt is single tier (T4).
+      tier2Everything: { title: `Confirm Always Allow`, body: "" },
+      includePathsOption: false,
+      includeFileOption: false,
+      includeBroaderOption: false,
+      includeAlwaysOption: false,
+      alwaysLabel: `${tool} (${data.consentKind})`,
+      pathGrantDirs: [],
+      sessionConsent: { label: `Allow ${data.consentKind} this session` },
+    };
+  }
+
+  if (gate === "egress") {
+    let body = label;
+    const args = data.argsPreview ? stripBraces(data.argsPreview) : "";
+    if (args) body += `\nArguments:\n${args}`;
+    body += `\n⚠️ ${note ?? "Data egress — the arguments leave the machine."}`;
+    return {
+      title: `⚠️ ${tool} (egress)`,
       body,
       tier2Everything: {
         title: `Confirm Always Allow`,
-        body: `"Always" will auto-allow ${data.consentKind} actions of ${tool} this session.\n\nOther ${tool} actions (including code execution) still prompt.`,
+        body: `"Always" will auto-allow ${data.consentKind} actions of ${tool} for the ENTIRE SESSION — no prompts, no judge.\n\nOther ${tool} actions still prompt.`,
       },
       includePathsOption: false,
       includeFileOption: false,

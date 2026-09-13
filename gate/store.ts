@@ -38,6 +38,11 @@ export interface Store {
   hasAllowedWritePath(path: string): boolean;
   /** Tool-plugin grant check (see AllowRules.toolGrants). */
   hasToolGrant(grant: string): boolean;
+  /** T5: the model identity ("provider/id") that granted a tool kind
+   * grant; null = unknown (pre-T5 / legacy grant — stays valid). */
+  getToolGrantModel(grant: string): string | null;
+  /** T5: record the granting model identity for a tool kind grant. */
+  recordToolGrantModel(grant: string, modelId: string): void;
   /** D10: bare package name trusted for fetchable run forms (npx tsc, uvx …). */
   hasTrustedPackage(pkg: string): boolean;
   /** D10: trust a bare package name for the session (prompt's "Trust" option). */
@@ -91,6 +96,7 @@ export function createStore(nowFn = Date.now): Store {
   const readPaths = new Set<string>();
   const writePaths = new Set<string>();
   const toolGrants = new Set<string>();
+  const toolGrantModels = new Map<string, string>();
   const trustedPackages = new Set<string>();
   const confirmedResolutions = new Map<string, string[]>();
   const aborted = new Map<string, number>();
@@ -124,6 +130,8 @@ export function createStore(nowFn = Date.now): Store {
     hasAllowedReadPath(p) { return readPaths.has(p); },
     hasAllowedWritePath(p) { return writePaths.has(p); },
     hasToolGrant(g) { return toolGrants.has(g); },
+    getToolGrantModel(g) { return toolGrantModels.get(g) ?? null; },
+    recordToolGrantModel(g, modelId) { toolGrantModels.set(g, modelId); },
     hasTrustedPackage(pkg) { return trustedPackages.has(pkg); },
     trustPackage(pkg) { trustedPackages.add(pkg); },
     getConfirmedResolution(token) { return confirmedResolutions.get(token) ?? null; },
@@ -191,6 +199,7 @@ export function createStore(nowFn = Date.now): Store {
       readPaths.clear();
       writePaths.clear();
       toolGrants.clear();
+      toolGrantModels.clear();
       trustedPackages.clear();
       confirmedResolutions.clear();
       aborted.clear();

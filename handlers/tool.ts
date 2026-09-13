@@ -52,7 +52,8 @@ export async function handleTool(
     cwd: ctx.cwd,
     script: req.kind === "exec" ? req.script : undefined,
     path: req.kind === "file" ? req.path : undefined,
-    consentKind: req.kind === "consent" ? req.consentKind : undefined,
+    consentKind:
+      req.kind === "consent" || req.kind === "egress" ? req.consentKind : undefined,
     argsPreview: req.kind !== "file" ? req.argsPreview : undefined,
     note: req.kind !== "file" ? req.note : undefined,
   };

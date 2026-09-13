@@ -4,7 +4,7 @@ What halter does, end to end: which tool calls it sees, how each resolves to
 auto-allow / prompt / block, and where every piece lives. The executable
 contract is `test/cases-data.ts` (the curated pass/prompt/block rows) plus the
 bypass and threading suites; this document is the spec they implement.
-Decision rationale for the judge regimes lives in `docs/dspa-redesign.md`.
+Decision rationale for the judge regimes lives in `docs/dspa-redesign.md`; per-class judge authority (operation classes C1–C4) in `docs/dspa-content-classes.md`.
 
 ## Terms
 
@@ -13,6 +13,7 @@ Decision rationale for the judge regimes lives in `docs/dspa-redesign.md`.
 | regime | One of the four mutually exclusive modes: `manual`, `dspa`, `dspat`, `dsp`. Enabling one disables the others. |
 | floor | The deterministic hard gate in `gate/dspa-gate.ts`. Code only, no model. The only thing that may stop `/dspa` from asking the judge. |
 | judgeable | An operation the floor lets through to the two-stage judge. |
+| operation class | The four-way split that selects the judge pipeline: C1 content-determined (the payload IS the effect), C2 effect-extending (payload is code), C3 context-dependent (opaque refs), C4 policy-absolute. `docs/dspa-content-classes.md`. |
 | bar | The manual bar: exactly the set of paths manual mode auto-allows (cwd + session grants + config-allowed + trusted scripts). Since D11 the floor's bar IS the manual bar. |
 | opaque ref | A path token static analysis cannot bind: `$VAR`, `${VAR}`, `$(…)`, backticks in path position, a glob over an unknown base. Marked, never fast-allowed, resolved via D12 convergence when the user confirms. |
 | unknown base | A `cd` whose target does not resolve; later relative paths in that segment chain get the `<unresolved-cwd>` marker. |
@@ -193,8 +194,6 @@ session-wide.
 Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
 
 1. **Floor** (`gate/dspa-gate.ts`, code only). Stops, by class:
-   - parse error (fail-closed);
-   - obscured command position (obfuscation detection hit);
    - credential pattern;
    - untrusted **fetchable** run form (D10) → stop names the package; the
      prompt offers `Trust: <pkg> (session)`;
@@ -210,15 +209,22 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
      auto-allow (D7).
    - the rm carve-out: explicit `/tmp` scratch targets are judgeable (D8/D11);
      computed/glob rm and `rm /etc/hosts` still stop.
+   Detection-limited stops are judgeable (content-classes T2): an obscured
+   command position and an unparseable command pass to the judge — the packet
+   carries the full raw text plus both flags, so the judge has strictly more
+   information than the static pass. Everything above is a POLICY stop and
+   stays absolute.
 
    Every floor stop is **advisory** (D16): the judge runs both stages and the
    verdict renders in the prompt ("— advisory (floor stop stands)") — the stop
    stands, the judge never grants over the floor.
 2. **Stage 1** (stateless, LRU-cached on the operation): the packet's static
-   analysis is the whole input. `approve` + `low` auto-allows.
+   analysis is the whole input. `approve` + `low` auto-allows. Script
+   payloads (C2, content-classes T3) skip stage 1 — the class always
+   escalates, so stage 1 would only add a call.
 3. **Stage 2** (reasoning-blind session context, uncached): runs when stage 1
-   did not auto-allow. `approve` + `low|medium` auto-allows. Its verdict is
-   final.
+   did not auto-allow (or immediately for script payloads). `approve` +
+   `low|medium` auto-allows. Its verdict is final.
 
 `approve` + `high`, `deny`, `defer`, and any no-verdict outcome prompt.
 
@@ -292,15 +298,19 @@ widget while active.
 
 ## The judge
 
-One one-shot model call per stage. The packet is the judge's entire input:
-command (capped 4000), analysis digest, and, when the operation executes an
-untrusted local script, the script content as fenced untrusted data (file 8000,
-script 150 lines / 64 KB; overflow → defer → prompt; only MCP-style args take
-head-cuts). No conversation history reaches stage 1. Stage 2 adds a
-reasoning-blind session context: the user's last messages (4 / 3000 chars
-verbatim) plus a 10-line tool-call digest (≤120 chars/line) plus session
-grants. Agent prose and tool outputs never appear: a compromised agent cannot
-talk the approver into compliance.
+One one-shot model call per stage. The packet is the judge's entire input,
+untrimmed by design (D11): the full command text (heredoc bodies included),
+the analysis digest, and, when the operation executes a local script, its
+content in full as fenced untrusted data; file writes carry the full new
+content, edits the after-edit view (replaced regions ±10 lines, line numbers).
+Only the digest sections head-cut (24 segments at ≤120 chars, 10 risk
+reasons, 20 paths); tool packets carry the plugin's argsPreview verbatim
+(the plugin caps its own previews, e.g. joplin). No conversation history
+reaches stage 1. Stage 2 adds a reasoning-blind session context: the user's
+last messages (4 / 3000 chars, head-truncated) plus a 10-line tool-call
+digest (≤120 chars/line) plus up to 10 session-grant lines. Agent prose and
+tool outputs never appear: a compromised agent cannot talk the approver into
+compliance.
 
 **Timeouts are two deadlines, not one.** `timeout` (default 8000ms) is a
 FIRST-TOKEN deadline: the streaming call is aborted if the model produces no
@@ -352,24 +362,46 @@ judge consume the same analysis.
 ## Tool plugin contract
 
 A tool extension opts in by shipping `<ext>/halter/index.ts` that default-exports
-a plugin (`plugins/types.ts`). `buildRequest(event, ctx)` classifies each call:
+a plugin (`plugins/types.ts`). `buildRequest(event, ctx)` classifies each
+call, and the KIND SELECTS THE PATH — two families (content-classes):
+
+Content-judge (judgeable — the /dspa cascade can auto-allow):
 
 - `exec` carries the final script payload, byte-identical to what the tool
   will execute (plugins import the tool ext's own payload builder). The
   payload goes through the bash script pipeline: floor + judge + dspa. No
   deterministic floor applies to the payload's internals; the payload IS the
   model.
+- `egress` carries the outgoing payload (a web search query, a url list) —
+  data leaving the machine (C1, content-classes T1). The full args ride in
+  the packet (the judge sees exactly what goes out); no deterministic floor
+  on the payload; standard cascade (stage-1 approve+low auto-allows, stage 2
+  low|medium is the de-risking pass).
+
+Human-gated (never auto-allowed — the prompt is the gate):
+
 - `file` carries a target path: outside-cwd warning, dir grants.
-- `consent` is a per-kind session grant (a read consent can never cover the
-  tool's exec actions).
-- `null` returns the call ungated (discovery calls).
+- `consent` — the action's meaning comes from the session (opaque args the
+  judge cannot vouch, C3), prompt session-scoped (content-classes T4): the
+  first prompt per kind per session asks "Allow <kind> this session?" — yes
+  IS the session grant, no blocks that op, single tier, the prompt names the
+  model. Consent grants reset on model switch (T5): the trust decision is
+  about a specific model.
+
+Mixed: classification is PER CALL — one tool's actions map to whichever
+path their payload demands (joplin: all consent; exa: all egress; a tool may
+combine, e.g. consent reads + exec actions + egress fetches). Grant scopes
+stay separate per kind (a read consent can never cover exec).
+
+`null` returns the call ungated (discovery calls).
 
 Grants: `<tool>` = whole tool (the "Always" on exec/file prompts);
-`<tool>:kind:<k>` = one consent kind. `exec` is judgeable under dspa;
-`file`/`consent` are never auto-allowed (session grants cover them). Fail-
-closed: a plugin that fails to import or violates the contract blocks ALL
-calls to its tool; the loader recovers the tool name from the plugin file's
-`name:` literal. The loader scans the extensions root at halter load.
+`<tool>:kind:<k>` = one consent or egress kind. `exec`/`egress` are
+judgeable under dspa; `file`/`consent` are never auto-allowed (session
+grants cover them). Fail-closed: a plugin that fails to import or violates
+the contract blocks ALL calls to its tool; the loader recovers the tool name
+from the plugin file's `name:` literal. The loader scans the extensions root
+at halter load.
 
 ## Session state and observability
 
