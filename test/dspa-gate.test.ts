@@ -3,10 +3,12 @@
  *
  * The gate uses halter's real analysis (analyzeCommand), so these cases run
  * through the actual parser. Fail closed on the floor: network egress,
- * credentials, outside-base paths, obscured command positions, and the rm
- * carve-out must block; everything else (inline scripts, redirects, pipes,
- * risk reasons) is judgeable and passes to the judge. Every floor stop is
- * advisory (D16) — the judge's verdict renders in the prompt, the stop
+ * credentials, outside-base paths, and the rm carve-out must block;
+ * everything else (inline scripts, redirects, pipes, risk reasons) is
+ * judgeable and passes to the judge — including detection-limited
+ * conditions (obscured command positions, unparseable commands, T2):
+ * the packet carries the full raw text plus both flags. Every floor stop
+ * is advisory (D16) — the judge's verdict renders in the prompt, the stop
  * stands.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
@@ -537,16 +539,22 @@ describe("bash", () => {
     if (!r.ok) expect(r.reason).toContain("network egress");
   });
 
-  it("blocks obscured command position (variable indirection)", async () => {
+  it("obscured command position is judgeable (T2) — the packet carries the full text + flag", async () => {
+    // T2 (content-classes): static analysis is blind to the command
+    // position, but the judge reads the full raw text (`f=rm; $f -rf
+    // ./build` resolves to `rm -rf ./build`) — strictly more information
+    // than the pre-T2 floor had. Policy stops (credentials, egress,
+    // outside base) still apply below.
     const r = await checkDspaGate(bashPd("f=rm; $f -rf ./build"), store);
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain("obscured");
+    expect(r.ok).toBe(true);
   });
 
-  it("blocks subshell command position", async () => {
+  it("a subshell command position stays on the policy floor (its egress is a URL in the text)", async () => {
+    // The obscured position is judgeable (T2) — but the URL catch-all still
+    // sees the destination: network egress stays a policy stop.
     const r = await checkDspaGate(bashPd("$(which curl) -s https://x.io"), store);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain("obscured");
+    if (!r.ok) expect(r.reason).toContain("network egress");
   });
 
   it("blocks credential-pattern commands (prompt data rule)", async () => {
@@ -915,16 +923,14 @@ describe("D16: every floor stop is advisory (2026-09-02)", () => {
     }
   });
 
-  it("the formerly bare bash stops are advisory", async () => {
+  it("policy bash stops are advisory; detection-limited conditions are judgeable (T2)", async () => {
     const a: any = await analyzeCommand("ls", BASE);
     a.hasParseError = true;
-    const cases: Array<[BashPromptData, string]> = [
-      [bashPd("f=rm; $f -rf ./build"), "obscured"],
+    const stops: Array<[BashPromptData, string]> = [
       [bashPd("cat .env", { credentialRule: ".env" }), "credential"],
-      [bashPd("ls", { analysis: a }), "unparseable"],
       [bashPd("find / -name secret"), "scan"],
     ];
-    for (const [pd, what] of cases) {
+    for (const [pd, what] of stops) {
       const r = await checkDspaGate(pd, store);
       expect(r.ok, what).toBe(false);
       if (!r.ok) {
@@ -932,6 +938,10 @@ describe("D16: every floor stop is advisory (2026-09-02)", () => {
         expect(r.advisory, what).toBe(true);
       }
     }
+    // Detection-limited: the full raw text reaches the judge with its flag
+    // (obfuscation / parse error) — judgeable now, stopped pre-T2.
+    expect((await checkDspaGate(bashPd("f=rm; $f -rf ./build"), store)).ok).toBe(true);
+    expect((await checkDspaGate(bashPd("ls", { analysis: a }), store)).ok).toBe(true);
   });
 
   it("names an unverifiable glob honestly (a verification failure, not a credential match)", async () => {
@@ -1028,10 +1038,17 @@ describe("quoted command words (floor quote-awareness)", () => {
     }
   });
 
-  it("a quoted variable command position is obscured", async () => {
+  it("a quoted variable command position is judgeable (T2) — the raw text is what the judge weighs", async () => {
+    // The obscured-position stop is gone (T2). Note the honest limit: the
+    // static path pipeline does not bind arguments under an obscured
+    // position (outsidePaths stays empty), so the outside target is a
+    // JUDGE input (the packet's full raw text), not a floor stop. An
+    // unobscured outside path still stops (Q1).
     const r = await checkDspaGate(bashPd('f=rm; "$f" /home/u/notes.txt'), store);
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain("obscured");
+    expect(r.ok).toBe(true);
+    const plain = await checkDspaGate(bashPd("cat /home/u/notes.txt"), store);
+    expect(plain.ok).toBe(false);
+    if (!plain.ok) expect(plain.reason).toContain("outside base");
   });
 });
 

@@ -1076,3 +1076,59 @@ describe("twoTierAlwaysPrompt: covered Always options are suppressed", () => {
     ]);
   });
 });
+
+// ── Session consent (T4: single-tier trust prompt) ─────────────────────
+
+describe("twoTierAlwaysPrompt: session consent (T4)", () => {
+  const consentPrompt = makePrompt({
+    title: "Allow joplin read this session?",
+    includeAlwaysOption: false,
+    sessionConsent: { label: "Allow read this session" },
+  });
+
+  it('"Allow <kind> this session" grants once — single tier, no tier-2, no one-shot Yes', async () => {
+    const cb = makeCallbacks();
+    const ctx = makeCtx([0]);
+    const result = await twoTierAlwaysPrompt(
+      consentPrompt, store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+    );
+    expect(result).toBe("always");
+    expect(cb.onAlways).toHaveBeenCalledTimes(1);
+    expect(ctx.__selects).toHaveLength(1); // single tier — no confirmation round
+    expect(ctx.__selects[0]).toEqual(["Allow read this session", "No"]);
+  });
+
+  it('"No" asks for a reason; cancel is the reason-less no', async () => {
+    const cb = makeCallbacks();
+    const ctx = makeCtx([1, "don't trust it yet"]);
+    const r = await twoTierAlwaysPrompt(
+      consentPrompt, store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+    );
+    expect(r).toEqual({ kind: "no", reason: "don't trust it yet" });
+    expect(cb.onAlways).not.toHaveBeenCalled();
+
+    const ctx2 = makeCtx([null]);
+    const r2 = await twoTierAlwaysPrompt(
+      consentPrompt, store, ctx2,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+    );
+    expect(r2).toBe("no");
+  });
+
+  it('Explain is offered when the judge can run, consumed after use', async () => {
+    const cb = makeCallbacks();
+    const judge = { explain: vi.fn(async () => "⚖️ Stage 1: the verdict block") };
+    const ctx = makeCtx([1, 0]); // Explain, then Allow
+    const result = await twoTierAlwaysPrompt(
+      consentPrompt, store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+      cb.onAlwaysBroader, judge,
+    );
+    expect(result).toBe("always");
+    expect(judge.explain).toHaveBeenCalledTimes(1);
+    expect(ctx.__selects[0]).toEqual(["Allow read this session", "Explain", "No"]);
+    expect(ctx.__selects[1]).toEqual(["Allow read this session", "No"]);
+  });
+});

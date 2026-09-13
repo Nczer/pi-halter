@@ -168,7 +168,12 @@ export async function gateDecide(
   opts?: DecideOptions,
 ): Promise<Decision> {
   try {
-    return await decide(request, store, opts);
+    // T5 (docs/dspa-content-classes.md): the session model identity rides on
+    // every decision — a consent/egress kind grant is only fresh under the
+    // model that granted it (a model switch re-prompts). ctx.model is a
+    // live getter, so the check tracks switches per call.
+    const modelId = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null;
+    return await decide(request, store, { ...opts, modelId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     try {

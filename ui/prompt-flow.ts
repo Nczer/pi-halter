@@ -90,6 +90,14 @@ export async function showPrompt(
       ? (dspa.gate.writeOutside ?? []).filter((d) => d !== "/" && !d.startsWith("<"))
       : undefined;
   let prompt = buildPrompt(decision, resolutions ?? undefined, confirmedTokens, isCovered, writeGrantDirs);
+  // T4 (content-classes): the consent trust prompt names the model — the
+  // trust decision ("the model could be trusted and is not incompetent")
+  // is made at the prompt. The session model identity also feeds the T5
+  // grant recording below.
+  const modelId = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null;
+  if (pd.type === "tool" && pd.gate === "consent" && modelId) {
+    prompt = { ...prompt, body: prompt.body + `\nModel: ${modelId}` };
+  }
   // The body before any dspa/dspat verdict lines — the "Judge again" retry
   // re-renders from this base so re-retries never stack stale verdicts.
   const baseBody = prompt.body;
@@ -280,7 +288,13 @@ export async function showPrompt(
   };
 
   const result = await twoTierAlwaysPrompt(prompt, store, ctx, () => {
-    store.addAllowed(RuleGenerator.generatePrimaryRules(decision.promptData));
+    const rules = RuleGenerator.generatePrimaryRules(decision.promptData);
+    store.addAllowed(rules);
+    // T5 (content-classes): a kind grant is a trust decision about THIS
+    // model — record the granting identity so a model switch invalidates
+    // it (decideTool checks freshness). Whole-tool grants are untouched
+    // (parked).
+    if (modelId) for (const g of rules.toolGrants ?? []) store.recordToolGrantModel(g, modelId);
     // The primary option's tier-2 text lists the resolver dirs too — grant
     // what the confirmation showed.
     if (prompt.resolverDirs?.length) store.addAllowed({ readDirs: prompt.resolverDirs });

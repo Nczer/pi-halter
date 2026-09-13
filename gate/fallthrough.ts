@@ -16,6 +16,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {PermissionRequest, Decision, PromptData} from "../decide/types";
 import type { Store } from "./store";
 import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decision-log";
+import { findExecutedScript } from "../analysis/script-payload";
 import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, type DspaGateResult } from "./dspa-gate";
 import {getJudgeVerdict, getStage2Verdict, judgeStatus} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
@@ -120,10 +121,14 @@ export function dspaAutoAllowed(
 /**
  * Two-stage dspa attempt (docs/dspa-redesign.md, D2/Q4):
  *  1. Hard gate (dspa-gate.ts) — the floor; failure → fall-through.
- *  2. Stage 1 (stateless, cached): approve+low → auto-allow.
+ *  2. Stage 1 (stateless, cached): approve+low → auto-allow. Skipped
+ *     entirely for a bash command that executes a file script (T3,
+ *     content-classes: the class always escalates, so stage 1 would only
+ *     add a call — the script content already rides in the stage-2 packet).
  *  3. Stage 2 (reasoning-blind session context, uncached): runs when stage
- *     1 did not auto-allow; approve+{low, medium} → auto-allow. Its verdict
- *     is final — approve+high and reject never auto-allow (phase 2: both
+ *     1 did not auto-allow (or immediately for script payloads);
+ *     approve+{low, medium} → auto-allow. Its verdict is final —
+ *     approve+high and reject never auto-allow (phase 2: both
  *     still prompt; the phase-3 denial flow changes only the destination).
  * Any judge failure resolves to fall-through — never an allow.
  */
@@ -168,8 +173,16 @@ export async function tryDspaAutoAllow(
     updateDspaWidget(ctx);
     return { autoAllowed: false, fallthrough: { gate: gateResult, verdict: null, stage: null } };
   }
+  // T3 (content-classes): a bash command that executes a file script (the
+  // D3/D11 identification) skips stage 1 — the class always escalates,
+  // so stage 1 would only add a call; stage 2 (low|medium) is the
+  // authority. Absent analysis (hand-constructed prompt data) → no skip
+  // (the conservative direction: an extra call, never a skipped judge).
+  const skipStage1 =
+    pd.type === "bash" && pd.analysis != null &&
+    findExecutedScript(pd.analysis, pd.cwd) !== null;
   // Stage 1 — stateless (the packet's static analysis is the whole input).
-  const v1 = await getJudgeVerdict(pd, ctx, store);
+  const v1 = skipStage1 ? null : await getJudgeVerdict(pd, ctx, store);
   // D19: a file script OUTSIDE the working set never auto-allows here —
   // its writes surface only in the stage-2 report, which the write bar
   // checks in the same pass (the stateless pass is eval-locked out of
@@ -225,7 +238,11 @@ export async function tryDspaAutoAllow(
   let note: string | undefined;
   if (!v2 && !v1) {
     const jstatus = judgeStatus(ctx);
-    note = jstatus.state === "invalid" ? `judge invalid: ${jstatus.reason}` : "judge call failed";
+    note = jstatus.state === "invalid"
+      ? `judge invalid: ${jstatus.reason}`
+      : skipStage1
+        ? "stage 2 call failed (stage 1 skipped — script payload)"
+        : "judge call failed";
   } else if (v1 && !v2) {
     note = "stage 2 produced no verdict — stateless stage-1 verdict only";
   }
