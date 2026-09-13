@@ -932,6 +932,58 @@ fall-through, never an auto-allow); scripts inside the session cwd
 acts on them); script content itself (D1 — the floor never interprets
 bodies).
 
+### D20. Base access for mixed segments — path-like bare args (2026-09-13)
+
+The D17 ledger found a floor blind spot: the 2026-09-13
+`cd <skill-dir> && uv run … python3 scripts/extract.py --source /abs/…`
+(the doc-extract shape) wrote a kind-`paths` line — the stage-2 judge
+reported the cd base, and the floor's path set never contained it.
+D13's attribution rule (a miss in the command text / at the tracked cd
+base = the floor's blind spot, not judge reach): **the judge was right;
+the floor was under-inclusive.** The op genuinely reads
+`scripts/extract.py` from the base.
+
+**Mechanism.** `baseAccessPath`'s path-aware scan early-returned `null`
+at the FIRST resolvable target, which made `sawBareArg` dead in any
+MIXED segment: one absolute path anywhere in the segment suppressed the
+base flag even when a bare name — which under a tracked outside base can
+live NOWHERE else — was present
+(`cd /var/tmp && cat main.txt /etc/hosts` flagged no base).
+
+**Decision (grill, 2026-09-13).** A bare token containing `/` (a
+PATH-LIKE bare arg — `scripts/extract.py`, an embedded flag value
+`--output out/file.txt`) forces the base flag even alongside resolvable
+targets; bare NO-SLASH args keep the current rule (flag only when NO
+resolvable target exists). Why: under a tracked base a path-like bare arg
+resolves DEFINITIVELY under the base — the flag is precise on location;
+no-slash bare args are ambiguous (`needle` in `rg needle /data` is a
+search term, `run` a subcommand, `pandas,openpyxl` a package list).
+Accepted false-positive class: slash-bearing non-paths (a `jq '.a/b'`
+expression, a grep pattern with `/`) — rare, and the prompt only fires
+when the base is OUTSIDE the manual bar, where the user's own `cd` makes
+the named dir no surprise. Bases inside the manual bar (cwd, session
+grants, config-allowed — `~/.pi` is allowed) are filtered by
+getOutsideCwdPaths: the doc-extract workflow stays auto-allow, zero
+noise.
+
+**Scope (audited — no hole elsewhere).** Direct segments only. The
+subshell variant (subshellBaseAccess) is already conservative (any
+path-aware command inside flags the local base, resolvable targets
+irrelevant); the write side (baseWriteAccess, D18) continues past
+resolvable targets and has no early-return hole.
+
+**Deliberately unchanged.** The D13 cross-check's known set does NOT
+count the tracked cd bases: a judge report of a cd target on a segment
+that triggers no base access (e.g. `cd X && uv run /abs/elsewhere/s.py`)
+keeps writing ledger lines — genuine mining data (the judge infers a
+touch the static model does not cover; `uv run` does peek into X for
+project files). D4 discipline: data before tightening.
+
+**Result.** The 2026-09-13 line class disappears (the base joins the path
+set → the judge's report is covered → no line), and the gate actually
+sees the base for approval — conservative: a prompt only for bases
+outside the manual bar. Suite 3767.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -996,6 +1048,14 @@ class"). Suite 3229.
   + `Allow writes` option, no learned state, nothing persisted; a file
   script outside the working set escalates to the intent pass from run
   one, since only that pass reports paths). Suite 3750.
+- **Phase 3n — done** (2026-09-13): D20 (base access for mixed segments —
+  a path-like bare arg (contains `/`) under a tracked outside base forces
+  the base flag even alongside resolvable targets; pre-D20 the early
+  return at the first resolvable target suppressed `sawBareArg` in every
+  mixed segment. Found by the D17 ledger: a kind-`paths` line where the
+  judge reported a cd base the floor never saw. No-slash bare args keep
+  the old rule; the D13 known set is unchanged — residual cd-target lines
+  keep accruing as mining data). Suite 3767.
 
 ## 5. Open questions (grill order)
 

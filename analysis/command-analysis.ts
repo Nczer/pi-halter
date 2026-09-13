@@ -253,7 +253,10 @@ export async function analyzeCommand(
   // left: a path-aware segment (or bare-name redirect) with no resolvable
   // target of its own operates on the base itself (`cd /var/tmp && ls`,
   // `cd $D && find .`) → the base (or the unknown-cwd marker) joins the path
-  // set. Inside-cwd/allowed bases are filtered out by getOutsideCwdPaths.
+  // set. D20: a path-like bare arg (contains `/`) under the base forces the
+  // flag even alongside resolvable targets (`python3 scripts/x.py --source
+  // /data` — the bare arg resolves under the base, nowhere else). Inside-
+  // cwd/allowed bases are filtered out by getOutsideCwdPaths.
   // Cwd threading (see threadCwdPaths): re-base post-cd segments' dot tokens
   // on the effective base, drop the stale session-cwd resolutions, flag
   // base access. Under an unknown base the tokens resolve to a marker path

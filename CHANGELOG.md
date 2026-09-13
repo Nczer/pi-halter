@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.25.0 — 2026-09-13
+
+- **D20 — base access for mixed segments.** The D17 judge ledger found a
+  floor blind spot: `cd X && python3 scripts/extract.py --source /abs/…`
+  (the doc-extract skill shape) never put `X` in the path set — the stage-2
+  judge reported it and the ledger flagged the disagreement (a kind-`paths`
+  line, `floorMisses` = the cd base itself). Root cause: the base-access
+  scan early-returned at the FIRST resolvable target, so a bare arg in the
+  same segment — which under a tracked base can live nowhere else — never
+  triggered the base flag (`cd /var/tmp && cat main.txt /etc/hosts` flagged
+  no base). Now a PATH-LIKE bare arg (contains `/`) forces the base flag
+  even alongside resolvable targets; no-slash bare args keep the old rule
+  (a search term, subcommand, or package list doesn't count —
+  `rg needle /data` stays clean). Bases inside the manual bar (`~/.pi` is
+  config-allowed) are filtered as before: the doc-extract workflow stays
+  auto-allow; new prompts appear only when the cd base is outside the
+  trusted scope (the conservative direction). Read side only — audited: the
+  subshell variant is already conservative and D18's write side has no
+  early-return hole. The D13 known set is deliberately unchanged (residual
+  cd-target lines keep accruing as mining data). Spec:
+  `docs/dspa-redesign.md` D20. Suite 3767.
+
 ## 3.24.0 — 2026-09-12
 
 **Content classes** (grill-resolved; spec: `docs/dspa-content-classes.md`). An

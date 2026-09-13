@@ -401,6 +401,17 @@ function subshellBaseAccess(tokens: string[], base: CwdBase): string | null {
  * subshellBaseAccess). Returns the base (or the unknown-cwd marker), or null
  * when the segment has a resolvable/opaque target of its own (already in the
  * path set) or performs no directory access (e.g. `echo`, `pwd`, `wc -l`).
+ * D20 (2026-09-13): a PATH-LIKE bare arg (contains `/`) forces the base flag
+ * even when the segment also names resolvable targets — under a tracked base
+ * it can live nowhere else (`cd X && python3 scripts/x.py --source /data`).
+ * The pre-D20 early return on the FIRST resolvable target made `sawBareArg`
+ * dead in any mixed segment: one absolute path anywhere dropped the base
+ * flag (the 2026-09-13 D13 ledger line — the judge reported the cd base the
+ * floor's path set never saw). Bare no-slash args keep the old rule (only
+ * flag when NO resolvable target exists — `needle` in `rg needle /data` is a
+ * search term, not a file); a slash-bearing non-path (a `jq '.a/b'` filter,
+ * a grep pattern) false-flags — accepted: the prompt only fires when the
+ * base is outside the manual bar, and the user typed the cd.
  */
 export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
   const tokens = tokenizeSegment(seg.text);
@@ -442,6 +453,8 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
 
   if (pathAware) {
     let sawBareArg = false;
+    let sawPathLikeBare = false; // D20: contains `/` — resolves under the base
+    let sawResolvable = false;
     for (let i = 0; i < stage.length; i++) {
       const token = stage[i];
       // Redirects are not file arguments — the command may still operate on
@@ -466,10 +479,18 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
         if (eq === -1 || eq >= t.length - 1) continue; // bare flag / empty value
         t = t.slice(eq + 1);
       }
-      if (isResolvableTarget(t)) return null; // resolvable (or marker-flagged) target of its own
+      // D20: no early return — a LATER bare arg still resolves under the
+      // base, and a bare arg BEFORE it must not be dismissed by it.
+      if (isResolvableTarget(t)) { sawResolvable = true; continue; }
       sawBareArg = true;
+      if (t.includes("/")) sawPathLikeBare = true;
     }
-    if (sawBareArg) return base === null ? UNKNOWN_CWD_MARKER : base;
+    // D20: a path-like bare arg resolves under the base even when the segment
+    // also names resolvable targets (see the D20 note above).
+    if (sawPathLikeBare) return base === null ? UNKNOWN_CWD_MARKER : base;
+    // Old rule, preserved exactly: bare no-slash args flag only when the
+    // segment names no resolvable target of its own.
+    if (sawBareArg && !sawResolvable) return base === null ? UNKNOWN_CWD_MARKER : base;
     // No file args: only cwd-defaulting commands access the directory.
     return CWD_DEFAULT_COMMANDS.has(first) ? (base === null ? UNKNOWN_CWD_MARKER : base) : null;
   }
