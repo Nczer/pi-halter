@@ -465,6 +465,57 @@ describe("base-access flagging (cd is navigation, not access)", () => {
     expect(d1.kind).toBe("prompt");
   }, 15000);
 
+  it("D20: a path-like bare arg under the tracked base flags the base even with a resolvable target in the same segment", async () => {
+    // The 2026-09-13 ledger shape: `cd X && python3 scripts/extract.py
+    // --source /data` — the pre-D20 early return on the FIRST resolvable
+    // target dropped the base flag in any mixed segment; the bare relative
+    // arg resolves under X, nowhere else.
+    expect((await d("cd /var/tmp && python3 scripts/extract.py --source /tmp/halter-probe.txt")).kind).toBe("prompt");
+    // Order must not matter: resolvable target first, bare arg after.
+    expect((await d("cd /var/tmp && cat /etc/hostname sub/main.txt")).kind).toBe("prompt");
+  }, 15000);
+
+  it("D20: the base joins the path set for the logged shape (the D13 fault closed)", async () => {
+    const a = await analyzeCommand(
+      "cd /var/tmp && uv run --with pandas,openpyxl python3 scripts/extract.py --source /tmp/halter-probe.txt 2>&1 | tail -30",
+      CWD,
+    );
+    expect(a.paths).toContain("/var/tmp");
+  }, 15000);
+
+  it.runIf(fs.existsSync(DOC_EXTRACT))(
+    "D20: the doc-extract shape — the tracked skill base is in the path set (the judge's report is now covered)",
+    async () => {
+      // Same shape as the 2026-09-13 ledger line (cd <skill> && uv run …
+      // python3 scripts/extract.py --source /abs); the safe 3-package form
+      // of the existing fixture — the base join must not disturb safety.
+      const cmd = `cd ${DOC_EXTRACT} && uv run --with pandas,openpyxl,xlrd python3 scripts/extract.py --source /tmp/pnap --dry-run 2>&1 | tail -40`;
+      const a = await analyzeCommand(cmd, CWD);
+      expect(a.paths).toContain(DOC_EXTRACT);
+      expect(a.safety.canBeAutoAllowed).toBe(true);
+    },
+    15000,
+  );
+
+  it("D20: bare no-slash args keep the old rule — a resolvable target suppresses the flag (order-insensitive)", async () => {
+    // `needle` is a search term, not a file: the base must NOT be flagged,
+    // in either argument order (pre-D20 semantics preserved).
+    const a1 = await analyzeCommand("cd /var/tmp && rg needle /tmp/halter-probe.txt", CWD);
+    expect(a1.paths).not.toContain("/var/tmp");
+    const a2 = await analyzeCommand("cd /var/tmp && cat /etc/hostname main.txt", CWD);
+    expect(a2.paths).not.toContain("/var/tmp");
+    const a3 = await analyzeCommand("cd /var/tmp && cat main.txt /etc/hostname", CWD);
+    expect(a3.paths).not.toContain("/var/tmp");
+  }, 15000);
+
+  it("D20: accepted false-positive class — a slash-bearing non-path flags the base (documented cost)", async () => {
+    // A jq path expression contains `/` but is not a file. The base is
+    // flagged (over-prompt) — fires only when the base is outside the manual
+    // bar, and the user typed the cd, so the named dir is not a surprise.
+    const a = await analyzeCommand("cd /var/tmp && jq .a/b /tmp/halter-probe.json", CWD);
+    expect(a.paths).toContain("/var/tmp");
+  }, 15000);
+
   it("cd into a credential dir still blocks (raw-text scan is path-set independent)", async () => {
     expect((await d("cd $HOME/.ssh && ls")).kind).toBe("block");
     expect((await d("cd $HOME/.ssh")).kind).toBe("block");
