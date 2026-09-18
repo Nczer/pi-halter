@@ -99,8 +99,8 @@ The five principles, from the header of `test/cases.test.ts`:
 
 **Prompt** comes in three flavors:
 - *First time*: a path resolves outside cwd/allowed dirs (grant the dir); a
-  safe command is not allowlisted (grant the signature); a `warnPaths` match
-  such as `.env.*`; a bare-name symlink in cwd that resolves outside it.
+  safe command is not allowlisted (grant the signature); a bare-name symlink
+  in cwd that resolves outside it.
 - *Every time* (no "Always" offered, principle 5): write redirects anywhere;
   write commands not in the allowlist; code execution; destructive or remote
   git (any `git push`, `git rm`, `git clean -f`, `git reset --hard`, ...).
@@ -108,12 +108,14 @@ The five principles, from the header of `test/cases.test.ts`:
   (`<unresolved-cwd>`), or base access (a path-aware segment with no target of
   its own after a `cd` names the cd's destination base as the location to
   approve).
+- *Credential* (3.26.0, no "Always" offered): any credential path match
+  (`warnPaths`: `.ssh`, `.gnupg`, `.env`, `.aws`, `id_rsa`, `*.pem`, …) —
+  glob- and quote-aware, comment-aware, plus bare-token symlink checks and a
+  filesystem-verified answer for pure-wildcard globs. The old hard-block tier
+  was removed: its false positives (a `sed` program body, `echo .*`) refused
+  benign commands, and deny-vs-warn never changed auto-allow behaviour.
 
 **Block** (never promptable):
-- credential patterns anywhere in the raw command text, glob- and quote-aware,
-  comment-aware: `.ssh`, `.gnupg`, `.env`, `.aws`, `id_rsa`, `*.pem`, ... plus
-  bare-token symlink checks;
-- `deniedPaths` matches;
 - retry-loop guard: a command aborted within 60 s is blocked, not re-prompted.
 
 ### The cd model
@@ -124,7 +126,7 @@ consequences: (a) later segments run against the effective base, so
 with no target of its own (`cd /outside && ls`) operates on the base the cd
 left, and that base is what gets approved. Standalone `cd /outside`
 auto-allows (state dies with the process); `cd /nonexistent && …` auto-allows
-when the rest never runs; `cd $HOME/.ssh && ls` still blocks (the credential
+when the rest never runs; `cd $HOME/.ssh && ls` still prompts (the credential
 scan is raw-text, independent of the path set).
 
 ### Command substitution
@@ -157,9 +159,9 @@ Refs the command itself pins resolve instead of flagging:
 ### File policy
 
 - reads: inside cwd / allowed / nonexistent paths auto-allow (a read can only
-  ENOENT; nothing leaks). Warned paths prompt even for reads; denied paths
-  block.
-- writes: outside cwd prompts (dir grant); denied blocks; warn prompts.
+  ENOENT; nothing leaks). Credential paths prompt even for reads (3.26.0:
+  no block tier — the very-high-risk warning is the gate).
+- writes: outside cwd prompts (dir grant); credential paths prompt.
 - the filesystem root is never an Always grant: a root-only path prompt offers
   no dir tier, mixed prompts drop `/`, and a file prompt's dir umbrella stops
   before root.

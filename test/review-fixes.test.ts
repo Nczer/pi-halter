@@ -150,49 +150,63 @@ describe("A3: tmux new-session/new shell command", () => {
 });
 
 describe("B1: quoted glob tokens are not credential globs", () => {
+  // Hermetic fixture: a real credential dir exists in this cwd, so an
+  // UNQUOTED dotfile glob is flagged (FS-verified expansion, 3.26.0) while a
+  // QUOTED pattern (regex/script body) is data and stays auto-allow.
+  let b1tmp: string;
+  beforeAll(() => {
+    b1tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-b1-"));
+    fs.mkdirSync(path.join(b1tmp, ".ssh"));
+  });
+  afterAll(() => {
+    fs.rmSync(b1tmp, { recursive: true, force: true });
+  });
+  const b1 = (command: string) =>
+    decide({ type: "bash", command, cwd: b1tmp }, createStore());
+
   it("grep \".*\" file.txt → auto-allow (regex pattern, not a glob)", async () => {
-    const d = await bash(`grep ".*" file.txt`);
+    const d = await b1(`grep ".*" file.txt`);
     expect(d.kind).toBe("auto-allow");
   });
 
   it("sed 's/.*/x/' file.txt → auto-allow", async () => {
-    const d = await bash(`sed 's/.*/x/' file.txt`);
+    const d = await b1(`sed 's/.*/x/' file.txt`);
     expect(d.kind).toBe("auto-allow");
   });
 
   it("sed '/.*/d' file.txt → auto-allow", async () => {
-    const d = await bash(`sed '/.*/d' file.txt`);
+    const d = await b1(`sed '/.*/d' file.txt`);
     expect(d.kind).toBe("auto-allow");
   });
 
   it("grep -r \"a.*b\" . → auto-allow", async () => {
-    const d = await bash(`grep -r "a.*b" .`);
+    const d = await b1(`grep -r "a.*b" .`);
     expect(d.kind).toBe("auto-allow");
   });
 
-  it("control: cat .*/id_rsa → block (unquoted glob expands)", async () => {
-    const d = await bash("cat .*/id_rsa");
-    expect(d.kind).toBe("block");
+  it("control: cat .*/id_rsa → prompt (credential-shaped unquoted glob)", async () => {
+    const d = await b1("cat .*/id_rsa");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("control: grep .* file.txt → block (unquoted .* glob)", async () => {
-    const d = await bash("grep .* file.txt");
-    expect(d.kind).toBe("block");
+  it("control: grep .* file.txt → prompt (unquoted .* reaches the real credential dir)", async () => {
+    const d = await b1("grep .* file.txt");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("control: ls .s*sh → block (unquoted, hides .ssh)", async () => {
-    const d = await bash("ls .s*sh");
-    expect(d.kind).toBe("block");
+  it("control: ls .s*sh → prompt (unquoted, hides .ssh)", async () => {
+    const d = await b1("ls .s*sh");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("control: grep \"\\.ssh\" README.md → block (literal credential name)", async () => {
-    const d = await bash(`grep "\\.ssh" README.md`);
-    expect(d.kind).toBe("block");
+  it("control: grep \"\\.ssh\" README.md → prompt (literal credential name)", async () => {
+    const d = await b1(`grep "\\.ssh" README.md`);
+    expect(d.kind).toBe("prompt");
   });
 
-  it("echo \".s*sh\" && cat .s*sh → block (unquoted occurrence stays checked)", async () => {
-    const d = await bash(`echo ".s*sh" && cat .s*sh`);
-    expect(d.kind).toBe("block");
+  it("echo \".s*sh\" && cat .s*sh → prompt (unquoted occurrence stays checked)", async () => {
+    const d = await b1(`echo ".s*sh" && cat .s*sh`);
+    expect(d.kind).toBe("prompt");
   });
 });
 
@@ -281,14 +295,14 @@ describe("A4: bare-token symlinks in cwd", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("cat ssh-link → block (symlink to ~/.ssh)", async () => {
+  it("cat ssh-link → prompt (symlink to ~/.ssh)", async () => {
     const d = await bash("cat ssh-link", tmp);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("cat key-link → block (symlink to ~/.ssh/id_rsa)", async () => {
+  it("cat key-link → prompt (symlink to ~/.ssh/id_rsa)", async () => {
     const d = await bash("cat key-link", tmp);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("cat etc-link → prompt (symlink escapes cwd)", async () => {
@@ -301,9 +315,9 @@ describe("A4: bare-token symlinks in cwd", () => {
     expect(d.kind).toBe("auto-allow");
   });
 
-  it("cd ssh-link && cat config → block (compound through symlink)", async () => {
+  it("cd ssh-link && cat config → prompt (compound through symlink)", async () => {
     const d = await bash("cd ssh-link && cat config", tmp);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("cat data.txt → auto-allow (regular file)", async () => {

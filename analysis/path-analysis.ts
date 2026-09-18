@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
-import { allowedReadPaths, allowedWritePaths, deniedPaths, warnPaths, isTrustedScriptPath } from "../config";
+import { allowedReadPaths, allowedWritePaths, warnPaths, isTrustedScriptPath } from "../config";
 import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
 import { UNKNOWN_CWD_MARKER } from "./cwd-tracking";
 export { expandTilde, OPAQUE_VAR_DIR }; // Re-export for existing importers
@@ -159,11 +159,6 @@ function checkPatternsResolved(filePath: string, resolved: string, patterns: str
     }
   }
   return null;
-}
-
-export function isPathDeniedResolved(filePath: string, resolved: string): { denied: boolean; matchedRule: string | null } {
-  const matched = checkPatternsResolved(filePath, resolved, deniedPaths);
-  return { denied: matched !== null, matchedRule: matched };
 }
 
 export function isPathWarnedResolved(filePath: string, resolved: string): { warned: boolean; matchedRule: string | null } {

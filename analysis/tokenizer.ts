@@ -341,11 +341,16 @@ export function tokenize(cmd: string): string[] {
  *   (the `;` in `node -e '…'` is not a command separator).
  * unquotedGlob — a glob char sits OUTSIDE the quoted spans: the word can
  *   still expand at runtime even when partly quoted (`a*b'c'`).
+ * quotedWhole — the word's content comes ENTIRELY from quoted spans (a partly
+ *   quoted word is not whole: `link;"x"` has an unquoted `;`, which IS shell
+ *   syntax). Only a whole word may be treated as a single operand: its
+ *   internal operators are data and its glob chars cannot expand.
  */
 export interface QuotedToken {
   text: string;
   quoted: boolean;
   unquotedGlob: boolean;
+  quotedWhole: boolean;
 }
 
 /**
@@ -361,15 +366,17 @@ export function tokenizeSegmentQuoted(cmd: string): QuotedToken[] {
   let current = "";
   let quoted = false;
   let unquotedGlob = false;
+  let unquotedChars = 0;
   let inSingleQuote = false;
   let inDoubleQuote = false;
   let inAnsi = false;
   const s = cmd.trim(); // tokenizeSegment's trimInput=true
   const push = () => {
-    if (current) parts.push({ text: current, quoted, unquotedGlob });
+    if (current) parts.push({ text: current, quoted, unquotedGlob, quotedWhole: quoted && unquotedChars === 0 });
     current = "";
     quoted = false;
     unquotedGlob = false;
+    unquotedChars = 0;
   };
   let i = 0;
   while (i < s.length) {
@@ -402,6 +409,7 @@ export function tokenizeSegmentQuoted(cmd: string): QuotedToken[] {
     if (append === "") { i += advance; continue; }
 
     if (!wasQuoted) {
+      unquotedChars += append.length;
       for (const c of append) if (c === "*" || c === "?" || c === "[") unquotedGlob = true;
     } else {
       quoted = true;

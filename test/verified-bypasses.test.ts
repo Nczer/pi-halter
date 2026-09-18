@@ -48,16 +48,16 @@ describe("P0: cd path-awareness", () => {
     expect(d.kind).not.toBe("auto-allow");
   });
 
-  it("cd ~/.s*sh && cat id_rsa → BLOCKED (* matches zero chars → real .ssh)", async () => {
+  it("cd ~/.s*sh && cat id_rsa → PROMPTS (* matches zero chars → real .ssh)", async () => {
     // `*` matches the empty string: ~/.s*sh globs to ~/.ssh at runtime — this
     // is the real cd-amplified credential bypass.
     const d = await decide({ type: "bash", command: "cd ~/.s*sh && cat id_rsa", cwd }, createStore());
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("cat ~/.s*sh/id_ed25519 → BLOCKED (star-encoded .ssh)", async () => {
+  it("cat ~/.s*sh/id_ed25519 → PROMPTS (star-encoded .ssh)", async () => {
     const d = await decide({ type: "bash", command: "cat ~/.s*sh/id_ed25519", cwd }, createStore());
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("control: cd /tmp stays auto-allow (allowed write path)", async () => {
@@ -784,13 +784,13 @@ describe("P5: credential names in heredoc bodies are data (FP regression)", () =
     expect(d.kind).not.toBe("block");
   });
 
-  it("control: direct read of a denied credential still blocks", async () => {
+  it("control: direct read of a credential dir still prompts", async () => {
     const d = await decide({ type: "bash", command: "cat .ssh/id_rsa", cwd }, createStore());
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("control: credential in the command line beside a heredoc still blocks", async () => {
+  it("control: credential in the command line beside a heredoc still prompts", async () => {
     const d = await decide({ type: "bash", command: "cat .ssh/id_rsa <<EOF\nbody\nEOF", cwd }, createStore());
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 });

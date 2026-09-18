@@ -9,7 +9,6 @@ import {
   isAllowedReadPath,
   getOutsideCwdPaths,
   isProjectPiPathResolved,
-  isPathDeniedResolved,
   isPathWarnedResolved,
 } from "../analysis/path-analysis";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
@@ -145,17 +144,17 @@ describe("resolved-path variants (hot-path optimization)", () => {
   // relies on.
   const resolved = (filePath: string) => resolvePathReal(expandTilde(filePath), cwd);
 
-  const deniedCases: [string, boolean, string | null][] = [
-    [".pi/agent/foo", false, null],
-    ["~/other/.pi/foo", false, null],
-    ["src/index.ts", false, null],
-    ["~/.ssh/id_rsa", true, ".ssh"],
-    [".env.production", false, null],
-    ["~/.aws/credentials", false, null],
+  // The credential DIRECTORY names (3.26.0: formerly a hard-block tier) warn
+  // through the same variant the file policy calls.
+  const credentialDirCases: [string, boolean, string | null][] = [
+    ["~/.ssh/config", true, ".ssh"],
+    ["~/.gnupg/private-keys-v1.d/k.key", true, ".gnupg"],
+    ["~/x/.vault/token", true, ".vault"],
+    ["src/.secret", true, ".secret"],
   ];
-  for (const [filePath, denied, matchedRule] of deniedCases) {
-    it(`isPathDeniedResolved: ${filePath}`, () => {
-      expect(isPathDeniedResolved(filePath, resolved(filePath))).toEqual({ denied, matchedRule });
+  for (const [filePath, warned, matchedRule] of credentialDirCases) {
+    it(`isPathWarnedResolved (credential dir): ${filePath}`, () => {
+      expect(isPathWarnedResolved(filePath, resolved(filePath))).toEqual({ warned, matchedRule });
     });
   }
 
@@ -163,7 +162,8 @@ describe("resolved-path variants (hot-path optimization)", () => {
     [".pi/agent/foo", false, null],
     ["~/other/.pi/foo", false, null],
     ["src/index.ts", false, null],
-    ["~/.ssh/id_rsa", true, "id_rsa"],
+    // The credential directory name wins: it is the honest reason to show.
+    ["~/.ssh/id_rsa", true, ".ssh"],
     [".env.production", true, ".env.*"],
     ["~/.aws/credentials", true, ".aws"],
   ];

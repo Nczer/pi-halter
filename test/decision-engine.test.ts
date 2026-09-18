@@ -207,14 +207,16 @@ describe("File: Edit inside cwd", () => {
   });
 });
 
-describe("File: Denied paths (inside cwd)", () => {
-  it("blocks .ssh/id_rsa", async () => {
+describe("File: credential dirs (inside cwd)", () => {
+  // 3.26.0: credential dirs no longer hard-block — they prompt with the
+  // very-high-risk warning (the block tier false-positived on benign commands).
+  it("prompts for ~/.ssh/id_rsa with credential warning", async () => {
     const store = createStore();
     const req: FileRequest = { type: "file", toolName: "read", filePath: "~/.ssh/id_rsa", cwd };
     const d = await decide(req, store);
-    expect(d.kind).toBe("block");
-    if (d.kind === "block") {
-      expect(d.reason).toContain(".ssh");
+    expect(d.kind).toBe("prompt");
+    if (d.kind === "prompt") {
+      expect((d.promptData as FilePromptData).warnedRule).toBe(".ssh");
     }
   });
 });
@@ -609,22 +611,25 @@ describe("Bash: FastAllow path-token guard", () => {
 // ── Credential path guard ──────────────────────────────────────────────
 
 describe("Bash: credential path guard", () => {
-  // Bash commands referencing credential files must not be auto-allowed.
-  // Denied paths (.ssh, .gnupg, ...) are blocked; warned paths (.env, .aws, ...) prompt.
+  // Bash commands referencing credential files must never be auto-allowed.
+  // 3.26.0: every credential path (dir or file) prompts with the very-high-risk
+  // warning — the old hard-block tier for dirs (.ssh, .gnupg, ...) was removed.
 
-  const deniedCases = [
+  const credentialDirCases = [
     "cat .ssh/id_rsa",
     "cat .gnupg/private.key",
     "ls .ssh",
     "cat .vault/token",
     "cat .secrets/db",
   ];
-  for (const cmd of deniedCases) {
-    it(`blocks: ${cmd}`, async () => {
+  for (const cmd of credentialDirCases) {
+    it(`prompts (credential dir): ${cmd}`, async () => {
       const store = createStore();
       const d = await decide({ type: "bash", command: cmd, cwd }, store);
-      expect(d.kind).toBe("block");
-      expect(d.kind === "block" && d.reason).toContain("denied path");
+      expect(d.kind).toBe("prompt");
+      if (d.kind === "prompt" && d.promptData.type === "bash") {
+        expect(d.promptData.credentialRule).not.toBeNull();
+      }
     });
   }
 
@@ -649,18 +654,18 @@ describe("Bash: credential path guard", () => {
   // (`X=~/.ssh && cat $X`) was invisible to the whole pipeline — the later
   // `$VAR` use is just a non-path token. The assignment value is now
   // checked at the assignment itself (the only statically visible moment).
-  const envIndirectionDenied = [
+  const envIndirectionDirs = [
     "export X=.ssh && ls $X",
     "X=.ssh; ls $X",
     "export X=$HOME/.ssh && ls $X",
     "X=$HOME/.ssh; cat $X",
     "declare X=.ssh",
   ];
-  for (const cmd of envIndirectionDenied) {
-    it(`blocks env indirection: ${cmd}`, async () => {
+  for (const cmd of envIndirectionDirs) {
+    it(`prompts env indirection: ${cmd}`, async () => {
       const store = createStore();
       const d = await decide({ type: "bash", command: cmd, cwd }, store);
-      expect(d.kind).toBe("block");
+      expect(d.kind).toBe("prompt");
     });
   }
 
@@ -712,7 +717,7 @@ describe("Bash: credential path guard", () => {
     const d1 = await decide({ type: "bash", command: "cat '.env'", cwd }, store);
     expect(d1.kind).toBe("prompt");
     const d2 = await decide({ type: "bash", command: 'cat ".ssh/id_rsa"', cwd }, store);
-    expect(d2.kind).toBe("block");
+    expect(d2.kind).toBe("prompt");
   });
 
   // Bug 3 fix: --flag=value/.env syntax was previously skipped by checkCommandForCredentialPaths
@@ -736,10 +741,10 @@ describe("Bash: credential path guard", () => {
       expect(d.kind).toBe("prompt");
     });
 
-    it("detects .ssh in --identity=~/.ssh/id_rsa — blocks", async () => {
+    it("detects .ssh in --identity=~/.ssh/id_rsa — prompts", async () => {
       const store = createStore();
       const d = await decide({ type: "bash", command: "cat --identity=~/.ssh/id_rsa", cwd }, store);
-      expect(d.kind).toBe("block");
+      expect(d.kind).toBe("prompt");
     });
 
     it("still correctly skips real env assignments (FOO=bar)", async () => {
@@ -765,16 +770,16 @@ describe("Bash: credential path guard", () => {
   });
 
   // — credential path with compound chains —
-  it("credential path in && chain still blocks", async () => {
+  it("credential path in && chain still prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cd /tmp && cat .ssh/id_rsa", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("credential path in ; chain still blocks", async () => {
+  it("credential path in ; chain still prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cd /tmp ; cat .ssh/id_rsa", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("warned credential in pipe: cat .env | grep SECRET → prompts", async () => {
@@ -783,10 +788,10 @@ describe("Bash: credential path guard", () => {
     expect(d.kind).toBe("prompt");
   });
 
-  it("denied credential in pipe: cat .ssh/id_rsa | grep AAA → blocks", async () => {
+  it("credential dir in pipe: cat .ssh/id_rsa | grep AAA → prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cat .ssh/id_rsa | grep AAA", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("credential path in subshell pipeline: (cd && cat .env) | grep → prompt (attached paren stripped)", async () => {
@@ -852,11 +857,11 @@ describe("File: Tilde expansion in paths", () => {
     expect(d.kind).toBe("auto-allow");
   });
 
-  it("reads ~/.ssh/id_rsa → blocks (denied path)", async () => {
+  it("reads ~/.ssh/id_rsa → prompts (credential dir)", async () => {
     const store = createStore();
     const req: FileRequest = { type: "file", toolName: "read", filePath: "~/.ssh/id_rsa", cwd };
     const d = await decide(req, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("reads ~/.env → prompts (warned path)", async () => {
@@ -1121,10 +1126,10 @@ describe("Bash: credential path in write redirects", () => {
     expect(d.kind).toBe("prompt");
   });
 
-  it("write redirect to .ssh/known_hosts blocks", async () => {
+  it("write redirect to .ssh/known_hosts prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cat file > .ssh/known_hosts", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("write redirect to .aws/credentials prompts", async () => {
@@ -1139,28 +1144,28 @@ describe("Bash: credential path in write redirects", () => {
     expect(d.kind).toBe("prompt");
   });
 
-  it("write redirect to .secrets/key.pem blocks", async () => {
+  it("write redirect to .secrets/key.pem prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cat file > .secrets/key.pem", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("write redirect to ~/.ssh/id_rsa blocks", async () => {
+  it("write redirect to ~/.ssh/id_rsa prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cat file > ~/.ssh/id_rsa", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("write redirect to .vault/token blocks", async () => {
+  it("write redirect to .vault/token prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cat file > .vault/token", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("write redirect to .gnupg/private.key blocks", async () => {
+  it("write redirect to .gnupg/private.key prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cat file > .gnupg/private.key", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 });
 
@@ -1171,10 +1176,10 @@ describe("Bash: credential path in input redirects", () => {
     expect(d.kind).toBe("prompt");
   });
 
-  it("input redirect from .ssh/id_rsa blocks", async () => {
+  it("input redirect from .ssh/id_rsa prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cat < .ssh/id_rsa", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("input redirect from .env.production prompts", async () => {
@@ -1195,10 +1200,10 @@ describe("Bash: credential path in input redirects", () => {
     expect(d.kind).toBe("prompt");
   });
 
-  it("input .ssh/id_rsa in pipeline blocks", async () => {
+  it("input .ssh/id_rsa in pipeline prompts", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "cat < .ssh/id_rsa | head", cwd }, store);
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 });
 
@@ -1843,7 +1848,7 @@ describe("Bare location tokens (FastAllow must not out-run the base)", () => {
 
 describe("= in a bare filename (symlink probe is existence-gated, not `=`-skipped)", () => {
   it("a cwd symlink named a=b pointing outside prompts", async () => {
-    // 2026-09-06: checkBareSymlinkTokens skipped tokens containing `=`, so a
+    // 2026-09-06: checkBareRelativeTokens skipped tokens containing `=`, so a
     // symlink literally named `notes=v2.md → /home/u` bypassed the probe in
     // every layer. The probe is existence-gated, so probing `=`-tokens is
     // exact (a real K=V assignment names no file).

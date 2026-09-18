@@ -41,13 +41,13 @@ describe("handleFile edit pre-validation security", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not read a denied path (~/.ssh) before the gate", async () => {
+  it("does not read a credential path (~/.ssh) before the gate", async () => {
     const result = await handleFile(makeEditEvent("~/.ssh/id_rsa"), makeCtx());
     // No file content read prior to the permission decision.
     expect(readSpy).not.toHaveBeenCalled();
     expect(existsSpy).not.toHaveBeenCalled();
-    // Gate hard-blocks denied paths without UI.
-    expect(result).toEqual({ block: true, reason: expect.stringContaining("denied path") });
+    // No UI → gate auto-blocks the credential prompt. No read happened first.
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
   });
 
   it("does not read a warned path (.env) before the gate", async () => {

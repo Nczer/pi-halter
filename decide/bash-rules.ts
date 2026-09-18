@@ -1,6 +1,6 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
 import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes, segmentFetchPackage } from "../analysis/segment-helpers";
-import { checkCommandForCredentialPaths, CREDENTIAL_SCAN_RE, checkBareSymlinkTokens } from "../analysis/credentials";
+import { CREDENTIAL_SCAN_RE, checkBareRelativeTokens } from "../analysis/credentials";
 import { tokenizeSegment, tokenizeSegmentQuoted } from "../analysis/tokenizer";
 import type {Store, BashRequest, Decision} from "./types";
 import type { CommandAnalysis } from "../analysis/command-analysis";
@@ -25,21 +25,6 @@ export const RetryLoopRule: BashRule = (req, store) => {
 };
 
 /**
- * Blocks commands that reference denied credential paths (.ssh, .gnupg, etc.).
- * Runs before FastAllowRule so even `cat .ssh/id_rsa` is blocked.
- */
-export const CredentialDenyRule: BashRule = (req) => {
-  const credCheck = checkCommandForCredentialPaths(req.command, req.cwd);
-  if (credCheck.denied) {
-    return {
-      kind: "block",
-      reason: `Blocked: '${credCheck.denied}' is a denied path (credentials/secrets)`,
-    };
-  }
-  return null;
-};
-
-/**
  * Auto-allows trivial commands without needing full tree-sitter analysis.
  */
 export const FastAllowRule: BashRule = (req) => {
@@ -56,7 +41,7 @@ export const FastAllowRule: BashRule = (req) => {
   // Single quotes are already neutralized ("__STR__") and never reach this branch.
   if (containsCommandSubstitution(stripped)) return null;
 
-  // Credential check — don't auto-allow if the command references credential paths.
+  // Credential check — never auto-allow a command that references credential paths.
   // Check both raw and dequoted versions to prevent quote-splitting bypasses (e.g., .en''v).
   // Glob chars defeat the string regex (.s?sh ≠ .ssh, id_rs? ≠ id_rsa) — fall through
   // to SafetyRule, whose analysis runs the glob-aware credential check.
@@ -84,13 +69,12 @@ export const FastAllowRule: BashRule = (req) => {
   const quotedTokens = tokenizeSegmentQuoted(req.command);
   const tokens = quotedTokens.map((t) => t.text);
   // A bare token may be a symlink in cwd pointing OUTSIDE it (repo-shipped
-  // `link → ~/.ssh/id_rsa`) — the literal name carries no path text for the
-  // prefix checks below to see. Denied targets are blocked by
-  // CredentialDenyRule (runs first); warned targets (credential name or
-  // outside cwd) must prompt via the analysis's credential check. Quoting
+  // `link → secret dir`) — the literal name carries no path text for the
+  // prefix checks below to see. Warned targets (credential name or outside
+  // cwd) must prompt via the analysis's credential check. Quoting
   // facts keep quoted words (script bodies, "l*") from being operator-split
-  // or glob-expanded (see checkBareSymlinkTokens).
-  if (checkBareSymlinkTokens(quotedTokens, req.cwd).warned) return null;
+  // or glob-expanded (see checkBareRelativeTokens).
+  if (checkBareRelativeTokens(quotedTokens, req.cwd)) return null;
   for (let i = 1; i < tokens.length; i++) {
     const token = tokens[i];
     // $VAR / $(…) / backtick arguments are computed values — the runtime

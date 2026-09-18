@@ -127,9 +127,9 @@ describe("tokenizeSegment ANSI decoding", () => {
 // ── Permission gate regression tests ──
 
 describe("ANSI-C quoting bypass regression", () => {
-  it("baseline: cat ~/.ssh/id_rsa is blocked", async () => {
+  it("baseline: cat ~/.ssh/id_rsa prompts", async () => {
     const d = await decide({ type: "bash", command: "cat ~/.ssh/id_rsa", cwd }, createStore());
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("baseline: cat /etc/passwd prompts", async () => {
@@ -137,14 +137,14 @@ describe("ANSI-C quoting bypass regression", () => {
     expect(d.kind).not.toBe("auto-allow");
   });
 
-  it("hex-escaped .ssh path is blocked", async () => {
+  it("hex-escaped .ssh path prompts", async () => {
     const d = await decide({ type: "bash", command: "cat $'\\x2fhome\\x2fuser\\x2f.ssh\\x2fid_rsa'", cwd }, createStore());
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
-  it("fully obfuscated .ssh path is blocked", async () => {
+  it("fully obfuscated .ssh path prompts", async () => {
     const d = await decide({ type: "bash", command: "cat $'\\x2e\\x73\\x73\\x68\\x2fid_rsa'", cwd }, createStore());
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("plain $'/etc/passwd' prompts (outside cwd)", async () => {
@@ -180,9 +180,9 @@ describe("ANSI-C quoting bypass regression", () => {
     }
   });
 
-  it("tilde-escaped .ssh path is blocked", async () => {
+  it("tilde-escaped .ssh path prompts", async () => {
     const d = await decide({ type: "bash", command: "cat $'~/.ssh/id_rsa'", cwd }, createStore());
-    expect(d.kind).toBe("block");
+    expect(d.kind).toBe("prompt");
   });
 
   it("$'...' as redirect target prompts (write redirect)", async () => {

@@ -7,7 +7,6 @@ import {
   isAllowedReadPath,
   isAllowedWritePath,
   isProjectPiPathResolved,
-  isPathDeniedResolved,
   isPathWarnedResolved,
 } from "../analysis/path-analysis";
 import type {Store, AllowRules, FileRequest, Decision, FilePromptData, DecideOptions} from "./types";
@@ -15,13 +14,9 @@ import type {Store, AllowRules, FileRequest, Decision, FilePromptData, DecideOpt
 export function decideFile(req: FileRequest, store: Store, opts?: DecideOptions): Decision {
   const resolved = req.resolvedPath ?? resolvePathReal(expandTilde(req.filePath), req.cwd);
 
-  // Denied paths block everything — credentials/secrets
-  const deniedResult = isPathDeniedResolved(req.filePath, resolved);
-  if (deniedResult.denied) {
-    return { kind: "block", reason: `Blocked: '${deniedResult.matchedRule}' is a denied path (credentials/secrets)` };
-  }
-
-  // Warned paths — may contain credentials, prompt with warning
+  // Credential paths — never silent: prompt with a very-high-risk warning.
+  // (3.26.0: there is no hard-block tier for credentials any more; the
+  // text heuristics behind it refused benign commands. See config/path-rules.ts.)
   const warnResult = isPathWarnedResolved(req.filePath, resolved);
 
   // Auto-allow checks. D3/D11 (docs/dspa-redesign.md): with

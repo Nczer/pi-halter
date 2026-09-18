@@ -6,7 +6,6 @@ import { store } from "../gate/store";
 import {
   expandTilde,
   resolvePathReal,
-  isPathDeniedResolved,
   isPathWarnedResolved,
 } from "../analysis/path-analysis";
 
@@ -159,13 +158,11 @@ export async function handleFile(
     // match is guaranteed to fail — prompting the user for it is pure noise.
     // Pass it through so the agent gets the normal tool error instead.
     //
-    // Credential paths (denied/warned) are NEVER pre-validated: prompt-vs-
-    // silent-failure would leak whether a guessed oldText occurs exactly once
-    // in the file — a content oracle on a secret. Those always prompt (or
-    // block) without a content read, even when the edit will fail.
-    const isCredentialPath =
-      isPathDeniedResolved(filePath, resolvedPath).denied ||
-      isPathWarnedResolved(filePath, resolvedPath).warned;
+    // Credential paths are NEVER pre-validated: prompt-vs-silent-failure
+    // would leak whether a guessed oldText occurs exactly once in the file — a
+    // content oracle on a secret. Those always prompt without a content read,
+    // even when the edit will fail.
+    const isCredentialPath = isPathWarnedResolved(filePath, resolvedPath).warned;
 
     if (!isCredentialPath) {
       try {

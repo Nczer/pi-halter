@@ -348,7 +348,7 @@ export const cases: TestCase[] = [
   { cmd: "(ls && echo ok && echo done) | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "(ls && echo && echo) | cat — triple &&, all safe" },
   // — credential path in compound chain (should block/prompt regardless of split) —
   { cmd: "cd /tmp && cat .env 2>&1 | grep SECRET", simple: true, unsafe: false, decision: "prompt", desc: "cd && cat .env 2>&1 | grep — credential path detected (isSimple=true for 2-segment, but credential check still prompts)" },
-  { cmd: "cd /tmp && cat .ssh/id_rsa 2>&1 | grep AAA", simple: true, unsafe: false, decision: "block", desc: "cd && cat .ssh 2>&1 | grep — denied credential detected (isSimple=true for 2-segment, but credential check still blocks)" },
+  { cmd: "cd /tmp && cat .ssh/id_rsa 2>&1 | grep AAA", simple: true, unsafe: false, decision: "prompt", desc: "cd && cat .ssh 2>&1 | grep — credential dir detected (isSimple=true for 2-segment, but credential check still prompts)" },
 
   // ═══════════════════════════════════════════════════════════
   // write redirects
@@ -944,18 +944,18 @@ export const cases: TestCase[] = [
   { cmd: "echo secret > .env", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .env (warned path)" },
   { cmd: "echo secret > .env.local", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .env.local (warned glob)" },
   { cmd: "echo secret > .env.production", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .env.production" },
-  { cmd: "cat file > .ssh/known_hosts", simple: false, unsafe: true, decision: "block", desc: "write redirect to .ssh dir (denied path)" },
+  { cmd: "cat file > .ssh/known_hosts", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .ssh dir (credential dir)" },
   { cmd: "cat file > .aws/credentials", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .aws/credentials" },
   { cmd: "cat file > .docker/config.json", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .docker/config.json" },
   { cmd: "cat file > .npmrc", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .npmrc" },
-  { cmd: "cat file > ~/.ssh/id_rsa", simple: false, unsafe: true, decision: "block", desc: "write redirect to ~/.ssh/id_rsa (denied path)" },
+  { cmd: "cat file > ~/.ssh/id_rsa", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to ~/.ssh/id_rsa (credential dir)" },
   { cmd: "cat file >> .env", simple: false, unsafe: true, decision: "prompt", desc: "append redirect to .env" },
-  { cmd: "cat file > .secrets/key.pem", simple: false, unsafe: true, decision: "block", desc: "write redirect to .secrets/key.pem (denied path)" },
-  { cmd: "cat file > .vault/token", simple: false, unsafe: true, decision: "block", desc: "write redirect to .vault/token (denied path)" },
-  { cmd: "cat file > .gnupg/private.key", simple: false, unsafe: true, decision: "block", desc: "write redirect to .gnupg/private.key (denied path)" },
+  { cmd: "cat file > .secrets/key.pem", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .secrets/key.pem (credential dir)" },
+  { cmd: "cat file > .vault/token", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .vault/token (credential dir)" },
+  { cmd: "cat file > .gnupg/private.key", simple: false, unsafe: true, decision: "prompt", desc: "write redirect to .gnupg/private.key (credential dir)" },
   // credential path in input redirects (read from credential files)
   { cmd: "cat < .env", simple: true, unsafe: false, decision: "prompt", desc: "input redirect from .env (warned path read)" },
-  { cmd: "cat < .ssh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "input redirect from .ssh/id_rsa (denied path)" },
+  { cmd: "cat < .ssh/id_rsa", simple: true, unsafe: false, decision: "prompt", desc: "input redirect from .ssh/id_rsa (credential dir)" },
   { cmd: "grep pattern < .env.production", simple: true, unsafe: false, decision: "prompt", desc: "input redirect from .env.production" },
   { cmd: "diff < .aws/credentials < .aws/config", simple: true, unsafe: false, decision: "prompt", desc: "dual input redirect from .aws paths" },
   // credential path in compound chains with redirects
@@ -964,7 +964,7 @@ export const cases: TestCase[] = [
   { cmd: "ls || cat > .env", simple: false, unsafe: true, decision: "prompt", desc: "safe || write to .env" },
   { cmd: "ls ; cat > .env", simple: false, unsafe: true, decision: "prompt", desc: "safe ; write to .env" },
   { cmd: "cat < .env | grep SECRET", simple: true, unsafe: false, decision: "prompt", desc: "input .env | grep (credential read in pipeline)" },
-  { cmd: "cat < .ssh/id_rsa | head", simple: true, unsafe: false, decision: "block", desc: "input .ssh/id_rsa | head (denied credential in pipeline)" },
+  { cmd: "cat < .ssh/id_rsa | head", simple: true, unsafe: false, decision: "prompt", desc: "input .ssh/id_rsa | head (credential dir in pipeline)" },
   { cmd: "ls && cat < .env", simple: true, unsafe: false, decision: "prompt", desc: "safe && input .env" },
   { cmd: "cat < .env && ls", simple: true, unsafe: false, decision: "prompt", desc: "input .env && safe" },
 
@@ -976,8 +976,8 @@ export const cases: TestCase[] = [
 
   // ── Regression: Bug 2 — Credential deny quote-splitting/backslash bypass ──
   { cmd: "cat .en''v", simple: true, unsafe: false, decision: "prompt", desc: ".en''v must be credential (prompt, not auto-allow)" },
-  { cmd: "cat ~/.s''sh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "~/.s''sh/id_rsa must BLOCK (quote-splitting bypass)" },
-  { cmd: "cat ~/.s\\sh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "~/.s\\sh/id_rsa must BLOCK (backslash-splitting bypass)" },
+  { cmd: "cat ~/.s''sh/id_rsa", simple: true, unsafe: false, decision: "prompt", desc: "~/.s''sh/id_rsa must PROMPT (quote-splitting bypass)" },
+  { cmd: "cat ~/.s\\sh/id_rsa", simple: true, unsafe: false, decision: "prompt", desc: "~/.s\\sh/id_rsa must PROMPT (backslash-splitting bypass)" },
 
   // ── Regression: Bug 3 — mid-word `#` stripped as comment (FastAllow bypass) ──
   // Bash only treats `#` as a comment at word start. A looser strip regex hid the
@@ -991,8 +991,8 @@ export const cases: TestCase[] = [
   { cmd: "# check the .ssh directory\nls", simple: true, unsafe: false, decision: "auto-allow", desc: "comment naming .ssh does not block (was BLOCK — comment text is not an operand)" },
   { cmd: "ls # todo: rotate .env", simple: true, unsafe: false, decision: "auto-allow", desc: "trailing comment naming .env does not prompt (was PROMPT)" },
   { cmd: "# rotate .env && rm -rf .\nls", simple: true, unsafe: false, decision: "auto-allow", desc: "comment swallows chained write/credential text to end of line" },
-  { cmd: "cat .ssh/id_rsa # see docs", simple: true, unsafe: false, decision: "block", desc: "real credential operand still blocks with a trailing comment" },
-  { cmd: "# see docs\ncat .ssh/id_rsa", simple: true, unsafe: false, decision: "block", desc: "comment line does not hide a live credential on the next line" },
+  { cmd: "cat .ssh/id_rsa # see docs", simple: true, unsafe: false, decision: "prompt", desc: "real credential operand still prompts with a trailing comment" },
+  { cmd: "# see docs\ncat .ssh/id_rsa", simple: true, unsafe: false, decision: "prompt", desc: "comment line does not hide a live credential on the next line" },
 
   // ═══════════════════════════════════════════════════════════
   // tmux send-keys — the payload is typed into a pane's shell; every
