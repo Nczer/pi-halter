@@ -199,10 +199,15 @@ describe("decision log", () => {
   });
 
   it("logs a block decision with the reason", async () => {
-    await gate({ type: "bash", command: "cat .ssh/id_rsa", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
+    // The only bash hard-block is the abort-retry guard — a recently aborted
+    // command is refused without a second prompt.
+    const st = createStore();
+    st.recordAbort("rm -rf /tmp");
+    await gate({ type: "bash", command: "rm -rf /tmp", cwd: tmp } as BashRequest, noUiCtx, st, noReject);
     const [entry] = lines(logFile);
     expect(entry.kind).toBe("block");
-    expect(entry.reason).toContain(".ssh");
+    expect(typeof entry.reason).toBe("string");
+    expect(entry.reason?.length).toBeGreaterThan(0);
   });
 
   it("logs a prompt decision with a one-line why (and gate blocks without UI)", async () => {

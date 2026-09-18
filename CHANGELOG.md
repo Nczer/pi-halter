@@ -1,5 +1,59 @@
 # Changelog
 
+# Changelog
+
+## 3.26.0 — 2026-09-18
+
+**Credential scan: false-positive fix + deny tier removed.** Two changes,
+one direction: credential paths always PROMPT (with the very-high-risk
+warning), never block — and the scan no longer invents credential matches
+in benign commands.
+
+- **Deny tier removed (`deniedPaths` → `warnPaths`).** The hard-block tier
+  (`.ssh`, `.gnupg`, `.gpg`, `.vault`, `.secret`, `.secrets`) is merged into
+  the warn tier; every credential path — dir or file, read or write,
+  redirect or symlink — now prompts with the very-high-risk warning. The
+  tier's false positives were outright *refusals* (no way to proceed), while
+  deny-vs-warn never changed auto-allow behaviour: every mode already stops
+  credential paths at the manual bar. Symlink probes that used to deny
+  (a link resolving into a credential dir) now warn with the resolved
+  target — same information, promptable.
+- **FP fix — three rules** (`analysis/credentials.ts`, documented in the
+  section comment):
+  1. *Quoted words are operands, not path fragments.* A wholly-quoted word
+     (a `sed`/`awk` program body, a regex) is never operator-split on
+     `;|&<>`, so `sed 's|/[0-9]*|/N|'` no longer produces fake path parts
+     (`[0-9]*`, `.*`). `QuotedToken.quotedWhole` carries the fact.
+  2. *Name-shape matches require a typed name.* A glob component is
+     compared against credential names only when it types out ≥1 literal
+     letter. Pure-wildcard components (`.*`, `[0-9]*`, `*.*`) compiled to
+     near-universal regexes and "matched" every credential name in
+     existence — that was a refusal waiting to happen.
+  3. *What a pure wildcard reaches is a filesystem question — answered by
+     the filesystem.* Relative unquoted globs are expanded
+     (`fs.globSync`) and each real match is checked against the credential
+     patterns: `.*/id_rsa` prompts when a credential dir actually exists in
+     the cwd; `echo .*` in a clean directory is clean. Untranslatable
+     static shapes still fail closed with the `glob-unverified:` marker.
+  - Runtime expansions (`$VAR`, `$(…)`, backticks) are not static globs and
+    are skipped by the shape check as before (regression pinned:
+    `cmds=(cat ls); echo ${cmds[@]}` stays auto-allow).
+  - Brace expansion is now statically translatable: `{a,.}ssh` prompts
+    (the `{` no longer defeats the scan).
+- **Honest widening:** `ls *` / `cat *` in a directory that *does* contain
+  a credential path (e.g. a repo with a checked-in `.env`) now prompts —
+  the expansion really reaches it. That is more honest than the old
+  name-only answer, and it is context-dependent: the same command in a
+  clean directory stays auto-allow.
+- **`handleFile` credential oracle guard intact:** credential paths are
+  never pre-validated (no content read before the decision) — the
+  prompt-vs-failure oracle on a secret stays closed.
+- Docs: `README.md`, `docs/architecture.md` (Block section shrank to the
+  retry-loop guard; credential moved to Prompt), `docs/dspa-redesign.md`
+  D5 note.
+
+Suite 3776 (was 3768: +8 FP regression rows).
+
 ## 3.25.0 — 2026-09-13
 
 - **D20 — base access for mixed segments.** The D17 judge ledger found a

@@ -4,8 +4,8 @@ A halter for pi tool calls. Intercepts `bash` and `read`/`write`/`edit` calls, a
 
 ## Features
 
-- **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.); blocks denied credential paths (`.ssh`, `.gnupg`, etc.) and prompts for warned paths (`.env`, `.aws`, etc.) even via `cat`/`grep`
-- **File access** — auto-allows reads inside cwd, trusted paths, and nonexistent paths (a read can only ENOENT — nothing can leak); prompts for paths outside cwd, denied names (`.env`, `.ssh`, etc.)
+- **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.); prompts for credential paths (`.ssh`, `.gnupg`, `.env`, `.aws`, …) with a very-high-risk warning — even via `cat`/`grep`
+- **File access** — auto-allows reads inside cwd, trusted paths, and nonexistent paths (a read can only ENOENT — nothing can leak); prompts for paths outside cwd and credential names (`.env`, `.ssh`, etc.)
 - **Opaque path resolution** — tokens static analysis cannot bind (`$VAR`, `$(…)`, globs over unknown bases) are listed as unresolved in the prompt; with the judge enabled it suggests concrete dirs, and a user-confirmed suggestion becomes a binding deterministic resolution (the token stops prompting)
 - **Tool plugins** — any tool ext that ships `<ext>/halter/index.ts` is gated: the plugin classifies calls as `exec` (script payload → judge/dspa), `file` (target path → outside-cwd warning), or `consent` (per-kind session consent); discovery calls pass ungated; a broken plugin blocks its tool fail-closed
 - **Auto-allow** — "Always" option grants session-scoped permission; status widget shows active allowances
@@ -49,7 +49,7 @@ four regimes, the hard floor, the judge, grants, trusted code — is specified i
 target is never itself a path. What matters is where later segments run
 (relative paths re-resolve against the effective base) and what they do with no
 resolvable target (that names the base). Standalone `cd /outside`
-auto-allows; `cd $HOME/.ssh && ls` still blocks (the credential scan is
+auto-allows; `cd $HOME/.ssh && ls` still prompts (the credential scan is
 raw-text, independent of the path set).
 
 ### Tool plugins
@@ -106,7 +106,7 @@ Config is split across focused modules in `config/`:
 |------|-----------------|
 | `config/index.ts` | Thresholds: `ABORT_REMEMBER_MS` (60s), `PROMPT_WARNING_THRESHOLD` (20). Re-exports from other config modules. |
 | `config/bash-patterns.ts` | `unconditionallySafeCommands`, `pathAwareCommands`, `isAllowedCommand()`, `isSafeSubcommand()`, `isWriteOperation()`, `wrapperCommands`, `SHELL_INTERPRETERS`, `PACKAGE_MANAGERS`, `dangerousFindFlags`, `dangerousSedFlags`, `dangerousPerlFlags` |
-| `config/path-rules.ts` | `deniedPaths`, `warnPaths`, `allowedReadPaths`, `allowedWritePaths` |
+| `config/path-rules.ts` | `warnPaths` (credential names — prompt tier), `allowedReadPaths`, `allowedWritePaths` |
 | `config/dangerous-patterns.ts` | `dangerousCommandPatterns`, `dangerousContextPatterns` (regex patterns) |
 | `config/trusted-scripts.ts` | `TRUSTED_PACKAGES` allowlist for `uv run --with`, `isTrustedScriptPath()`, `isTrustedScriptCommand()` |
 
@@ -169,7 +169,7 @@ The log is the *input* to a log-driven fix loop, not just a measurement: the sui
 
 ## Ad-hoc testing a command
 
-To see what halter will do with a specific command — without running it — use the probe harness in `tools/probe.mts`. It calls the same `decide()` the gate uses, but with a **fresh empty store** and a hardcoded CWD (`/mnt/Ndr/Projects`) — so it shows the *first-encounter* decision, not one with session grants in place. Config (`deniedPaths`, warn paths, trusted packages) still applies.
+To see what halter will do with a specific command — without running it — use the probe harness in `tools/probe.mts`. It calls the same `decide()` the gate uses, but with a **fresh empty store** and a hardcoded CWD (`/mnt/Ndr/Projects`) — so it shows the *first-encounter* decision, not one with session grants in place. Config (credential warn paths, trusted packages) still applies.
 
 ```
 cd ~/.pi/agent/extensions/halter

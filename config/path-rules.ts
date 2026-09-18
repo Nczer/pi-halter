@@ -31,14 +31,23 @@ export const allowedWritePaths: string[] = [
   "/private/tmp", // macOS: realpathSync resolves /tmp → /private/tmp
 ];
 
-/** File/directory names that are always denied — hard block, no prompt. */
-export const deniedPaths: string[] = [
+/**
+ * File/directory names that may contain credentials — always a prompt with a
+ * very-high-risk warning, never silent, and never a hard block.
+ *
+ * 3.26.0: the old `deniedPaths` hard-block tier was removed and its names
+ * merged here. The block tier fired on the command TEXT (credential name
+ * roots, glob-decoded names), so ordinary shell work — a `sed 's|/…|/…|'`
+ * program body, `echo .*`, searching this repo for the word `.ssh` — could
+ * be refused outright with no way to proceed. Deny-vs-warn never changed
+ * *auto-allow* behaviour (every mode stops a credential path at the manual
+ * bar, see gate/dspa-gate.ts), so the tier only ever converted prompts into
+ * refusals — and its false positives were refusals of benign commands.
+ */
+export const warnPaths: string[] = [
+  // Credential directories (formerly the hard-denied tier).
   ".ssh", ".gnupg", ".gpg",
   ".vault", ".secret", ".secrets",
-];
-
-/** File/directory names that may contain credentials — prompt with warning instead of hard block. */
-export const warnPaths: string[] = [
   ".env", ".aws", ".gcloud", ".azure",
   ".git-credentials", ".hg/hgrc",
   ".netrc", ".npmrc", ".pypirc", ".docker/config.json",

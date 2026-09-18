@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { describe, expect, it, beforeAll, afterAll, afterEach, vi } from "vitest";
 import {
   checkCommandForCredentialPaths,
-  checkBareSymlinkTokens,
+  checkBareRelativeTokens,
   stripHeredocBodies,
   stripShellComments,
   GLOB_UNVERIFIED_PREFIX,
@@ -23,7 +23,7 @@ beforeAll(() => {
 afterAll(() => removeContractCwd(cwd));
 
 describe("checkCommandForCredentialPaths", () => {
-  const deniedCases: [string, string][] = [
+  const flaggedCases: [string, string][] = [
     ["cat .ssh/id_rsa", ".ssh"],
     ["cat .gnupg/private.key", ".gnupg"],
     ["cat .gpg/key", ".gpg"],
@@ -45,14 +45,14 @@ describe("checkCommandForCredentialPaths", () => {
     ["declare X=.ssh", ".ssh"],
     ["export X=$HOME/.ssh && ls $X", ".ssh"],
   ];
-  for (const [cmd, rule] of deniedCases) {
-    it(`denies: ${cmd}`, () => {
+  for (const [cmd, rule] of flaggedCases) {
+    it(`flags credential dir: ${cmd}`, () => {
       const result = checkCommandForCredentialPaths(cmd, cwd);
-      expect(result.denied).toBe(rule);
+      expect(result).toBe(rule);
     });
   }
 
-  const warnedCases: [string, string][] = [
+  const warnCases: [string, string][] = [
     ["cat .env", ".env"],
     ["cat .aws/credentials", ".aws"],
     ["cat .env.production", ".env.*"],
@@ -66,11 +66,10 @@ describe("checkCommandForCredentialPaths", () => {
     ["cat .env|grep x", ".env"],
     ["export X=.env && cat $X", ".env"],
   ];
-  for (const [cmd, rule] of warnedCases) {
-    it(`warns: ${cmd}`, () => {
+  for (const [cmd, rule] of warnCases) {
+    it(`flags credential file: ${cmd}`, () => {
       const result = checkCommandForCredentialPaths(cmd, cwd);
-      expect(result.warned).toBe(rule);
-      expect(result.denied).toBeNull();
+      expect(result).toBe(rule);
     });
   }
 
@@ -91,8 +90,8 @@ describe("checkCommandForCredentialPaths", () => {
   for (const cmd of safeCases) {
     it(`safe: ${cmd}`, () => {
       const result = checkCommandForCredentialPaths(cmd, cwd);
-      expect(result.denied).toBeNull();
-      expect(result.warned).toBeNull();
+      expect(result).toBeNull();
+      expect(result).toBeNull();
     });
   }
 
@@ -101,40 +100,40 @@ describe("checkCommandForCredentialPaths", () => {
   // own probe commands writing test files got blocked on this).
   it("heredoc body with denied credential name is data (no match)", () => {
     const result = checkCommandForCredentialPaths("cat > out.txt <<'EOF'\n.ssh/id_rsa\nEOF", cwd);
-    expect(result.denied).toBeNull();
-    expect(result.warned).toBeNull();
+    expect(result).toBeNull();
+    expect(result).toBeNull();
   });
 
   it("heredoc body with warned credential name is data (no match)", () => {
     const result = checkCommandForCredentialPaths("wc -l x <<EOF\n.env\nEOF", cwd);
-    expect(result.denied).toBeNull();
-    expect(result.warned).toBeNull();
+    expect(result).toBeNull();
+    expect(result).toBeNull();
   });
 
   it("credential in the command line beside a heredoc still matches", () => {
     const result = checkCommandForCredentialPaths("cat .ssh/id_rsa <<EOF\nbody\nEOF", cwd);
-    expect(result.denied).toBe(".ssh");
+    expect(result).toBe(".ssh");
   });
 
   it("redirect target credential still matches with heredoc present", () => {
     const result = checkCommandForCredentialPaths("cat <<EOF > .ssh/id_rsa\nbody\nEOF", cwd);
-    expect(result.denied).toBe(".ssh");
+    expect(result).toBe(".ssh");
   });
 
   it("quoted pseudo-heredoc mid-line does not strip following lines", () => {
     const result = checkCommandForCredentialPaths('echo "fake <<EOF text" && cat .env', cwd);
-    expect(result.warned).toBe(".env");
+    expect(result).toBe(".env");
   });
 
   it("unterminated heredoc stays fail-closed (body still scanned)", () => {
     const result = checkCommandForCredentialPaths("cat <<EOF\n.ssh/id_rsa", cwd);
-    expect(result.denied).toBe(".ssh");
+    expect(result).toBe(".ssh");
   });
 
   it("multiple heredocs on one line: bodies until both terminators", () => {
     const result = checkCommandForCredentialPaths("cmd <<A <<B\na-body.ssh\nA\nb-body.env\nB", cwd);
-    expect(result.denied).toBeNull();
-    expect(result.warned).toBeNull();
+    expect(result).toBeNull();
+    expect(result).toBeNull();
   });
 
   // Bypass regression: a FALSE heredoc start (operator text bash does not
@@ -142,17 +141,17 @@ describe("checkCommandForCredentialPaths", () => {
   // that would drop live command lines from the credential scan.
   it("line comment ending in <<EOF does not hide a live credential line (bypass)", () => {
     const result = checkCommandForCredentialPaths("# usage: tool <<EOF\ncat .ssh/id_rsa\nEOF", cwd);
-    expect(result.denied).toBe(".ssh");
+    expect(result).toBe(".ssh");
   });
 
   it("semicolon-comment <<EOF does not hide a live credential line (bypass)", () => {
     const result = checkCommandForCredentialPaths("echo hi;# c <<EOF\ncat .ssh/id_rsa\nEOF", cwd);
-    expect(result.denied).toBe(".ssh");
+    expect(result).toBe(".ssh");
   });
 
   it("glued x<<EOF (literal word, not a redirect) does not hide a live credential line (bypass)", () => {
     const result = checkCommandForCredentialPaths("echo foo<<EOF\ncat .ssh/id_rsa\nEOF", cwd);
-    expect(result.denied).toBe(".ssh");
+    expect(result).toBe(".ssh");
   });
 
   it("string closed before a live credential line is not hidden (false start in unterminated string)", () => {
@@ -162,49 +161,48 @@ describe("checkCommandForCredentialPaths", () => {
       'x="docs: <<EOF\nend of docs"\ncat .ssh/id_rsa\nEOF',
       cwd,
     );
-    expect(result.denied).toBe(".ssh");
+    expect(result).toBe(".ssh");
   });
 
   it("real heredoc with a comment AFTER the operator still strips the body", () => {
     const result = checkCommandForCredentialPaths("cat <<EOF # c\n.ssh/id_rsa\nEOF", cwd);
-    expect(result.denied).toBeNull();
-    expect(result.warned).toBeNull();
+    expect(result).toBeNull();
+    expect(result).toBeNull();
   });
 
   // ── Shell comments are data, not path operands (2026-08) ──
   it("line comment naming a denied path does not block", () => {
     const result = checkCommandForCredentialPaths("# check the .ssh directory\nls", cwd);
-    expect(result.denied).toBeNull();
-    expect(result.warned).toBeNull();
+    expect(result).toBeNull();
+    expect(result).toBeNull();
   });
 
   it("inline trailing comment naming a warned path does not prompt", () => {
     const result = checkCommandForCredentialPaths("ls # todo: rotate .env", cwd);
-    expect(result.denied).toBeNull();
-    expect(result.warned).toBeNull();
+    expect(result).toBeNull();
+    expect(result).toBeNull();
   });
 
   it("comment swallows chained credential text to end of line", () => {
     const result = checkCommandForCredentialPaths("ls # .ssh && rm -rf .", cwd);
-    expect(result.denied).toBeNull();
-    expect(result.warned).toBeNull();
+    expect(result).toBeNull();
+    expect(result).toBeNull();
   });
 
   it("a comment does not hide a LIVE credential on the next line", () => {
     const result = checkCommandForCredentialPaths("# see docs\ncat .ssh/id_rsa", cwd);
-    expect(result.denied).toBe(".ssh");
+    expect(result).toBe(".ssh");
   });
 
   it("a real credential operand is still denied with a trailing comment", () => {
     const result = checkCommandForCredentialPaths("cat .ssh/id_rsa # see docs", cwd);
-    expect(result.denied).toBe(".ssh");
+    expect(result).toBe(".ssh");
   });
 
   it("mid-word # is literal — foo#.ssh is a benign filename, live text after operators is still checked", () => {
-    expect(checkCommandForCredentialPaths("cat foo#.ssh", cwd).denied).toBeNull();
+    expect(checkCommandForCredentialPaths("cat foo#.ssh", cwd)).toBeNull();
     const result = checkCommandForCredentialPaths("cat foo#.ssh; cat .env", cwd);
-    expect(result.denied).toBeNull();
-    expect(result.warned).toBe(".env");
+    expect(result).toBe(".env");
   });
 });
 
@@ -298,36 +296,78 @@ describe("stripHeredocBodies", () => {
 });
 
 describe("checkCommandForCredentialPaths: quoted glob tokens", () => {
-  // Quoted text is never glob-expanded by bash, so a quoted ".*" is a regex
-  // pattern (or a literal name), not a glob reaching .ssh at runtime.
+  // 3.26.0 false-positive regressions. Two defects made ordinary commands
+  // look like credential reads: (1) a QUOTED word was operator-split, so a
+  // sed/awk program body (`s|/[0-9]*|/N|`) became fake path operands; (2) a
+  // wildcard-only component (`[0-9]*`, `.*`) was compiled into a
+  // near-universal regex and compared against credential NAMES. Quoted text
+  // never expands and never splits, so all of these are data.
   it.each([
     'grep ".*" file.txt',
     "sed 's/.*/x/' file.txt",
     "sed '/.*/d' file.txt",
     'grep -r "a.*b" .',
-  ])("%s → clean (quoted, cannot expand)", (cmd) => {
-    expect(checkCommandForCredentialPaths(cmd, cwd)).toEqual({ denied: null, warned: null });
+    "sed 's|/[0-9]*|/N|g' notes.md",
+    "sed -i -e 's|.*/x|y|' f",
+    "rg -no '\\b[A-Z]{2,4}/[0-9]+\\b' spec.md",
+    "awk '{print $2}' f",
+    "tr a-z A-Z",
+    "echo .*",
+    "rg 'x.*' f",
+  ])("%s → clean", (cmd) => {
+    expect(checkCommandForCredentialPaths(cmd, cwd)).toBeNull();
   });
 
-  // Unquoted globs keep the full check (runtime-verified: they DO expand).
+  // A glob that spells a credential name (letters typed out) is flagged from
+  // the spelling alone — an unquoted `s*sh` can expand to the ssh directory.
   it.each([
-    "cat .*/id_rsa",
-    "grep .* file.txt",
     "ls .s*sh",
-  ])("%s → denied (unquoted glob expands)", (cmd) => {
-    expect(checkCommandForCredentialPaths(cmd, cwd).denied).not.toBeNull();
+    "cat .s*e*",
+    "ls id_rs?",
+  ])("%s → flagged (glob spells a credential name)", (cmd) => {
+    expect(checkCommandForCredentialPaths(cmd, cwd)).not.toBeNull();
+  });
+
+  // A wildcard-ONLY spelling carries no name, so it is answered by the
+  // filesystem instead: the expansion is probed, and a credential path that is
+  // really there is flagged.
+  it("an unquoted glob expands onto a credential path — flagged", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halter-glob-"));
+    try {
+      fs.mkdirSync(path.join(dir, ".secrets"));
+      fs.writeFileSync(path.join(dir, ".secrets", "blob"), "x");
+      fs.writeFileSync(path.join(dir, "file.txt"), "x");
+      expect(checkCommandForCredentialPaths("cat .*/blob", dir)).toBe(".secrets");
+      expect(checkCommandForCredentialPaths("grep .* file.txt", dir)).toBe(".secrets");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the same wildcard glob is clean where nothing credential-shaped is present", () => {
+    expect(checkCommandForCredentialPaths("cat .*/blob", cwd)).toBeNull();
   });
 
   it("a quoted occurrence does not shield an unquoted one", () => {
-    expect(checkCommandForCredentialPaths('echo ".s*sh" && cat .s*sh', cwd).denied).not.toBeNull();
+    expect(checkCommandForCredentialPaths('echo ".s*sh" && cat .s*sh', cwd)).not.toBeNull();
   });
 
-  it("literal credential names inside quotes are still denied", () => {
-    expect(checkCommandForCredentialPaths('grep "\\.ssh" README.md', cwd).denied).not.toBeNull();
+  it("literal credential names inside quotes are still flagged", () => {
+    expect(checkCommandForCredentialPaths('grep "\\.ssh" README.md', cwd)).not.toBeNull();
+  });
+
+  // Brace alternation spells names too; a brace group with no comma is a
+  // regex quantifier and stays literal text.
+  it("brace alternation naming a credential path is flagged", () => {
+    expect(checkCommandForCredentialPaths("ls {a,.}ssh/x", cwd)).toBe(".ssh");
+  });
+
+  it("a brace quantifier is not an alternation", () => {
+    expect(checkCommandForCredentialPaths("rg [a-z]{2,4} f", cwd)).toBeNull();
   });
 });
 
-describe("checkBareSymlinkTokens", () => {
+describe("checkBareRelativeTokens", () => {
   const home = os.homedir();
   let tmp: string;
   beforeAll(() => {
@@ -343,62 +383,60 @@ describe("checkBareSymlinkTokens", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("denies a symlink whose target matches a deny pattern", () => {
-    const r = checkBareSymlinkTokens(["cat", "ssh-link"], tmp);
-    expect(r.denied).not.toBeNull();
+  it("flags a symlink whose target matches a credential pattern", () => {
+    expect(checkBareRelativeTokens(["cat", "ssh-link"], tmp)).toBe(".ssh");
   });
 
-  it("warns on a symlink escaping cwd (non-credential target)", () => {
-    const r = checkBareSymlinkTokens(["cat", "etc-link"], tmp);
-    expect(r.denied).toBeNull();
-    expect(r.warned).toBe("/etc/hostname");
+  it("flags a symlink escaping cwd (non-credential target)", () => {
+    const r = checkBareRelativeTokens(["cat", "etc-link"], tmp);
+    expect(r).toBe("/etc/hostname");
   });
 
   it("allows a symlink staying inside cwd", () => {
-    const r = checkBareSymlinkTokens(["cat", "inner-link"], tmp);
-    expect(r).toEqual({ denied: null, warned: null });
+    const r = checkBareRelativeTokens(["cat", "inner-link"], tmp);
+    expect(r).toBeNull();
   });
 
   it("skips regular files and flags", () => {
-    expect(checkBareSymlinkTokens(["cat", "data.txt"], tmp)).toEqual({ denied: null, warned: null });
-    expect(checkBareSymlinkTokens(["grep", "-r", "foo", "data.txt"], tmp)).toEqual({ denied: null, warned: null });
+    expect(checkBareRelativeTokens(["cat", "data.txt"], tmp)).toBeNull();
+    expect(checkBareRelativeTokens(["grep", "-r", "foo", "data.txt"], tmp)).toBeNull();
   });
 
   it("expands bare relative globs and probes every match for symlink escapes", () => {
     // The attack shape: the repo ships a benign-looking symlink; a natural
     // `cat ln*` reaches it although no credential text is on the command line.
-    expect(checkBareSymlinkTokens(["cat", "ln*"], tmp)).toEqual({ denied: null, warned: "/etc/hostname" });
+    expect(checkBareRelativeTokens(["cat", "ln*"], tmp)).toBe("/etc/hostname");
   });
 
   it("denies a glob whose match targets a deny pattern", () => {
-    expect(checkBareSymlinkTokens(["cat", "ssh-*"], tmp).denied).not.toBeNull();
+    expect(checkBareRelativeTokens(["cat", "ssh-*"], tmp)).not.toBeNull();
   });
 
   it("keeps globs matching only regular files or in-cwd symlinks clean", () => {
-    expect(checkBareSymlinkTokens(["cat", "da*"], tmp)).toEqual({ denied: null, warned: null });
-    expect(checkBareSymlinkTokens(["cat", "inner-*"], tmp)).toEqual({ denied: null, warned: null });
-    expect(checkBareSymlinkTokens(["cat", ".s*sh"], tmp)).toEqual({ denied: null, warned: null }); // no match
+    expect(checkBareRelativeTokens(["cat", "da*"], tmp)).toBeNull();
+    expect(checkBareRelativeTokens(["cat", "inner-*"], tmp)).toBeNull();
+    expect(checkBareRelativeTokens(["cat", ".s*sh"], tmp)).toBeNull(); // no match
   });
 
   it("probes relative globs below cwd (subdir symlinks)", () => {
     fs.mkdirSync(path.join(tmp, "sub"));
     fs.symlinkSync("/etc/hostname", path.join(tmp, "sub", "ln"));
-    expect(checkBareSymlinkTokens(["cat", "sub/ln*"], tmp)).toEqual({ denied: null, warned: "/etc/hostname" });
+    expect(checkBareRelativeTokens(["cat", "sub/ln*"], tmp)).toBe("/etc/hostname");
   });
 
   it("skips globs with runtime expansions (path layer keeps them opaque)", () => {
-    expect(checkBareSymlinkTokens(["cat", "$x*"], tmp)).toEqual({ denied: null, warned: null });
+    expect(checkBareRelativeTokens(["cat", "$x*"], tmp)).toBeNull();
   });
 
   it("skips non-bare tokens (slashes, env assignments, command name)", () => {
-    expect(checkBareSymlinkTokens(["cat", path.join(home, ".ssh", "id_rsa")], tmp)).toEqual({ denied: null, warned: null });
-    expect(checkBareSymlinkTokens(["X=ssh-link", "cat"], tmp)).toEqual({ denied: null, warned: null });
-    expect(checkBareSymlinkTokens(["ssh-link", "arg"], tmp)).toEqual({ denied: null, warned: null });
+    expect(checkBareRelativeTokens(["cat", path.join(home, ".ssh", "id_rsa")], tmp)).toBeNull();
+    expect(checkBareRelativeTokens(["X=ssh-link", "cat"], tmp)).toBeNull();
+    expect(checkBareRelativeTokens(["ssh-link", "arg"], tmp)).toBeNull();
   });
 
   it("sees tokens glued to shell operators", () => {
-    expect(checkBareSymlinkTokens(["cat", "ssh-link;ls"], tmp).denied).not.toBeNull();
-    expect(checkBareSymlinkTokens(["cat", "ssh-link>x"], tmp).denied).not.toBeNull();
+    expect(checkBareRelativeTokens(["cat", "ssh-link;ls"], tmp)).not.toBeNull();
+    expect(checkBareRelativeTokens(["cat", "ssh-link>x"], tmp)).not.toBeNull();
   });
 });
 
@@ -440,9 +478,9 @@ describe("tokenizeSegmentQuoted: quoting facts", () => {
 
 // ── Quoted-token probe semantics (3.22.0 field false-positive fix) ──────────
 
-describe("checkBareSymlinkTokens: quoted tokens", () => {
+describe("checkBareRelativeTokens: quoted tokens", () => {
   let tmp: string;
-  const q = (text: string): QuotedToken => ({ text, quoted: true, unquotedGlob: false });
+  const q = (text: string): QuotedToken => ({ text, quoted: true, unquotedGlob: false, quotedWhole: true });
   beforeAll(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-symq-"));
     fs.writeFileSync(path.join(tmp, "data.txt"), "hi\n");
@@ -455,32 +493,32 @@ describe("checkBareSymlinkTokens: quoted tokens", () => {
   });
 
   it("a quoted literal name still follows symlinks (quoting does not stop it)", () => {
-    expect(checkBareSymlinkTokens(["cat", q("lnk-out")], tmp)).toEqual({ denied: null, warned: "/etc/hostname" });
+    expect(checkBareRelativeTokens(["cat", q("lnk-out")], tmp)).toBe("/etc/hostname");
   });
 
   it("a quoted glob never expands — cat \"l*\" is the literal name l*", () => {
-    expect(checkBareSymlinkTokens(["cat", q("ln*")], tmp)).toEqual({ denied: null, warned: null });
+    expect(checkBareRelativeTokens(["cat", q("ln*")], tmp)).toBeNull();
   });
 
   it("a quoted word that IS a literal glob-named symlink is still probed", () => {
-    expect(checkBareSymlinkTokens(["cat", q("lit*")], tmp)).toEqual({ denied: null, warned: "/etc/hostname" });
+    expect(checkBareRelativeTokens(["cat", q("lit*")], tmp)).toBe("/etc/hostname");
   });
 
   it("a quoted word is never operator-split (internal ; && | are data)", () => {
-    expect(checkBareSymlinkTokens(["cat", q("lnk-out; ls && lnk-out")], tmp)).toEqual({ denied: null, warned: null });
+    expect(checkBareRelativeTokens(["cat", q("lnk-out; ls && lnk-out")], tmp)).toBeNull();
     // Contrast: the same text UNQUOTED is a chain and reaches the symlink.
-    expect(checkBareSymlinkTokens(["cat", "lnk-out; ls"], tmp).warned).toBe("/etc/hostname");
+    expect(checkBareRelativeTokens(["cat", "lnk-out; ls"], tmp)).toBe("/etc/hostname");
   });
 
   it("a glob char outside the quoted span still expands and probes matches", () => {
-    expect(checkBareSymlinkTokens(["cat", { text: "lnk-out*", quoted: true, unquotedGlob: true }], tmp).warned)
+    expect(checkBareRelativeTokens(["cat", { text: "lnk-out*", quoted: true, unquotedGlob: true, quotedWhole: false }], tmp))
       .toBe("/etc/hostname");
   });
 });
 
 // ── globSync failure semantics (honest marker + static-prefix guard) ────────
 
-describe("checkBareSymlinkTokens: glob-verify failures", () => {
+describe("checkBareRelativeTokens: glob-verify failures", () => {
   let tmp: string;
   beforeAll(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-symg-"));
@@ -499,17 +537,14 @@ describe("checkBareSymlinkTokens: glob-verify failures", () => {
     vi.spyOn(fs, "globSync").mockImplementation(() => {
       throw new Error("simulated no-match throw");
     });
-    expect(checkBareSymlinkTokens(["grep", "x", "missing-dir/*.ts"], tmp)).toEqual({ denied: null, warned: null });
+    expect(checkBareRelativeTokens(["grep", "x", "missing-dir/*.ts"], tmp)).toBeNull();
   });
 
   it("an existing prefix with an unverifiable expansion fails closed, marked honestly", () => {
     vi.spyOn(fs, "globSync").mockImplementation(() => {
       throw new Error("simulated");
     });
-    expect(checkBareSymlinkTokens(["grep", "x", "exist-dir/*.zzz"], tmp)).toEqual({
-      denied: null,
-      warned: GLOB_UNVERIFIED_PREFIX + "exist-dir/*.zzz",
-    });
+    expect(checkBareRelativeTokens(["grep", "x", "exist-dir/*.zzz"], tmp)).toBe(GLOB_UNVERIFIED_PREFIX + "exist-dir/*.zzz");
   });
 
   it("marker helpers round-trip", () => {
@@ -525,7 +560,7 @@ describe("checkBareSymlinkTokens: glob-verify failures", () => {
 describe("checkCommandForCredentialPaths: quoted bodies (field regression)", () => {
   it("does not operator-split a quoted node -e body (no bogus fragments)", () => {
     const r = checkCommandForCredentialPaths("node -e 'const p = \"*.ts\"; a; b && c | d'", cwd);
-    expect(r).toEqual({ denied: null, warned: null });
+    expect(r).toBeNull();
   });
 
   it("the field repro: grep over missing-prefix globs no longer prompts", () => {
@@ -535,6 +570,6 @@ describe("checkCommandForCredentialPaths: quoted bodies (field regression)", () 
       'cd ~/.pi/agent/extensions/halter && grep -n "misses" judge/*.ts gate/*.ts analysis/*.ts | head -30',
       cwd,
     );
-    expect(r).toEqual({ denied: null, warned: null });
+    expect(r).toBeNull();
   });
 });

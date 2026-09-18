@@ -27,7 +27,7 @@ beforeAll(() => {
 afterAll(() => removeContractCwd(cwd));
 
 
-// Bare-name symlink escaping cwd → prompt (the checkBareSymlinkTokens `warned`
+// Bare-name symlink escaping cwd → prompt (the checkBareRelativeTokens `warned`
 // path — pinned end-to-end; perm #645 class). Uses a real tmpdir fixture so
 // the lstat probe in the gate sees the actual link.
 describe("bare-token symlink escape (end-to-end decision)", () => {

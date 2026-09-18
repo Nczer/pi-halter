@@ -228,7 +228,10 @@ and defer leave the streak untouched).
 
 ### D5. What does NOT change
 
-- `deniedPaths` hard blocks, credential warnings, fail-closed boundaries.
+- Credential warnings and fail-closed boundaries. (3.26.0 post-dates this
+  spec: the `deniedPaths` hard-block tier was removed — credential paths
+  prompt with the very-high-risk warning instead of blocking, so a judge mode
+  can never be the only thing between an op and a refusal.)
 - The rm carve-out mechanics (`checkRmTargets`).
 - cwd-bound bash grants (exact signatures) — narrow enough to keep running
   before the judge in all modes (Claude keeps narrow rules too).

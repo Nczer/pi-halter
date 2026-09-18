@@ -63,7 +63,7 @@ export interface CommandAnalysis {
   opaque: OpaqueRef[];
   assignments: ShellAssignment[];
   parsedSegments: BashSegment[];
-  /** Credential path detected in the command (denied paths are blocked earlier; this is for warned paths). */
+  /** Credential path detected in the command — never auto-allow; the prompt carries the very-high-risk warning. */
   hasCredentialPath: boolean;
   /** Matched credential pattern name, if any (e.g. ".env", ".aws"). */
   credentialRule: string | null;
@@ -408,8 +408,9 @@ export async function analyzeCommand(
     needsPathApproval = op.length > 0;
   }
 
-  // Credential path check — denies are blocked earlier by CredentialDenyRule,
-  // but we check both here for defense-in-depth (prevents auto-allow if a rule is bypassed)
+  // Credential path check — the sole credential verdict for the command: a
+  // match never auto-allows (SafetyRule) and stops every auto mode (dspa
+  // gate), so it always reaches a human prompt with the very-high-risk note.
   const credentialCheck = checkCommandForCredentialPaths(cmd, cwd);
 
   // Fold the [TmuxPayload] reasons into the whole-command risk (order-stable,
@@ -439,8 +440,8 @@ export async function analyzeCommand(
     opaque,
     assignments,
     parsedSegments: segments,
-    hasCredentialPath: credentialCheck.denied !== null || credentialCheck.warned !== null,
-    credentialRule: credentialCheck.denied ?? credentialCheck.warned,
+    hasCredentialPath: credentialCheck !== null,
+    credentialRule: credentialCheck,
     prompt: {
       nonAllowlistedSegmentIndices,
       promptSignatures,

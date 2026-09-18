@@ -516,9 +516,9 @@ describe("base-access flagging (cd is navigation, not access)", () => {
     expect(a.paths).toContain("/var/tmp");
   }, 15000);
 
-  it("cd into a credential dir still blocks (raw-text scan is path-set independent)", async () => {
-    expect((await d("cd $HOME/.ssh && ls")).kind).toBe("block");
-    expect((await d("cd $HOME/.ssh")).kind).toBe("block");
+  it("cd into a credential dir still prompts (raw-text scan is path-set independent)", async () => {
+    expect((await d("cd $HOME/.ssh && ls")).kind).toBe("prompt");
+    expect((await d("cd $HOME/.ssh")).kind).toBe("prompt");
   }, 15000);
 
   it("inner cd in a subshell lists the inner dir (previously flagged only via the cd target path)", async () => {
