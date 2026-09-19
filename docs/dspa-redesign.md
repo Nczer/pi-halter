@@ -1036,7 +1036,8 @@ skills` (read-allowed, non-write-granted — the D18 stop correctly offered
 - **Merged grant options:** the write-base set is computed BEFORE the
   read-bar stop, so that stop carries `writeOutside` for its write bases →
   the first prompt offers `Always (paths): Read B/*` and `Allow writes: B
-  (session)` together. `Allow writes` grants WRITE (and read — write
+  (session)` together, and the reason names both (`touches paths outside
+  base (B); writes B`). `Allow writes` grants WRITE (and read — write
   implies read in the store), so one click reaches steady state.
 - **Behavior note:** cd-into-cwd-subdir + write (working set) → no floor
   stop at all; once the judge stops misreading grant state, dspa

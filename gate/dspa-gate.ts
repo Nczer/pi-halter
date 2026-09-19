@@ -657,9 +657,15 @@ export async function checkDspaGate(
   const writeOutside = [...new Set(writeBases)].filter((b) => !insideManualWriteBar(store, b, pd.cwd));
   if (resolvedOutside.length > 0) {
     const shown = [...new Set(resolvedOutside)].slice(0, 2);
+    // Compound reason (D21): when the command also writes a base, name it —
+    // the stop carries the write option, and a read-only-sounding title
+    // would leave it looking out of place.
+    const reason = writeOutside.length > 0
+      ? `touches paths outside base (${shown.join(", ")}); writes ${writeOutside.slice(0, 2).join(", ")}`
+      : `touches paths outside base (${shown.join(", ")})`;
     return {
       ok: false,
-      reason: `touches paths outside base (${shown.join(", ")})`,
+      reason,
       advisory: true,
       ...(confirmedOutside.length > 0 ? { confirmedOutside } : {}),
       ...(writeOutside.length > 0 ? { writeOutside } : {}),

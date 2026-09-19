@@ -58,7 +58,7 @@ describe("D21 gate scenarios (MOSAC incident)", () => {
     const r = await checkDspaGate(bashPd(CMD, "/home/nczer"), createStore());
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.reason).toContain(`outside base (${B}`);
+      expect(r.reason).toBe(`touches paths outside base (${B}); writes ${B}`);
       expect(r.writeOutside).toEqual([B]);
     }
   });

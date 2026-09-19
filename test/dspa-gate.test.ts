@@ -1163,7 +1163,7 @@ describe("D18: write-mode base access (2026-09-12 incident)", () => {
     const r = await checkDspaGate(bashPd(`cd /etc && python3 - <<'PYEOF'\nopen("x","w")\nPYEOF`), store);
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.reason).toBe("touches paths outside base (/etc)");
+      expect(r.reason).toBe("touches paths outside base (/etc); writes /etc");
       // D21: the base is also a write base (heredoc class) — the one prompt
       // offers the read AND the write options (Allow writes = read+write).
       expect(r.writeOutside).toEqual(["/etc"]);
