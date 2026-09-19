@@ -26,7 +26,6 @@ import { analyzeCommand } from "../analysis/command-analysis";
 import { findExecutedScript } from "../analysis/script-payload";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { expandTilde } from "../analysis/path-util";
-import { makeManualBar, insideManualWriteBar } from "../gate/dspa-gate";
 import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeResult, JudgeSettings} from "./judge";
 import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
@@ -74,19 +73,14 @@ async function buildJudgmentInput(
         getConfirmedResolution: (t) => store.getConfirmedResolution(t),
       }));
     const script = findExecutedScript(analysis, pd.cwd);
-    // D18: the base the command actually operates under (after a re-basing
-    // cd) and the floor's bars against it — the judge may not rule on
-    // scope, but it should see whether writes there are granted.
+    // D21: the base the command actually operates under (after a re-basing
+    // cd) — radius context only. Grant state is never in the packet: the
+    // floor enforces scope, and the verdict weighs affected dirs only when
+    // they are unreasonable/unsafe, never grant state.
     const normBase = path.resolve(expandTilde(pd.cwd));
-    let effectiveBase: { dir: string; read: boolean; write: boolean } | null = null;
+    let effectiveBase: string | null = null;
     for (const b of analysis.effectiveCwds) {
-      if (b !== null && b !== normBase) {
-        effectiveBase = {
-          dir: b,
-          read: makeManualBar(store, pd.cwd)(b),
-          write: insideManualWriteBar(store, b, pd.cwd),
-        };
-      }
+      if (b !== null && b !== normBase) effectiveBase = b;
     }
     const input: JudgmentBashInput = {
       command: pd.command,

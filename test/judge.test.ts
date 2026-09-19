@@ -242,7 +242,7 @@ describe("judgment packet", () => {
     expect(a).toBe(b);
   });
 
-  it("D18: renders the effective base with its grant state after a re-basing cd", () => {
+  it("D21: renders the effective base dir after a re-basing cd — no grant state", () => {
     const p = buildJudgmentPacket({
       command: "cd ~/.pi && python3 - <<'PYEOF'\nopen('x','w').write('s')\nPYEOF",
       cwd: "/mnt/Ndr/Projects",
@@ -252,24 +252,26 @@ describe("judgment packet", () => {
       hasUnsafePattern: true,
       paths: ["/home/u/.pi"],
       outsidePaths: [],
-      effectiveBase: { dir: "/home/u/.pi", read: true, write: false },
+      effectiveBase: "/home/u/.pi",
     });
-    expect(p).toContain("effective base: /home/u/.pi (after cd) — read: granted, write: NOT granted");
+    expect(p).toContain("effective base: /home/u/.pi (after cd)");
+    expect(p).not.toMatch(/granted|NOT granted/);
     expect(p).toContain("risk flags: high — [Tool] python (script execution)");
   });
 
-  it("D18: a write-granted base renders granted, and an absent effective base adds no line", () => {
-    const granted = buildJudgmentPacket({
+  it("D21: grant state never appears, and an absent effective base adds no line", () => {
+    const p = buildJudgmentPacket({
       command: "cd /work && python3 -c 'x'",
       cwd: "/home/u/project",
       segments: ["cd /work", "python3 -c 'x'"],
       riskReasons: ["[Tool] python (script execution)"],
       severity: "medium",
       hasUnsafePattern: true,
-      effectiveBase: { dir: "/work", read: true, write: true },
+      effectiveBase: "/work",
     });
-    expect(granted).toContain("effective base: /work (after cd) — read: granted, write: granted");
-    expect(granted).toContain("risk flags: medium — [Tool] python (script execution)");
+    expect(p).toContain("effective base: /work (after cd)");
+    expect(p).not.toMatch(/granted|NOT granted/);
+    expect(p).toContain("risk flags: medium — [Tool] python (script execution)");
 
     const none = buildJudgmentPacket(baseInput);
     expect(none).not.toContain("effective base:");

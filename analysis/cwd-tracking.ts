@@ -505,7 +505,7 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
  * allowed but not write-granted would sail through (2026-09-12 dspa
  * incident: a heredoc python rewrote a source file under a read-allowed,
  * non-write-granted extension dir; Q1 says scope grants are the user's
- * call, never the judge's). Two deterministic classes:
+ * call, never the judge's). Three deterministic classes:
  *  - a bare output-redirect target (`echo x > f`, `cmd >> f`, `cmd 2> f`)
  *    — the file lands in the base. Resolvable targets and fd references
  *    (2>&1, >&1) don't count; input redirects (`<`) read the base.
@@ -514,9 +514,22 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
  *    bodies (D1), so the code may write anywhere under the base. A path-
  *    qualified script FILE is not inline code — its content rides fenced
  *    in the judge packet (findExecutedScript), which stays the backstop.
+ *  - a write-verb stage (D21) with a base-resolving target: the file
+ *    lands under the base and the path set sees only the base (D20's
+ *    base flag). A pipeline shares the effective cwd, so any stage
+ *    counts (`cat x | tee f`). Resolvable targets enter the path set
+ *    themselves (read bar / D19 handle them). git is deliberately absent
+ *    from the verb set — subcommand-dependent (status/log don't write).
  * Subshells are not modeled here (baseAccessPath's subshell scan already
  * flags their base for the read bar).
  */
+
+/** Commands whose common use creates/modifies files at their targets
+ * (D18 class 3, added D21). A bare (base-resolving) target under a
+ * re-based base is a write to the base. git is deliberately absent:
+ * subcommand-dependent (status/log don't write); a bare `git commit`
+ * rides on the judge's verdict. */
+const WRITE_VERB_BASE = new Set(["mkdir", "mv", "cp", "touch", "tee", "ln", "chmod", "chown", "chgrp", "install"]);
 export function baseWriteAccess(seg: BashSegment): boolean {
   const tokens = tokenizeSegment(seg.text);
   let ti = 0;
@@ -548,6 +561,36 @@ export function baseWriteAccess(seg: BashSegment): boolean {
         if (target !== null && !target.startsWith("&") && !/^\d+$/.test(target) && !isResolvableTarget(target)) return true;
       }
     }
+  }
+
+  // (3) Write-verb stage with a base-resolving target (D21): mkdir/mv/cp/…
+  // — the file lands in the re-based base and the path set sees only the
+  // base (D20's base flag). Any pipeline stage counts (a pipeline shares
+  // the effective cwd: `cat x | tee f`); flags and bare numbers are not
+  // targets; resolvable targets enter the path set themselves.
+  {
+    const stages: string[][] = [];
+    let cur: string[] = [];
+    for (const t of tokens.slice(ti)) {
+      if (t === "|" || t === "|&") { stages.push(cur); cur = []; }
+      else cur.push(t);
+    }
+    stages.push(cur);
+    let sawVerb = false;
+    for (const st of stages) {
+      let k = 0;
+      while (k < st.length && ENV_ASSIGN_RE.test(st[k])) k++;
+      const cmd = k < st.length ? path.basename(st[k]).toLowerCase() : "";
+      const sedInPlace = cmd === "sed" &&
+        st.slice(k + 1).some((t) => t === "-i" || /^-i\./.test(t) || t.startsWith("--in-place"));
+      if (!WRITE_VERB_BASE.has(cmd) && !sedInPlace) continue;
+      sawVerb = true;
+      for (const t of st.slice(k + 1)) {
+        if (t.startsWith("-") || /^\d+$/.test(t)) continue;
+        if (!isResolvableTarget(t)) return true;
+      }
+    }
+    if (sawVerb) return false; // only resolvable targets: the path set covers them
   }
 
   // (2) Opaque inline-code execution under the base.

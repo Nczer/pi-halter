@@ -1007,7 +1007,8 @@ describe("baseWriteAccess (D18)", () => {
       "python3 script.py",
       "python3 /abs/s.py",
       "git -c user.name=x commit",
-      "cat f | tee g",
+      // (cat f | tee g — D21: a write verb in a later pipeline stage now
+      // counts; see test/d21-write-verbs.test.ts)
     ]) {
       expect(baseWriteAccess(seg(t)), t).toBe(false);
     }
