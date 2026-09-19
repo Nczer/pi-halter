@@ -848,6 +848,14 @@ paths + config write paths + project-pi). Stop: `write outside base
      script bodies (D1), so the code may write anywhere under the base.
      The check is SCOPE, not content: `python3 - <<EOF print(1)` under an
      ungranted base stops exactly like the incident.
+  3. (D21, 2026-09-13) a write-verb stage — mkdir, mv, cp, touch, tee, ln,
+     chmod, chown, chgrp, install; sed only with `-i`/`--in-place` — with
+     at least one bare (non-resolvable) target under the re-based base:
+     the file lands in the base and the path set sees only the base
+     (D20's base flag). Any pipeline stage counts (shared effective cwd:
+     `cat x | tee f`); resolvable targets enter the path set themselves.
+     git is deliberately absent — subcommand-dependent (status/log don't
+     write).
 - **Out of scope (stay judgeable / unchanged):** base READS (`cd X && ls`);
   inline code under the SESSION cwd (the working set — bases inside the
   session cwd are skipped, mirroring the file branch, which never stops a
@@ -860,7 +868,9 @@ paths + config write paths + project-pi). Stop: `write outside base
   their base for the read bar).
 - **Precedence:** the read-bar stop (non-read-allowed base) and the D7
   sentinel (unknown base) fire first — the write check adds stops only for
-  bases that pass the read bar.
+  bases that pass the read bar. Since D21 the write-base set is computed
+  before the read-bar stop, so that stop carries `writeOutside` for its
+  write bases (merged grant options: read + write in ONE prompt).
 - **Grant option (steady state).** The fall-through prompt offers `Allow
   writes: <dir> (session)` — mirroring the D10 Trust option: a session
   write grant (write implies read) for EXACTLY the `writeOutside` dirs,
@@ -868,11 +878,12 @@ paths + config write paths + project-pi). Stop: `write outside base
   (D9's rule). After the grant, the identical run passes the floor and the
   judge decides — with the facts.
 - **Packet hygiene (part B).** The risk line carries severity (`risk
-  flags: high — …`); the Operation section reports `effective base: <dir>
-  (after cd) — read: granted|NOT granted, write: granted|NOT granted`
-  whenever a re-based base exists. Facts, not instructions: the system
-  prompt's "do not deny for scope alone" stands — what changed is that the
-  judge can finally see the write state.
+  flags: high — …`); the Operation section reports the re-based base
+  whenever one exists. Part B's grant-state rendering (`read: …, write: …`)
+  was RETIRED by D21 — it contaminated the verdict: a small judge model
+  latched on `write: NOT granted` and denied legitimate bounded writes.
+  The packet now carries the base dir only; the verdict weighs affected
+  scope only when unreasonable/unsafe (D21).
 
 ### D19. The write bar on the judge's fresh report — same pass (2026-09-12)
 
@@ -987,6 +998,56 @@ set → the judge's report is covered → no line), and the gate actually
 sees the base for approval — conservative: a prompt only for bases
 outside the manual bar. Suite 3767.
 
+### D21. Packet: grant state out of the judge's input; write verbs face the write bar (2026-09-13)
+
+**Incident.** D18 part B put grant state in the packet (`effective base:
+<dir> — read: granted, write: NOT granted`). The local judge model latched
+on `write: NOT granted` and REJECTed legitimate bounded writes:
+`cd <corpus> && mkdir -p … && mv … && ls … | wc -l` prompted forever under
+/dspa — REJECT advice whose explanation quoted the grant line verbatim —
+with no path to grant the write: D18's trigger classes (redirects, opaque
+code) don't cover write verbs, so no floor stop ever carried
+`writeOutside`, and D19 fires only after the stage-2 APPROVE that the
+contaminated verdict prevented. Both examples from the report: this
+command, and a NOTES.md append + `git add/commit` under `~/.pi/agent/
+skills` (read-allowed, non-write-granted — the D18 stop correctly offered
+`Allow writes`; the judge's REJECT advice was the noise).
+
+**Decisions (grill, 2026-09-13).**
+- **Packet:** `effectiveBase` is now just the re-based dir (`effective
+  base: <dir> (after cd)`). Grant state never reaches the judge: scope is
+  enforced by the floor (read bar, D18 write bar, D19), and grants are the
+  operator's choice at the prompt, not a verdict input.
+- **System prompt:** affected scope is a deny reason only when it is
+  UNREASONABLE OR UNSAFE for the operation's purpose (e.g., bulk effects
+  far beyond the working set); a bounded effect in an ungranted or
+  outside-base directory is not. The judge may still weigh affected dirs —
+  never grant state.
+- **D18 class 3** (`baseWriteAccess`): a write-verb stage (mkdir, mv, cp,
+  touch, tee, ln, chmod, chown, chgrp, install; sed only with
+  `-i`/`--in-place`) with at least one bare (non-resolvable) target under
+  a re-based base — the file lands in the base and the path set sees only
+  the base (D20's base flag). Any pipeline stage counts (a pipeline
+  shares the effective cwd — `cat x | tee f`); resolvable targets enter
+  the path set themselves (read bar / D19 handle them). git is
+  deliberately absent — subcommand-dependent (status/log don't write);
+  a bare `git commit` rides on the (now clean) judge's verdict. Bases
+  inside the session cwd stay the working set (skipped, as before).
+- **Merged grant options:** the write-base set is computed BEFORE the
+  read-bar stop, so that stop carries `writeOutside` for its write bases →
+  the first prompt offers `Always (paths): Read B/*` and `Allow writes: B
+  (session)` together. `Allow writes` grants WRITE (and read — write
+  implies read in the store), so one click reaches steady state.
+- **Behavior note:** cd-into-cwd-subdir + write (working set) → no floor
+  stop at all; once the judge stops misreading grant state, dspa
+  auto-allows (manual mode still prompts at the command tier unless
+  always-allowed — the modes deliberately differ there).
+
+**Result.** Steady state for the incident command: the read-bar stop with
+both options (base outside cwd, no grants) or the D18 write stop (base
+read-granted) → `Allow writes: <base>` → the identical run passes the
+floor and the (clean-packet) judge auto-allows it. Suite 3784.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -1059,6 +1120,12 @@ class"). Suite 3229.
   judge reported a cd base the floor never saw. No-slash bare args keep
   the old rule; the D13 known set is unchanged — residual cd-target lines
   keep accruing as mining data). Suite 3767.
+- **Phase 3o — done** (2026-09-13): D21 (grant state out of the judge's
+  input — `effective base: <dir>` carries no `read: …, write: …` flags,
+  and affected scope is a deny reason only when unreasonable/unsafe;
+  D18 class 3 — write-verb stages with bare targets under a re-based base
+  face the WRITE bar; the read-bar stop now carries `writeOutside`, so
+  the read and write grant options land in ONE prompt). Suite 3784.
 
 ## 5. Open questions (grill order)
 

@@ -199,10 +199,10 @@ describe("getJudgeVerdict", () => {
     expect(r).toBeNull();
   });
 
-  it("D18: the packet carries the re-based base's grant state and the risk severity", async () => {
-    // The 2026-09-12 incident shape: re-based base that is read-allowed but
-    // NOT write-granted — the judge must see both facts (it may not rule
-    // on scope, but it should not decide blind).
+  it("D21: the packet carries the re-based base dir (no grant state) and the risk severity", async () => {
+    // The 2026-09-13 fix for the 2026-09-12 incident's overcorrection: the
+    // judge sees the base (radius) but never grant state — a small model
+    // latched on "write: NOT granted" and denied legitimate bounded writes.
     const calls: CapturedCall[] = [];
     const { ctx } = makeCtx(fakeModel());
     const homePi = path.join(os.homedir(), ".pi");
@@ -219,7 +219,8 @@ describe("getJudgeVerdict", () => {
           ? m.content.map((c: any) => c.text ?? "").join("")
           : String(m.content ?? ""))
       .join("\n");
-    expect(text).toContain(`effective base: ${homePi} (after cd) — read: granted, write: NOT granted`);
+    expect(text).toContain(`effective base: ${homePi} (after cd)`);
+    expect(text).not.toMatch(/granted|NOT granted/);
     expect(text).toContain("risk flags: high —");
   });
 

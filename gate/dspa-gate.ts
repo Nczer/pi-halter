@@ -634,24 +634,19 @@ export async function checkDspaGate(
       confirmedOutside.push({ token: u.token, dirs: out });
     }
   }
-  if (resolvedOutside.length > 0) {
-    const shown = [...new Set(resolvedOutside)].slice(0, 2);
-    return {
-      ok: false,
-      reason: `touches paths outside base (${shown.join(", ")})`,
-      advisory: true,
-      ...(confirmedOutside.length > 0 ? { confirmedOutside } : {}),
-    };
-  }
-  // D18 (2026-09-12): write-mode base access. baseAccessPath flags the
-  // re-based base as an undifferentiated touch, and the read bar above
-  // admits read-allowed bases (~/.pi is read-allowed in config). A segment
-  // that WRITES its base — a bare output redirect, or opaque inline code
-  // (heredoc / -c / -e) the floor does not interpret (D1) — must face the
-  // WRITE bar, exactly like a file-op write (the file branch above).
+  // D18 (2026-09-12, extended D21 2026-09-13): write-mode base access.
+  // baseAccessPath flags the re-based base as an undifferentiated touch, and
+  // the read bar above admits read-allowed bases (~/.pi is read-allowed in
+  // config). A segment that WRITES its base — a bare output redirect, opaque
+  // inline code (heredoc / -c / -e) the floor does not interpret (D1), or a
+  // write verb with a base-resolving target (D21) — must face the WRITE bar,
+  // exactly like a file-op write (the file branch above).
   // Bases inside the session cwd are the working set (the file branch never
   // stops a write into cwd); unknown bases (cd $D) are already stopped by
-  // the D7 sentinel pass.
+  // the D7 sentinel pass. Computed BEFORE the read-bar stop below so that
+  // stop can carry the same writeOutside (D21: the read and write options
+  // land in ONE prompt — `Allow writes` grants write+read, so one click
+  // reaches steady state).
   const normBase = path.resolve(expandTilde(pd.cwd));
   const writeBases: string[] = [];
   for (let i = 0; i < analysis.parsedSegments.length; i++) {
@@ -660,6 +655,16 @@ export async function checkDspaGate(
     if (baseWriteAccess(analysis.parsedSegments[i])) writeBases.push(base);
   }
   const writeOutside = [...new Set(writeBases)].filter((b) => !insideManualWriteBar(store, b, pd.cwd));
+  if (resolvedOutside.length > 0) {
+    const shown = [...new Set(resolvedOutside)].slice(0, 2);
+    return {
+      ok: false,
+      reason: `touches paths outside base (${shown.join(", ")})`,
+      advisory: true,
+      ...(confirmedOutside.length > 0 ? { confirmedOutside } : {}),
+      ...(writeOutside.length > 0 ? { writeOutside } : {}),
+    };
+  }
   if (writeOutside.length > 0) {
     return {
       ok: false,
