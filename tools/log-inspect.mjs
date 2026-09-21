@@ -24,6 +24,21 @@
  *             judgePaths + floorMisses — the fault is the miner's call)
  *             — with error/floor-miss rollups. Reads the ledger directly
  *             (not decisions.jsonl), so --file is rarely needed
+ *   unresolved the always-on unresolved-token ledger (.log/unresolved.jsonl):
+ *             each token's outcome history (prompted / gate-stop / auto-allowed),
+ *             whether a confirmed resolution was persisted, the LLM-resolver
+ *             dirs, grouped per token — the convergence view (D12), plus the
+ *             never-converges class (positional parameters: the store refuses
+ *             the grant, so they keep prompting by design) and ledger
+ *             contradictions
+ *   globerr   the always-on glob-verify ledger (.log/glob-err.jsonl): failed
+ *             glob probes (pattern + error + cwd), rolled up by pattern — a
+ *             healthy run writes nothing, so any line is worth a look
+ *
+ * The three ledgers above are ON by default and NOT version-bound; the blast-
+ * radius log (decisions.jsonl) is off by default and resets on /reload, so
+ * `summary`/`list`/… may have nothing to read — the tool then names the ledgers
+ * that DO exist instead of only failing.
  *   stats     per-target aggregation — who prompts repeatedly, who auto-allows
  *   audit     anomaly scan: known bug classes (test-fixture pollution,
  *             contradictions, phantom root paths, misleading outside-base
@@ -74,10 +89,21 @@ const truncateLen = flags.full ? Infinity : 110;
 
 const DEFAULT_FILE = path.join(here, "..", ".log", "decisions.jsonl");
 const JUDGE_LEDGER = path.join(here, "..", ".log", "judge.jsonl");
+const UNRESOLVED_LEDGER = path.join(here, "..", ".log", "unresolved.jsonl");
+const GLOBERR_LEDGER = path.join(here, "..", ".log", "glob-err.jsonl");
+/** Commands that read a diagnostic ledger instead of decisions.jsonl. */
+const LEDGERS = { judge: JUDGE_LEDGER, unresolved: UNRESOLVED_LEDGER, globerr: GLOBERR_LEDGER };
 const files = [];
-const base = flags.file ? String(flags.file) : cmd === "judge" ? JUDGE_LEDGER : DEFAULT_FILE;
+const base = flags.file ? String(flags.file) : LEDGERS[cmd] ?? DEFAULT_FILE;
 if (!fs.existsSync(base)) {
   console.error(`log file not found: ${base}`);
+  const present = Object.keys(LEDGERS).filter((k) => fs.existsSync(LEDGERS[k]));
+  if (present.length) {
+    console.error(`ledgers present: ${present.join(", ")} — run: node tools/log-inspect.mjs ${present.join(", ")}`);
+    console.error(`(decisions.jsonl is off by default and version-bound: it is deleted when gate code reloads)`);
+  } else if (!LEDGERS[cmd]) {
+    console.error(`no ledger written yet either (.log/ holds decisions.jsonl, judge.jsonl, unresolved.jsonl, glob-err.jsonl)`);
+  }
   process.exit(2);
 }
 if (flags.all) {
@@ -128,6 +154,9 @@ const F = entries.filter(inFilter);
 
 const trunc = (s, n = truncateLen) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const firstLine = (s) => s.split("\n")[0];
+// Logged commands are often multi-line (functions, for loops); the ledger cmd field
+// is capped at 200 chars, so keep the whole thing visible on one line.
+const oneLine = (s) => s.replace(/\s*\n\s*/g, " ⏎ ");
 const time = (ts) => ts.slice(11, 19);
 const day = (ts) => ts.slice(0, 10);
 const tag = (e) => e.mode ?? "manual";
@@ -564,6 +593,124 @@ function judgeCmd() {
   }
 }
 
+/** Positional parameters can never converge: store.confirmResolution refuses
+ *  them, because the map is keyed by the token as written — a confirmed `$2`
+ *  would vouch for one call site and silently re-apply to every other. Kept
+ *  in sync with isPositionalRef in analysis/path-util.ts. */
+const POSITIONAL_REF_RE = /\$(?:[0-9]|[-@*#?!])|\$\{\s*(?:[0-9]+|[@*])/;
+
+/** ["gate-stop","gate-stop","prompted"] → "gate-stop×2 → prompted" — a
+ *  token's life in one field (file order is chronological). */
+function seqOf(values) {
+  const runs = [];
+  for (const v of values) {
+    const last = runs[runs.length - 1];
+    if (last && last.k === v) last.n++;
+    else runs.push({ k: v, n: 1 });
+  }
+  return runs.map((r) => (r.n > 1 ? `${r.k}×${r.n}` : r.k)).join(" → ");
+}
+
+/** D12 convergence view over .log/unresolved.jsonl, grouped per token: what
+ *  converged (stopped/prompted, later auto-allowed), what is still open, and
+ *  the never-converges class. The last group is not a backlog — positional
+ *  parameters are refused a grant on purpose, so a line there is expected
+ *  noise, not something to mine. */
+function unresolvedCmd() {
+  const g = new Map();
+  for (const e of F) {
+    const k = e.token ?? "(none)";
+    if (!g.has(k)) g.set(k, []);
+    g.get(k).push(e);
+  }
+  console.log(`# unresolved — ${F.length} lines, ${g.size} distinct tokens${F.length ? ` (${counts(F, (e) => e.outcome ?? "?").map(([k, n]) => `${n} ${k}`).join(", ")})` : ""}`);
+  if (!F.length) {
+    console.log("(empty — nothing was unresolved in this window; a fully-bindable run writes no lines)");
+    return;
+  }
+  const rows = [...g.entries()].map(([token, es]) => {
+    const outcomes = es.map((e) => e.outcome ?? "?");
+    return {
+      token,
+      es,
+      seq: seqOf(outcomes),
+      persisted: es.filter((e) => e.persisted).length,
+      dirs: [...new Set(es.flatMap((e) => e.llm ?? []))],
+      positional: POSITIONAL_REF_RE.test(token),
+      auto: outcomes.includes("auto-allowed"),
+      stoppedOrPrompted: outcomes.some((o) => o !== "auto-allowed"),
+      last: es[es.length - 1],
+    };
+  });
+  const showRow = (r) => {
+    const bits = [
+      `n=${String(r.es.length).padStart(3)}`,
+      `${day(r.es[0].ts ?? "")}${r.es.length > 1 && day(r.last.ts) !== day(r.es[0].ts) ? "→" + day(r.last.ts) : ""}`,
+      r.seq,
+      `${r.token}${r.positional ? "  [positional: never converges]" : ""}`,
+    ];
+    if (r.persisted) bits.push(`persisted ${r.persisted}/${r.es.length}`);
+    if (r.dirs.length) bits.push(`→ LLM: ${trunc(r.dirs.join(", "), 60)}`);
+    console.log(`  ${bits.join("  ")}`);
+    console.log(`         cmd: ${trunc(oneLine(r.last.cmd ?? ""), 150)}`);
+  };
+  const section = (label, arr) => {
+    console.log(`\n## ${label} (${arr.length})`);
+    for (const r of arr.sort((a, b) => b.es.length - a.es.length || a.token.localeCompare(b.token))) showRow(r);
+  };
+  section("converged (the D12 payoff: stopped or prompted earlier, auto-allowed later)",
+    rows.filter((r) => r.auto && r.stoppedOrPrompted));
+  section("still open (never auto-allowed — the mining target: a grant that would bind, or a parser hole)",
+    rows.filter((r) => !r.auto && !r.positional));
+  section("auto-allowed without ever stopping (judge approved; the token itself stayed unresolved)",
+    rows.filter((r) => r.auto && !r.stoppedOrPrompted));
+  section("never converges (positional parameters — the store refuses the grant, by design)",
+    rows.filter((r) => r.positional));
+
+  const contradictions = [];
+  for (const r of rows) {
+    if (r.positional && r.persisted)
+      contradictions.push(`${r.token}: persisted:true on ${r.persisted}/${r.es.length} line(s) but the store refuses positional grants ([@${r.es.find((e) => e.persisted).__idx}]) — the line predates the guard, or something bypasses it`);
+    const autoIdxs = r.es.map((e, i) => [e.outcome, i]).filter(([o]) => o === "auto-allowed");
+    const lastAuto = autoIdxs.pop();
+    const laterStop = lastAuto ? r.es.slice(lastAuto[1] + 1).find((e) => e.outcome !== "auto-allowed") : null;
+    if (laterStop)
+      contradictions.push(`${r.token}: auto-allowed [@${r.es[lastAuto[1]].__idx}] then ${laterStop.outcome} again [@${laterStop.__idx}] — a converged token stopped (grant lost, or the parser changed)`);
+  }
+  console.log(`\n## ledger contradictions (${contradictions.length})`);
+  for (const c of contradictions) console.log(`  ${c}`);
+  if (!contradictions.length) console.log("  (none — persisted flags match the store's rules, no re-convergence)");
+}
+
+/** Failed glob re-checks (.log/glob-err.jsonl), rolled up by error: which
+ *  pattern broke, how often, where. A healthy run writes nothing, so any
+ *  line here is a real gap (usually a pattern the glob library itself
+ *  rejects — the analyzer keeps the pattern unexpanded, the command is fine). */
+function globerrCmd() {
+  console.log(`# glob-err — ${F.length} failed glob probes`);
+  if (!F.length) {
+    console.log("(empty — no failed glob re-check in this window; that is the healthy state)");
+    return;
+  }
+  const g = new Map();
+  for (const e of F) {
+    const k = `${e.name ?? "?"}: ${trunc(String(e.message ?? "?"), 110)}`;
+    const r = g.get(k) ?? { n: 0, patterns: new Set(), cwds: new Set(), first: e.ts ?? "", last: e.ts ?? "" };
+    r.n++;
+    r.patterns.add(String(e.pattern ?? "?"));
+    if (e.cwd) r.cwds.add(e.cwd);
+    if (!r.first || (e.ts ?? "") < r.first) r.first = e.ts ?? r.first;
+    if (!r.last || (e.ts ?? "") > r.last) r.last = e.ts ?? r.last;
+    g.set(k, r);
+  }
+  for (const [k, r] of [...g.entries()].sort((a, b) => b[1].n - a[1].n)) {
+    console.log(`\n  ${String(r.n).padStart(3)}× ${k}  [${day(r.first)}${day(r.last) !== day(r.first) ? "→" + day(r.last) : ""}]`);
+    for (const p of [...r.patterns].slice(0, 8)) console.log(`        pattern: ${trunc(p, 110)}`);
+    if (r.patterns.size > 8) console.log(`        … ${r.patterns.size - 8} more patterns`);
+    if (r.cwds.size) console.log(`        cwd: ${[...r.cwds].slice(0, 5).join(", ")}${r.cwds.size > 5 ? ` (+${r.cwds.size - 5})` : ""}`);
+  }
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────
 
 switch (cmd) {
@@ -572,10 +719,12 @@ switch (cmd) {
   case "blocks": blocksCmd(); break;
   case "dspa": flags.reasons ? dspaReasons() : flags.paths ? dspaPaths() : dspaCmd(); break;
   case "judge": judgeCmd(); break;
+  case "unresolved": unresolvedCmd(); break;
+  case "globerr": globerrCmd(); break;
   case "stats": stats(); break;
   case "audit": audit(); break;
   case "show": show(); break;
   default:
-    console.error(`unknown command: ${cmd}\nusage: node tools/log-inspect.mjs [summary|list|blocks|dspa|judge|stats|audit|show N] [options]`);
+    console.error(`unknown command: ${cmd}\nusage: node tools/log-inspect.mjs [summary|list|blocks|dspa|judge|unresolved|globerr|stats|audit|show N] [options]`);
     process.exit(2);
 }
