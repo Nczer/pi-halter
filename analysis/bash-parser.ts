@@ -1335,17 +1335,24 @@ function sedScriptArgIndices(args: string[]): Set<number> {
 }
 
 /**
- * Indices of `grep` PATTERN arguments: the first non-flag argument (grep's
- * grammar is `grep [flags] PATTERN [files…]`) and the values consumed by
- * -e / --regexp / --regex. Unlike sed's script position (which can also be
- * a script FILE), grep's PATTERN position is never a file — the 2026-08-26
- * log case `grep -vE "//|\*" …` resolved the pattern as an absolute path
- * (a leading `//` is a network-prefix absolute) into a phantom root child
- * ("outside /"). -f / --file switches the grammar: its value IS a file
- * (pattern file — stays path-checked), and every later non-flag argument
- * is a plain file.
+ * Indices of the PATTERN argument of a grep-shaped search command — `grep`
+ * and `rg` (identical grammar: `[flags] PATTERN [files…]`): the first
+ * non-flag argument and the values consumed by -e / --regexp / --regex.
+ * Unlike sed's script position (which can also be a script FILE), the
+ * PATTERN position is never a file — the 2026-08-26 log case
+ * `grep -vE "//|\*" …` resolved the pattern as an absolute path (a leading
+ * `//` is a network-prefix absolute) into a phantom root child ("outside
+ * /"). -f / --file switches the grammar: its value IS a file (pattern file
+ * — stays path-checked), and every later non-flag argument is a plain file.
+ *
+ * rg drags along value-taking flags grep lacks (-g/--glob, -t/--type,
+ * -m/--max-count, -A/-B/-C, --pre, -r/--replace, …), so "first non-flag" can
+ * pick the flag's VALUE as the pattern. Both mistakes are conservative: a
+ * flag value is never a file (rg globs/types/pattern files touch nothing),
+ * and a real pattern pushed one slot right stays path-checked — over-flag,
+ * never an under-flag. Keeping the flag list out means it cannot drift.
  */
-function grepPatternArgIndices(args: string[]): Set<number> {
+function searchPatternArgIndices(args: string[]): Set<number> {
   const idxs = new Set<number>();
   let patternSeen = false;
   let filePatterns = false;
@@ -1541,11 +1548,13 @@ export async function parseCommand(
         // — the `sed -n "$(grep … | cut …),+12p" f` line-range idiom must not
         // produce <unresolved-var>. File-position args keep the opaque marker.
         const sedScripts = cmdName === "sed" ? sedScriptArgIndices(args.map(a => a.text)) : null;
-        // Grep: the PATTERN position is data, never a file (see
-        // grepPatternArgIndices) — skipping it also keeps pattern-position
-        // vars ($re in `grep -vE "$re" f`) out of the opaque ref set, where
-        // they would floor-stop the command.
-        const grepPatterns = cmdName === "grep" ? grepPatternArgIndices(args.map(a => a.text)) : null;
+        // Grep/rg: the PATTERN position is data, never a file (see
+        // searchPatternArgIndices) — skipping it also keeps pattern-position
+        // vars ($re in `grep -vE "$re" f`, `$1`/`$pat` in an `rg` helper
+        // function) out of the opaque ref set, where they would floor-stop
+        // the command (2026-09-21 unresolved.jsonl: 4 of 11 stops came from
+        // an rg pattern-position var).
+        const grepPatterns = cmdName === "grep" || cmdName === "rg" ? searchPatternArgIndices(args.map(a => a.text)) : null;
         // Awk: the program position is data, never a file (see
         // awkProgramArgIndices) — a bare filter (`awk -F: '$1>420' f`) is
         // program text whose `$1` is awk field syntax, not a shell var.
@@ -1570,7 +1579,7 @@ export async function parseCommand(
               isSedPatternArg(arg)
             )) ||
               (cmdName === "awk" && (awkPrograms !== null && awkPrograms.has(ai) || isAwkScriptArg(arg))) ||
-              (cmdName === "grep" && grepPatterns !== null && grepPatterns.has(ai))) {
+              (grepPatterns !== null && grepPatterns.has(ai))) {
             continue;
           }
 

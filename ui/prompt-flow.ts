@@ -11,6 +11,7 @@ import { resolveUnresolvedPaths, type ResolutionMap } from "../judge/path-resolv
 import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/dspat-mode";
 import type {JudgeResult} from "../judge/judge";
 import { makeManualBar } from "../gate/dspa-gate";
+import { isPositionalRef } from "../analysis/path-util";
 import type { DspaFallthrough } from "../gate/fallthrough";
 import { logJudgeDiff, logJudgePaths, logUnresolved } from "../gate/decision-log";
 
@@ -280,6 +281,10 @@ export async function showPrompt(
   const persistResolutions = (all: boolean) => {
     if (!resolutions) return;
     for (const [token, dirs] of resolutions) {
+      // Positional parameters can never be confirmed for the token's own
+      // value (see path-util.isPositionalRef) — skipped here so the ledger
+      // never records a persistence the store refused.
+      if (isPositionalRef(token)) continue;
       if (all || (bar ? dirs.every(d => bar(d)) : false)) {
         store.confirmResolution(token, dirs);
         persistedTokens.add(token);

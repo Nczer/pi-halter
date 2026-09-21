@@ -278,4 +278,20 @@ describe("Store: confirmed resolutions (LLM-suggested token dirs)", () => {
     store.reset();
     expect(store.getConfirmedResolution("/x/$e/f")).toBeNull();
   });
+
+  it("positional parameters are refused — the key is call-site local (2026-09-21 log)", () => {
+    // The map is keyed by the token as written, so a confirmed "$2" would
+    // vouch for one script's argument and silently re-apply it to every other
+    // command spelling the same token (a false resolution = under-flagging).
+    const store = createStore();
+    for (const token of ["$2", "${2}", "${12}V*.txt", "$@", "$*", "$0", "${@}"]) {
+      store.confirmResolution(token, ["/a"]);
+      expect(store.getConfirmedResolution(token)).toBeNull();
+    }
+    // Named references keep working (the assignment is in the command text).
+    store.confirmResolution("$pat", ["/a"]);
+    store.confirmResolution("/x/$e/f", ["/a"]);
+    expect(store.getConfirmedResolution("$pat")).toEqual(["/a"]);
+    expect(store.getConfirmedResolution("/x/$e/f")).toEqual(["/a"]);
+  });
 });

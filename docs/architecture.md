@@ -144,6 +144,21 @@ wrappers are excluded from the body set.
 not a file and is skipped by path analysis; file-position args keep the
 opaque marker; a bare literal path in script position stays path-checked.
 
+### Search grammar (grep, rg)
+
+`grep|rg [flags] PATTERN [files…]`: the first non-flag arg (and `-e`/
+`--regexp` values) is the pattern — data, never a file, so it is skipped by
+path analysis and never mints an opaque ref (the 2026-08-26 grep case: a
+`//…` pattern resolved as a network-prefix absolute, a phantom root child;
+the 2026-09-21 unresolved.jsonl case: `$1`/`$pat` in an rg helper function
+floor-stopped a read-only census). `-f`/`--file` switches the grammar: its
+value IS a file (the pattern file, stays path-checked) and every later
+non-flag arg is a file. rg carries value-taking flags grep lacks (`-g/--glob`,
+`-t/--type`, `-m`, `-A/-B/-C`, `--pre`, `-r/--replace`), so “first non-flag”
+can pick a flag's VALUE as the pattern; both mistakes are conservative — a
+flag value is never a file, and a real pattern pushed one slot right stays
+path-checked. The flag list is deliberately not modeled (it cannot drift).
+
 ### D15 parser resolutions
 
 Refs the command itself pins resolve instead of flagging:

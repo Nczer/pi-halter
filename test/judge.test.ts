@@ -343,6 +343,33 @@ describe("judge call", () => {
     expect(r.risk).toBeNull();
   });
 
+  it("accepts a boolean approve — the shape a local model sends (2026-09-20 judge log)", async () => {
+    // Grammar-constrained local models emit {"approve":true,…} for the enum
+    // field; the whole verdict used to be thrown away as bad-args (and logged
+    // as no-explanation / bad-args: {…}), costing a prompt.
+    const yes = await judge(baseInput, {
+      ...baseOpts,
+      stream: fixedStream(() => toolCallReply({ ...VERDICT, approve: true }), []),
+    });
+    expect(yes.approve).toBe("approve");
+    expect(yes.failReason).toBeUndefined();
+    const no = await judge({ ...baseInput, command: "rm -rf /tmp/x" }, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(() => toolCallReply({ ...VERDICT, explanation: "Deletes a tree.", approve: false }), []),
+    });
+    expect(no.approve).toBe("deny");
+  });
+
+  it("reads an enum member past case/padding (“Approve ”, “ LOW ”)", async () => {
+    const r = await judge({ ...baseInput, command: "pwd" }, {
+      ...baseOpts,
+      stream: fixedStream(() => toolCallReply({ ...VERDICT, approve: "Approve", risk: " LOW " }), []),
+    });
+    expect(r.approve).toBe("approve");
+    expect(r.risk).toBe("low");
+  });
+
   it("defers with bad-args on an invalid enum or missing explanation", async () => {
     const badRisk = await judge(baseInput, {
       ...baseOpts,

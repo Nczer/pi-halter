@@ -552,6 +552,12 @@ token, dirs)` (session-scoped) records a user-accepted token → dirs:
   inside the manual bar are persisted (Yes vouches for this exact run;
   in-bar dirs never needed a grant, so confirming them only makes the
   next run judgeable).
+- **Never**: positional parameters (`$1`, `$@`, `${2}V*.txt`, …) — the map is
+  keyed by the token as written, so a confirmed `$2` vouches for one call
+  site and silently re-applies it to every other command spelling the same
+  token (a false resolution = under-flagging). `store.confirmResolution`
+  refuses the record; such tokens keep their sentinel and keep prompting
+  (2026-09-21 unresolved.jsonl).
 
 Confirmed resolutions are consulted at the **analysis layer** (one
 derivation, deterministic — no LLM), so the manual bar and the dspa gate
