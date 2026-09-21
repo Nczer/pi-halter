@@ -43,6 +43,25 @@ export function expandTilde(p: string): string {
 export const OPAQUE_VAR_DIR = "<unresolved-var>";
 
 /**
+ * Positional/one-letter shell parameters — a reference whose value comes from
+ * a CALL SITE, never from the text of the command being judged: `$1`…`$9`,
+ * `${12}`, `$0`, the argument list `$@`/`$*`, and the shell's own status
+ * vars (`$#`, `$?`, `$!`, `$-`). Matches anywhere in a token, so the compound
+ * forms an unquoted expansion produces (`${2}V*.txt`) count too.
+ *
+ * Why callers care: confirmed resolutions are keyed by the token AS WRITTEN
+ * (store.confirmResolution), so a confirmed `$2` vouches for one script's
+ * argument and then silently re-applies it to every other command spelling
+ * the same token — a false resolution, i.e. under-flagging. Such tokens never
+ * converge; they keep prompting (fail closed).
+ */
+const POSITIONAL_REF_RE = /\$(?:[0-9]|[-@*#?!])|\$\{\s*(?:[0-9]+|[@*])/;
+
+export function isPositionalRef(token: string): boolean {
+  return POSITIONAL_REF_RE.test(token);
+}
+
+/**
  * Display form of an unresolved token for prompts/reasons: first line,
  * truncated to `max` chars with an ellipsis. Tokens can be whole glob
  * expansions of a long base — one short line is all the operator needs to

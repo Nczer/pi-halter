@@ -386,6 +386,18 @@ function sanitizeText(s: string): string {
 }
 
 /**
+ * Read an enum member out of a tool-call argument, tolerating case and
+ * padding ("Medium " → "medium"); anything that does not name a member →
+ * null. Grammar-constrained local models are not consistent about emitting
+ * the enum's exact spelling, and a spelling miss costs the whole verdict.
+ */
+function enumMember(v: unknown, members: ReadonlySet<string>): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  return members.has(s) ? s : null;
+}
+
+/**
  * Judge one operation (bash / file). Returns a fail-safe `defer`
  * (no explanation) on ANY failure; only a complete, valid tool call yields
  * a real verdict — which is then LRU-cached (keyed on model + operation
@@ -468,13 +480,18 @@ export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<J
     const args = call.arguments ?? {};
     const explanation =
       typeof args.explanation === "string" ? sanitizeText(args.explanation) : "";
-    const risk = args.risk;
-    const approve = args.approve;
-    if (
-      explanation === "" ||
-      typeof risk !== "string" || !RISKS.has(risk) ||
-      typeof approve !== "string" || !APPROVES.has(approve)
-    ) {
+    const risk = enumMember(args.risk, RISKS);
+    // A boolean `approve` is the one non-enum shape with an honest reading:
+    // the 2026-09-20 judge ledger shows a local model sending
+    // {"approve":true,"explanation":"…"} — a complete, well-argued verdict
+    // thrown away as bad-args (and logged as the misleading `no-explanation`
+    // sub-reason `bad-args: {…}`). true accepts, false denies; `false` keeps
+    // the failure direction fail-safe. Anything else must still name a member.
+    const approve =
+      typeof args.approve === "boolean"
+        ? args.approve ? "approve" : "deny"
+        : enumMember(args.approve, APPROVES);
+    if (explanation === "" || risk === null || approve === null) {
       return fail("bad-args", JSON.stringify(args).slice(0, 200));
     }
     const reason = typeof args.reason === "string" ? sanitizeText(args.reason) : "";

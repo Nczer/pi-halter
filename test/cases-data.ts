@@ -1023,4 +1023,7 @@ export const cases: TestCase[] = [
   { cmd: "f=$(find . -exec ls {} \\;); cat $f", simple: true, unsafe: false, decision: "prompt", desc: "find -exec value stays opaque (unresolvable → forced approval)" },
   { cmd: "export f=/etc/x; cat $f", simple: true, unsafe: false, decision: "prompt", desc: "export form binds (declaration_command), outside value prompts" },
   { cmd: "f=$g; cat $f", simple: true, unsafe: false, decision: "prompt", desc: "unbound chain stays opaque" },
+  { cmd: 'rg -c "$q" log.txt', simple: true, unsafe: false, decision: "auto-allow", desc: "rg PATTERN position is data, never a path — no <unresolved-var> (2026-09-21 log false positive)" },
+  { cmd: 'rg -c "$q" ${2}V*.txt', simple: true, unsafe: false, decision: "prompt", desc: "rg: pattern skipped, the file-position glob stays a sentinel" },
+  { cmd: "rg -f /etc/pats log.txt", simple: true, unsafe: false, decision: "prompt", desc: "rg -f switches the grammar: the pattern FILE is a real read" },
 ];

@@ -431,6 +431,36 @@ describe("parseCommand: grep PATTERN position is data, never a file (2026-08-26 
   });
 });
 
+describe("parseCommand: rg shares grep's PATTERN position (2026-09-21 unresolved.jsonl)", () => {
+  it("a pattern-position var is data — only the path-position token stays opaque", async () => {
+    // The corpus census helper from the log: $1 is the pattern, ${2}V*.txt
+    // the file glob. Only the glob may mint an opaque ref.
+    const r = await parseCommand('rg -c -i --no-messages "$1" ${2}V*.txt', cwd);
+    expect(r.opaque.map(o => o.raw)).toEqual(["${2}V*.txt"]);
+  });
+
+  it("the -U form with two positional vars keeps just the file one", async () => {
+    const r = await parseCommand('cnt() { rg -c -o -i -U "$1" "$2" 2>/dev/null; }', cwd);
+    expect(r.opaque.map(o => o.raw)).toEqual(["$2"]);
+  });
+
+  it("$@ in the file position stays opaque (it really does name files)", async () => {
+    const r = await parseCommand('cnt() { local pat="$1"; shift; rg -c -o -i -U "$pat" "$@" 2>/dev/null; }', cwd);
+    expect(r.opaque.map(o => o.raw)).toEqual(["$@"]);
+  });
+
+  it("a path-looking rg pattern is data; the file args are not skipped", async () => {
+    const r = await parseCommand("rg /etc/passwd ./f", cwd);
+    expect(r.paths.some(p => p.endsWith("/etc/passwd"))).toBe(false);
+    expect(r.paths.some(p => p.endsWith("/f"))).toBe(true);
+  });
+
+  it("rg -f PATTERNFILE: the pattern file stays path-checked", async () => {
+    const r = await parseCommand("rg -f /etc/patterns ./f", cwd);
+    expect(r.paths).toContain("/etc/patterns");
+  });
+});
+
 describe("parseCommand: loop in-list roots (symlink verification)", () => {
   const dirs: string[] = [];
 

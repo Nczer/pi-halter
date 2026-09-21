@@ -1,4 +1,5 @@
 import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "../config";
+import { isPositionalRef } from "../analysis/path-util";
 
 // ── Allow rules ──
 
@@ -136,6 +137,12 @@ export function createStore(nowFn = Date.now): Store {
     trustPackage(pkg) { trustedPackages.add(pkg); },
     getConfirmedResolution(token) { return confirmedResolutions.get(token) ?? null; },
     confirmResolution(token, dirs) {
+      // Positional parameters are call-site local: the map is keyed by the
+      // token as written, so a confirmed "$2" would vouch for one script's
+      // argument and re-apply it to every other command using that token (a
+      // false resolution — under-flagging). Refuse the record; the token
+      // keeps its sentinel and keeps prompting.
+      if (isPositionalRef(token)) return;
       const deduped = [...new Set(dirs)];
       if (deduped.length > 0) confirmedResolutions.set(token, deduped);
     },
