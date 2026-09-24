@@ -1061,6 +1061,23 @@ describe("parseCommand: multi-line literal args are script bodies, not paths", (
     expect(r.paths).toEqual([]);
   });
 
+  it("node -e with a multi-line DOUBLE-QUOTED script and JS-regex escapes: no opaque ref", async () => {
+    // tree-sitter-bash splits the string into per-line children with the
+    // newlines in the gaps between nodes — the row-span check must still
+    // see multi-line where the resolved text has lost every newline
+    // (2026-09-24 unresolved.jsonl gate stop).
+    const script = [
+      "const src = require('fs').readFileSync('self-compact.test.ts','utf8').split('\\n');",
+      "let depth = 0;",
+      "for (const c of src) { if (c === '{') depth++; else if (c === '}') depth--; }",
+      "const re = /\\`[^\\`]*\\`|\\/\\/.*$/g;",
+      "console.log('depth before L765:', depth);",
+    ].join("\n");
+    const r = await parseCommand(`node -e "${script}"`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths).toEqual([]);
+  });
+
   it("python3 -c with a multi-line double-quoted literal: excluded too", async () => {
     const r = await parseCommand('python3 -c "import os\nprint(os.getcwd())"', cwd);
     expect(r.opaque).toEqual([]);

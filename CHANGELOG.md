@@ -2,6 +2,31 @@
 
 # Changelog
 
+## 3.26.1 — 2026-09-24
+
+**Floor: three closed-set misses from the 2026-09-24 unresolved.jsonl.**
+All fail-closed; each loosens exactly one provable shape, nothing more.
+
+- **Multi-line literal args: row-span check** (`analysis/bash-parser.ts`).
+  tree-sitter-bash splits a double-quoted string containing escape
+  sequences into child nodes with the newlines in the gaps between them,
+  so the resolved text lost every newline and `isMultiLineLiteralArg`
+  never fired — a `node -e "<script>"` body containing a JS-regex `\``
+  (or `$/g`) minted the whole script as one opaque token and gate-stopped.
+  The check now uses the argument node's source row span; a body with real
+  runtime expansion stays opaque.
+- **grep -l stage: `--opt=value` long flags** (`analysis/cwd-local.ts`).
+  The attached value cannot shift the pattern position, so
+  `grep -rln pat --include="*.ts" . | head -1` is cwd-local; a bare
+  `--opt` (value in the next token) is still rejected.
+- **Quote-aware inner tokenization** (`analysis/cwd-local.ts`).
+  `splitShellWords` now follows the bash quote model (inside double quotes
+  a backslash escapes the next character, so `\"` does not close the
+  quote; the other quote kind is content), and the pipeline stage split
+  happens outside quotes only — a `|` inside a quoted pattern (grep's
+  `\|`) is data, not a stage separator. `grep -rln "name: \\"x\\"\|name:
+  'y'" *.ts` is cwd-local; an unterminated inner quote still fails closed.
+
 ## 3.26.0 — 2026-09-18
 
 **Credential scan: false-positive fix + deny tier removed.** Two changes,

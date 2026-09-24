@@ -40,28 +40,97 @@ const FIND_EXEC_RE = /(^|\s)-(?:exec|execdir|ok|okdir)(\s|$)/;
  * Whitespace-split that keeps quoted words whole (one level of '…' / "…",
  * quotes may contain spaces). Used by the grep -l stage, where the PATTERN
  * is positional: a naive split would shred a quoted multi-word pattern into
- * fragments that the start checks would misread. Unterminated quote → null
- * (fail closed).
+ * fragments that the start checks would misread.
+ *
+ * Bash quote model: inside single quotes everything is literal until the
+ * closing ' (no escapes); inside double quotes a backslash escapes the NEXT
+ * character (so `\"` and `\\` do not close the quote) and the other quote
+ * kind is plain content; outside quotes a backslash quotes the next
+ * character literally. Unterminated quote → null (fail closed).
  */
 function splitShellWords(text: string): string[] | null {
   const out: string[] = [];
   let cur = "";
-  let quote: string | null = null;
-  for (const ch of text) {
-    if (quote) {
-      if (ch === quote) quote = null;
+  let quote: string | null = null; // the open quote char (' or ")
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (quote === "'") {
       cur += ch;
+      if (ch === "'") quote = null;
+      i++;
+    } else if (quote === '"') {
+      if (ch === "\\" && i + 1 < text.length) {
+        cur += ch + text[i + 1]; // \" \\ \$ \` — literal pair, no state change
+        i += 2;
+      } else {
+        cur += ch;
+        if (ch === '"') quote = null;
+        i++;
+      }
     } else if (ch === "'" || ch === '"') {
       quote = ch;
       cur += ch;
+      i++;
     } else if (/(\s)/.test(ch)) {
       if (cur) { out.push(cur); cur = ""; }
+      i++;
+    } else if (ch === "\\" && i + 1 < text.length) {
+      cur += text[i + 1]; // unquoted \x → literal x
+      i += 2;
     } else {
       cur += ch;
+      i++;
     }
   }
   if (quote) return null; // unterminated quote — the shape is not provable
   if (cur) out.push(cur);
+  return out;
+}
+
+/**
+ * Split text on a separator only OUTSIDE quotes (same quote model as
+ * splitShellWords) — a `|` inside a quoted pattern (grep's `\|`) is data,
+ * not a pipeline. Unterminated quote → null (fail closed).
+ */
+function splitOutsideQuotes(text: string, sep: string): string[] | null {
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (quote === "'") {
+      cur += ch;
+      if (ch === "'") quote = null;
+      i++;
+    } else if (quote === '"') {
+      if (ch === "\\" && i + 1 < text.length) {
+        cur += ch + text[i + 1];
+        i += 2;
+      } else {
+        cur += ch;
+        if (ch === '"') quote = null;
+        i++;
+      }
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      cur += ch;
+      i++;
+    } else if (ch === sep) {
+      out.push(cur);
+      cur = "";
+      i++;
+    } else if (ch === "\\" && i + 1 < text.length) {
+      cur += ch + text[i + 1]; // unquoted escape — literal, not the separator
+      i += 2;
+    } else {
+      cur += ch;
+      i++;
+    }
+  }
+  if (quote) return null; // unterminated quote — the shape is not provable
+  out.push(cur);
   return out;
 }
 
@@ -95,12 +164,15 @@ function isGrepLStartWord(w: string): boolean {
  * output value is a name relative to the runtime cwd.
  *
  * Closed set: letter-flag clusters only (r/R/l/F) — an `e` or `f` cluster
- * char consumes a pattern VALUE the scanner cannot position, and long flags
- * (--include, …) shift positions too and are rejected outright. The pattern
- * is the first non-flag token (after an optional `--`); every remaining
- * token is a START (isGrepLStartWord). At least one start — a stdin read
- * prints `-`, not names. A grep stage may not FOLLOW another stage: its own
- * starts would then ignore the piped input (the output is not a subset).
+ * char consumes a pattern VALUE the scanner cannot position — plus long
+ * flags in `--opt=value` form, whose attached value cannot shift the
+ * pattern position; a bare `--opt` takes its value in the next token and
+ * is rejected. The pattern is the first non-flag token (after an optional
+ * `--`); every remaining token is a START (isGrepLStartWord) except
+ * `--opt=value` flags, which may follow the pattern too (their attached
+ * value shifts nothing). At least one start — a stdin read prints `-`, not
+ * names. A grep stage may not FOLLOW another stage: its own starts would
+ * then ignore the piped input (the output is not a subset).
  */
 function isGrepLStage(tokens: string[]): boolean {
   if (tokens[0] !== "grep") return false;
@@ -110,7 +182,14 @@ function isGrepLStage(tokens: string[]): boolean {
     const t = tokens[i];
     if (t === "--") { i++; break; } // terminator: the next token is the pattern
     if (t.startsWith("-")) {
-      if (t.startsWith("--") || !/^[a-zA-Z]+$/.test(t.slice(1))) return false;
+      if (t.startsWith("--")) {
+        // `--opt=value`: the value is attached, so it cannot shift the
+        // pattern position. A bare `--opt` takes its value in the NEXT
+        // token (which would be misread as the pattern) and is rejected.
+        if (!/^--[^=]+=/.test(t)) return false;
+        continue;
+      }
+      if (!/^[a-zA-Z]+$/.test(t.slice(1))) return false;
       if (/[ef]/.test(t)) return false; // -e/-f: a pattern value shifts the positions
       hasL = hasL || t.includes("l");
       continue;
@@ -123,7 +202,9 @@ function isGrepLStage(tokens: string[]): boolean {
   i++;
   let starts = 0;
   for (; i < tokens.length; i++) {
-    if (!isGrepLStartWord(tokens[i])) return false;
+    const t = tokens[i];
+    if (t.startsWith("--") && /^--[^=]+=/.test(t)) continue; // attached value — a flag after the pattern, not a start
+    if (!isGrepLStartWord(t)) return false;
     starts++;
   }
   return starts > 0;
@@ -189,7 +270,11 @@ export function isCwdLocalSubstitution(inner: string): boolean {
   const text = inner.trim();
   if (!text) return false;
   if (/[;&`$]/.test(text)) return false; // second command / computed path
-  const stages = text.split("|").map(s => s.trim().split(/\s+/).filter(Boolean));
+  // Pipeline stages split only OUTSIDE quotes — a `|` inside a quoted
+  // pattern (grep's `\|`) is data, not a stage separator.
+  const stageTexts = splitOutsideQuotes(text, "|");
+  if (!stageTexts) return false;
+  const stages = stageTexts.map(s => s.trim().split(/\s+/).filter(Boolean));
   if (stages.some(t => t.length === 0)) return false;
   // The grep stage tokenizes quote-aware (its pattern is positional); the
   // other stages are flag-scanned, so the naive split suffices for them.
