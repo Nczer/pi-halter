@@ -52,6 +52,11 @@ describe("isCwdLocalSubstitution", () => {
     "grep -rl pat . | sort -u",
     "grep -l 'a b' config/ | head -1",
     "grep -l \"pat\" dir",
+    "grep --include=x -l pat dir",
+    "grep -rln 'pat' --include=\"*.ts\" . | head -1",
+    "grep -rln \"type A\\|interface B\" --include=\"*.ts\" . | head -1",
+    "grep -rln \"name: \\\"sr\\\"\\|name: 'sr2'\" *.ts",
+    "grep -l 'a|b' dir",
   ];
   const rejected = [
     "find /abs",
@@ -78,7 +83,9 @@ describe("isCwdLocalSubstitution", () => {
     "grep pat dir",
     "grep -el pat dir",
     "grep -f /p dir",
-    "grep --include=x -l pat dir",
+    "grep --include x -l pat dir",
+    "grep -l pat --include x dir",
+    "grep -l \"pat dir",
     "grep -l pat dir | wc -l",
     "grep -l 'a b' '/etc x'",
     "grep -l pat - | head -1",

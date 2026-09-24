@@ -20,6 +20,9 @@ interface TSNode {
   readonly parent: TSNode | null;
   /** Stable node identity within the tree (child(i) wrappers are fresh per call). */
   readonly id: number;
+  /** Source position (web-tree-sitter Node.startPosition / endPosition). */
+  readonly startPosition: { readonly row: number; readonly column: number };
+  readonly endPosition: { readonly row: number; readonly column: number };
   child(index: number): TSNode | null;
 }
 
@@ -281,14 +284,21 @@ function nodeHasRuntimeExpansion(n: TSNode): boolean {
 
 /**
  * A multi-line LITERAL argument — a script or data body (`node -e '…'`,
- * `python3 -c "…"`), never a path: it contains newlines but no runtime
- * expansion anywhere in its AST subtree, so its text is fixed at parse
- * time. Text-level checks can't tell a JS template literal's backticks from
- * a shell backtick substitution — the AST can. A multi-line argument that
- * DOES expand at runtime stays opaque (fail closed).
+ * `python3 -c "…"`), never a path: it spans multiple source lines but has
+ * no runtime expansion anywhere in its AST subtree, so its value is fixed
+ * at parse time. Text-level checks can't tell a JS template literal's
+ * backticks from a shell backtick substitution — the AST can. A multi-line
+ * argument that DOES expand at runtime stays opaque (fail closed).
+ *
+ * Multi-line is judged by the node's row span, not the resolved text:
+ * tree-sitter-bash splits a double-quoted string containing escape
+ * sequences into multiple child nodes, and the newlines fall into the gaps
+ * BETWEEN children, so the concatenated value can lose every newline
+ * (2026-09-24 unresolved.jsonl: a node -e body with a JS-regex `\`` and
+ * `$/g` minted the whole script as one opaque token → gate stop).
  */
-function isMultiLineLiteralArg(text: string, node: TSNode): boolean {
-  return text.includes("\n") && !nodeHasRuntimeExpansion(node);
+function isMultiLineLiteralArg(node: TSNode): boolean {
+  return node.endPosition.row > node.startPosition.row && !nodeHasRuntimeExpansion(node);
 }
 
 /** Text-level variant for redirect targets (no node available): a newline
@@ -1566,7 +1576,7 @@ export async function parseCommand(
           // is the whole script, bloating the prompt and the decision log.
           // The shell never touches body paths — but the script does: scan
           // them into the path set (fail-closed, like every other path).
-          if (isMultiLineLiteralArg(arg, argNode)) {
+          if (isMultiLineLiteralArg(argNode)) {
             bodyPaths(arg, cwd, allPaths);
             continue;
           }
