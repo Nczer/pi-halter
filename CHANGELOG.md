@@ -2,6 +2,31 @@
 
 # Changelog
 
+## 3.26.2 — 2026-09-30
+
+**Prompt: the symlink chain behind outside-cwd dirs.** A written path can
+resolve via symlink into a directory that appears nowhere in the command
+text (`ls -la ~/.local/bin/Joplin` → target under /mnt/Ndr/Download) —
+the outside-cwd prompt named only the resolved dir, so the trigger looked
+like a phantom (2026-09-30 session: the user could not map the prompt
+back to any token).
+
+- **Hop capture (`analysis/bash-parser.ts`).** `parseCommand` records
+  `PathHop { written, resolved }` for literal path tokens (args, `sort -o`
+targets, redirects, script-body literals) whose realpath differs from the
+  written form. Dot-prefixed tokens are excluded — `threadCwdPaths`
+  re-resolves them against the per-segment effective cwd, so a parse-time
+  hop would pin the wrong base.
+- **Bar filter (`analysis/command-analysis.ts`).** `prompt.symlinkHops`
+  keeps only hops whose resolved location is in the outside set — an
+  in-bar symlink is not a signal.
+- **Render (`ui/prompt-builder.ts`).** The bash prompt renders up to 3
+  `🔗 written → resolved` lines under the outside-cwd line (+N more tail),
+  mirroring the file prompt's existing `symlinkHint`. Display-only: the
+  approval bar, grants, and auto-allow logic are unchanged.
+
+Tests +8 (3814 pass).
+
 ## 3.26.1 — 2026-09-24
 
 **Floor: three closed-set misses from the 2026-09-24 unresolved.jsonl.**

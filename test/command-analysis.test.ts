@@ -491,6 +491,40 @@ describe("Paths: outside cwd detection for root filesystem", () => {
   });
 });
 
+describe("symlinkHops: written→resolved chain for prompt display", () => {
+  const prefix = fs.mkdtempSync(path.join(home, ".halter-hop-"));
+  afterAll(() => fs.rmSync(prefix, { recursive: true, force: true }));
+  const real = path.join(prefix, "real");
+  fs.mkdirSync(real);
+  const link = path.join(prefix, "link");
+  fs.symlinkSync(real, link);
+
+  it("keeps only hops whose resolved location is in the outside set", async () => {
+    const a = await analyzeCommand(`cat ${link}/f.txt`, cwd, {
+      isInsideAllowedDir: () => false,
+    });
+    expect(a.prompt.symlinkHops).toEqual([
+      { written: `${link}/f.txt`, resolved: `${real}/f.txt` },
+    ]);
+  });
+
+  it("in-bar symlink (inside cwd) leaves no hop in the prompt set", async () => {
+    const inReal = path.join(cwd, "real");
+    const inLink = path.join(cwd, "link");
+    fs.mkdirSync(inReal);
+    try {
+      fs.symlinkSync(inReal, inLink);
+      const a = await analyzeCommand(`cat ${inLink}/f.txt`, cwd, {
+        isInsideAllowedDir: () => false,
+      });
+      expect(a.prompt.symlinkHops).toEqual([]);
+    } finally {
+      fs.rmSync(inLink);
+      fs.rmSync(inReal, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("outsideDirs: unbound-token locations are not grantable", () => {
   const prefix = fs.mkdtempSync(path.join(home, ".halter-od-"));
   afterAll(() => fs.rmSync(prefix, { recursive: true, force: true }));

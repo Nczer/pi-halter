@@ -509,6 +509,45 @@ describe("parseCommand: loop in-list roots (symlink verification)", () => {
   });
 });
 
+describe("parseCommand: symlink hops (prompt display)", () => {
+  const dirs: string[] = [];
+
+  function makeRoot(): { base: string; real: string; link: string } {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "halter-hop-"));
+    dirs.push(base);
+    const real = path.join(base, "real");
+    fs.mkdirSync(real);
+    const link = path.join(base, "link");
+    fs.symlinkSync(real, link);
+    return { base, real, link };
+  }
+
+  afterEach(() => {
+    while (dirs.length) {
+      const d = dirs.pop()!;
+      try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  });
+
+  it("records written→resolved for a literal arg behind a symlink", async () => {
+    const { real, link } = makeRoot();
+    const r = await parseCommand(`cat ${link}/f.txt`, cwd);
+    expect(r.hops).toContainEqual({ written: `${link}/f.txt`, resolved: `${real}/f.txt` });
+  });
+
+  it("records hops for redirect targets behind a symlink", async () => {
+    const { real, link } = makeRoot();
+    const r = await parseCommand(`echo x > ${link}/out.txt`, cwd);
+    expect(r.hops).toContainEqual({ written: `${link}/out.txt`, resolved: `${real}/out.txt` });
+  });
+
+  it("no hop for a path that resolves to itself", async () => {
+    const { base } = makeRoot();
+    const r = await parseCommand(`cat ${base}/real/f.txt`, cwd);
+    expect(r.hops).toEqual([]);
+  });
+});
+
 describe("parseCommand: relative-glob loop in-lists (2026-08-31 log case)", () => {
   it("classifies a relative-glob in-list as cwdLocal (the glob cannot cross /)", async () => {
     const r = await parseCommand("for f in */x.ts; do cat \"$f\"; done", cwd);

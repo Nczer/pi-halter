@@ -238,6 +238,34 @@ describe("bash body content", () => {
     expect(prompt.body).not.toContain("⚠️ echo part 29");
   });
 
+  it("renders symlink hops under the outside-cwd line (written → resolved)", () => {
+    const prompt = buildPrompt(bashDecision({
+      command: "ls -la ~/.local/bin/Joplin",
+      outsideDirs: ["/mnt/Ndr/Download"],
+      needsPathApproval: true,
+      symlinkHops: [{ written: "~/.local/bin/Joplin", resolved: "/mnt/Ndr/Download/Joplin-3.7.16.appimage" }],
+    }));
+    expect(prompt.body).toContain("⚠️ outside cwd: /mnt/Ndr/Download");
+    expect(prompt.body).toContain("🔗 ~/.local/bin/Joplin → /mnt/Ndr/Download/Joplin-3.7.16.appimage");
+  });
+
+  it("caps symlink hops at 3 lines with a +N more tail", () => {
+    const hops = Array.from({ length: 5 }, (_, i) => ({ written: `~/.local/bin/a${i}`, resolved: `/mnt/x/a${i}.bin` }));
+    const prompt = buildPrompt(bashDecision({
+      outsideDirs: ["/mnt/x"],
+      needsPathApproval: true,
+      symlinkHops: hops,
+    }));
+    const hopLines = prompt.body.split("\n").filter(l => l.startsWith("🔗"));
+    expect(hopLines).toHaveLength(4);
+    expect(hopLines[3]).toContain("+2 more");
+  });
+
+  it("no hop lines when symlinkHops is absent", () => {
+    const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], needsPathApproval: true }));
+    expect(prompt.body).not.toContain("🔗");
+  });
+
   it("unflagged chains list no segments (nothing to show)", () => {
     const segs = Array.from({ length: 12 }, (_, i) => `echo part ${i}`);
     const prompt = buildPrompt(bashDecision({

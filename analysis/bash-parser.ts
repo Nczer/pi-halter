@@ -1472,9 +1472,11 @@ const BODY_PATH_RE = /(?<![\w:/.-])(?:~)?\/[\w.-]+(?:\/[\w.-]+)+/g;
 
 /** Scan script body text for path-like literals, resolved like any other
  *  extracted path (SAFE_SYSTEM_PATHS filter + dedup apply downstream). */
-function bodyPaths(text: string, cwd: string, out: string[]): void {
+function bodyPaths(text: string, cwd: string, out: string[], hop?: (written: string, resolved: string) => void): void {
   for (const m of text.matchAll(BODY_PATH_RE)) {
-    out.push(resolvePathReal(expandTilde(m[0]), cwd));
+    const resolved = resolvePathReal(expandTilde(m[0]), cwd);
+    hop?.(m[0], resolved);
+    out.push(resolved);
   }
 }
 
@@ -1501,6 +1503,20 @@ function detectOpsInNode(node: TSNode): string[] {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
+ * A literal path token whose realpath differs from the written form (a
+ * symlink somewhere in the chain). Recorded for prompt display: the
+ * outside-cwd line names the RESOLVED dir, and without this the trigger
+ * would appear nowhere in the command text (2026-09-30:
+ * ~/.local/bin/Joplin → /mnt/Ndr/Download/Joplin-….appimage).
+ */
+export interface PathHop {
+  /** The token as written (after flag-value slicing, before resolution). */
+  written: string;
+  /** Realpath of the written token (deepest existing parent resolved). */
+  resolved: string;
+}
+
+/**
  * Single parse that extracts segments, paths, opaque refs, and assignments.
  */
 export async function parseCommand(
@@ -1512,10 +1528,11 @@ export async function parseCommand(
   opaque: OpaqueRef[];
   assignments: ShellAssignment[];
   hasParseError: boolean;
+  hops: PathHop[];
 }> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], paths: [], opaque: [], assignments: [], hasParseError: false };
+  if (!tree) return { segments: [], paths: [], opaque: [], assignments: [], hasParseError: false, hops: [] };
 
   try {
     // Check for ERROR nodes in the AST (malformed bash)
@@ -1541,6 +1558,17 @@ export async function parseCommand(
     const commandNodes = collectCommandNodes(tree.rootNode);
     const allPaths: string[] = [];
     const opaque: OpaqueRef[] = [];
+    // Symlink hops (written ≠ resolved) for prompt display. Dot-prefixed
+    // tokens are excluded: threadCwdPaths re-resolves them against the
+    // per-segment effective cwd (a `cd` earlier in the chain), so a
+    // parse-time hop would pin the wrong base.
+    const hops: PathHop[] = [];
+    const hopSeen = new Set<string>();
+    const recordHop = (written: string, resolved: string): void => {
+      if (written === resolved || /^(?:\.\/|\.\.\/)/.test(written)) return;
+      const key = written + "\u0000" + resolved;
+      if (!hopSeen.has(key)) { hopSeen.add(key); hops.push({ written, resolved }); }
+    };
 
     for (const cmdNode of commandNodes) {
       // Path-qualified invocations (`/usr/bin/python3`, `~/.pi/…/.bin/tsx`)
@@ -1577,7 +1605,7 @@ export async function parseCommand(
           // The shell never touches body paths — but the script does: scan
           // them into the path set (fail-closed, like every other path).
           if (isMultiLineLiteralArg(argNode)) {
-            bodyPaths(arg, cwd, allPaths);
+            bodyPaths(arg, cwd, allPaths, recordHop);
             continue;
           }
           // Skip inline script/pattern expressions that look like paths but aren't:
@@ -1605,7 +1633,9 @@ export async function parseCommand(
             const resolveArg = arg.startsWith("-") && arg.includes("=")
               ? arg.slice(arg.indexOf("=") + 1)
               : arg;
-            allPaths.push(resolvePathReal(expandHomeToken(expandTilde(resolveArg)), cwd));
+            const resolvedArg = resolvePathReal(expandHomeToken(expandTilde(resolveArg)), cwd);
+            recordHop(resolveArg, resolvedArg);
+            allPaths.push(resolvedArg);
           }
         }
       }
@@ -1632,7 +1662,11 @@ export async function parseCommand(
           if (target && target !== "-" && !target.startsWith("-")) {
             const ref = opaqueRef(cmdNode, target, cwd, segMap.get(cmdNode.id) ?? -1, segments);
             if (ref) opaque.push(ref);
-            else allPaths.push(resolvePathReal(expandHomeToken(expandTilde(target)), cwd));
+            else {
+              const resolvedTarget = resolvePathReal(expandHomeToken(expandTilde(target)), cwd);
+              recordHop(target, resolvedTarget);
+              allPaths.push(resolvedTarget);
+            }
           }
         }
       }
@@ -1661,7 +1695,9 @@ export async function parseCommand(
         for (const p of extractRedirectPaths(node)) {
           if (isMultiLineLiteralText(p)) continue; // script/data body, not a path
           if (isPathCandidate(p)) {
-            redirectPaths.push(resolvePathReal(expandHomeToken(expandTilde(p)), cwd));
+            const resolvedP = resolvePathReal(expandHomeToken(expandTilde(p)), cwd);
+            recordHop(p, resolvedP);
+            redirectPaths.push(resolvedP);
           } else {
             // `> $X` — write destination only knowable at runtime → opaque ref.
             const ref = opaqueRef(node, p, cwd, segMap.get(node.id) ?? -1, segments);
@@ -1686,7 +1722,7 @@ export async function parseCommand(
       return true;
     });
 
-    return { segments, paths, opaque, assignments, hasParseError };
+    return { segments, paths, opaque, assignments, hasParseError, hops };
   } finally {
     subshellCache = null;
     tree.delete();

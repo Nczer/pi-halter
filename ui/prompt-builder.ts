@@ -289,6 +289,12 @@ function buildBashPrompt(
     if (outsideDirs.length > 0) {
       body += `\u26a0\ufe0f outside cwd: ${outsideDirs.join(", ")}\n`;
     }
+    // Symlink hops: a written token that resolves into an outside dir that
+    // appears nowhere in the command text — render the chain so the dir
+    // traces back to its token (mirrors the file prompt's symlinkHint).
+    const hops = data.symlinkHops ?? [];
+    for (const h of hops.slice(0, 3)) body += `\u{1F517} ${h.written} \u2192 ${h.resolved}\n`;
+    if (hops.length > 3) body += `\u{1F517} +${hops.length - 3} more\n`;
     for (const u of unresolved) {
       let line = `\u26a0\ufe0f unresolved ${shortenToken(u.token)}`;
       if (u.reason === "base") line += ` \u2014 working directory not statically known`;
