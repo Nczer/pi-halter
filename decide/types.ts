@@ -6,6 +6,7 @@
  * "Always" would grant). Pure types: no runtime code.
  */
 import type { CommandAnalysis } from "../analysis/command-analysis";
+import type { PathHop } from "../analysis/bash-parser";
 
 export type { Store, AllowRules } from "../gate/store";
 
@@ -123,6 +124,14 @@ export interface BashPromptData {
    * part of an Always grant). Absent on hand-constructed PromptData.
    */
   unresolved?: Array<{ token: string; reason: "var" | "base" }>;
+  /**
+   * Symlink hops behind the outside dirs: literal tokens whose realpath
+   * differs from the written form. The prompt renders `written → resolved`
+   * lines under the outside-cwd line, so a dir that appears nowhere in the
+   * command text traces back to its token (e.g. ~/.local/bin/Joplin →
+   * /mnt/…/Joplin-….appimage). Absent on hand-constructed PromptData.
+   */
+  symlinkHops?: PathHop[];
   /**
    * Fetchable run-form segments (npx tsc, uvx tsc, bunx …) whose package is
    * NOT yet session-trusted, with the segment signature and bare package

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { parseCommand, type OpaqueRef, type BashSegment } from "./bash-parser";
+import { parseCommand, type OpaqueRef, type BashSegment, type PathHop } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
 import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath, staleCwdResolutions, UNKNOWN_CWD_MARKER, type CwdBase } from "./cwd-tracking";
 import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
@@ -33,6 +33,14 @@ export interface PromptHints {
   outsideDirs: string[] | undefined;
   /** Whether path approval is needed (outside paths exist). Undefined if allowed dirs not provided. */
   needsPathApproval: boolean | undefined;
+  /**
+   * Literal tokens whose realpath differs from the written form (symlink
+   * hop) and whose resolved location is in the outside set — the prompt
+   * renders them under the outside-cwd line so a dir that appears nowhere
+   * in the command text traces back to its token. Undefined if allowed
+   * dirs not provided.
+   */
+  symlinkHops: PathHop[] | undefined;
   /**
    * Opaque references the analysis could not statically bind (a variable
    * value not knowable from the command text, or a cwd-local value under an
@@ -379,6 +387,7 @@ export async function analyzeCommand(
   let outsidePaths: string[] | undefined;
   let outsideDirs: string[] | undefined;
   let needsPathApproval: boolean | undefined;
+  let symlinkHops: PathHop[] | undefined;
   if (options?.isInsideAllowedDir) {
     const op = getOutsideCwdPaths(
       paths.filter((p) => !unresolvedRawTokens.has(p)),
@@ -386,6 +395,9 @@ export async function analyzeCommand(
       options.isInsideAllowedDir,
     );
     outsidePaths = op;
+    // Only hops whose resolved location actually forced the bar (in the
+    // outside set) reach the prompt — an in-bar symlink is not a signal.
+    symlinkHops = parseResult.hops.filter(h => op.includes(h.resolved));
     // The bare unresolved-var sentinel names no directory — the prompt shows
     // it via the unresolved list instead (the unknown-cwd marker stays: it is
     // the display of a base the cd chain could not resolve, and is never
@@ -448,6 +460,7 @@ export async function analyzeCommand(
       outsidePaths,
       outsideDirs,
       needsPathApproval,
+      symlinkHops,
       unresolved: opaqueResolution.unresolved,
     },
   };

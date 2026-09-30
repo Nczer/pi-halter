@@ -225,6 +225,7 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
       command: req.command,
       cwd: req.cwd,
       outsideDirs: prompt.outsideDirs ?? [],
+      symlinkHops: prompt.symlinkHops,
       segments: analysis.segments,
       signatures: prompt.promptSignatures,
       // Relative-tool segment signatures (the promptSignatures filter drops
