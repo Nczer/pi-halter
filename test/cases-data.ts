@@ -1026,4 +1026,6 @@ export const cases: TestCase[] = [
   { cmd: 'rg -c "$q" log.txt', simple: true, unsafe: false, decision: "auto-allow", desc: "rg PATTERN position is data, never a path — no <unresolved-var> (2026-09-21 log false positive)" },
   { cmd: 'rg -c "$q" ${2}V*.txt', simple: true, unsafe: false, decision: "prompt", desc: "rg: pattern skipped, the file-position glob stays a sentinel" },
   { cmd: "rg -f /etc/pats log.txt", simple: true, unsafe: false, decision: "prompt", desc: "rg -f switches the grammar: the pattern FILE is a real read" },
+  { cmd: "shuf -i 1-10 -n 3 words.txt", simple: false, unsafe: false, decision: "prompt", desc: "shuf -i/--input-range + -n/--lines values are numeric data — no <unresolved-var> (2026-09-26 log FP); shuf is not allowlisted, so the command still prompts" },
+  { cmd: "awk -v l=$L 'NR>=l' data.txt", simple: false, unsafe: false, decision: "prompt", desc: "awk -v var=value is input data, never a file — no <unresolved-var> (2026-09-26/30 log FP); awk is not allowlisted, so the command still prompts" },
 ];

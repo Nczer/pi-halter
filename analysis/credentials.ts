@@ -300,8 +300,13 @@ export function checkBareRelativeTokens(
    * whose glob chars all sit AFTER its last "/" searches exactly the literal
    * directory before that slash — and if that directory is missing, the
    * expansion is provably empty: nothing to probe, no prompt. (Patterns with
-   * no "/" search cwd itself; patterns with a glob char in the directory part
-   * are not statically verifiable and take the fail-closed path below.)
+   * no "/" search cwd itself.) The same proof applies when the glob chars sit
+   * IN the directory part: the LITERAL ancestor before the first
+   * glob-bearing component (a partially-quoted sed word `s/.*[\"\\]// ` —
+   * dir part `s/…` names nothing; the 2026-09-26 glob-err case where Bun's
+   * globSync threw ENOENT with a NUL in the path) must exist for anything to
+   * match. A glob in the FIRST component (no literal prefix) has no literal
+   * ancestor and takes the fail-closed path below.
    * Required because some runtimes' fs.globSync throws on no-match (observed
    * in the field on Bun, which is what pi runs): without the guard the
    * everyday no-match glob would fail closed every time.
@@ -319,6 +324,13 @@ export function checkBareRelativeTokens(
     const lastSlash = t.lastIndexOf("/");
     const staticDir = lastSlash >= 0 && lastG > lastSlash ? t.slice(0, lastSlash) : null;
     if (staticDir !== null && !fs.existsSync(path.join(cwdReal, staticDir))) return;
+    if (staticDir === null && lastSlash > 0) {
+      const comps = t.split("/");
+      const firstGlob = comps.findIndex(c => /[*?\[\]]/.test(c));
+      if (firstGlob > 0 && !fs.existsSync(path.join(cwdReal, ...comps.slice(0, firstGlob)))) {
+        return; // literal ancestor missing → provably empty
+      }
+    }
     let matches: string[];
     try {
       if (typeof fs.globSync !== "function") {

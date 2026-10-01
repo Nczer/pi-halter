@@ -1,7 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import { describe, expect, it, beforeAll, afterAll, afterEach, vi } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import {
   checkCommandForCredentialPaths,
   checkBareRelativeTokens,
@@ -513,6 +513,49 @@ describe("checkBareRelativeTokens: quoted tokens", () => {
   it("a glob char outside the quoted span still expands and probes matches", () => {
     expect(checkBareRelativeTokens(["cat", { text: "lnk-out*", quoted: true, unquotedGlob: true, quotedWhole: false }], tmp))
       .toBe("/etc/hostname");
+  });
+});
+
+describe("checkBareRelativeTokens: glob literal-ancestor guard (2026-09-26 glob-err.jsonl)", () => {
+  let tmp: string;
+  let calls: string[] = [];
+  let real: any;
+  // Bun's globSync throws ENOENT on no-match (Node returns []): with the
+  // guard patched to ALWAYS throw, only the guard itself can keep the
+  // provably-empty cases from failing closed.
+  const throwGlob = (p: string): never => {
+    calls.push(p);
+    throw new Error("ENOENT: no such file or directory");
+  };
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-globg-"));
+    calls = [];
+    real = (fs as any).globSync;
+    (fs as any).globSync = throwGlob;
+  });
+  afterEach(() => {
+    (fs as any).globSync = real;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("a partially-quoted sed word with a missing literal ancestor is provably empty (no probe, no warn)", () => {
+    // The 2026-09-26 line: `sed s/.*[\"\\]// f` — the dir part names
+    // nothing, so the expansion is empty before any expansion is attempted.
+    const t = { text: 's/.*["\\]// ', quoted: true, unquotedGlob: false, quotedWhole: false } as QuotedToken;
+    expect(checkBareRelativeTokens(["sed", t], tmp)).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("a glob in the first component has no literal ancestor — still fails closed", () => {
+    expect(checkBareRelativeTokens(["cat", "nope*/x"], tmp))
+      .toBe(GLOB_UNVERIFIED_PREFIX + "nope*/x");
+  });
+
+  it("an EXISTING literal ancestor keeps the fail-closed path (expansion error → warn)", () => {
+    fs.mkdirSync(path.join(tmp, "real"));
+    expect(checkBareRelativeTokens(["cat", "real/*.txt"], tmp))
+      .toBe(GLOB_UNVERIFIED_PREFIX + "real/*.txt");
+    expect(calls).toHaveLength(1);
   });
 });
 

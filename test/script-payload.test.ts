@@ -8,7 +8,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
-import { findExecutedScript, scriptFilePathInSegment } from "../analysis/script-payload";
+import {
+  findExecutedScript,
+  scriptFilePathInSegment,
+  executedScriptPaths,
+} from "../analysis/script-payload";
 import { analyzeCommand } from "../analysis/command-analysis";
 
 let tmp: string;
@@ -87,5 +91,29 @@ describe("scriptFilePathInSegment (D19 — pure, no file read)", () => {
     expect(scriptFilePathInSegment("ls job.py", tmp)).toBeNull();
     const skill = path.join(os.homedir(), ".pi", "agent", "skills");
     expect(scriptFilePathInSegment(`python3 ${skill}/foo/job.py`, tmp)).toBeNull();
+  });
+});
+
+describe("executedScriptPaths (D13 floor knowledge)", () => {
+  async function analyze(command: string, cwd = tmp) {
+    return analyzeCommand(command, cwd);
+  }
+
+  it("includes trusted skill scripts — the floor saw them when it trusted them", async () => {
+    const skill = path.join(os.homedir(), ".pi", "agent", "skills");
+    const a = await analyze(`bash ${skill}/doc-search/scripts/q.sh -P x`);
+    expect(executedScriptPaths(a, tmp)).toEqual([`${skill}/doc-search/scripts/q.sh`]);
+    // …while the payload view stays null (trusted scripts are never payloads).
+    expect(findExecutedScript(a, tmp)).toBeNull();
+  });
+
+  it("includes non-trusted scripts and dedupes", async () => {
+    const a = await analyze("python3 job.py && python3 job.py");
+    expect(executedScriptPaths(a, tmp)).toEqual([path.join(tmp, "job.py")]);
+  });
+
+  it("bash -c and computed paths yield nothing", async () => {
+    expect(executedScriptPaths(await analyze("bash -c 'echo hi'"), tmp)).toEqual([]);
+    expect(executedScriptPaths(await analyze("python3 $SCRIPT"), tmp)).toEqual([]);
   });
 });
