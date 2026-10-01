@@ -50,6 +50,7 @@ import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
 import type {PromptData} from "../decide/types";
 import type { Store } from "../gate/store";
+import { executedScriptPaths } from "../analysis/script-payload";
 import type { JudgeResult } from "./judge";
 
 /** Log economy: cap the stored report. */
@@ -167,7 +168,16 @@ export function judgePathLogFields(
   // The floor's own side, as raw knowledge (sentinels included — an
   // unbound-var marker is the floor's limited knowledge of that location).
   // The coverage check below still ignores non-absolute/sentinel entries.
-  const floorPaths = [...analysis.paths, ...(analysis.prompt.outsidePaths ?? [])];
+  // Executed scripts join the floor's knowledge too: the floor identified
+  // (and possibly trusted) the script, so a judge report of its path is not
+  // a blind spot (2026-09-30 judge.jsonl floorMiss on a trusted skill
+  // script). Ledger-only — see executedScriptPaths for why this stays out
+  // of analysis.paths.
+  const floorPaths = [
+    ...analysis.paths,
+    ...(analysis.prompt.outsidePaths ?? []),
+    ...executedScriptPaths(analysis, pd.cwd),
+  ];
   const r = judgePathReport(reported, {
     cwd: pd.cwd,
     floorPaths,

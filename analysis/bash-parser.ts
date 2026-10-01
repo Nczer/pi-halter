@@ -1431,6 +1431,69 @@ function awkProgramArgIndices(args: string[]): Set<number> {
 }
 
 /**
+ * Indices of `awk`'s DATA arguments — the `-v var=value` values (the next
+ * argument after the -v flag, or the inline -vNAME=VAL form) and the
+ * post-program `var=value` assignment operands. All are awk input data,
+ * never file operands — the same accepted blind spot as the program
+ * position (the program may open a file named by a value; the program's own
+ * text already accepts that). -f FILE keeps its value path-checked (it is
+ * the program FILE). (2026-09-26 / 09-30 unresolved.jsonl: the line numbers
+ * `awk -v l=$L` / `awk -v n=$l` floor-stopped as opaque `l=$L` / `n=$l`.)
+ */
+function awkDataArgIndices(args: string[]): Set<number> {
+  const idxs = new Set<number>();
+  let programSeen = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-v" || a === "--assign") {
+      if (i + 1 < args.length) idxs.add(i + 1);
+      continue;
+    }
+    if (a.startsWith("--assign=")) continue; // self-contained flag
+    if (/^-v[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { idxs.add(i); continue; }
+    if (a === "-f" || a === "--file") {
+      programSeen = true;
+      if (i + 1 < args.length) i++; // the program FILE — keep path-checked
+      continue;
+    }
+    if (a.startsWith("--file=") || (a.startsWith("-f") && a.length > 2 && !a.startsWith("--"))) {
+      programSeen = true; // -fFILE / --file= — program from a file
+      continue;
+    }
+    if (a === "-F" || a === "--field-separator") {
+      if (i + 1 < args.length) i++; // separator value — not the program
+      continue;
+    }
+    if (a.startsWith("--field-separator=")) continue;
+    if (a.startsWith("-") && a !== "-") continue; // flag (value inline, if any)
+    if (!programSeen) { programSeen = true; continue; } // the program itself
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) idxs.add(i); // var=value assignment operand
+  }
+  return idxs;
+}
+
+/**
+ * Indices of `shuf`'s DATA arguments: the `-i/--input-range` range
+ * (`1-$n`) and the `-n/--lines` count — separate or inline (-i1-9, -n42).
+ * The FILE operand and the -o/--output / --random-source values stay
+ * path-checked (shuf reads its random source from a real file).
+ * (2026-09-26 unresolved.jsonl: the range `shuf -i 1-$n -n 2`
+ * floor-stopped on the opaque `1-$n`.)
+ */
+function shufDataArgIndices(args: string[]): Set<number> {
+  const idxs = new Set<number>();
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-i" || a === "--input-range" || a === "-n" || a === "--lines") {
+      if (i + 1 < args.length) idxs.add(i + 1);
+      continue;
+    }
+    if (/^-(?:i|n)[0-9]/.test(a) || /^(?:--input-range=|--lines=)/.test(a)) idxs.add(i);
+  }
+  return idxs;
+}
+
+/**
  * Check if an argument to `awk` looks like an inline script rather than a file path.
  *
  * Awk scripts are typically the first non-flag argument. When they start with `/`,
@@ -1597,6 +1660,10 @@ export async function parseCommand(
         // awkProgramArgIndices) — a bare filter (`awk -F: '$1>420' f`) is
         // program text whose `$1` is awk field syntax, not a shell var.
         const awkPrograms = cmdName === "awk" ? awkProgramArgIndices(args.map(a => a.text)) : null;
+        // Awk/shuf data positions: -v values, assignment operands, numeric
+        // ranges — data, never files (see the helpers).
+        const awkData = cmdName === "awk" ? awkDataArgIndices(args.map(a => a.text)) : null;
+        const shufData = cmdName === "shuf" ? shufDataArgIndices(args.map(a => a.text)) : null;
         for (let ai = 0; ai < args.length; ai++) {
           const { text: arg, node: argNode } = args[ai];
           // A multi-line LITERAL argument is a script/data body (`node -e '…'`),
@@ -1617,7 +1684,9 @@ export async function parseCommand(
               isSedPatternArg(arg)
             )) ||
               (cmdName === "awk" && (awkPrograms !== null && awkPrograms.has(ai) || isAwkScriptArg(arg))) ||
-              (grepPatterns !== null && grepPatterns.has(ai))) {
+              (grepPatterns !== null && grepPatterns.has(ai)) ||
+              (cmdName === "awk" && awkData !== null && awkData.has(ai)) ||
+              (cmdName === "shuf" && shufData !== null && shufData.has(ai))) {
             continue;
           }
 

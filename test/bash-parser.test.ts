@@ -461,6 +461,27 @@ describe("parseCommand: rg shares grep's PATTERN position (2026-09-21 unresolved
   });
 });
 
+describe("parseCommand: awk/shuf data args (2026-09-26/30 unresolved.jsonl)", () => {
+  it("shuf's -i range and -n count are numeric data — no opaque ref", async () => {
+    const r = await parseCommand("shuf -i 1-$n -n 2 words.txt", cwd);
+    expect(r.opaque.map(o => o.raw)).toEqual([]);
+  });
+
+  it("awk -v var=value is input data, never a file — no opaque ref", async () => {
+    const r = await parseCommand("awk -v l=$L 'NR>=l' data.txt", cwd);
+    expect(r.opaque.map(o => o.raw)).toEqual([]);
+    const inline = await parseCommand("awk -vn=$l 'print' in.csv", cwd);
+    expect(inline.opaque.map(o => o.raw)).toEqual([]);
+    const fs = await parseCommand("awk -v FS=, 'print' in.csv", cwd);
+    expect(fs.opaque.map(o => o.raw)).toEqual([]);
+  });
+
+  it("a var in the FILE position stays opaque (the data positions are the exemption, not a blanket skip)", async () => {
+    const r = await parseCommand("shuf $f", cwd);
+    expect(r.opaque.map(o => o.raw)).toEqual(["$f"]);
+  });
+});
+
 describe("parseCommand: loop in-list roots (symlink verification)", () => {
   const dirs: string[] = [];
 
