@@ -1,7 +1,7 @@
 import path from "node:path";
 import { parseCommand, type OpaqueRef, type BashSegment, type PathHop } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
-import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath, staleCwdResolutions, UNKNOWN_CWD_MARKER, type CwdBase } from "./cwd-tracking";
+import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath, staleCwdResolutions, homeReassigned, UNKNOWN_CWD_MARKER, type CwdBase } from "./cwd-tracking";
 import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
 import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
@@ -149,9 +149,12 @@ function threadCwdPaths(
   effectiveCwds: CwdBase[],
   normBase: string,
   paths: string[],
+  assignments?: ShellAssignment[],
 ): void {
   const keepStale = new Set<string>();
   const dropStale = new Set<string>();
+  // Same closed-set $HOME state as trackEffectiveCwd ran with (subshell scan).
+  const homeFixed = homeReassigned(segments, assignments);
   for (let i = 0; i < segments.length; i++) {
     const stale = staleCwdResolutions(segments[i], normBase);
     if (effectiveCwds[i] === normBase) { for (const s of stale) keepStale.add(s); }
@@ -166,7 +169,7 @@ function threadCwdPaths(
     const base = effectiveCwds[i];
     if (base !== normBase) {
       paths.push(...reResolveCwdDependentPaths(segments[i], base));
-      const basePath = baseAccessPath(segments[i], base);
+      const basePath = baseAccessPath(segments[i], base, homeFixed);
       if (basePath) paths.push(basePath);
     } else {
       // Base === session cwd: parseCommand already resolved ./../ tokens
@@ -197,8 +200,8 @@ async function analyzeTmuxSendKeysPayload(
     // (`cd /var/tmp && ls` touches the base). The payload's opaque refs
     // resolve against the payload's own segment bases; the full outside-cwd
     // bar (allowed roots, granted dirs) applies downstream at command level.
-    const payloadCwds = trackEffectiveCwd(parsed.segments, cwd);
-    threadCwdPaths(parsed.segments, payloadCwds, normBase, parsed.paths);
+    const payloadCwds = trackEffectiveCwd(parsed.segments, cwd, parsed.assignments);
+    threadCwdPaths(parsed.segments, payloadCwds, normBase, parsed.paths, parsed.assignments);
     const payloadOpaque = resolveOpaqueRefs(
       parsed.opaque,
       parsed.segments,
@@ -248,7 +251,7 @@ export async function analyzeCommand(
   // paths must be analyzed against it for the trusted-script bypass to work
   // (`cd <skill-dir> && uv run … scripts/x.py`). null = unknown base (a
   // non-literal cd or a `||` branch made the runtime cwd unresolvable).
-  const effectiveCwds = trackEffectiveCwd(segments, cwd);
+  const effectiveCwds = trackEffectiveCwd(segments, cwd, assignments);
 
   // Cwd-dependent tokens (./x, ../x, $PWD/x) in post-cd segments were resolved
   // by parseCommand against the session cwd — re-resolve them against the
@@ -270,7 +273,7 @@ export async function analyzeCommand(
   // base access. Under an unknown base the tokens resolve to a marker path
   // outside every allowed dir, forcing path approval.
   const normBase = path.resolve(expandTilde(cwd));
-  threadCwdPaths(segments, effectiveCwds, normBase, paths);
+  threadCwdPaths(segments, effectiveCwds, normBase, paths, assignments);
 
   // Opaque references (an expansion in path position the parser could not
   // resolve on its own): bind them with the command's own dataflow — the
