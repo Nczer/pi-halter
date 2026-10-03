@@ -36,6 +36,21 @@ export function expandTilde(p: string): string {
 }
 
 /**
+ * Statically resolvable variable-path tokens — a closed set. `$HOME`/`${HOME}`
+ * expand to os.homedir() independent of any cd; any other variable or
+ * expansion (`$D/x`, `${HOME:-/tmp}`) is a computed path and stays opaque
+ * (its value is only knowable by running the shell).
+ */
+export const HOME_TOKEN_RE = /^\$(?:\{HOME\}|HOME)(?:\/|(?![a-zA-Z0-9_]))/;
+
+/** Expand a leading $HOME / ${HOME} to the home directory (no-op otherwise). */
+export function expandHomeToken(p: string): string {
+  const m = p.match(/^\$(?:\{HOME\}|HOME)(?:\/(.*))?$/);
+  if (!m) return p;
+  return m[1] !== undefined ? path.join(os.homedir(), m[1]) : os.homedir();
+}
+
+/**
  * Sentinel dir for paths whose runtime location is statically unbound (an
  * opaque expansion the analysis could not bind). It sits outside every real
  * dir, so the outside-cwd check can never drop a path carrying it.

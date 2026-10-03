@@ -569,7 +569,7 @@ export async function checkDspaGate(
   // D7: resolve the sentinels (see d7ResolveSentinel). Concrete outside
   // locations stop (naming the dir for a one-time grant); unprovable
   // locations stop outright (Q1 — never judgeable).
-  const bounds = cdBaseBounds(analysis.parsedSegments, pd.cwd);
+  const bounds = cdBaseBounds(analysis.parsedSegments, pd.cwd, analysis.assignments);
   const resolvedOutside: string[] = [];
   const confirmedOutside: Array<{ token: string; dirs: string[] }> = [];
   // Each unbound opaque ref contributes TWO entries: the raw reference text

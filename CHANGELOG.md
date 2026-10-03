@@ -2,6 +2,46 @@
 
 # Changelog
 
+## 3.27.1 — 2026-10-03
+
+**cd targets expand the closed-set `$HOME` (an ungrantable prompt for a
+knowable location).** `cd $HOME/.pi/agent/extensions/llama-link && grep -rn
+foo .` stopped with `outside cwd: <unresolved-cwd>` — the marker is never
+grantable, so the command could only be approved once at a time. The parser
+already resolves `$HOME`/`${HOME}/…` as a closed set for path tokens (`cat
+$HOME/x` → `/home/nczer/x`), but `resolveCdTarget` bailed on any `$` in a cd
+target: the base went unknown and the later `.` resolved to the marker. cd
+targets were the one place the closed set was not applied.
+
+- **`analysis/path-util.ts`** — `HOME_TOKEN_RE` + `expandHomeToken()` move
+  here from bash-parser: the closed set is now shared by path tokens and cd
+  targets.
+- **`analysis/cwd-tracking.ts`** — `resolveCdTarget`, `resolveLoopCdCandidates`
+  and `subshellBaseAccess` expand a closed-set `$HOME` / `${HOME}/…` / quoted
+  `$HOME` target into the home dir before the `$` bail. New export
+  `homeReassigned(segments, assignments)` disables the expansion when the
+  command reassigns HOME — an env prefix in bash's assignment position
+  (`HOME=/tmp cd $HOME`) or an `export`/`declare`/`local`/`typeset`/
+  `readonly`/`unset`/`read` command naming HOME, plus the parser's
+  `assignments` list (`export HOME=…` never becomes a segment). Token-based,
+  so `MY_HOME=`, `HOME_DIR=` and `echo HOME=/tmp` (an argument, not an
+  assignment) do not disable it. `cdBaseBounds`/`trackEffectiveCwd` take
+  `assignments`. Residual: a HOME set by a sourced file or the outer shell is
+  invisible to the gate — bash's own `cd` fallback there is the passwd home,
+  i.e. the value the closed set assumes.
+- **`analysis/bash-parser.ts`** — imports the shared helper (local copy removed).
+- **`analysis/command-analysis.ts`** — `threadCwdPaths` and both
+  `trackEffectiveCwd` calls carry `assignments`, so a payload and the direct
+  command run with the same closed-set state.
+- **`gate/dspa-gate.ts`** — `cdBaseBounds(…, analysis.assignments)`.
+- Behaviour: `cd $HOME/.pi/… && grep -rn foo .` allows, as the literal form
+  does; `cd $HOME && ls` prompts naming `/home/nczer` (grantable) instead of
+  the marker; `HOME=/tmp cd $HOME && ls`, `export HOME=…; cd $HOME && ls` and
+  `cd $HOMEDIR && ls` keep the marker stop; a non-existent `$HOME` target
+  leaves the base unchanged (the cd fails, as in bash).
+
+Tests +9 (3837 pass).
+
 ## 3.27.0 — 2026-10-03
 
 **Floor stops: the judge's verdict is back — stage 2 skipped when stage 1

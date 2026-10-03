@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { allowedReadPaths, allowedWritePaths, pathAwareCommands } from "../config";
 import { expandTilde, resolvePathReal } from "./path-analysis";
-import { OPAQUE_VAR_DIR } from "./path-util";
+import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandHomeToken } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
 import type { ShellAssignment } from "./var-resolution";
 import { decodeAnsiCEscapes } from "./tokenizer";
@@ -215,19 +215,9 @@ const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 const BARE_SLASH_RE = /^\/\/+$/;
 
 /**
- * Statically resolvable variable-path tokens — a closed set. `$HOME`/`${HOME}`
- * expand to os.homedir() independent of any cd; any other variable or
- * expansion (`$D/x`, `${HOME:-/tmp}`) is a computed path and stays opaque
- * (its value is only knowable by running the shell).
+ * Statically resolvable variable-path tokens — a closed set (`HOME_TOKEN_RE`
+ * / `expandHomeToken`, shared with the cd threading in cwd-tracking).
  */
-const HOME_TOKEN_RE = /^\$(?:\{HOME\}|HOME)(?:\/|(?![a-zA-Z0-9_]))/;
-
-/** Expand a leading $HOME / ${HOME} to the home directory (no-op otherwise). */
-function expandHomeToken(p: string): string {
-  const m = p.match(/^\$(?:\{HOME\}|HOME)(?:\/(.*))?$/);
-  if (!m) return p;
-  return m[1] !== undefined ? path.join(os.homedir(), m[1]) : os.homedir();
-}
 
 /**
  * Opaque expansions in path position: $VAR / ${VAR…} / $(…) / backticks.

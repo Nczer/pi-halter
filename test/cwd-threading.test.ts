@@ -6,6 +6,7 @@ import {
   trackEffectiveCwd,
   reResolveCwdDependentPaths,
   baseWriteAccess,
+  homeReassigned,
   UNKNOWN_CWD_MARKER,
 } from "../analysis/cwd-tracking";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
@@ -158,6 +159,99 @@ describe("trackEffectiveCwd", () => {
       ),
     ).toEqual([BASE, BASE, "/var"]);
   });
+});
+
+describe("closed-set $HOME in cd targets (the <unresolved-cwd> regression)", () => {
+  // `cd $HOME && grep -rn foo .` used to bail on any `$` in a cd target: the
+  // base went unknown, so the later `.` resolved to <unresolved-cwd> — an
+  // ungrantable prompt for a command whose location was perfectly knowable.
+  // The parser already expands $HOME as a closed set for path tokens; cd
+  // targets must use the same bar.
+  it("threads $HOME, ${HOME}/… and quoted $HOME like a literal cd", () => {
+    expect(trackEffectiveCwd([seg("cd $HOME"), seg("ls")], BASE)).toEqual([BASE, HOME]);
+    expect(trackEffectiveCwd([seg("cd ${HOME}/.pi"), seg("ls")], BASE)).toEqual([BASE, path.join(HOME, ".pi")]);
+    expect(
+      trackEffectiveCwd([seg('cd "$HOME/.pi"'), seg("cd agent"), seg("ls")], BASE),
+    ).toEqual([BASE, path.join(HOME, ".pi"), path.join(HOME, ".pi", "agent")]);
+  });
+
+  it("HOME-lookalike variables are not $HOME (stay unknown, as before)", () => {
+    expect(trackEffectiveCwd([seg("cd $HOMEDIR"), seg("ls")], BASE)).toEqual([BASE, null]);
+    expect(trackEffectiveCwd([seg("cd $HOME_DIR"), seg("ls")], BASE)).toEqual([BASE, null]);
+  });
+
+  it("homeReassigned: only a real HOME assignment disables the closed set", () => {
+    expect(homeReassigned([seg("cd $HOME")])).toBe(false);
+    expect(homeReassigned([seg("HOME=/tmp cd $HOME")])).toBe(true);
+    expect(homeReassigned([seg("export HOME=/tmp")])).toBe(true);
+    expect(homeReassigned([seg("declare -x HOME=/tmp")])).toBe(true);
+    expect(homeReassigned([seg("readonly HOME=/tmp")])).toBe(true);
+    expect(homeReassigned([seg("unset HOME")])).toBe(true);
+    // lookalikes and a HOME-looking word in an argument must not disable it
+    expect(homeReassigned([seg("MY_HOME=/tmp cd $MY_HOME")])).toBe(false);
+    expect(homeReassigned([seg("HOME_DIR=/tmp echo x")])).toBe(false);
+    expect(homeReassigned([seg("echo HOME=/tmp")])).toBe(false);
+    // `export HOME=` never reaches a segment (the parser collects it as an
+    // assignment), so the assignment list is checked too
+    expect(homeReassigned([seg("cd $HOME")], [{ name: "HOME", value: "/tmp", at: 0 }])).toBe(true);
+    expect(homeReassigned([seg("cd $HOME")], [{ name: "D", value: "/tmp", at: 0 }])).toBe(false);
+  });
+
+  it("a HOME reassignment keeps the base unknown (fail closed)", () => {
+    expect(
+      trackEffectiveCwd([seg("HOME=/tmp cd $HOME"), seg("ls")], BASE),
+    ).toEqual([BASE, null]);
+    expect(
+      trackEffectiveCwd([seg("cd $HOME"), seg("ls")], BASE, [{ name: "HOME", value: "/tmp", at: 0 }]),
+    ).toEqual([BASE, null]);
+  });
+
+  const dirs = async (cmd: string) => {
+    const dec = await decide({ type: "bash", command: cmd, cwd: CWD }, createStore());
+    return dec.kind === "prompt" ? ((dec.promptData as BashPromptData).outsideDirs ?? []) : [];
+  };
+
+  it("cd $HOME && ls prompts naming the home dir, not the marker", async () => {
+    const od = await dirs("cd $HOME && ls");
+    expect(od).toContain(HOME);
+    expect(od).not.toContain(UNKNOWN_CWD_MARKER);
+  }, 15000);
+
+  it("cd $HOME/.pi/… && grep -rn foo . loses the marker (the reported command)", async () => {
+    const a = await analyzeCommand("cd $HOME/.pi/agent/extensions/llama-link && grep -rn foo . | head -5", CWD);
+    expect(a.paths).not.toContain(UNKNOWN_CWD_MARKER);
+    // same analysis as the literal form of the same command
+    const lit = await analyzeCommand(`cd ${HOME}/.pi/agent/extensions/llama-link && grep -rn foo . | head -5`, CWD);
+    expect(lit.paths).not.toContain(UNKNOWN_CWD_MARKER);
+    expect(a.paths.sort()).toEqual(lit.paths.sort());
+  }, 15000);
+
+  it("a subshell cd $HOME names the home dir (read bar)", async () => {
+    const a = await analyzeCommand("(cd $HOME && ls)", CWD);
+    expect(a.paths).toContain(HOME);
+    expect(a.paths).not.toContain(UNKNOWN_CWD_MARKER);
+  }, 15000);
+
+  it("a HOME-reassigning command still lands on the marker (guard holds)", async () => {
+    for (const cmd of [
+      "export HOME=/tmp; cd $HOME && ls",
+      "HOME=/tmp cd $HOME && ls",
+      "declare -x HOME=/tmp; cd $HOME && ls",
+      "cd $HOMEDIR && ls",
+    ]) {
+      const od = await dirs(cmd);
+      expect(od, cmd).toContain(UNKNOWN_CWD_MARKER);
+      expect(od, cmd).not.toContain(HOME);
+    }
+  }, 15000);
+
+  it("a non-existent $HOME target leaves the base unchanged (the cd fails, as bash)", async () => {
+    expect(
+      trackEffectiveCwd([seg("cd $HOME/.nonexistent-xyz-abc"), seg("ls")], BASE),
+    ).toEqual([BASE, BASE]);
+    const d = await decide({ type: "bash", command: "cd $HOME/.nonexistent-xyz-abc && ls", cwd: CWD }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  }, 15000);
 });
 
 describe("parser operator metadata (precedingOp / backgrounded)", () => {

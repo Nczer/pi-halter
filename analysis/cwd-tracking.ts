@@ -1,11 +1,12 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { expandTilde } from "./path-util";
+import { expandTilde, expandHomeToken } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
 import { tokenizeSegment } from "./tokenizer";
 import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS } from "../config";
 import type { BashSegment } from "./bash-parser";
+import type { ShellAssignment } from "./var-resolution";
 
 // ── cwd tracking across `cd` ───────────────────────────────────────────────
 //
@@ -67,7 +68,11 @@ function stripEscapes(text: string): string {
  * `cwd === null` means the base is already unknown (relative targets stay
  * unknown; absolute literals recover).
  */
-export function resolveCdTarget(seg: BashSegment, cwd: CwdBase): CdResolution {
+export function resolveCdTarget(
+  seg: BashSegment,
+  cwd: CwdBase,
+  homeFixed = false,
+): CdResolution {
   // Pipeline stages and subshells run in a subshell — their cd does not
   // persist into subsequent segments.
   if (seg.hasSubshell) return { kind: "unchanged" };
@@ -109,16 +114,20 @@ export function resolveCdTarget(seg: BashSegment, cwd: CwdBase): CdResolution {
   // directories → keep the conservative unknown: a set-valued base would need
   // per-value path checks, which the current path pipeline doesn't do.
   if (seg.loopCdInList) {
-    const cands = resolveLoopCdCandidates(seg.loopCdInList, cwd);
+    const cands = resolveLoopCdCandidates(seg.loopCdInList, cwd, homeFixed);
     if (cands === null) return { kind: "unknown" };
     if (cands.length === 0) return { kind: "unchanged" };
     if (cands.length === 1) return { kind: "thread", dir: cands[0] };
     return { kind: "unknown" };
   }
+  // Closed-set $HOME / ${HOME} expand statically whatever the base is (the
+  // same closed set the parser applies to path tokens, see path-util). Off
+  // when the command reassigns HOME — the expansion is then a guess.
+  const homeTarget = homeFixed ? target : expandHomeToken(target);
   // Globs, $VAR / $(…) / backtick expansions can't be resolved at gate time.
-  if (/[?*[\]$`]/.test(target)) return { kind: "unknown" };
+  if (/[?*[\]$`]/.test(homeTarget)) return { kind: "unknown" };
 
-  const expanded = expandTilde(target);
+  const expanded = expandTilde(homeTarget);
   // Relative literal on an unknown base: runtime dir is <unknown>/<rel>.
   if (!path.isAbsolute(expanded) && cwd === null) return { kind: "unknown" };
 
@@ -158,14 +167,16 @@ export function resolveCdTarget(seg: BashSegment, cwd: CwdBase): CdResolution {
 export function cdBaseBounds(
   segments: BashSegment[],
   sessionCwd: string,
+  assignments?: ShellAssignment[],
 ): { unbounded: boolean; candidates: string[] } {
   const candidates: string[] = [sessionCwd];
   let base: CwdBase = sessionCwd;
   let unbounded = false;
+  const homeFixed = homeReassigned(segments, assignments);
   for (const seg of segments) {
     if ((seg.subshellDepth ?? 0) !== 0 || seg.backgrounded) continue;
     if (unbounded) continue;
-    const r = resolveCdTarget(seg, base);
+    const r = resolveCdTarget(seg, base, homeFixed);
     if (r.kind === "unknown") unbounded = true;
     else if (r.kind === "thread") {
       base = r.dir;
@@ -203,13 +214,18 @@ export function cdBaseBounds(
  *     pre-cd base). A branch cd NEVER recovers an unknown base — the branch
  *     may not have run, so the runtime cwd is {target, unknown}.
  */
-export function trackEffectiveCwd(segments: BashSegment[], baseCwd: string): CwdBase[] {
+export function trackEffectiveCwd(
+  segments: BashSegment[],
+  baseCwd: string,
+  assignments?: ShellAssignment[],
+): CwdBase[] {
   const result: CwdBase[] = [];
   const bases: CwdBase[] = [path.resolve(expandTilde(baseCwd))];
   // Base at the start of the current (;) statement, per depth — the || freeze anchor.
   const stmtStarts: CwdBase[] = [bases[0]];
   // Distinct conditional-branch cd targets since the last definite cd, per depth.
   const branchCds: Set<string>[] = [new Set()];
+  const homeFixed = homeReassigned(segments, assignments);
   let depth = 0;
   for (const seg of segments) {
     const d = seg.subshellDepth ?? 0;
@@ -225,7 +241,7 @@ export function trackEffectiveCwd(segments: BashSegment[], baseCwd: string): Cwd
     if (seg.precedingOp === "||" && bases[depth] !== stmtStarts[depth]) bases[depth] = null;
     result.push(bases[depth]);
     if (seg.backgrounded) continue;
-    const r = resolveCdTarget(seg, bases[depth]);
+    const r = resolveCdTarget(seg, bases[depth], homeFixed);
     if (r.kind === "thread") {
       // A branch-dependent cd may not have run: it threads only over a base
       // that was already known, and never recovers an unknown one (the
@@ -258,7 +274,7 @@ export const UNKNOWN_CWD_MARKER = "<unresolved-cwd>";
  * a glob with too many matches. A token whose values are missing or not
  * directories is dropped — the cd fails at runtime for those values.
  */
-function resolveLoopCdCandidates(inList: string[], base: CwdBase): string[] | null {
+function resolveLoopCdCandidates(inList: string[], base: CwdBase, homeFixed = false): string[] | null {
   const dirs = new Set<string>();
   for (const raw of inList) {
     let t = raw;
@@ -267,6 +283,7 @@ function resolveLoopCdCandidates(inList: string[], base: CwdBase): string[] | nu
       if (q[1] === '"' && /[$`]/.test(q[2])) return null; // expansion inside double quotes
       t = q[2];
     }
+    if (!homeFixed) t = expandHomeToken(t); // closed-set $HOME (see resolveCdTarget)
     if (/[`$]/.test(t)) return null; // runtime expansion — target not knowable
     if (t.startsWith("~")) t = expandTilde(t);
     let resolved: string;
@@ -304,6 +321,45 @@ function resolveLoopCdCandidates(inList: string[], base: CwdBase): string[] | nu
 /** Leading env-assignment prefix (VAR=x / _VAR=x) — not the command itself. */
 const ENV_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
+/**
+ * A command that reassigns (or unsets) HOME makes the closed-set $HOME
+ * expansion a guess: the runtime value is no longer os.homedir(). `HOME=/tmp
+ * cd $HOME` lands in /tmp, so threading it to the home dir names the wrong
+ * base — and under-flags when the home dir IS the session cwd. Token-based so
+ * the assignment has to sit in bash's assignment position: an env prefix
+ * before the command word (`HOME=/tmp cd …`) or a `export`/`declare`/`local`/
+ * `typeset`/`readonly`/`unset`/`read` command. `echo HOME=/tmp` is an
+ * argument, not an assignment, and `MY_HOME=`/`HOME_DIR=` are not HOME. A
+ * false positive only reverts to the pre-fix behaviour (no expansion, so the
+ * marker prompt). `export HOME=`/`declare HOME=` never become a segment (the
+ * parser collects them into `assignments`), so that list is checked too.
+ * Residuals: a HOME set by a sourced file or the outer shell is invisible to
+ * the gate — bash's own `cd` fallback there is the passwd home, i.e. the same
+ * value the closed set assumes.
+ */
+const HOME_NAME_RE = /(?:^|[^A-Za-z0-9_.])HOME(?:$|[^A-Za-z0-9_.])/;
+const HOME_BUILTIN_RE = /^(?:export|declare|local|typeset|readonly|unset|read)$/;
+
+/** True when the command reassigns HOME (closed-set $HOME disabled). */
+export function homeReassigned(
+  segments: BashSegment[],
+  assignments?: ShellAssignment[],
+): boolean {
+  for (const seg of segments) {
+    const tokens = tokenizeSegment(seg.text);
+    let i = 0;
+    while (i < tokens.length && ENV_ASSIGN_RE.test(tokens[i])) {
+      if (HOME_NAME_RE.test(tokens[i])) return true; // env prefix: HOME=/tmp cd …
+      i++;
+    }
+    if (tokens[i] && HOME_BUILTIN_RE.test(tokens[i])
+      && tokens.slice(i + 1).some((t) => HOME_NAME_RE.test(t))) {
+      return true;
+    }
+  }
+  return assignments?.some((a) => a.name === "HOME") ?? false;
+}
+
 /** Path-aware commands that operate on the cwd when given no file args. */
 const CWD_DEFAULT_COMMANDS = new Set(["ls", "find", "du"]);
 
@@ -334,7 +390,7 @@ function isResolvableTarget(t: string): boolean {
  * (`(cd /var&&ls)`) defeat the token scan — the parser sees them, this
  * scan does not.
  */
-function subshellBaseAccess(tokens: string[], base: CwdBase): string | null {
+function subshellBaseAccess(tokens: string[], base: CwdBase, homeFixed = false): string | null {
   let localBase: CwdBase = base;
   let hasAccess = false;
   let i = 0;
@@ -357,18 +413,22 @@ function subshellBaseAccess(tokens: string[], base: CwdBase): string | null {
       }
       if (invalid) localBase = null;
       else if (target === null) localBase = os.homedir(); // bare cd → $HOME
-      else if (target === "-" || /\$\(|`/.test(target) || /[?*\[\]$]/.test(target)) localBase = null;
       else {
-        const expanded = expandTilde(target);
-        if (path.isAbsolute(expanded)) {
-          try {
-            if (fs.statSync(expanded).isDirectory()) localBase = expanded;
-            // nonexistent: the inner cd fails — localBase unchanged
-          } catch { /* unchanged */ }
-        } else if (localBase !== null) {
-          localBase = path.resolve(localBase, expanded);
-        } else {
-          localBase = null;
+        // Closed-set $HOME / ${HOME} — same rule as resolveCdTarget.
+        const homeTarget = homeFixed ? target : expandHomeToken(target);
+        if (homeTarget === "-" || /\$\(|`/.test(homeTarget) || /[?*\[\]$]/.test(homeTarget)) localBase = null;
+        else {
+          const expanded = expandTilde(homeTarget);
+          if (path.isAbsolute(expanded)) {
+            try {
+              if (fs.statSync(expanded).isDirectory()) localBase = expanded;
+              // nonexistent: the inner cd fails — localBase unchanged
+            } catch { /* unchanged */ }
+          } else if (localBase !== null) {
+            localBase = path.resolve(localBase, expanded);
+          } else {
+            localBase = null;
+          }
         }
       }
       continue;
@@ -413,14 +473,14 @@ function subshellBaseAccess(tokens: string[], base: CwdBase): string | null {
  * a grep pattern) false-flags — accepted: the prompt only fires when the
  * base is outside the manual bar, and the user typed the cd.
  */
-export function baseAccessPath(seg: BashSegment, base: CwdBase): string | null {
+export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = false): string | null {
   const tokens = tokenizeSegment(seg.text);
   let ti = 0;
   while (ti < tokens.length && ENV_ASSIGN_RE.test(tokens[ti])) ti++;
   const first = tokens[ti] ? path.basename(tokens[ti]).toLowerCase() : "";
 
   if (seg.hasSubshell || first === "(" || first === "{") {
-    return subshellBaseAccess(tokens, base);
+    return subshellBaseAccess(tokens, base, homeFixed);
   }
 
   // Only the first pipeline stage targets the base; later stages read stdin.
