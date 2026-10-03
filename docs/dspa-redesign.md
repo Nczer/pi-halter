@@ -1055,6 +1055,36 @@ both options (base outside cwd, no grants) or the D18 write stop (base
 read-granted) → `Allow writes: <base>` → the identical run passes the
 floor and the (clean-packet) judge auto-allows it. Suite 3784.
 
+### D22. Floor stops stay advisory — stage 2 skipped when stage 1 approved (2026-10-03)
+
+**Incident.** A 2026-10-03 change (`e315cc8`, reverted the same day) made
+floor stops BARE — no judge call at all, the verdict only on demand. That
+went past the spec: the behaviour is D16 (the judge runs, its verdict
+renders in the prompt as advisory input) with ONE delta — when the floor
+stops a command that stage 1 already approved, the intent pass adds a
+sequential call that never changes the outcome (the stop stands either
+way), so it is skipped (2026-09-01: 47/49 dspa prompts were floor stops
+paying two sequential judge calls).
+
+**Decisions.**
+- **Stage 1 always runs on a floor stop** (D16 unchanged): the stop stands
+  — never an auto-allow — and its verdict renders in the prompt (`—
+  advisory (floor stop stands)`).
+- **Stage 2 is skipped when stage 1 approved** (the approve, any risk
+  tier): the prompt carries the stage-1 verdict. When stage 1 denied or
+  produced no verdict, stage 2 runs exactly as before (the cross-check is
+  the intent pass's point).
+- **Consequence (known):** a skipped stage 2 writes no path report, so the
+  D13 parser-gap mining line (`judgePaths` / `floorMisses` on the prompt's
+  decision-log line) is absent when stage 1 approved — the floor's blind
+  spots for approve-prone shapes are only mineable on the deny/defer side.
+- The rest of the D16 machinery stands: `logJudgeDiff` is a no-op on a
+  skipped stage 2 (the same no-pair shape as a failed one); the judge
+  LEDGER still gets no paths line on floor stops (nothing ran through the
+  floor); `recordDspaStop("gate", model)` uses the carried verdict's model.
+
+Suite 3828.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -1133,6 +1163,11 @@ class"). Suite 3229.
   D18 class 3 — write-verb stages with bare targets under a re-based base
   face the WRITE bar; the read-bar stop now carries `writeOutside`, so
   the read and write grant options land in ONE prompt). Suite 3784.
+- **Phase 3p — done** (2026-10-03): D22 (floor stops stay advisory — the
+  judge's verdict renders in the prompt as before D16; stage 2 is skipped
+  when stage 1 approved, cutting the second sequential call on the common
+  floor-stop shape; supersedes the same-day reverted bare-stop change
+  `e315cc8`). Suite 3828.
 
 ## 5. Open questions (grill order)
 

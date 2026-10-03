@@ -2,6 +2,30 @@
 
 # Changelog
 
+## 3.27.0 — 2026-10-03
+
+**Floor stops: the judge's verdict is back — stage 2 skipped when stage 1
+approved.** The same-day bare-stop change (reverted) removed the judge
+call from floor stops entirely, so the prompt showed the floor's reason
+with no judge review — a regression past the spec. Restored D16 behaviour
+with one delta: when the floor stops a command that stage 1 already
+approved, stage 2 is skipped (its sequential call never changes the
+outcome — the stop stands) and the prompt carries the stage-1 verdict.
+
+- **`gate/fallthrough.ts`** — the advisory floor-stop branch runs stage 1
+  always; stage 2 only when stage 1 did not approve. `logJudgeDiff` is a
+  no-op on a skipped stage 2 (the no-pair shape, same as a failed stage
+  2); the judge ledger still gets no paths line on floor stops (nothing
+  ran through the floor); `recordDspaStop("gate", …)` uses the carried
+  verdict's model.
+- **Known consequence:** a skipped stage 2 writes no path report, so the
+  D13 parser-gap mining line is absent when stage 1 approved.
+- **Prompt** — unchanged from D16: the verdict block leads the body
+  (`— advisory (floor stop stands)`); 💭 Explain stays offered only when no
+  verdict rendered at all (both stages failed).
+
+Tests +1 (3828 pass).
+
 ## 3.26.2 — 2026-09-30
 
 **Prompt: the symlink chain behind outside-cwd dirs.** A written path can

@@ -20,9 +20,9 @@
  *    call, never the judge's. A path manual mode auto-allows (e.g. /tmp via
  *    config) is not a scope violation — the judge reviews it (D11, 2026-08-26
  *    re-alignment). EVERY floor stop is advisory (D16): the fall-through
- *    prompt renders the judge's verdict (both stages) as input to the
- *    user's allow/deny/grant decision — the stop stands, the judge never
- *    grants over the floor. First-word checks are
+ *    prompt renders the judge's verdict as input to the user's
+ *    allow/deny/grant decision (D22: stage 2 is skipped when stage 1
+ *    approved) — the stop stands, the judge never grants over the floor. First-word checks are
  *    wrapper/env-prefix transparent (`FOO=bar npx evil` is npx evil; `env
  *    $f` is obscured) — the policy's delegation transparency, mirrored.
  *    Unsafe patterns (inline scripts, redirects, pipes, subshells) and risk
