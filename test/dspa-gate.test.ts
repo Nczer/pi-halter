@@ -1267,3 +1267,62 @@ describe("D19: hasFileScriptOutsideCwd — intent-pass escalation", () => {
     expect(hasFileScriptOutsideCwd(bashPd("python3 x.py"))).toBe(false);
   });
 });
+
+describe("egress floor sees through wrapper/prefix delegation (2026-10-03 incident)", () => {
+  // `cd <repo> && timeout 120 git push origin master` auto-allowed: the
+  // wrapper occupied command position, networkHit keyed on the raw first
+  // word, the gate passed, stage 1 approved at low risk. The risk layer
+  // already resolved delegation (`[Git] git push (writes to remote)` fired);
+  // the floor standing in front of it must not be weaker.
+  const WRAPPERS = ["timeout 120", "env", "nice", "command", "xargs -a list"];
+  const EGRESS = ["ssh host 'ls'", "scp f host:/tmp/", "nc host 1234", "git push origin master"];
+
+  it("each egress command stops unwrapped and wrapped alike", async () => {
+    for (const cmd of EGRESS) {
+      const plain = await checkDspaGate(bashPd(cmd), store);
+      expect(plain.ok, cmd).toBe(false);
+      for (const w of WRAPPERS) {
+        const c = `${w} ${cmd}`;
+        const r = await checkDspaGate(bashPd(c), store);
+        expect(r.ok, c).toBe(false);
+        if (!r.ok) expect(r.reason, c).toContain("network egress");
+      }
+    }
+  });
+
+  it("the reason names the delegated command, not the wrapper", async () => {
+    const r = await checkDspaGate(bashPd("timeout 120 git push origin master"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("network egress (git push)");
+  });
+
+  it("git network subcommands resolve past the wrapper AND past global flags", async () => {
+    for (const c of [
+      "timeout 120 git -C dir push",
+      "env GIT_SSH=ssh git push",
+      "timeout 120 git fetch origin",
+      "nice git clone https://github.com/x/y",
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) expect(r.reason, c).toContain("network egress (git ");
+    }
+  });
+
+  it("a wrapped loopback call stays judgeable (D14 control); a wrapped remote call does not", async () => {
+    expect(await checkDspaGate(bashPd("timeout 120 curl http://127.0.0.1:8080/x"), store)).toEqual({
+      ok: true,
+    });
+    const r = await checkDspaGate(bashPd("timeout 120 curl http://example.com/x"), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("network egress (curl)");
+  });
+
+  it("a wrapped package-manager RUN form stays judgeable (D8)", async () => {
+    expect(await checkDspaGate(bashPd("timeout 120 npm run build"), store)).toEqual({ ok: true });
+  });
+
+  // Residual, deliberately untested: a wrapper outside `wrapperCommands`
+  // (`time git push`) is invisible to the floor AND to the risk layer — the
+  // delegation table is shared, so both layers miss it together.
+});
