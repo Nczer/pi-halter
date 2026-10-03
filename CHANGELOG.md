@@ -2,6 +2,34 @@
 
 # Changelog
 
+## 3.27.0 — 2026-10-03
+
+**dspa: floor stops are bare (D22).** A deterministic floor stop no
+longer runs the judge: the stop stands and the prompt shows regardless,
+so the two sequential stage calls only added latency before the prompt
+rendered, never changing the outcome. (2026-09-01 window: 47 of 49 dspa
+prompts were floor stops.)
+
+- **Gate (`gate/dspa-gate.ts`).** The `advisory` flag is removed from
+  `DspaGateResult` — every `checkDspaGate` stop is bare (D16
+  superseded).
+- **Fall-through (`gate/fallthrough.ts`).** A floor stop → bare
+  fall-through: no judge call, `verdict: null`, stop tag `gate:
+  <reason>`. The D19 write-bar stop is unchanged — it synthesizes after
+  stage 2 already ran, so its verdict renders free (it is now the only
+  floor stop that carries a verdict).
+- **Explain (`ui/prompt-flow.ts`).** 💭 Explain on a dspa floor-stop
+  prompt runs the FULL cascade on demand (stage 1, then stage 2 when
+  stage 1 is not approve+low; T3 script payloads skip stage 1), with the
+  "— advisory (floor stop stands)" note. Display-only: no judge-diff or
+  path logging. Manual mode's Explain stays stage 1.
+- **Where the judge's read on a floor-stopped shape lives now:** /dspat
+  — the floor is not applied there, so the same shapes are ordinary
+  judged prompts, and their stage-2 path reports land in the always-on
+  judge ledger (D13 floor-miss mining moves there).
+
+Suite 3828.
+
 ## 3.26.2 — 2026-09-30
 
 **Prompt: the symlink chain behind outside-cwd dirs.** A written path can

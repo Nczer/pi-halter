@@ -119,8 +119,9 @@ export function dspaAutoAllowed(
 }
 
 /**
- * Two-stage dspa attempt (docs/dspa-redesign.md, D2/Q4):
- *  1. Hard gate (dspa-gate.ts) — the floor; failure → fall-through.
+ * Two-stage dspa attempt (docs/dspa-redesign.md, D2/Q4, D22):
+ *  1. Hard gate (dspa-gate.ts) — the floor; failure → bare fall-through
+ *     (no judge call — the stop stands and the prompt shows regardless).
  *  2. Stage 1 (stateless, cached): approve+low → auto-allow. Skipped
  *     entirely for a bash command that executes a file script (T3,
  *     content-classes: the class always escalates, so stage 1 would only
@@ -141,34 +142,14 @@ export async function tryDspaAutoAllow(
   const pd = decision.promptData;
   const gateResult = await checkDspaGate(pd, store);
   if (!gateResult.ok) {
-    // D16 (docs/dspa-redesign.md): EVERY floor stop is advisory — the
-    // judge still runs both stages and its verdict renders in the prompt
-    // as input to the allow/deny/grant decision. Never an auto-allow: the
-    // floor's stop stands. (A bare stop — no judge call — is the
-    // defensive fallback below; the gate currently never emits one.)
-    if (gateResult.advisory) {
-      const v1 = await getJudgeVerdict(pd, ctx, store);
-      const v2 = await getStage2Verdict(pd, ctx, store);
-      // Judge-self disagreement is still logged (the judge ran, whatever
-      // the floor's stop) — but NO paths line: the floor stopped the
-      // command, so the miss never ran through the floor. The ledger
-      // records faults that ran through; the prompt's decision line still
-      // carries the report (gate.ts).
-      logJudgeDiff(pd, "dspa", v1, v2);
-      const final = (v2 ?? v1) ?? null;
-      // The stop is the FLOOR's (any verdict here is advisory) — count it as
-      // a gate stop, with the verdict's model for counter scoping.
-      recordDspaStop("gate", final?.model ?? null);
-      updateDspaWidget(ctx);
-      return {
-        autoAllowed: false,
-        fallthrough: {
-          gate: gateResult,
-          verdict: final,
-          stage: v2 ? 2 : v1 ? 1 : null,
-        },
-      };
-    }
+    // D22 (docs/dspa-redesign.md): a floor stop is BARE — no judge call.
+    // The stop stands (never an auto-allow) and the prompt shows
+    // regardless, so a verdict could only add two sequential model calls
+    // of latency before the prompt renders, never change the outcome.
+    // The judge's read on a floor-stopped shape lives in /dspat (the
+    // floor is not applied there, so the shape is an ordinary prompt both
+    // stages judge) or 💭 Explain on demand in dspa (the full cascade —
+    // ui/prompt-flow.ts).
     recordDspaStop("gate", null);
     updateDspaWidget(ctx);
     return { autoAllowed: false, fallthrough: { gate: gateResult, verdict: null, stage: null } };
@@ -202,9 +183,12 @@ export async function tryDspaAutoAllow(
   // re-reports the same writes — now inside the bar — and auto-allows.
   const writeOutside = judgeWriteOutside(pd, store, v2?.writes);
   if (writeOutside.length > 0) {
+    // D19: this stop synthesizes AFTER stage 2 already ran for the
+    // auto-allow attempt — its verdict renders at no extra cost (the D22
+    // bare-stop rule covers checkDspaGate stops, which run BEFORE any
+    // judge call).
     const writeStop: DspaGateResult = {
       ok: false,
-      advisory: true,
       reason: `write outside base (${writeOutside.slice(0, 2).join(", ")})`,
       writeOutside,
     };

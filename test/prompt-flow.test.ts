@@ -334,12 +334,24 @@ describe("/dspa fall-through", () => {
     expect(body).not.toContain("not auto-allowed (risk must be low)");
   });
 
-  it("gate blocked on untrusted package → 🚧 line + advisory verdict block (D10)", async () => {
+  it("D19 write stop → 🚧 title + verdict block, advisory note (the only floor stop with a verdict)", async () => {
+    // D22: checkDspaGate floor stops are bare — the only floor stop that
+    // carries a verdict is the D19 write-bar stop (stage 2 already ran
+    // for the auto-allow attempt, so the verdict is free).
     const dspa: DspaFallthrough = {
-      gate: { ok: false, reason: "untrusted package (npx evil-pkg)" },
-      verdict: { model: "llama-cpp/qwen", explanation: "Dev tool in use this session.", approve: "approve", risk: "low", reason: "dev tool", latencyMs: 10, cached: false },
+      gate: { ok: false, reason: "write outside base (/home/user/other)", writeOutside: ["/home/user/other"] },
+      verdict: { model: "llama-cpp/qwen", explanation: "Rewrites a sibling source file.", approve: "approve", risk: "low", reason: "r", latencyMs: 10, cached: false },
       stage: 2,
     };
+    await showPrompt(bashDecision(), ctx, store, dspa);
+    const body = shownPrompt().body;
+    expect(shownPrompt().title).toBe("🚧 DSPA: write outside base (/home/user/other)");
+    // The verdict block leads the body (the freshest word on the operation).
+    expect(body).toContain("   Rewrites a sibling source file.");
+    expect(body).toContain("→ suggests: APPROVE (low, stage 2) — advisory (floor stop stands)");
+  });
+
+  it("floor stop is bare (D22) → 🚧 title, no verdict block, 💭 Explain runs the full cascade", async () => {
     // The decision's fetchable form (from the same analysis the gate saw)
     // is what surfaces the Trust option — not a field on the fall-through.
     const decision: PromptDecision = {
@@ -363,14 +375,26 @@ describe("/dspa fall-through", () => {
         fetchableForms: [{ sig: "npx evil-pkg", pkg: "evil-pkg" }],
       },
     };
+    const dspa: DspaFallthrough = { gate: { ok: false, reason: "untrusted package (npx evil-pkg)" }, verdict: null, stage: null };
     await showPrompt(decision, ctx, store, dspa);
-    const body = shownPrompt().body;
     expect(shownPrompt().title).toBe("🚧 DSPA: untrusted package (npx evil-pkg)");
-    // The verdict block leads the body (the freshest word on the operation).
-    expect(body).toContain("   Dev tool in use this session.");
-    expect(body).toContain("→ suggests: APPROVE (low, stage 2) — advisory (floor stop stands)");
-    // the prompt offers the Trust option for the fetchable form
+    // Bare: no verdict block in the body…
+    expect(shownPrompt().body).not.toContain("→ suggests:");
+    // …but the prompt still offers the Trust option for the fetchable form
     expect((shownPrompt() as any).trustPackages).toEqual(["evil-pkg"]);
+    // …and 💭 Explain runs the FULL cascade on demand (stage 2 only when
+    // stage 1 is not approve+low — the auto-allow cascade).
+    const judge = judgeArg() as { explain: () => Promise<string | null> };
+    expect(judge).toBeDefined();
+    verdictMock.mockResolvedValue({ model: "m", explanation: "Dev tool in use this session.", approve: "approve", risk: "low", reason: "r", latencyMs: 10, cached: false });
+    let block = await judge.explain();
+    expect(stage2Mock).not.toHaveBeenCalled();
+    expect(block).toContain("→ suggests: APPROVE (low, stage 1) — advisory (floor stop stands)");
+    verdictMock.mockResolvedValue({ model: "m", explanation: "Medium.", approve: "approve", risk: "medium", reason: "r", latencyMs: 10, cached: false });
+    stage2Mock.mockResolvedValue({ model: "m2", explanation: "Stage two.", approve: "deny", risk: "high", reason: "r", latencyMs: 10, cached: false });
+    block = await judge.explain();
+    expect(stage2Mock).toHaveBeenCalledTimes(1);
+    expect(block).toContain("→ suggests: REJECT (high, stage 2) — advisory (floor stop stands)");
   });
 });
 

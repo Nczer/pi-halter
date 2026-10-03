@@ -19,10 +19,10 @@
  *    unresolvable cd target): Q1 is absolute, scope grants are the user's
  *    call, never the judge's. A path manual mode auto-allows (e.g. /tmp via
  *    config) is not a scope violation — the judge reviews it (D11, 2026-08-26
- *    re-alignment). EVERY floor stop is advisory (D16): the fall-through
- *    prompt renders the judge's verdict (both stages) as input to the
- *    user's allow/deny/grant decision — the stop stands, the judge never
- *    grants over the floor. First-word checks are
+ *    re-alignment). A floor stop is BARE (D22): no judge call — the stop
+ *    stands and the prompt renders immediately (the judge's read on a
+ *    floor-stopped shape is /dspat's measurement, or 💭 Explain on demand
+ *    in dspa). First-word checks are
  *    wrapper/env-prefix transparent (`FOO=bar npx evil` is npx evil; `env
  *    $f` is obscured) — the policy's delegation transparency, mirrored.
  *    Unsafe patterns (inline scripts, redirects, pipes, subshells) and risk
@@ -61,7 +61,7 @@
  *    args ride in the packet, the two-stage cascade decides. The
  *    file/consent gates are never auto-allowed: low-risk prompts whose
  *    repetition session grants cover — they stop like every other floor
- *    stop, advisory (D16).
+ *    stop (bare, D22).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -94,13 +94,6 @@ export type DspaGateResult =
   | {
       ok: false;
       reason: string;
-      /** D16: EVERY floor stop is advisory — the judge still runs both
-       *  stages and its verdict renders in the fall-through prompt as
-       *  input to the user's allow/deny/grant decision. The stop stands
-       *  (the judge never grants over the floor). The field stays so a
-       *  future bare stop can opt out; the gate currently sets it on
-       *  every stop. */
-      advisory?: boolean;
       /** Confirmed (user-accepted) token → dirs resolutions that fell
        *  outside the base — the fall-through prompt offers a grant for
        *  EXACTLY these dirs (deterministic; no LLM call needed). */
@@ -428,7 +421,6 @@ export async function checkDspaGate(
       return {
         ok: false,
         reason: `tool ${pd.gate} never auto-allows (session grants cover its repetition)`,
-        advisory: true,
       };
     }
     // exec: the payload is the whole model — no deterministic floor applies
@@ -455,9 +447,9 @@ export async function checkDspaGate(
     // read as though the file were outside its parent dir. The grant dir
     // stays visible in the same log line (promptDir/target).
     if (!writeBarOk && pd.outsideDir) {
-      return { ok: false, reason: `outside base (session ${pd.cwd})`, advisory: true };
+      return { ok: false, reason: `outside base (session ${pd.cwd})` };
     }
-    if (pd.warnedRule) return { ok: false, reason: `credential pattern (${pd.warnedRule})`, advisory: true };
+    if (pd.warnedRule) return { ok: false, reason: `credential pattern (${pd.warnedRule})` };
     return { ok: true };
   }
 
@@ -488,17 +480,16 @@ export async function checkDspaGate(
   if (hasRm) {
     // rm carve-out: bounded, explicit targets only (see header).
     const rm = checkRmTargets(analysis.segments, pd.cwd, isInsideManualBar);
-    if (rm.reason) return { ok: false, reason: rm.reason, advisory: true };
+    if (rm.reason) return { ok: false, reason: rm.reason };
     outsideExempt = rm.exempt;
     // Non-rm dangerous reasons still stop the auto-allow: the carve-out
     // covers only the rm's own footprint (recursive/forced delete, its
     // self-written redirect/pipe). Other dangerous content in the command
     // — script interpreters, file-modification patterns, … — stays a floor
-    // stop, advisory like every stop (D16 — the verdict renders, the stop
-    // stands).
+    // stop (bare, D22).
     const otherDanger = analysis.risk.reasons.filter((r) => !RM_RISK_REASON_RE.test(r));
     if (otherDanger.length > 0) {
-      return { ok: false, reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}`, advisory: true };
+      return { ok: false, reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}` };
     }
   }
   // Non-rm: unsafe patterns and risk reasons are JUDGEABLE (D1) — inline
@@ -512,9 +503,9 @@ export async function checkDspaGate(
     // An unverifiable glob is a verification failure, not a credential match
     // — name it honestly (the prompt renders the same distinction).
     if (isGlobUnverified(pd.credentialRule)) {
-      return { ok: false, reason: `unverifiable glob (${globUnverifiedToken(pd.credentialRule)})`, advisory: true };
+      return { ok: false, reason: `unverifiable glob (${globUnverifiedToken(pd.credentialRule)})` };
     }
-    return { ok: false, reason: `credential pattern (${pd.credentialRule})`, advisory: true };
+    return { ok: false, reason: `credential pattern (${pd.credentialRule})` };
   }
   // D10 (docs/dspa-redesign.md): a fetchable run form names a package that
   // may be FETCHED (and executed) on cache miss — the same fetch class the
@@ -539,7 +530,6 @@ export async function checkDspaGate(
       reason: `untrusted package (${uniq.slice(0, 3).join(", ")})`,
       // The prompt offers "Trust: <pkg> (session)" — computed from the
       // same analysis (BashPromptData.fetchableForms), not carried here.
-      advisory: true,
     };
   }
   // Full-filesystem scan (find /, grep -rn /): a dedicated stop reason —
@@ -547,16 +537,15 @@ export async function checkDspaGate(
   // ("touches paths outside base (/)") understates what the command does.
   for (const seg of analysis.segments) {
     const scan = rootScanTarget(seg);
-    if (scan) return { ok: false, reason: `full filesystem scan (${scan} /)`, advisory: true };
+    if (scan) return { ok: false, reason: `full filesystem scan (${scan} /)` };
   }
   // D14 (docs/dspa-redesign.md): network egress. Loopback-only curl/wget is
   // judgeable (a local call can't exfiltrate; the judge reviews the full
-  // text). All other egress stays a floor stop — but advisory: the judge
-  // runs both stages and its verdict renders in the prompt as input to the
-  // user's allow/deny (the stop stands; egress is never auto-allowed).
+  // text). All other egress stays a floor stop (bare, D22 — the stop
+  // stands; egress is never auto-allowed).
   const net = networkHit(pd.command, analysis.segments);
   if (net && !isLoopbackEgress(pd.command, analysis.segments)) {
-    return { ok: false, reason: `network egress (${net})`, advisory: true };
+    return { ok: false, reason: `network egress (${net})` };
   }
   // prompt.outsidePaths already applied the manual bar (above): what's left
   // is exactly what manual mode would prompt for — the scope class (Q1:
@@ -605,7 +594,7 @@ export async function checkDspaGate(
     if (r.kind === "outside") {
       resolvedOutside.push(...r.paths);
       if (r.confirmedToken) confirmedOutside.push({ token: r.confirmedToken, dirs: r.paths });
-    } else if (r.kind === "stop") return { ok: false, reason: r.reason, advisory: true };
+    } else if (r.kind === "stop") return { ok: false, reason: r.reason };
     // inside → drop
   }
   // Opaque refs re-resolved under the floor's (manual) bar — defensive twin
@@ -666,7 +655,6 @@ export async function checkDspaGate(
     return {
       ok: false,
       reason,
-      advisory: true,
       ...(confirmedOutside.length > 0 ? { confirmedOutside } : {}),
       ...(writeOutside.length > 0 ? { writeOutside } : {}),
     };
@@ -675,7 +663,6 @@ export async function checkDspaGate(
     return {
       ok: false,
       reason: `write outside base (${writeOutside.slice(0, 2).join(", ")})`,
-      advisory: true,
       writeOutside,
     };
   }

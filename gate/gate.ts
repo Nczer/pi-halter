@@ -99,8 +99,8 @@ export async function gate(
   // Decision log (JSONL): one line per tool call, including fail-closed
   // synthetic blocks. Fire-and-forget — logDecision never throws.
   // D13: a dspa fall-through whose FINAL verdict is stage 2 logs the judge's
-  // path report + floor mismatches — the richest parser-gap case is a floor
-  // stop where the judge saw paths the static analysis never did.
+  // path report + floor mismatches. (D22: floor stops are bare — the judge
+  // never sees them in dspa; the floor-miss measurement is /dspat's.)
   const judgePathFields =
     decision.kind === "prompt" && dspaFallthrough?.stage === 2
       ? judgePathLogFields(decision.promptData, store, dspaFallthrough.verdict?.paths)

@@ -92,8 +92,11 @@ function switchModel(m: string): void {
 /**
  * Why a dspa operation did NOT auto-allow (recorded at the single
  * fall-through point, gate.ts tryDspaAutoAllow):
- *  - `gate`     — the deterministic floor stopped it (danger-class or
- *                 advisory: the stop stands, any verdict is advisory);
+ *  - `gate`     — the deterministic floor stopped it (bare — no judge
+ *                 call, D22; the verdict on the shape is /dspat's
+ *                 measurement or 💭 Explain on demand); the one exception
+ *                 is the D19 write-bar stop, whose verdict stage 2 had
+ *                 already computed for the auto-allow attempt;
  *  - `deny`     — the final judge verdict was REJECT;
  *  - `declined` — the final verdict was approve, but the risk sat above
  *                 the stage's authority (approve+high, or stage-1-only
@@ -108,7 +111,8 @@ export type DspaStopKind = "gate" | "deny" | "declined" | "defer";
 /**
  * Record one non-auto-allowed dspa operation. `verdictModel` is the
  * verdict's model; null when no verdict exists (a null model never resets
- * the counters — the floor can stop before any judge call).
+ * the counters). Floor stops pass null (bare — D22); only the D19
+ * write-bar stop carries a verdict model.
  */
 export function recordDspaStop(kind: DspaStopKind, verdictModel: string | null): void {
   if (verdictModel !== null && verdictModel !== model) switchModel(verdictModel);
