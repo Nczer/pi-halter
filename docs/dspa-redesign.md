@@ -415,7 +415,10 @@ verdict is rendered in the fall-through prompt with an
 input for the user's decision, not authority over it. D11 extends the
 advisory to the scope-class stops (outside base, unresolvable location);
 D14 makes all other egress advisory; D16 makes EVERY floor stop advisory
-(superseding this paragraph's "danger-class stays bare" reading).
+(superseding this paragraph's "danger-class stays bare" reading). D22
+supersedes all of this in dspa: floor stops are bare (no judge call) —
+the judge's read on a stopped package is /dspat's measurement or 💭
+Explain on demand.
 
 **The grant**: the prompt's tier-1 offers `Trust: <pkg> (session)` (second
 confirm, like every Always). Trust = per bare package name, stored in the
@@ -499,15 +502,16 @@ from. Six decisions (implemented the same day; reverts fix (a) of
    (bash + file), unresolvable-location stops, and untrusted-package
    stops (D10) run BOTH judge stages; the final verdict renders in the
    prompt as advisory input — the floor's stop stands (never an
-   auto-allow). Danger-class stops stay bare (see D10).
+   auto-allow). Danger-class stops stay bare (see D10). (Superseded by
+   D22: floor stops are bare in dspa.)
 5. **The Trust option stays.** Grilled as possibly redundant vs Always —
    it is not: Trust is per bare package across ALL fetchable forms
    (npx/uvx/bun x/npm exec/pnpm dlx/yarn dlx/uv x) with version pins
    stripped, and is the ONLY grant for those forms (3.13.0 removed the
    exact-form and manager-prefix Always options). Deterministic
    post-grant; covers no unsafe shapes.
-6. **The floor keeps**: unresolvable-location stops (now with advisory
-   verdict), full-filesystem scans, and rm targets outside the bar.
+6. **The floor keeps**: unresolvable-location stops (now bare, D22),
+   full-filesystem scans, and rm targets outside the bar.
 
 ### D12. Converge: unresolved tokens resolve to determinism (2026-08-27)
 
@@ -685,8 +689,9 @@ noise.
   fall-through prompt ("— advisory (floor stop stands)"), so the user can
   approve an informed verdict on intended egress (`git push` to a known
   remote, a one-off fetch). The stop stands: egress is never auto-
-  allowed. (Superseded by D16: every floor stop — credentials, parse,
-  obscured, rm-class — is now advisory too.)
+  allowed. (Superseded by D16, then by D22: floor stops are bare in
+  dspa — no judge call; the egress verdict is /dspat's measurement or
+  💭 Explain on demand.)
 - **Prompt visibility.** The `🚧 DSPA: not auto-allowed — <reason>` line
   now LEADS the fall-through body (it used to trail it — off-screen on
   long prompts, which is why the stop was guessed from latency).
@@ -732,7 +737,13 @@ directory; `for d in …` names every literal dir, so Always-for-dir works
 per dir. The unresolvable sentinel now stops only what truly cannot be
 resolved.
 
-### D16. Every floor stop is advisory (2026-09-02)
+### D16. Every floor stop is advisory (2026-09-02) — SUPERSEDED by D22 (2026-10-03)
+
+> **D22 supersedes the dspa half of D16:** floor stops are bare — no
+> judge call, the prompt renders immediately. The two-stage read on
+> floor-stopped shapes lives in /dspat (the floor is not applied there,
+> so they are ordinary judged prompts) or 💭 Explain on demand. The
+> section below is kept as design history.
 
 The log's remaining friction: the dev-loop `cp … && npx vitest … ; rm
 <scratch>` shape hit the rm carve-out's `dangerous: [Pattern]
@@ -843,7 +854,9 @@ no scope fact it was allowed to rest on, and missed the write.
 re-based base faces the manual **WRITE** bar — the exact predicate the file
 branch applies to writes (`insideManualWriteBar`: session write dirs/
 paths + config write paths + project-pi). Stop: `write outside base
-(<dir>)`, advisory (D16), `writeOutside` on the gate result.
+(<dir>)`, `writeOutside` on the gate result. Since D22 this is the
+ONLY floor stop that carries a verdict: stage 2 already ran for the
+auto-allow attempt, so it renders at no cost.
 
 - **Trigger classes (deterministic — `baseWriteAccess`):**
   1. a bare output-redirect target (`echo x > f`, `cmd >> f`, `cmd 2> f`)
@@ -1055,6 +1068,48 @@ both options (base outside cwd, no grants) or the D18 write stop (base
 read-granted) → `Allow writes: <base>` → the identical run passes the
 floor and the (clean-packet) judge auto-allows it. Suite 3784.
 
+### D22. Floor stops are bare (2026-10-03)
+
+The 2026-09-01 dspa window: 49 prompts, 47 of them floor stops — each
+paying two sequential judge calls for a verdict that could never change
+the outcome: the stop stands, the prompt shows regardless. The verdict's
+only consumer was the human reading the prompt, and that human gets the
+prompt faster without it. The measurement value — "what does the judge
+take of the shape the floor stopped?" — belongs to the shadow regime:
+under /dspat the floor is not applied, so those same shapes are ordinary
+prompts the two stages already judge, with their stage-2 path reports in
+the always-on judge ledger. That is the standing read on floor-stopped
+classes, and D13 floor-miss (parser-gap) mining moves there with it.
+
+**Decisions (user-approved, 2026-10-03).**
+- **`checkDspaGate` floor stops are bare.** No judge call, no verdict
+  block, and the `advisory` flag is removed from the gate result: the
+  prompt renders immediately, the 🚧 reason as the title. Stop tag stays
+  `gate: <reason>`; the gate-stop counter records a null model (a null
+  model never resets the model-scoped counters).
+- **The judge's read on a floor-stopped shape lives in /dspat.** dspa
+  floor stops write no judge-ledger line (the judge never runs); the
+  same shape under /dspat is an ordinary prompt both stages judge, and
+  its stage-2 report lands in the ledger as usual.
+- **💭 Explain on a dspa floor-stop prompt runs the FULL cascade on
+  demand** (ui/prompt-flow.ts): stage 1, then stage 2 when stage 1 is
+  not approve+low (the auto-allow cascade order); T3 script payloads
+  skip stage 1. The block carries the "— advisory (floor stop stands)"
+  note. Display-only — Explain never logs judge diffs or paths (a
+  self-selected consultation is not the shadow regime's data). Manual
+  mode's Explain stays stage-1-only.
+- **The D19 write-bar stop keeps its verdict.** It synthesizes AFTER
+  stage 2 already ran for the auto-allow attempt — the verdict renders
+  free, exactly as before. It is now the only floor stop that carries a
+  verdict.
+
+Supersedes: D16 (every floor stop is advisory), D14's advisory-egress
+bullet, D10's advisory-judge paragraph, and the D3-phase "advisory
+verdicts on scope-class floor stops" item. Accepted losses: no upfront
+verdict on egress/scope/package/rm stops in dspa (💭 Explain instead),
+and no decision-log path report on those stops (the ledger's dspat line
+covers the same measurement).
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
@@ -1133,6 +1188,11 @@ class"). Suite 3229.
   D18 class 3 — write-verb stages with bare targets under a re-based base
   face the WRITE bar; the read-bar stop now carries `writeOutside`, so
   the read and write grant options land in ONE prompt). Suite 3784.
+- **Phase 3p — done** (2026-10-03): D22 (floor stops are bare — no judge
+call on `checkDspaGate` stops; the `advisory` flag is removed from the
+gate result; 💭 Explain on a dspa floor-stop prompt runs the full
+cascade on demand; the D19 write-bar stop keeps its already-computed
+verdict). Suite 3828.
 
 ## 5. Open questions (grill order)
 

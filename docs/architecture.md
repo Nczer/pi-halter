@@ -216,9 +216,10 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
      prompt offers `Trust: <pkg> (session)`;
    - network egress: fetch forms and raw egress stop; **loopback-only
      curl/wget is judgeable** (every URL in the command is 127.0.0.0/8, ::1,
-     or localhost, D14); all other egress stops are **advisory**: the judge
-     still runs, the verdict renders in the prompt, the stop stands (egress
-     never auto-allows);
+     or localhost, D14); all other egress stops are **bare** (D22): no
+     judge call — the prompt renders immediately (the egress verdict is
+     /dspat's measurement or 💭 Explain on demand); egress never
+     auto-allows;
    - full-filesystem scans (`find /`, `grep -rn x /`) get a dedicated stop (D9);
    - paths outside the manual bar (D11). Unbound locations are first resolved
      from the command itself (local assignments, every candidate base of an
@@ -232,9 +233,12 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
    information than the static pass. Everything above is a POLICY stop and
    stays absolute.
 
-   Every floor stop is **advisory** (D16): the judge runs both stages and the
-   verdict renders in the prompt ("— advisory (floor stop stands)") — the stop
-   stands, the judge never grants over the floor.
+   Every floor stop is **bare** (D22): no judge call — the prompt renders
+   immediately, the 🚧 reason as the title. The verdict on a floor-stopped
+   shape is /dspat's measurement (the floor is not applied there) or 💭
+   Explain on demand. The one exception is the D19 write-bar stop, which
+   carries the verdict stage 2 already computed for the auto-allow attempt.
+   The stop stands, the judge never grants over the floor.
 2. **Stage 1** (stateless, LRU-cached on the operation): the packet's static
    analysis is the whole input. `approve` + `low` auto-allows. Script
    payloads (C2, content-classes T3) skip stage 1 — the class always
@@ -257,8 +261,10 @@ failures — never re-judged (Yes/No are the user's tools). Not offered when
 the judge is off (a choice, not a transient failure), after a floor stop
 (the deterministic layer cannot be re-judged), or without the permission
 request.
-EVERY floor stop is advisory (D16): the judge runs both stages and renders
-the verdict in the prompt — the stop stands. Auto-allowed operations toast.
+Floor stops are bare (D22): the stop stands and the prompt renders without
+a judge call (the verdict is /dspat's measurement or 💭 Explain on demand;
+the D19 write-bar stop alone carries a verdict, computed for free). 
+Auto-allowed operations toast.
 
 **Content-bearing manual auto-allows are judged too (D3/D11).** In dspa, a
 file WRITE that manual mode would auto-allow (grants, config-allowed,
