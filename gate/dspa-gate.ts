@@ -236,15 +236,34 @@ function isPkgRunForm(first: string, words: string[]): boolean {
   return !!sub && forms.has(sub);
 }
 
+/**
+ * The words a segment executes FROM COMMAND POSITION: inline env-assignment
+ * prefixes and prefix/wrapper delegation (`timeout 120 git push`, `env ssh
+ * host`, `xargs -a l scp h:/tmp`, `command nc h 1234`) resolved to the
+ * delegated command. The egress collectors must key on what actually runs —
+ * the same transparency the risk layer and the D10 trust gate already have
+ * (segmentFetchPackage resolves delegation first), and the reason the floor
+ * must not be weaker than the risk layer standing in front of it: a wrapper
+ * in command position hid `git push` from the floor, the gate passed, and the
+ * judge auto-allowed egress that must never auto-allow. Residual: a wrapper
+ * outside `wrapperCommands` (e.g. `time git push`) is invisible to both
+ * layers. Raw words when the segment delegates to nothing.
+ */
+function operativeWords(words: string[]): string[] {
+  const oper = words.slice(skipEnvPrefixes(words));
+  const deleg = getDelegatedCommand(oper.join(" "));
+  return deleg ? deleg.tail.split(/\s+/) : oper;
+}
+
 /** First egress hit only (gate reason line); URLs truncated to 60 chars.
  *  Package-manager RUN forms are skipped (D8 — judgeable). The operative
- *  first word (env-prefixes skipped) is checked, and git's subcommand is
- *  resolved past global flags via the shared gitNetworkSubcommand —
- *  `git -C dir push` is egress exactly like `git push`. */
+ *  first word (env-prefixes skipped, wrapper/prefix delegation resolved) is
+ *  checked, and git's subcommand is resolved past global flags via the shared
+ *  gitNetworkSubcommand — `git -C dir push` is egress exactly like `git push`. */
 function networkHit(command: string, segments: string[]): string | null {
   for (const seg of segments) {
     const words = seg.trim().split(/\s+/);
-    const oper = words.slice(skipEnvPrefixes(words));
+    const oper = operativeWords(words);
     // cleanToken: `"ssh" host` is ssh to the shell — the first word is
     // judged dequoted (git subcommand resolution is quote-aware in
     // gitNetworkSubcommand; the URL catch-all below is quote-independent).
@@ -252,9 +271,9 @@ function networkHit(command: string, segments: string[]): string | null {
     if (!first) continue;
     if (isPkgRunForm(first, oper)) continue;
     if (NETWORK_COMMANDS.has(first)) return first;
-    const sub = gitNetworkSubcommand(words);
+    const sub = gitNetworkSubcommand(oper);
     if (sub) return `git ${sub}`;
-    const gc = goCargoFetchForm(words);
+    const gc = goCargoFetchForm(oper);
     if (gc) return gc;
   }
   const m = command.match(NETWORK_URL_RE);
@@ -313,13 +332,13 @@ function isLoopbackHost(hostWithPort: string): boolean {
 function isLoopbackEgress(command: string, segments: string[]): boolean {
   for (const seg of segments) {
     const words = seg.trim().split(/\s+/);
-    const oper = words.slice(skipEnvPrefixes(words));
+    const oper = operativeWords(words);
     // cleanToken: a quoted curl is still curl (`"curl" http://127…` must
     // not fall out of the egress classification entirely).
     const first = cleanToken(oper[0] ?? "").toLowerCase();
     if (!first) continue;
     if (isPkgRunForm(first, oper)) continue; // D8 run forms — judged on their own rules
-    if (gitNetworkSubcommand(words)) return false; // remote destination, never loopback-provable
+    if (gitNetworkSubcommand(oper)) return false; // remote destination, never loopback-provable
     if (NETWORK_COMMANDS.has(first) && !LOOPBACK_EGRESS_CMDS.has(first)) return false;
   }
   const urls = command.match(NETWORK_URL_RE_GLOBAL) ?? [];

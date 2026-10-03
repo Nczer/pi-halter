@@ -2,6 +2,43 @@
 
 # Changelog
 
+## 3.27.2 — 2026-10-03
+
+**The dspa egress floor sees through wrapper/prefix delegation.**
+`cd <repo> && timeout 120 git push origin master` auto-allowed with no prompt
+and no judge ledger line: `timeout` occupied command position, `networkHit`
+keyed on the raw first word, `checkDspaGate` returned `{ok:true}`, stage 1
+approved at low risk. The risk layer already resolved the delegation (`[Git]
+git push (writes to remote)`, danger=true fired on the same command) — the
+floor standing in front of it was weaker, and under dspa a danger reason is
+judgeable (D1), so the judge overrode a stop that must never auto-allow.
+
+- `gate/dspa-gate.ts`: new `operativeWords(words)` — `skipEnvPrefixes` then
+  `getDelegatedCommand` (the shared `wrapperCommands`/prefix table: `env`,
+  `command`, `timeout`, `xargs`, `nice`, `watch`, `parallel`, `ionice`,
+  `stdbuf`), returning the delegated words or the raw words when nothing
+  delegates.
+- `networkHit` and `isLoopbackEgress` both classify the operative words: the
+  first word, `isPkgRunForm`, `gitNetworkSubcommand` and `goCargoFetchForm`
+  now run on the resolved tail, so `timeout 120 ssh`, `env ssh`, `nice ssh`,
+  `command nc`, `xargs -a list scp`, `env GIT_SSH=ssh git push`, `timeout 120
+  git -C dir push` all stop as `network egress (…)` naming the delegated
+  command.
+- Controls kept: a wrapped loopback call stays judgeable (`timeout 120 curl
+  http://127.0.0.1:8080/x`), a wrapped package-manager RUN form stays
+  judgeable (`timeout 120 npm run build`), and a wrapped remote call does not
+  (`timeout 120 curl http://example.com/x`).
+- Residual (documented in the `operativeWords` comment, deliberately
+  untested): a wrapper outside `wrapperCommands` — `time git push` — is
+  invisible to the floor and to the risk layer together, because both read
+  the same delegation table.
+- Not a regression: `networkHit` has keyed on the first word since it was
+  written (`bf2e660`, `0fb0ac6` D14, `c39cc52`, `45564d7`). Wrapper
+  transparency was added 2026-08-18 (`0891d00`) to the analysis/risk layer
+  and to `segmentFetchPackage` (D10), never to the egress collectors.
+
+Tests +5 (3842 pass)
+
 ## 3.27.1 — 2026-10-03
 
 **cd targets expand the closed-set `$HOME` (an ungrantable prompt for a
