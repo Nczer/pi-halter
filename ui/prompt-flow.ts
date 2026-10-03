@@ -12,7 +12,6 @@ import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/d
 import type {JudgeResult} from "../judge/judge";
 import { makeManualBar } from "../gate/dspa-gate";
 import { isPositionalRef } from "../analysis/path-util";
-import { findExecutedScript } from "../analysis/script-payload";
 import type { DspaFallthrough } from "../gate/fallthrough";
 import { logJudgeDiff, logJudgePaths, logUnresolved } from "../gate/decision-log";
 
@@ -115,11 +114,8 @@ export async function showPrompt(
         title: `🚧 DSPA: ${dspa.gate.reason}`,
       };
       if (dspa.verdict) {
-        // D19: write-outside-base stop — its verdict was already computed
-        // (stage 2 ran for the auto-allow attempt); it is advisory input
-        // for the Allow-writes/Yes/No decision, not an auto-allow. (D22:
-        // checkDspaGate floor stops are bare, so this branch is the only
-        // floor stop that carries a verdict.)
+        // D10: untrusted-package stop — the judge ran anyway; its verdict is
+        // advisory input for the Trust/Yes/No decision, not an auto-allow.
         const rest = prompt.body;
         prompt = {
           ...prompt,
@@ -211,27 +207,6 @@ export async function showPrompt(
     !isDspatActive() && jstatus.state === "ok" && !dspa?.verdict
       ? {
           explain: async () => {
-            if (dspa && !dspa.gate.ok) {
-              // D22: floor stops are bare (no judge call in the auto-allow
-              // attempt — the stop stands regardless) — but the judge's
-              // read on the shape is still available on demand: the FULL
-              // cascade, the same verdict /dspat would render (stage 2
-              // only when stage 1 is not approve+low; T3: script payloads
-              // skip stage 1). Display-only — Explain never logs judge
-              // diffs/paths (the measurement regime is /dspat).
-              const skipStage1 =
-                pd.type === "bash" && pd.analysis != null &&
-                findExecutedScript(pd.analysis, pd.cwd) !== null;
-              const v1 = skipStage1 ? null : await getJudgeVerdict(pd, ctx, store);
-              const v2 =
-                v1 && v1.approve === "approve" && v1.risk === "low"
-                  ? null
-                  : await getStage2Verdict(pd, ctx, store);
-              const verdict = v2 ?? v1;
-              return verdict
-                ? judgeVerdictBlock(verdict, v2 ? 2 : 1, "— advisory (floor stop stands)")
-                : null;
-            }
             const verdict = await getJudgeVerdict(pd, ctx, store);
             return verdict ? judgeVerdictBlock(verdict, 1) : null;
           },
