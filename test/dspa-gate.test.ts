@@ -7,10 +7,9 @@
  * everything else (inline scripts, redirects, pipes, risk reasons) is
  * judgeable and passes to the judge — including detection-limited
  * conditions (obscured command positions, unparseable commands, T2):
- * the packet carries the full raw text plus both flags. Floor stops are
- * bare (D22) — the stop stands and the prompt renders without a judge
- * call; the judge's read on a stopped shape is /dspat's measurement or
- * 💭 Explain on demand in dspa.
+ * the packet carries the full raw text plus both flags. Every floor stop
+ * is advisory (D16) — the judge's verdict renders in the prompt, the stop
+ * stands.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import fs from "node:fs";
@@ -237,6 +236,7 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
     const r = await checkDspaGate(bashPd("ls", { analysis: a }), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("/etc/shadow");
+    if (!r.ok) expect(r.advisory).toBe(true);
   });
 
   it("rm with an opaque target stays on the floor", async () => {
@@ -273,6 +273,7 @@ describe("floor bar for concrete paths (D11 — the bar is the manual bar)", () 
     const r = await checkDspaGate(bashPd("cat > /data/out.log <<'EOF'\nx\nEOF"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("/data/out.log");
+    if (!r.ok) expect(r.advisory).toBe(true);
   });
 
   it("a session write grant keeps the path judgeable (D3-style escape hatch)", async () => {
@@ -321,6 +322,7 @@ describe("bash", () => {
     // either reason is the right block.
     const r = await checkDspaGate(bashPd("git push origin main"), store);
     expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.advisory).toBe(true);
   });
 
   it("loopback-only curl/wget egress is judgeable (D14 — a local call can't exfiltrate)", async () => {
@@ -335,7 +337,7 @@ describe("bash", () => {
     }
   });
 
-  it("non-loopback or unprovable egress stays a bare floor stop (D14, D22)", async () => {
+  it("non-loopback or unprovable egress stays a floor stop, now advisory (D14)", async () => {
     const cases: Array<[string, string]> = [
       ["curl -s https://example.com/x", "external URL"],
       ["curl -s http://127.0.0.1:1/ok http://evil.com/x", "mixed loopback + external"],
@@ -350,6 +352,7 @@ describe("bash", () => {
       expect(r.ok, what).toBe(false);
       if (!r.ok) {
         expect(r.reason, what).toContain("network egress");
+        expect(r.advisory, what).toBe(true);
       }
     }
   });
@@ -852,6 +855,7 @@ describe("script-body and loop-list resolution (2026-08-31 log)", () => {
         expect(r.reason).toContain("outside base");
         expect(r.reason).not.toContain("unresolvable");
         expect(r.reason).toContain(path.join(base, "app"));
+        expect(r.advisory).toBe(true);
       }
     } finally {
       cleanup();
@@ -866,6 +870,7 @@ describe("script-body and loop-list resolution (2026-08-31 log)", () => {
       if (!r.ok) {
         expect(r.reason).toContain(path.join(base, "app"));
         expect(r.reason).not.toContain("unresolvable");
+        expect(r.advisory).toBe(true);
       }
     } finally {
       cleanup();
@@ -883,6 +888,7 @@ describe("script-body and loop-list resolution (2026-08-31 log)", () => {
       if (!r.ok) {
         expect(r.reason).toContain("outside base");
         expect(r.reason).toContain(base);
+        expect(r.advisory).toBe(true);
       }
     } finally {
       cleanup();
@@ -890,8 +896,8 @@ describe("script-body and loop-list resolution (2026-08-31 log)", () => {
   });
 });
 
-describe("D22: floor stops are bare (2026-10-03)", () => {
-  it("rm carve-out failures stop the floor", async () => {
+describe("D16: every floor stop is advisory (2026-09-02)", () => {
+  it("rm carve-out failures are advisory", async () => {
     const cases: Array<[string, string]> = [
       ["rm -rf *", "not explicit"],
       ["rm", "without explicit targets"],
@@ -903,19 +909,21 @@ describe("D22: floor stops are bare (2026-10-03)", () => {
       expect(r.ok, what).toBe(false);
       if (!r.ok) {
         expect(r.reason, what).toContain(what);
+        expect(r.advisory, what).toBe(true);
       }
     }
   });
 
-  it("rm-neighborhood danger stops the floor (the cp … && rm … shape)", async () => {
+  it("rm-neighborhood danger is advisory (the cp … && rm … shape)", async () => {
     const r = await checkDspaGate(bashPd("cp /tmp/show-msg.test.ts f && rm f"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toContain("dangerous");
+      expect(r.advisory).toBe(true);
     }
   });
 
-  it("policy bash stops are bare; detection-limited conditions are judgeable (T2)", async () => {
+  it("policy bash stops are advisory; detection-limited conditions are judgeable (T2)", async () => {
     const a: any = await analyzeCommand("ls", BASE);
     a.hasParseError = true;
     const stops: Array<[BashPromptData, string]> = [
@@ -927,6 +935,7 @@ describe("D22: floor stops are bare (2026-10-03)", () => {
       expect(r.ok, what).toBe(false);
       if (!r.ok) {
         expect(r.reason, what).toContain(what);
+        expect(r.advisory, what).toBe(true);
       }
     }
     // Detection-limited: the full raw text reaches the judge with its flag
@@ -940,24 +949,27 @@ describe("D22: floor stops are bare (2026-10-03)", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe("unverifiable glob (foo/*.ts)");
+      expect(r.advisory).toBe(true);
     }
   });
 
-  it("file credential stops are bare", async () => {
+  it("file credential stops are advisory", async () => {
     const r = await checkDspaGate(filePd({ warnedRule: ".env" }), store);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toContain("credential");
+      expect(r.advisory).toBe(true);
     }
   });
 
-  it("tool file/consent gate stops are bare (prompt-only gates)", async () => {
+  it("tool file/consent gate stops are advisory (prompt-only gates)", async () => {
     for (const gate of ["file", "consent"] as const) {
       const pd: ToolPromptData = { type: "tool", tool: "blender", label: "open scene", gate };
       const r = await checkDspaGate(pd, store);
       expect(r.ok, gate).toBe(false);
       if (!r.ok) {
         expect(r.reason, gate).toContain("never auto-allows");
+        expect(r.advisory, gate).toBe(true);
       }
     }
   });
@@ -1090,6 +1102,7 @@ describe("D18: write-mode base access (2026-09-12 incident)", () => {
     if (!r.ok) {
       expect(r.reason).toBe(`write outside base (${HOME_PI})`);
       expect(r.writeOutside).toEqual([HOME_PI]);
+      expect(r.advisory).toBe(true);
     }
   });
 
