@@ -120,7 +120,9 @@ export function dspaAutoAllowed(
 
 /**
  * Two-stage dspa attempt (docs/dspa-redesign.md, D2/Q4):
- *  1. Hard gate (dspa-gate.ts) — the floor; failure → fall-through.
+ *  1. Hard gate (dspa-gate.ts) — the floor; failure → advisory
+ *     fall-through (D16/D22): stage 1 runs and its verdict renders in
+ *     the prompt; stage 2 only when stage 1 did not approve.
  *  2. Stage 1 (stateless, cached): approve+low → auto-allow. Skipped
  *     entirely for a bash command that executes a file script (T3,
  *     content-classes: the class always escalates, so stage 1 would only
@@ -142,13 +144,18 @@ export async function tryDspaAutoAllow(
   const gateResult = await checkDspaGate(pd, store);
   if (!gateResult.ok) {
     // D16 (docs/dspa-redesign.md): EVERY floor stop is advisory — the
-    // judge still runs both stages and its verdict renders in the prompt
-    // as input to the allow/deny/grant decision. Never an auto-allow: the
-    // floor's stop stands. (A bare stop — no judge call — is the
-    // defensive fallback below; the gate currently never emits one.)
+    // judge still runs and its verdict renders in the prompt as input to
+    // the allow/deny/grant decision. D22: stage 2 is skipped when stage 1
+    // already approved — the stop stands either way, so the intent pass
+    // (session context) would only add a sequential call, never change
+    // the outcome. Never an auto-allow: the floor's stop stands. (A bare
+    // stop — no judge call — is the defensive fallback below; the gate
+    // currently never emits one.)
     if (gateResult.advisory) {
       const v1 = await getJudgeVerdict(pd, ctx, store);
-      const v2 = await getStage2Verdict(pd, ctx, store);
+      const v2 = v1 && v1.approve === "approve"
+        ? null
+        : await getStage2Verdict(pd, ctx, store);
       // Judge-self disagreement is still logged (the judge ran, whatever
       // the floor's stop) — but NO paths line: the floor stopped the
       // command, so the miss never ran through the floor. The ledger
