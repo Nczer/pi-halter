@@ -1,5 +1,46 @@
 # Changelog
 
+## 3.28.0 — 2026-10-04
+
+**Ledger mining, round 3: `perl` had no risk entry (deliberate policy flip).**
+
+- **A bare `perl -e` auto-allowed with zero reasons.** `perl` sat in the allow
+  table with the exclusion reason "-i edits files in place", so only the `-i`
+  forms were ever flagged: `perl -e 'unlink("/tmp/zz")'`, `perl -pe 'system(...)' file.txt`
+  and even `perl /tmp/evil.pl` (an outside path, named in the path set) all came
+  back `auto-allow`, `reasons: []`. An auto-allow never reaches the gate or the
+  judge (`gate/fallthrough.ts` — `tryDspaAutoAllow` is prompt-only), so no floor
+  in any mode ever saw them.
+- **The two layers disagreed.** The config layer already declared perl
+  write-capable — `SCRIPT_INTERPRETERS` → `isWriteOperation` is true for every
+  invocation (`config/bash-patterns.ts`), asserted in `config-helpers.test.ts`.
+  The risk layer simply had no matching rule. `perl` now joins
+  python/node/ruby/php/lua in `ToolEvaluator`: `/^perl[\d.]*$/` →
+  `perl (script execution)`.
+- **No version-only exemption, no `-i` precondition.** Filter mode (`-n`/`-p`)
+  is not a read-only guarantee — `open`/`system`/`unlink` write without `-i`,
+  and a `BEGIN` block runs under `-n`. So `perl --version` prompts, exactly as
+  `ruby --version` and `php --version` do today. Session history contains no
+  bare perl one-liners, so the friction cost is occasional.
+- **Test expectations flipped, not quietly.** Three `cases-data.ts` entries
+  asserted auto-allow for perl-without-`-i`; they now assert prompt, with the
+  flip dated in their `desc`. That removed the only case that could demonstrate
+  the `-i` anchoring regression (an unanchored pattern reads `-session.txt` as
+  a flag token), so it is now pinned on the flag itself —
+  `config-helpers.test.ts` tests `dangerousPerlFlags` directly.
+- **New regression class:** `verified-bypasses.test.ts` P6 — `perl -e unlink`,
+  `perl -pe system` with a file operand, and `perl <script file>` must not
+  auto-allow; `cat file.txt` control still does.
+- **Still open from the same ledger** (analysis recorded, no code): program-position
+  body classification (safe only if the sentinel survives expansion-bearing
+  bodies — `cat "a\n$X/b"`, `bash-parser.test.ts:1194`), `$HOME`/
+  `${HOME}` in `BODY_PATH_RE` (additive, but the store has no persistence, so
+  every `python3 -c "…$HOME/…"` re-prompts each session), and closed-form
+  `$(dirname X)`/`$(basename X)` evaluation — the only candidate that can
+  *remove* a stop, so it waits for bypass cases written first. Value evaluation,
+  never pinning: `/tmp/ll/$(dirname ../x/a.md)` really touches `/tmp/x`.
+- Suite: 3885 pass (50 files).
+
 ## 3.27.5 — 2026-10-04
 
 **Ledger mining, round 2 (`unresolved.jsonl` 2 lines, `judge.jsonl` 7).**

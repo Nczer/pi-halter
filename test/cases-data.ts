@@ -36,9 +36,10 @@ export const cases: TestCase[] = [
   // ═══════════════════════════════════════════════════════════
   // perl
   // ═══════════════════════════════════════════════════════════
-  { cmd: "perl -p -e 's/foo/bar/' file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "perl -p (print, no -i)" },
-  { cmd: "perl -ne 'print if /foo/' file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "perl -ne (no -i)" },
-  { cmd: "perl -ne 'print' foo-session.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "perl -ne, path with -session token (regression: unanchored -i pattern matched the path)" },
+  { cmd: "perl -p -e 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "perl -p (print, no -i) — program body is arbitrary code (2026-10-04 policy flip: perl joined the script-execution interpreters)" },
+  { cmd: "perl -ne 'print if /foo/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "perl -ne (no -i) — filter mode is not a read-only guarantee" },
+  { cmd: "perl -ne 'print' foo-session.txt", simple: false, unsafe: true, decision: "prompt", desc: "perl -ne, path with -session token — the prompt is now unconditional, so the -i anchoring regression is pinned directly in config-helpers.test.ts" },
+  { cmd: "perl /tmp/evil.pl", simple: false, unsafe: true, decision: "prompt", desc: "perl <script file> — no -e/-i needed to be code execution" },
   { cmd: "perl -pi -e 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "perl -pi (combined)" },
   { cmd: "perl -i -p -e 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "perl -i -p (separate)" },
   { cmd: "perl -p -i -e 's/foo/bar/' file.txt", simple: false, unsafe: true, decision: "prompt", desc: "perl -p -i (reversed)" },

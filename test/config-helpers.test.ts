@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findNetworkEgress, isWriteOperation, isTrustedScriptCommand } from "../config";
+import { dangerousPerlFlags } from "../config/bash-patterns";
 import { analyzeCommand } from "../analysis/command-analysis";
 
 // ── isWriteOperation (from config) ──
@@ -35,6 +36,15 @@ describe("isWriteOperation", () => {
     expect(isWriteOperation("perl", "perl -pi -e 's/foo/bar/g' file.txt")).toBe(true);
     expect(isWriteOperation("perl", "perl -e 'print 42'")).toBe(true);
     expect(isWriteOperation("perl", "perl script.pl")).toBe(true);
+  });
+
+  // The perl -i cases now prompt for a second reason (script execution), so
+  // the anchoring regression is pinned on the flag itself: an unanchored
+  // pattern reads "-session.txt" as an in-place flag token.
+  it("dangerousPerlFlags stays anchored to real flag tokens", () => {
+    expect(dangerousPerlFlags.test("perl -ne 'print' foo-session.txt")).toBe(false);
+    expect(dangerousPerlFlags.test("perl -npi -e 's/a/b/' file.txt")).toBe(true);
+    expect(dangerousPerlFlags.test("perl -i.bak -pe 's/a/b/' file.txt")).toBe(true);
   });
 
   it("detects tee as write", () => {

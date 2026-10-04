@@ -68,6 +68,14 @@ const TOOL_HANDLERS: Array<{ match: (seg: ToolSegment) => boolean; reason: strin
   { match: (s) => /^python[\d.]*$/.test(s.firstWord) && !isVersionOnly(s.rest), reason: "python (script execution)" },
   { match: (s) => s.firstWord === "node" && !isVersionOnly(s.rest), reason: "node (script execution)" },
   { match: (s) => s.firstWord === "ruby", reason: "ruby (script execution)" },
+  // perl gets no exemption and no -i precondition: the program body (`-e`,
+  // or a script file) is arbitrary code — `open`/`unlink`/`system` write
+  // without any -i flag, and filter mode (-n/-p) is not a read-only
+  // guarantee. The config layer already asserts this (perl is in
+  // SCRIPT_INTERPRETERS → isWriteOperation is true for every invocation,
+  // config/bash-patterns.ts); the risk layer had no matching rule, so a
+  // bare `perl -e …` reached auto-allow and never met the gate.
+  { match: (s) => /^perl[\d.]*$/.test(s.firstWord), reason: "perl (script execution)" },
   { match: (s) => s.firstWord === "php", reason: "php (script execution)" },
   { match: (s) => s.firstWord === "lua", reason: "lua (script execution)" },
   { match: (s) => s.firstWord === "uv" && !isVersionOnly(s.rest), reason: "uv (python package manager)" },
