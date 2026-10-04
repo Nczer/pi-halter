@@ -8,8 +8,8 @@
  * the same time therefore replace each other: the first is cancelled when the
  * second opens.
  *
- * halter's permission prompts are tool-call UIs, so they race against consult
- * and quiz. All three extensions chain on the same `globalThis` key — a
+ * halter's permission prompts are tool-call UIs, so they race against consult.
+ * Both extensions chain on the same `globalThis` key — a
  * module-local lock only serializes one extension against itself.
  */
 const SHARED_UI_LOCK_KEY = "__piSharedUiLock";
