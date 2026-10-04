@@ -316,6 +316,7 @@ function dspaReasons() {
   section("stop tags (fall-through prompts)", ds.filter((e) => e.kind === "prompt"), (e) => e.dspa ?? "(no stop tag)");
   section("judge denials (the LLM's words)", ds, (e) => e.judgeDeny);
   section("D13 floor misses (judge-reported, floor never saw)", ds, (e) => floorMissesOf(e)?.join(", "));
+  section("stage-2 context echoes (path only named in the Session context section)", ds, (e) => e.contextMisses?.join(", "));
 }
 
 function stats() {
@@ -570,10 +571,16 @@ function judgeCmd() {
     for (const [k, n] of Object.entries(errCount).sort((a, b) => b[1] - a[1])) console.log(`  ${n}× ${k}`);
   }
   const missCount = {};
+  const ctxMissCount = {};
   for (const e of pathLines) for (const m of floorMissesOf(e) ?? []) missCount[m] = (missCount[m] ?? 0) + 1;
   if (Object.keys(missCount).length) {
     console.log("\nfloor misses (top 10 — ran through the floor; judge-reported, floor never saw):");
     for (const [m, n] of Object.entries(missCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
+  }
+  for (const e of pathLines) for (const m of e.contextMisses ?? []) ctxMissCount[m] = (ctxMissCount[m] ?? 0) + 1;
+  if (Object.keys(ctxMissCount).length) {
+    console.log("\ncontext misses (stage-2 echo of a path only named in the Session context section):");
+    for (const [m, n] of Object.entries(ctxMissCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
   }
   if (F.length) {
     console.log("\nlines:");
@@ -586,6 +593,7 @@ function judgeCmd() {
         if (e.judgePaths?.length) parts.push(`judge:  ${trunc(e.judgePaths.join(", "), 100)}`);
         const mm = floorMissesOf(e);
         if (mm?.length) parts.push(`MISS:   ${trunc(mm.join(", "), 100)}`);
+        if (e.contextMisses?.length) parts.push(`CTX:    ${trunc(e.contextMisses.join(", "), 100)}`);
       } else if (e.misses?.length) parts.push(`misses: ${e.misses.join(", ")}`);
       if (e.cmd) parts.push(trunc(e.cmd, 80));
       console.log(`  ${parts.join("  ")}`);

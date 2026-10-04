@@ -1,5 +1,49 @@
 # Changelog
 
+## 3.27.4 — 2026-10-04
+
+**Judge hygiene: the first week of `judge.jsonl` (7 lines — 4 infra, 3 paths,
+0 diff) charged five defects to the judge, not the floor.**
+
+- **Prose instead of a verdict** (3 of 4 infra lines). The system prompt now
+  opens with the tool-call requirement — `report_verdict` is the only tool and
+  the only valid output, a text-only reply is a failed judgment — and closes
+  with "Always call it, even when deferring". No packet-text parsing and no
+  retry: a prose reply still defers fail-safe.
+- **A question shaped as a verdict** (1 infra line: `{"question":…,
+  "options":[…]}`). The prompt states there is no channel to the operator — a
+  thin packet is a `defer` with reason "missing information". Such a reply is
+  also detected in arg validation and labelled `bad-args: asked-user: …` so
+  the defect stays countable.
+- **Stage-2 context bleed** (1 paths line: a session transcript read in an
+  earlier turn was reported as a path this command touched). The stage-2 prompt
+  now says paths named in the Session context section are not paths of this
+  operation, and the audit splits them: `contextMisses` (an echo of context
+  knowledge) vs `floorMisses` (a floor blind spot). A context-only miss still
+  writes a line — the bleed rate is what makes the prompt fix measurable.
+  `sessionContextPaths()` (judge/session-context.ts) exposes the paths the
+  digest names; context paths are normalized to the same absolute form as the
+  report before comparison.
+- **Parent-dir generalization** (1 paths line: judge named
+  `…/extensions/memory`, the floor saw `…/memory/SKILL.md`). `isCovered` now
+  counts an ancestor of a known floor path as covered — the same location
+  generalized upward, not a place the gate never saw. The old glob-only rule
+  keeps its force where enforcement lives: the write bar (`judgeWriteOutside`)
+  reads the sanitized `writes` list directly, so a broader WRITE claim still
+  escalates. `GLOB_RE` is gone.
+- **Compact explanations.** The prompt now asks for ONE plain sentence (what
+  the operation does plus the deciding fact — no command echo, no code, under
+  160 characters) and `EXPLANATION_MAX_CHARS` dropped 440 → 240. The cut is no
+  longer a raw slice: `sentenceCut` keeps the first complete sentence (a `.!?`
+  followed by whitespace — `python3.13` and `e.g.` never end it early), falls
+  back to a word boundary, and appends the ellipsis only when text was actually
+  dropped mid-sentence.
+- **Ledger labels.** `JudgeLogEntry.error` is judge()'s own typed `failReason`
+  (`model-unresolved | auth-failed | timeout | no-tool-call | bad-args |
+  call-failed`); `no-explanation` is dropped — it labelled every failure the
+  same and pushed the real class into `detail`, so the ledger could not be
+  counted by cause. `log-inspect.mjs judge` gained a context-miss rollup.
+
 ## 3.27.3 — 2026-10-04
 
 **File operands stopped being swallowed by the script/pattern heuristics.**

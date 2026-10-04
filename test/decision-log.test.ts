@@ -491,16 +491,16 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     expect(new Date(entries[0].ts).toString()).not.toBe("Invalid Date");
   });
 
-  it("infra: one line per failure site with the error class", () => {
+  it("infra: one line per failure site, labelled with judge()'s own failure class", () => {
     logJudgeInfra(bashPd, "dspa", 2, "call-failed", "llama-cpp/qwen");
-    logJudgeInfra(bashPd, "dspat", 1, "no-model");
-    logJudgeInfra(bashPd, "manual", 1, "no-explanation", "llama-cpp/qwen", "no-tool-call");
+    logJudgeInfra(bashPd, "dspat", 1, "model-unresolved");
+    logJudgeInfra(bashPd, "manual", 1, "no-tool-call", "llama-cpp/qwen", "no-tool-call");
     const entries = judgeLines();
-    expect(entries.map((e) => e.error)).toEqual(["call-failed", "no-model", "no-explanation"]);
+    expect(entries.map((e) => e.error)).toEqual(["call-failed", "model-unresolved", "no-tool-call"]);
     expect(entries[0]).toMatchObject({ kind: "infra", mode: "dspa", stage: 2, cmd: "rm -rf /tmp/x" });
     expect(entries[1].model).toBeUndefined();
-    // The normalized sub-reason rides along (detail) — the no-explanation
-    // rate alone is unactionable without it.
+    // The message rides along (detail) — a class alone says which rule fired,
+    // detail says why.
     expect(entries[2].detail).toBe("no-tool-call");
     expect(entries[0].detail).toBeUndefined();
   });
@@ -511,8 +511,43 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     expect(fs.existsSync(judgeFile)).toBe(false);
   });
 
+  it("paths: a stage-2 context echo is its own field, and still writes a line", () => {
+    const cwd = "/home/u/project";
+    const pd = {
+      type: "bash",
+      command: "cat notes.md",
+      cwd,
+      analysis: {
+        paths: [`${cwd}/notes.md`],
+        segments: ["cat notes.md"],
+        effectiveCwds: [cwd],
+        prompt: { unresolved: [], outsidePaths: [] },
+      },
+    } as never;
+    // The session read a transcript in an earlier turn — the judge named it
+    // as a path of THIS command (the 2026-10-04 bleed).
+    const ctx = {
+      sessionManager: {
+        getBranch: () => [
+          { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "x", name: "read", arguments: { path: "/home/u/project/../sessions/x.jsonl" } }] } },
+        ],
+      },
+    } as never;
+    logJudgePaths(
+      pd,
+      createStore(),
+      v("approve", "low", [`${cwd}/notes.md`, "/home/u/sessions/x.jsonl", "/never/seen"]),
+      "dspa",
+      ctx,
+    );
+    const [e] = judgeLines();
+    expect(e.kind).toBe("paths");
+    expect(e.floorMisses).toEqual(["/never/seen"]);
+    expect(e.contextMisses).toEqual(["/home/u/sessions/x.jsonl"]);
+  });
+
   it("cmd is truncated to 200 (log economy)", () => {
-    logJudge({ kind: "infra", mode: "manual", stage: 1, error: "no-model", cmd: "x".repeat(300) });
+    logJudge({ kind: "infra", mode: "manual", stage: 1, error: "model-unresolved", cmd: "x".repeat(300) });
     const [e] = judgeLines();
     expect(e.cmd).toHaveLength(200);
   });

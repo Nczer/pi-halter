@@ -82,13 +82,13 @@ export function dspaAutoAllowed(
 ): void {
   // D13: a stage-2 auto-allow logs the judge's path report (and any path
   // the floor never saw) — the parser-gap probe. Stage 1 never reports.
-  const jp = stage === 2 ? judgePathLogFields(pd, store, verdict.paths) : {};
+  const jp = stage === 2 ? judgePathLogFields(pd, store, verdict.paths, ctx) : {};
   logDecision(request, { kind: "auto-allow", reason: `dspa: judge approved (stage ${stage}, ${verdict.model})` }, "dspa", undefined, undefined, jp.judgePaths, jp.floorMisses);
   // D17: the same path report also goes to the on-by-default judge ledger
   // (decisions.jsonl is toggle-gated and version-bound; the ledger is the
   // durable home for D13 mining).
   if (stage === 2) {
-    logJudgePaths(pd, store, verdict, "dspa");
+    logJudgePaths(pd, store, verdict, "dspa", ctx);
   }
   // Unresolved-token log: an auto-allow of a command WITH unresolved tokens
   // — either their resolutions were already user-confirmed (the convergence
@@ -218,7 +218,7 @@ export async function tryDspaAutoAllow(
     // D17: the report RAN THROUGH the floor — the ledger line stands
     // (each stage-2 verdict logs exactly once; the auto-allow and the
     // judge-declined branches below log their own).
-    logJudgePaths(pd, store, v2!, "dspa");
+    logJudgePaths(pd, store, v2!, "dspa", ctx);
     // The stop is the write bar's (the floor layer) — count it as a gate
     // stop, with the verdict's model for counter scoping.
     recordDspaStop("gate", v2?.model ?? v1?.model ?? null);
@@ -240,7 +240,7 @@ export async function tryDspaAutoAllow(
   // branch logs it in dspaAutoAllowed, the write-stop branch above logs
   // its own — each stage-2 verdict exactly once).
   if (v2) {
-    logJudgePaths(pd, store, v2, "dspa");
+    logJudgePaths(pd, store, v2, "dspa", ctx);
   }
   let note: string | undefined;
   if (!v2 && !v1) {

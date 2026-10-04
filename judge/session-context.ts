@@ -75,20 +75,38 @@ function toolTarget(name: string, args: Record<string, unknown> | undefined): st
   return "";
 }
 
-/**
- * Build the "## Session context" section, or "" when the session carries
- * none of the three data classes (a fresh session: nothing to add).
- * Never throws — a malformed entry degrades to "no context", the stage-2
- * pass still runs on the operation packet alone.
- */
-export function buildSessionContext(ctx: ExtensionContext, store: Store): string {
-  let userBlock = "";
-  let callsBlock = "";
-  let shownCalls = 0;
+/** A token that reads as a filesystem path (see sessionContextPaths). */
+const PATHISH_RE = /^(\/|~\/|~$|\.\/|\.\.\/|\$HOME\/|\$\{HOME\}\/)/;
+function isPathish(s: string): boolean {
+  return s !== "" && (PATHISH_RE.test(s) || s.includes("../"));
+}
+
+/** Path-like tokens in a user message (surrounding quotes/punctuation cut). */
+function pathTokensInText(text: string): string[] {
+  return text
+    .split(/\s+/)
+    .map((t) => t.replace(/^["'`([{]+|["'`),\];:]+$/g, "").replace(/\.$/, ""))
+    .filter(isPathish);
+}
+
+interface SessionDigest {
+  /** User messages, verbatim, oldest first. */
+  userMsgs: string[];
+  /** One line per recent tool call (`tool: target`, truncated). */
+  calls: string[];
+  /** Raw (untruncated) tool-call targets. */
+  targets: string[];
+}
+
+/** Walk the session branch and collect the two reasoning-blind data classes
+ * (user messages, tool-call digest). Never throws — malformed entries
+ * degrade to an empty digest. */
+function collectSessionDigest(ctx: ExtensionContext): SessionDigest {
+  const userMsgs: string[] = [];
+  const calls: string[] = [];
+  const targets: string[] = [];
   try {
     const entries: SessionEntry[] = ctx.sessionManager.getBranch();
-    const userMsgs: string[] = [];
-    const calls: string[] = [];
     for (const entry of entries) {
       if (entry.type !== "message") continue;
       const m = entry.message as { role?: string; content?: unknown };
@@ -104,6 +122,7 @@ export function buildSessionContext(ctx: ExtensionContext, store: Store): string
             const tc = part as { name?: string; arguments?: Record<string, unknown> };
             if (typeof tc.name !== "string") continue;
             const target = toolTarget(tc.name, tc.arguments);
+            if (target !== "") targets.push(target);
             const line = target === "" ? tc.name : `${tc.name}: ${target}`;
             calls.push(line.length > TOOL_LINE_MAX ? `${line.slice(0, TOOL_LINE_MAX - 1)}…` : line);
           }
@@ -111,24 +130,61 @@ export function buildSessionContext(ctx: ExtensionContext, store: Store): string
       }
       // toolResult entries are intentionally skipped (tool outputs never in).
     }
-
-    if (userMsgs.length > 0) {
-      const msgs = userMsgs.slice(-USER_MSGS_MAX).join("\n\n");
-      if (msgs.length > USER_CHARS_MAX) {
-        // Head-truncation: keep the NEWEST request intact (it is the live
-        // intent), mark the head as omitted.
-        userBlock = TRUNC_MARKER + "\n" + msgs.slice(msgs.length - USER_CHARS_MAX);
-      } else {
-        userBlock = msgs;
-      }
-    }
-    if (calls.length > 0) {
-      const shown = calls.slice(-TOOL_CALLS_MAX);
-      callsBlock = shown.join("\n");
-      shownCalls = shown.length;
-    }
   } catch {
-    /* malformed/missing session data → no context block */
+    /* malformed/missing session data → empty digest */
+  }
+  return { userMsgs, calls, targets };
+}
+
+/**
+ * The paths the Session context section names: tool-call targets, path-like
+ * tokens in user messages, and granted write dirs. The stage-2 judge sees
+ * these and can echo one back as a path of the operation (2026-10-04 judge
+ * ledger: a session transcript read in an earlier turn was reported as a path
+ * the command touched). judge/paths.ts uses this set to classify such a floor
+ * miss as context bleed instead of a floor blind spot.
+ */
+export function sessionContextPaths(ctx: ExtensionContext, store?: Store): string[] {
+  const out = new Set<string>();
+  const digest = collectSessionDigest(ctx);
+  for (const t of digest.targets) if (isPathish(t)) out.add(t);
+  for (const msg of digest.userMsgs) for (const t of pathTokensInText(msg)) out.add(t);
+  if (store) {
+    try {
+      for (const d of store.listAllowedWriteDirs()) out.add(d);
+    } catch {
+      /* store failure → grants simply not counted */
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Build the "## Session context" section, or "" when the session carries
+ * none of the three data classes (a fresh session: nothing to add).
+ * Never throws — a malformed entry degrades to "no context", the stage-2
+ * pass still runs on the operation packet alone.
+ */
+export function buildSessionContext(ctx: ExtensionContext, store: Store): string {
+  let userBlock = "";
+  let callsBlock = "";
+  let shownCalls = 0;
+  const { userMsgs, calls } = collectSessionDigest(ctx);
+
+  if (userMsgs.length > 0) {
+    const msgs = userMsgs.slice(-USER_MSGS_MAX).join("\n\n");
+    if (msgs.length > USER_CHARS_MAX) {
+      // Head-truncation: keep the NEWEST request intact (it is the live
+      // intent), mark the head as omitted.
+      userBlock = TRUNC_MARKER + "\n" + msgs.slice(msgs.length - USER_CHARS_MAX);
+    } else {
+      userBlock = msgs;
+    }
+  }
+  if (calls.length > 0) {
+    const shown = calls.slice(-TOOL_CALLS_MAX);
+    callsBlock = shown.join("\n");
+    shownCalls = shown.length;
   }
 
   const grantLines: string[] = [];

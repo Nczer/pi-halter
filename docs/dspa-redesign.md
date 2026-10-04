@@ -1168,6 +1168,36 @@ class"). Suite 3229.
   when stage 1 approved, cutting the second sequential call on the common
   floor-stop shape; supersedes the same-day reverted bare-stop change
   `e315cc8`). Suite 3828.
+- **Phase 3q — done** (2026-10-04): D23 (judge hygiene, mined from the first
+  week of `judge.jsonl`: 7 lines — 4 infra, 3 paths, 0 diff). Five changes,
+  all on the judge's own defects, none on the floor:
+  (a) the system prompt now opens with the tool-call requirement (it is the
+  only tool, a text-only reply is a failed judgment) and states there is no
+  channel to the operator — a thin packet is a `defer` with reason "missing
+  information", not a question back (3 of 4 infra lines were prose replies,
+  1 was a `{"question":…,"options":[…]}` verdict); a question-shaped reply is
+  additionally labelled `bad-args: asked-user: …` so the defect is countable.
+  Prose stays a fail-safe defer — no packet-text parsing, no retry.
+  (b) stage 2 is told that paths named in the Session context section are not
+  paths of this operation, and such a miss is now logged as `contextMisses`
+  instead of inflating `floorMisses` (kept, never suppressed — the bleed rate
+  is what makes the prompt fix measurable).
+  (c) `isCovered` counts an ANCESTOR of a known floor path as covered: the
+  judge naming `…/extensions/memory` for a command whose floor saw
+  `…/memory/SKILL.md` is the same location generalized upward, not a place the
+  gate never saw. The old glob-only rule stands where it matters — the write
+  bar (`judgeWriteOutside`) sees the sanitized `writes` list directly, so a
+  broader WRITE claim still escalates.
+  (d) the ledger's `error` field is judge()'s own typed `failReason`
+  (model-unresolved / auth-failed / timeout / no-tool-call / bad-args /
+  call-failed); `no-explanation` is gone — it labelled every failure the same
+  and pushed the real class into `detail`.
+  (e) `sessionContextPaths()` (session-context.ts) exposes the paths the
+  digest names, so (b) is decidable without re-reading the packet text.
+  (f) the explanation is compact: the prompt asks for ONE plain sentence (no
+  command echo, no code, <160 chars), `EXPLANATION_MAX_CHARS` 440 → 240, and
+  the cut keeps the first complete sentence instead of slicing mid-word.
+  Suite 3866.
 
 ## 5. Open questions (grill order)
 

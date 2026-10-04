@@ -438,9 +438,12 @@ at halter load.
 - **Judge ledger** (`.log/judge.jsonl`, on by default, D17): signal-only
   judge diagnostics — stage-2 tightenings over stateless stage 1 (`diff` — a
   stage-2 loosening is the expected direction, not a line), stage
-  failures (`infra`: no-model / no-auth / no-explanation / call-failed —
-  no-explanation lines carry the normalized sub-reason in `detail`), and
-  D13 path mismatches (`paths`). Mine with `tools/log-inspect.mjs judge`.
+  failures (`infra`: `error` is judge()'s own typed class — model-unresolved
+  / auth-failed / timeout / no-tool-call / bad-args / call-failed, with the
+  message in `detail`; a question-shaped reply is `bad-args` with detail
+  `asked-user: …`), and D13 path mismatches (`paths`: `floorMisses` = paths
+  the floor never saw, `contextMisses` = stage-2 echoes of paths named only
+  in the Session context section). Mine with `tools/log-inspect.mjs judge`.
 - **Glob-err ledger** (`.log/glob-err.jsonl`, on by default): credential-scan
   glob-verify failures only — a healthy run writes nothing. When a relative
   glob's `fs.globSync` throws (or is missing in the runtime), the scan fails

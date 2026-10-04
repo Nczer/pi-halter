@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from "vitest";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { buildSessionContext } from "../judge/session-context";
+import { buildSessionContext, sessionContextPaths } from "../judge/session-context";
 import { createStore } from "../gate/store";
 
 const BASE = "/home/u/project";
@@ -185,5 +185,42 @@ describe("empty session", () => {
     const out = buildSessionContext(makeCtx([]), store);
     expect(out).toContain("write dir: /tmp/scratch");
     expect(out).not.toContain("### User messages");
+  });
+});
+
+describe("sessionContextPaths — the paths the section names (context-bleed classifier)", () => {
+  it("tool-call targets, path-like user tokens, granted write dirs; never prose or tool output", () => {
+    const store = createStore();
+    store.addAllowed({ writeDirs: ["/tmp/scratch"] });
+    const ctx = makeCtx([
+      userMsg("compare /home/u/a.txt with /home/u/b.txt, then clean up."),
+      assistantToolCall("read", { path: "/home/u/project/x.ts" }),
+      assistantToolCall("bash", { command: "ls -la" }),
+      assistantProse("I considered /prose/only — prose is never a path source"),
+      toolResult("TOOL_OUTPUT_MARKER /from/output"),
+    ]);
+    const out = sessionContextPaths(ctx, store);
+    expect(out).toContain("/home/u/a.txt");
+    expect(out).toContain("/home/u/b.txt");
+    expect(out).toContain("/home/u/project/x.ts");
+    expect(out).toContain("/tmp/scratch");
+    expect(out).not.toContain("/prose/only");
+    expect(out).not.toContain("/from/output");
+  });
+
+  it("surrounding punctuation is cut; prose words are not paths", () => {
+    const ctx = makeCtx([userMsg("edit ./src/main.ts and /tmp/x, then push.")]);
+    expect(sessionContextPaths(ctx)).toEqual(["./src/main.ts", "/tmp/x"]);
+  });
+
+  it("a bash command target is not a path", () => {
+    const ctx = makeCtx([assistantToolCall("bash", { command: "cat /etc/hosts" })]);
+    expect(sessionContextPaths(ctx)).toEqual([]);
+  });
+
+  it("store failure degrades to the session-derived paths only", () => {
+    const broken = { listAllowedWriteDirs: () => { throw new Error("no store"); } } as any;
+    const ctx = makeCtx([assistantToolCall("read", { path: "/home/u/project/x.ts" })]);
+    expect(sessionContextPaths(ctx, broken)).toEqual(["/home/u/project/x.ts"]);
   });
 });
