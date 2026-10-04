@@ -32,11 +32,10 @@
  * auto-allow or judge-declined prompt; a floor stop writes no ledger line,
  * the prompt's decision line still carries the report). Both sides sit on
  * the line — floorPaths (the floor's own path set, sentinels included) and
- * judgePaths — plus the mismatch (floorMisses), so the miner can attribute
- * the fault: a miss present in the command text or at the tracked cd base
- * is the floor's blind spot (mine it — that is how D7–D12 were found); a
- * miss nowhere in the command is judge reach — context knowledge (no
- * fault) or a hallucination (the judge's fault).
+ * judgePaths — plus the mismatch, split by cause: floorMisses (the floor's
+ * blind spots — mine them, that is how D7–D12 were found) and contextMisses
+ * (the stage-2 judge echoing a path it only saw in the Session context
+ * section — a judge-side defect, kept so its rate is measurable).
  *
  * Wording: the name names the SUBJECT — `floorMisses` = paths the JUDGE
  * reported that the FLOOR never saw (the floor's blind spots), not misses
@@ -52,18 +51,24 @@ import type {PromptData} from "../decide/types";
 import type { Store } from "../gate/store";
 import { executedScriptPaths } from "../analysis/script-payload";
 import type { JudgeResult } from "./judge";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { sessionContextPaths } from "./session-context";
 
 /** Log economy: cap the stored report. */
 const JUDGE_PATHS_MAX = 8;
 /** Log economy: cap the stored floor misses. */
 const JUDGE_MISSES_MAX = 5;
 
-/** Glob characters — a floor entry containing these covers its expansions. */
-const GLOB_RE = /[*?[]/;
-
 /** The floor's own marker sentinels (echoed back by the model — not paths). */
 function isSentinel(p: string): boolean {
   return p.startsWith(OPAQUE_VAR_DIR) || p.startsWith(UNKNOWN_CWD_MARKER);
+}
+
+/** One path to absolute form: ~ expanded, relatives resolved against `cwd`,
+ * `..` collapsed (the floor's own paths are already resolved — comparing
+ * un-normalized text against them would invent a mismatch). */
+function toAbs(p: string, cwd: string): string {
+  return path.resolve(cwd, p.startsWith("~") ? expandTilde(p) : p);
 }
 
 /**
@@ -81,8 +86,7 @@ export function sanitizeJudgePaths(
     if (typeof raw !== "string") continue;
     const p = raw.trim();
     if (!p || isSentinel(p)) continue;
-    let abs = p.startsWith("~") ? expandTilde(p) : p;
-    if (!abs.startsWith("/")) abs = path.resolve(cwd, abs);
+    const abs = toAbs(p, cwd);
     if (!out.includes(abs)) out.push(abs);
     if (out.length >= JUDGE_PATHS_MAX) break;
   }
@@ -91,17 +95,22 @@ export function sanitizeJudgePaths(
 
 /**
  * A reported path is COVERED by the floor's knowledge when it is a floor
- * path itself or lies under one; a floor path lying under the report
- * counts only when it is a GLOB (a literal floor path narrower than the
- * report means the judge claims more reach than the command references).
+ * path itself, lies under one, or is an ANCESTOR of one (2026-10-04, D23:
+ * the judge named `/home/nczer/.pi/agent/extensions/memory` for a command
+ * whose floor saw `…/memory/SKILL.md` — the same location, generalized
+ * upward, not a location the gate never saw).
+ *
+ * The previous rule counted an ancestor only when the floor entry was a
+ * GLOB, on the grounds that a literal floor path narrower than the report
+ * means the judge claims more reach than the command references. That holds
+ * for ENFORCEMENT, and enforcement does not use this function: the write bar
+ * (dspa-gate.ts judgeWriteOutside) faces the sanitized `writes` list
+ * directly, so a judge-reported write that is an ancestor of a known path
+ * still escalates there. For the DIAGNOSTIC the old rule was noise — it
+ * reported a real floor sighting as a blind spot.
  */
 function isCovered(p: string, known: string[]): boolean {
-  return known.some(
-    (f) =>
-      p === f ||
-      p.startsWith(f + "/") ||
-      (f.startsWith(p + "/") && GLOB_RE.test(f)),
-  );
+  return known.some((f) => p === f || p.startsWith(f + "/") || f.startsWith(p + "/"));
 }
 
 export interface JudgePathReport {
@@ -110,6 +119,12 @@ export interface JudgePathReport {
   /** Judge-reported paths not covered by the floor's knowledge — the
    *  floor's blind spots (omitted when empty). */
   floorMisses?: string[];
+  /** Misses that are only a STAGE-2 CONTEXT ECHO: the path is named in the
+   *  Session context section (an earlier tool call's target, a path the user
+   *  mentioned, a granted dir), so the judge had it in view without this
+   *  operation reaching it (omitted when empty). Kept, never suppressed —
+   *  the bleed rate is what makes the prompt fix measurable. */
+  contextMisses?: string[];
 }
 
 export interface JudgePathFloor {
@@ -120,6 +135,9 @@ export interface JudgePathFloor {
   floorPaths: string[];
   /** Confirmed (user-accepted) resolution dirs. */
   confirmedDirs?: string[];
+  /** Paths named in the stage-2 Session context section (sessionContextPaths)
+   *  — a miss matching one is classified as context bleed, not a floor gap. */
+  contextPaths?: string[];
 }
 
 /**
@@ -137,10 +155,21 @@ export function judgePathReport(
     ...(floor.confirmedDirs ?? []),
     ...floor.floorPaths.filter((p) => p.startsWith("/") && !isSentinel(p)),
   ];
-  const floorMisses = paths
-    .filter((p) => !isCovered(p, known))
+  const misses = paths.filter((p) => !isCovered(p, known));
+  // Context paths arrive as written in the session (relative, ~, `..`); they
+  // must be compared in the same absolute form the report was sanitized to.
+  const inContext = (floor.contextPaths ?? [])
+    .map((c) => c.trim())
+    .filter((c) => c !== "" && !isSentinel(c))
+    .map((c) => toAbs(c, floor.cwd));
+  const contextMisses = misses
+    .filter((p) => inContext.some((c) => p === c || p.startsWith(c + "/") || c.startsWith(p + "/")))
     .slice(0, JUDGE_MISSES_MAX);
-  return floorMisses.length > 0 ? { paths, floorMisses } : { paths };
+  const floorMisses = misses.filter((p) => !contextMisses.includes(p)).slice(0, JUDGE_MISSES_MAX);
+  const r: JudgePathReport = { paths };
+  if (floorMisses.length > 0) r.floorMisses = floorMisses;
+  if (contextMisses.length > 0) r.contextMisses = contextMisses;
+  return r;
 }
 
 /**
@@ -154,7 +183,8 @@ export function judgePathLogFields(
   pd: PromptData,
   store: Store,
   reported: string[] | undefined,
-): { judgePaths?: string[]; floorPaths?: string[]; floorMisses?: string[] } {
+  ctx?: ExtensionContext,
+): { judgePaths?: string[]; floorPaths?: string[]; floorMisses?: string[]; contextMisses?: string[] } {
   if (pd.type !== "bash" || !reported?.length || !pd.analysis) return {};
   const analysis = pd.analysis;
   // Confirmed dirs are the floor's own (deterministic) knowledge — the
@@ -182,10 +212,12 @@ export function judgePathLogFields(
     cwd: pd.cwd,
     floorPaths,
     confirmedDirs,
+    contextPaths: ctx ? sessionContextPaths(ctx, store) : undefined,
   });
   return {
     judgePaths: r.paths,
     floorPaths: floorPaths.slice(0, JUDGE_PATHS_MAX),
     floorMisses: r.floorMisses,
+    contextMisses: r.contextMisses,
   };
 }

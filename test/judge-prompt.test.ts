@@ -556,29 +556,29 @@ describe("D17: infra lines in the always-on judge ledger", () => {
     expect(fs.existsSync(judgeLog)).toBe(false);
   });
 
-  it("no model resolvable → infra line (no-model)", async () => {
+  it("no model resolvable → infra line (model-unresolved)", async () => {
     const { ctx } = makeCtx(undefined);
     await getJudgeVerdict(makePd("infra-nomodel-test", tmp), ctx, createStore(), {
       stream: fixedStream(() => toolCallReply(VERDICT), []),
       settings: ON,
     });
     expect(judgeLines()).toEqual([
-      expect.objectContaining({ kind: "infra", mode: "manual", stage: 1, error: "no-model" }),
+      expect.objectContaining({ kind: "infra", mode: "manual", stage: 1, error: "model-unresolved" }),
     ]);
   });
 
-  it("auth failure → infra line (no-auth, model named)", async () => {
+  it("auth failure → infra line (auth-failed, model named)", async () => {
     const { ctx } = makeCtx(fakeModel(), false);
     await getJudgeVerdict(makePd("infra-noauth-test", tmp), ctx, createStore(), {
       stream: fixedStream(() => toolCallReply(VERDICT), []),
       settings: ON,
     });
     expect(judgeLines()).toEqual([
-      expect.objectContaining({ kind: "infra", error: "no-auth", model: "llama-cpp/qwen3-27b" }),
+      expect.objectContaining({ kind: "infra", error: "auth-failed", model: "llama-cpp/qwen3-27b" }),
     ]);
   });
 
-  it("reply without explanation (a thrown stream normalizes to the same) → no-explanation line", async () => {
+  it("reply without explanation (a thrown stream normalizes to the same) → line labelled by judge()'s own class", async () => {
     const { ctx } = makeCtx(fakeModel());
     await getJudgeVerdict(makePd("infra-noexpl-test", tmp), ctx, createStore(), {
       stream: (() => { throw new Error("boom"); }) as JudgeStreamFn,
@@ -588,8 +588,8 @@ describe("D17: infra lines in the always-on judge ledger", () => {
       stream: fixedStream(() => assistantText("I refuse to call tools"), []),
       settings: ON,
     });
-    expect(judgeLines().map((l) => l.error)).toEqual(["no-explanation", "no-explanation"]);
-    // The sub-reason is logged (detail) so a no-explanation line is diagnosable.
+    expect(judgeLines().map((l) => l.error)).toEqual(["call-failed", "no-tool-call"]);
+    // The message stays in `detail` so each class is still diagnosable.
     expect(judgeLines().map((l) => l.detail)).toEqual(["call-failed: boom", "no-tool-call"]);
   });
 });

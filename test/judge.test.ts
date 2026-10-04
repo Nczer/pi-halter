@@ -316,10 +316,38 @@ describe("judge call", () => {
     const long = "word ".repeat(100).trim();
     const r = await judge(
       { ...baseInput, command: "pwd" },
-      { ...baseOpts, stream: fixedStream(() => toolCallReply({ ...VERDICT, explanation: long }), []) },
+      { ...baseOpts, uncached: true, stream: fixedStream(() => toolCallReply({ ...VERDICT, explanation: long }), []) },
     );
-    expect(r.explanation.length).toBeLessThanOrEqual(441);
+    expect(r.explanation.length).toBeLessThanOrEqual(241);
     expect(r.explanation).toMatch(/…$/);
+    // The cut lands on a word boundary: the kept text is a prefix of the
+    // reply and the character the cut dropped is a space.
+    const kept = r.explanation.replace(/…$/, "");
+    expect(long.startsWith(kept)).toBe(true);
+    expect(long[kept.length]).toBe(" ");
+  });
+
+  it("keeps the FIRST sentence and drops the rest (compact explanation, 2026-10-04)", async () => {
+    const two =
+      "Deletes the build directory, which is what the command's stated purpose is. " +
+      "It then goes on with a long restatement of the rules, a description of the directory contents and other detail the operator never asked to read in the prompt body, including a summary of the session and a list of files nobody asked about.";
+    const r = await judge(
+      { ...baseInput, command: "rm -rf build" },
+      { ...baseOpts, uncached: true, stream: fixedStream(() => toolCallReply({ ...VERDICT, explanation: two }), []) },
+    );
+    expect(r.explanation).toBe("Deletes the build directory, which is what the command's stated purpose is.");
+  });
+
+  it("a version-like dot never ends the kept sentence", async () => {
+    const t =
+      "Runs python3.13 with the flags the user asked for, then writes the report into the working directory as intended by the request. " +
+      "A second sentence of padding follows here and is dropped because the first one already carries the whole decision and nothing else needs saying.";
+    const r = await judge(
+      { ...baseInput, command: "python3.13 run.py" },
+      { ...baseOpts, uncached: true, stream: fixedStream(() => toolCallReply({ ...VERDICT, explanation: t }), []) },
+    );
+    expect(r.explanation.startsWith("Runs python3.13 with the flags")).toBe(true);
+    expect(r.explanation).not.toContain("padding");
   });
 
   it("strips ANSI escapes and control chars from model output (no terminal-state leak)", async () => {
@@ -381,6 +409,20 @@ describe("judge call", () => {
       stream: fixedStream(() => toolCallReply({ ...VERDICT, explanation: "" }), []),
     });
     expect(noExpl.failReason).toBe("bad-args");
+  });
+
+  it("a question instead of a verdict → bad-args labelled asked-user (2026-10-04 ledger)", async () => {
+    // A stage-1 call answered {"question":"…","options":[…]}: the judge has
+    // one tool and no channel to the operator, so it is a failed judgment —
+    // labelled distinctly so the prompt defect is countable.
+    const r = await judge({ ...baseInput, command: "ls" }, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(() => toolCallReply({ question: "Which directory?", options: ["a", "b"] }), []),
+    });
+    expect(r.approve).toBe("defer");
+    expect(r.failReason).toBe("bad-args");
+    expect(r.reason.startsWith("bad-args: asked-user: {")).toBe(true);
   });
 
   it("defers with timeout when no first token arrives before the deadline", async () => {
@@ -780,6 +822,27 @@ describe("buildJudgmentPacket: file content", () => {
       exists: true,
     });
     expect(p).not.toContain("New content");
+  });
+});
+
+describe("judge prompt — tool-call discipline (2026-10-04 ledger: 3 of 7 stage-1 calls answered with prose)", () => {
+  it("the tool-call requirement is stated before the judging rules", () => {
+    const p = JUDGE_SYSTEM_PROMPT;
+    expect(p.indexOf("Answer ONLY by calling the report_verdict tool")).toBeGreaterThan(-1);
+    expect(p.indexOf("Answer ONLY by calling the report_verdict tool"))
+      .toBeLessThan(p.indexOf("Decide:"));
+    expect(p).toContain("the only valid output");
+    expect(p).toContain("Always call it, even when deferring");
+  });
+
+  it("no channel to the operator: a missing-information packet is a defer, not a question", () => {
+    expect(JUDGE_SYSTEM_PROMPT).toContain("no way to reach the operator");
+    expect(JUDGE_SYSTEM_PROMPT).toContain('reason "missing information"');
+  });
+
+  it("stage 2: session-context paths are not paths of the operation", () => {
+    expect(JUDGE_STAGE2_SYSTEM_PROMPT).toContain("are NOT paths of this operation");
+    expect(JUDGE_SYSTEM_PROMPT).not.toContain("are NOT paths of this operation");
   });
 });
 

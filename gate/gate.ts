@@ -103,7 +103,7 @@ export async function gate(
   // stop where the judge saw paths the static analysis never did.
   const judgePathFields =
     decision.kind === "prompt" && dspaFallthrough?.stage === 2
-      ? judgePathLogFields(decision.promptData, store, dspaFallthrough.verdict?.paths)
+      ? judgePathLogFields(decision.promptData, store, dspaFallthrough.verdict?.paths, ctx)
       : {};
   logDecision(
     request,

@@ -78,10 +78,23 @@ describe("judgePathReport", () => {
     expect(r.floorMisses).toEqual(["/etc/shadow"]);
   });
 
-  it("a literal floor path under the report is a miss (broader claim)", () => {
-    // The floor saw /y/z; the judge claims the operation touches all of /y.
+  it("a literal floor path under the report is COVERED (2026-10-04, D23)", () => {
+    // The floor saw /y/z; the judge named /y — the same location generalized
+    // upward, not a place the gate never saw. A broader claim still escalates
+    // where it matters (the write bar, dspa-gate.ts judgeWriteOutside, sees
+    // the sanitized `writes` list directly); this is the diagnostic only.
     const r = judgePathReport(["/y"], { cwd: "/x", floorPaths: ["/y/z"] });
-    expect(r.floorMisses).toEqual(["/y"]);
+    expect(r.floorMisses).toBeUndefined();
+  });
+
+  it("contextMisses: a miss the judge only saw in the Session context section is split out, never suppressed", () => {
+    const r = judgePathReport(["/seen/in/context", "/never/seen"], {
+      cwd: "/x",
+      floorPaths: ["/x"],
+      contextPaths: ["/seen/in"],
+    });
+    expect(r.floorMisses).toEqual(["/never/seen"]);
+    expect(r.contextMisses).toEqual(["/seen/in/context"]);
   });
 
   it("sentinels in the floor set are not knowledge", () => {

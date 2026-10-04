@@ -228,12 +228,12 @@ async function runJudgeStage(
 
     const model = resolveJudgeModel(settings, ctx.modelRegistry, ctx.model);
     if (!model) {
-      logJudgeInfra(pd, logMode, stage, "no-model");
+      logJudgeInfra(pd, logMode, stage, "model-unresolved");
       return null;
     }
     const auth = await resolveJudgeAuth(model, ctx.modelRegistry);
     if (!auth) {
-      logJudgeInfra(pd, logMode, stage, "no-auth", `${model.provider}/${model.id}`);
+      logJudgeInfra(pd, logMode, stage, "auth-failed", `${model.provider}/${model.id}`);
       return null;
     }
 
@@ -277,13 +277,13 @@ async function runJudgeStage(
       return null;
     }
     if (!result.explanation) {
-      // No usable explanation — covers timeout, refusal, malformed reply,
-      // and thrown calls (all normalized here by judge()). Treated as no
-      // verdict; the no-explanation rate is itself signal (D17). The
-      // normalized sub-reason rides along (result.reason: "timeout" /
-      // "no-tool-call" / "bad-args: …" / "call-failed: …") — the rate
-      // alone is unactionable without it.
-      logJudgeInfra(pd, logMode, stage, "no-explanation", `${model.provider}/${model.id}`, result.reason.slice(0, 200));
+      // No usable explanation — covers timeout, a text-only reply, a refusal
+      // and malformed or thrown calls (all normalized here by judge()).
+      // Treated as no verdict; the failure rate is itself signal (D17).
+      // The ledger labels the line with judge()'s own typed class
+      // (result.failReason) and keeps the message in `detail` — the 2026-10-04
+      // ledger instead of seven rows all reading "no-explanation".
+      logJudgeInfra(pd, logMode, stage, result.failReason ?? "call-failed", `${model.provider}/${model.id}`, result.reason.slice(0, 200));
       return null;
     }
     return result;

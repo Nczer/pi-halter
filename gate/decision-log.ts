@@ -52,8 +52,9 @@ import { SETTINGS_PATH, readSettingsFile, writeSettings } from "../halter-settin
 import { summarizePrompt } from "../ui/prompt-builder";
 import type {Decision, FilePromptData, PermissionRequest, PromptData} from "../decide/types";
 import type {Store} from "./store";
-import type {JudgeResult} from "../judge/judge";
+import type {JudgeFailReason, JudgeResult} from "../judge/judge";
 import { judgePathLogFields } from "../judge/paths";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // Anchored to the extension ROOT, not this file's dir (gate/): the log
 // lives at <extension dir>/.log/ regardless of where the module lives.
@@ -392,20 +393,27 @@ export interface JudgeLogEntry {
   s2?: string;
   // kind: "infra".
   stage?: 1 | 2;
-  error?: "no-model" | "no-auth" | "call-failed" | "no-explanation";
+  // kind: "infra" — the failure class, straight from JudgeResult.failReason
+  // (2026-10-04: the old fixed enum collapsed every no-verdict line into
+  // "no-explanation" and put the real class in `detail`, so the ledger could
+  // not be counted by cause).
+  error?: JudgeFailReason;
   // kind: "infra" — the normalized sub-reason (JudgeResult.reason, ≤200ch):
-  // "timeout" / "no-tool-call" / "bad-args: {…}" / "call-failed: <msg>".
+  // "timeout" / "no-tool-call" / "bad-args: {…}" / "bad-args: asked-user:
+  // {…}" / "call-failed: <msg>".
   detail?: string;
   // kind: "paths" — both sides of the floor↔judge disagreement: the floor's
   // own path set (sentinels included), the report as sanitized, and the
-  // floor's blind spots (judge-reported paths the floor never saw —
-  // "floorMisses": the floor's misses, not the judge's). Written only when
-  // the command PASSED the floor (auto-allow or judge-declined prompt) —
-  // fault (floor's blind spot vs judge reach) is the miner's call; the
-  // line carries both sides for it.
+  // mismatch split by cause — floorMisses (judge-reported paths the floor
+  // never saw — "floorMisses": the floor's misses, not the judge's) and
+  // contextMisses (misses the judge only saw in the Session context section
+  // — a stage-2 echo, not a floor gap). Written only when the command PASSED
+  // the floor (auto-allow or judge-declined prompt) — fault attribution is
+  // the miner's call; the line carries both sides for it.
   floorPaths?: string[];
   judgePaths?: string[];
   floorMisses?: string[];
+  contextMisses?: string[];
 }
 
 /** The operation a log line is about (logJudge truncates to 200). */
@@ -471,19 +479,22 @@ export function logJudgeDiff(
  * D13: a stage-2 verdict with a path the floor's path model never saw — the
  * floor↔judge disagreement line, mirrored to the on-by-default ledger so it
  * survives the decision log being off (or wiped on /reload). Both sides sit
- * on the line (floorPaths + judgePaths + floorMisses) so the fault — the
- * floor's blind spot vs judge reach — is analysable by the miner. A no-op
- * when the report is absent or fully covered by the floor.
+ * on the line (floorPaths + judgePaths) and the mismatch is split by cause
+ * (floorMisses = floor blind spot, contextMisses = stage-2 context echo), so
+ * the miner can attribute it. A no-op when the report is absent or fully
+ * covered by the floor; a context-only bleed still writes a line — the bleed
+ * rate is what makes the prompt fix measurable.
  */
 export function logJudgePaths(
   pd: PromptData,
   store: Store,
   verdict: JudgeResult,
   mode: JudgeLogMode,
+  ctx?: ExtensionContext,
 ): void {
   if (pd.type !== "bash") return;
-  const f = judgePathLogFields(pd, store, verdict.paths);
-  if (!f.floorMisses?.length) return;
+  const f = judgePathLogFields(pd, store, verdict.paths, ctx);
+  if (!f.floorMisses?.length && !f.contextMisses?.length) return;
   logJudge({
     kind: "paths",
     mode,
@@ -492,6 +503,7 @@ export function logJudgePaths(
     floorPaths: f.floorPaths,
     judgePaths: f.judgePaths,
     floorMisses: f.floorMisses,
+    contextMisses: f.contextMisses,
   });
 }
 
