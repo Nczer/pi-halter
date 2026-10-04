@@ -794,3 +794,32 @@ describe("P5: credential names in heredoc bodies are data (FP regression)", () =
     expect(d.kind).toBe("prompt");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// P6: script interpreter with no risk entry — perl was allowlisted with the
+// exclusion reason "-i edits files in place", so only the -i forms were ever
+// flagged. A program body writes without -i (`unlink`, `system`, `open`), and
+// an auto-allow never reaches the gate or the judge in any mode. Found in the
+// unresolved ledger 2026-10-04 (round 3).
+// ──────────────────────────────────────────────────────────────────────
+describe("P6: perl program body is code execution", () => {
+  it("perl -e unlink → prompts", async () => {
+    const d = await decide({ type: "bash", command: "perl -e 'unlink(\"zz\")'", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("perl -pe system (filter mode, file operand present) → prompts", async () => {
+    const d = await decide({ type: "bash", command: "perl -pe 'system(\"rm -rf zz\") if 1' file.txt", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("perl <script file> → prompts (no -e needed)", async () => {
+    const d = await decide({ type: "bash", command: "perl /tmp/evil.pl", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("control: the flip is confined to perl — plain read stays auto-allow", async () => {
+    const d = await decide({ type: "bash", command: "cat file.txt", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+});

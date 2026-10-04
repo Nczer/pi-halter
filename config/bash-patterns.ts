@@ -35,7 +35,7 @@ const ALLOW_TABLE: readonly AllowEntry[] = [
   ["join"], ["comm"], ["paste"], ["column"], ["seq"],
   // Text transform (safe stdout — guarded by dangerous flag checks)
   ["sed", "-i edits files in place"],
-  ["perl", "-i edits files in place"],
+  ["perl", "program body runs arbitrary code (-i in-place edits) — ToolEvaluator flags every invocation"],
   // Hashing / binary inspection
   ["md5sum"], ["sha1sum"], ["sha256sum"], ["sha512sum"], ["cksum"],
   ["hexdump"], ["od"], ["strings"],
