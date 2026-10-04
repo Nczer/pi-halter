@@ -156,6 +156,17 @@ function extractCommandArgPairs(node: TSNode): { text: string; node: TSNode }[] 
       continue;
     }
 
+    // A bare number is an argument too, but tree-sitter gives it its own node
+    // type. Leaving it out shifts every "the flag's value is args[i+1]" index
+    // by one, so `shuf -n 2 FILE` marked FILE as shuf data and dropped it from
+    // the path set (same for `grep -e 2 FILE`, `awk -F 2 … FILE`):
+    // 2026-10-04 ledger mining. Numeric args are inert downstream —
+    // isPathCandidate("2") and isOpaqueValue("2") are both false.
+    if (child.type === "number") {
+      args.push({ text: resolveNodeText(child), node: child });
+      continue;
+    }
+
     // Recurse (e.g., command substitution in args) — the pair keeps the
     // subtree root as its node (runtime-expansion checks walk the subtree).
     for (let j = 0; j < child.childCount; j++) {
@@ -1328,6 +1339,20 @@ function sedScriptArgIndices(args: string[]): Set<number> {
       continue;
     }
     if (a.startsWith("--expression=")) continue; // self-contained flag
+    // -f FILE: the script comes from a file (the FILE stays path-checked) and
+    // every later argument is a file. The flag index itself is marked so the
+    // pattern region ends there (see patternRegionOpen).
+    if (a === "-f" || a === "--file") {
+      scriptSeen = true;
+      idxs.add(i);
+      if (i + 1 < args.length) i++;
+      continue;
+    }
+    if (a.startsWith("--file=") || (a.startsWith("-f") && a.length > 2 && !a.startsWith("--"))) {
+      scriptSeen = true;
+      idxs.add(i);
+      continue;
+    }
     if (a.startsWith("-")) continue; // flag (value inline, if any)
     if (!scriptSeen) { scriptSeen = true; idxs.add(i); }
   }
@@ -1402,11 +1427,13 @@ function awkProgramArgIndices(args: string[]): Set<number> {
     const a = args[i];
     if (a === "-f" || a === "--file") {
       programFixed = true;
-      if (i + 1 < args.length) i++; // the program FILE — keep path-checked
+      idxs.add(i); // the flag marks the program region; its FILE stays path-checked
+      if (i + 1 < args.length) i++;
       continue;
     }
     if (a.startsWith("--file=") || (a.startsWith("-f") && a.length > 2 && !a.startsWith("--"))) {
       programFixed = true; // -fFILE / --file= — program from a file
+      idxs.add(i);
       continue;
     }
     if (a === "-F" || a === "--field-separator" || a === "-v" || a === "--assign") {
@@ -1491,9 +1518,18 @@ function shufDataArgIndices(args: string[]): Set<number> {
  * absolute paths because they begin with `/`.
  *
  * Detection: awk scripts that start with `/` contain awk action syntax:
- * spaces, braces { }, $NF, $0, print, etc. — characters never found in bare paths.
+ * spaces, braces { }, print, etc. — characters a path does not carry. `$` is NOT
+ * one of them: the parser sees UNEXPANDED text, so `/proc/$pid/status` is a
+ * path-shaped token and the `$` is what the opaque-ref layer exists to handle
+ * (2026-10-04 ledger mining: `awk '{print $1}' /proc/$pid/status` lost its file
+ * operand to this check).
+ *
+ * `atProgramRegion` is the position gate (see patternRegionOpen): past awk's
+ * program argument every later argument is a file, and the `/`-prefixed rules
+ * below must not reclassify it. The structural rules (BEGIN/END blocks, action
+ * braces) hold at any position.
  */
-function isAwkScriptArg(arg: string): boolean {
+function isAwkScriptArg(arg: string, atProgramRegion = true): boolean {
   // Rule blocks or function definitions anchored at the start of the arg —
   // `BEGIN {…}`, `END {…}`, `function f(…) {…}` — are program text, not paths
   // (the log case: `awk 'BEGIN{t=""} /re/{…} END{print t}' f`).
@@ -1502,8 +1538,26 @@ function isAwkScriptArg(arg: string): boolean {
   // braces here, and a token without a path-like prefix is not a candidate.
   if (!arg.startsWith("/") && arg.includes("{") && arg.includes("}")) return true;
   if (!arg.startsWith("/")) return false;
+  if (!atProgramRegion) return false;
   // Awk scripts contain awk-specific syntax that never appears in file paths
-  return /[\s{}\(\)\$\^\*\+\?\|\\!=;]/.test(arg) || /,\//.test(arg);
+  return /[\s{}\(\)\^\*\+\?\|\\!=;]/.test(arg) || /,\//.test(arg);
+}
+
+/**
+ * Position gate for the sed/awk text heuristics. In `sed [flags] script [files…]`
+ * and `awk [options] program [files…]` the program/pattern argument precedes
+ * every file operand, so once the positional helper has fixed the program region
+ * (its highest marked index), the arguments after it are files — a text heuristic
+ * must not swallow them (2026-10-04 ledger mining: `sed 's/a/b/' /tmp/x` was
+ * dropped as `/pattern/x`, `awk '{print $1}' /proc/$pid/status` as a script).
+ * An empty set carries no information, so the heuristic keeps covering every
+ * position there.
+ */
+function patternRegionOpen(idxs: Set<number> | null, ai: number): boolean {
+  if (!idxs || idxs.size === 0) return true;
+  let last = -1;
+  for (const i of idxs) if (i > last) last = i;
+  return ai <= last;
 }
 
 /**
@@ -1671,9 +1725,9 @@ export async function parseCommand(
           //   grep: PATTERN position, -e PATTERN
           if ((cmdName === "sed" && (
               (sedScripts !== null && sedScripts.has(ai) && !/^(?:\/|\.\/|~\/)/.test(arg)) ||
-              isSedPatternArg(arg)
+              (patternRegionOpen(sedScripts, ai) && isSedPatternArg(arg))
             )) ||
-              (cmdName === "awk" && (awkPrograms !== null && awkPrograms.has(ai) || isAwkScriptArg(arg))) ||
+              (cmdName === "awk" && (awkPrograms !== null && awkPrograms.has(ai) || isAwkScriptArg(arg, patternRegionOpen(awkPrograms, ai)))) ||
               (grepPatterns !== null && grepPatterns.has(ai)) ||
               (cmdName === "awk" && awkData !== null && awkData.has(ai)) ||
               (cmdName === "shuf" && shufData !== null && shufData.has(ai))) {
