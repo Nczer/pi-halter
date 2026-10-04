@@ -11,6 +11,7 @@ import { isLedgerLogEnabled, setLedgerLogEnabled } from "./config/logging";
 import {readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, JudgeSettings} from "./judge/judge";
 import {judgeStatus} from "./judge/verdict";
 import { store } from "./gate/store";
+import { withUILock } from "./ui/ui-lock";
 
 // ── Main extension ──
 
@@ -93,7 +94,9 @@ export default async function halterExtension(pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       // Show confirm prompt before enabling; disabling toggles instantly
       if (!isDspActive() && ctx.hasUI) {
-        const ok = await ctx.ui.confirm("Enable DSP (Dangerously Skip Permissions)?", "This bypasses ALL permission checks.");
+        const ok = await withUILock(() =>
+          ctx.ui.confirm("Enable DSP (Dangerously Skip Permissions)?", "This bypasses ALL permission checks."),
+        );
         if (!ok) return; // cancelled or No — the current mode stays
       }
       const displaced = applyMode(ctx, isDspActive() ? "manual" : "dsp");
