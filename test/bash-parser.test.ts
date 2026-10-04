@@ -207,6 +207,14 @@ describe("parseCommand: paths", () => {
       expect(r.paths).toContain(realPath("/tmp/y.ts"));
     });
 
+    it("collects the payload of a ~-qualified launcher outside the closed set (2026-10-04 ledger)", async () => {
+      const r = await parseCommand(
+        `${home}/.pi/agent/extensions/node_modules/.bin/vite-node /tmp/hprobe.mts "x"`,
+        cwd,
+      );
+      expect(r.paths).toContain(realPath("/tmp/hprobe.mts"));
+    });
+
     it("applies the sed script-arg rule to a path-qualified sed", async () => {
       const r = await parseCommand("/usr/bin/sed -n '/foo/,$p' file.txt", cwd);
       expect(r.paths).toEqual([]);
@@ -335,6 +343,45 @@ describe("parseCommand: opaque var markers (log FPs)", () => {
   it("embedded loop var, non-literal in-list stays opaque", async () => {
     const r = await parseCommand(`for y in $(ls); do cat examiner_$y.txt; done`, cwd);
     expect(r.opaque.every(o => o.kind === "opaque")).toBe(true);
+  });
+
+  // 2026-10-04 unresolved ledger: `for d in */; do f=$(ls "$d"CHANGELOG.md …)`
+  // — the token never converged, so the user's "always" grant could not be
+  // persisted and every variant of the loop re-prompted.
+  it("a quoted expansion glued to a literal braces the name boundary (ledger case)", async () => {
+    // Concatenation[string("$d"), word("CHANGELOG.md")]: gluing the texts
+    // reads as the name `dCHANGELOG`, so the loop binding is lost.
+    const r = await parseCommand('for d in */; do f=$(ls "$d"CHANGELOG.md); done', cwd);
+    expect(r.opaque).toEqual([{ raw: "${d}CHANGELOG.md", segIdx: 0, kind: "cwdLocal" }]);
+  });
+
+  it("the brace appears only at a glued AST boundary (a bare word is left as written)", async () => {
+    const glued = await parseCommand('cat "$d"CHANGELOG.md', cwd);
+    expect(glued.opaque.map(o => o.raw)).toEqual(["${d}CHANGELOG.md"]);
+    // Written unquoted, bash really does read the longer name — unchanged.
+    const bare = await parseCommand('cat $dCHANGELOG.md', cwd);
+    expect(bare.opaque.map(o => o.raw)).toEqual(["$dCHANGELOG.md"]);
+  });
+
+  it("an embedded loop ref over a cwd-local in-list is cwdLocal, not a sentinel (ledger case)", async () => {
+    // Only the leading form carried the cwd-local classification; the glued
+    // form of the same loop fell through to a sentinel that can never resolve.
+    const r = await parseCommand('for d in */; do cat "sub/${d}CHANGELOG.md"; done', cwd);
+    expect(r.opaque).toEqual([{ raw: "sub/${d}CHANGELOG.md", segIdx: 0, kind: "cwdLocal" }]);
+  });
+
+  it("an absolute static part is NOT cwd-local (fail closed — the prefix is unprovable here)", async () => {
+    const r = await parseCommand('for d in */; do cat "/var/log/${d}2019.log"; done', cwd);
+    expect(r.opaque.map(o => o.kind)).toEqual(["opaque"]);
+  });
+
+  it("a quoted command substitution body reaches the path set (2026-10-04 judge.jsonl floorMiss)", async () => {
+    // The substitution is one opaque token to the resolver, but it RUNS:
+    // the shell touches every path its body names. The unquoted form was
+    // already recursed into; the quoted form was invisible.
+    const r = await parseCommand('node a.mts "$(cat /tmp/cmd1.txt)"', cwd);
+    expect(r.paths).toContain(realPath("/tmp/cmd1.txt"));
+    expect(r.opaque.map(o => o.raw)).toEqual(["$(cat /tmp/cmd1.txt)"]);
   });
 
   it("two embedded vars stay opaque (one value each)", async () => {

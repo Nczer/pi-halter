@@ -108,7 +108,7 @@ export const pathAwareCommands = new Set([
   "pushd", "popd",
   "tar", "zip", "unzip", "gzip", "gunzip",
   "python", "python3", "node", "ruby", "perl", "php",
-  "tsx", "bun", "deno",
+  "tsx", "bun", "deno", "vite-node",
   "sed", "awk", "sort", "uniq", "cut", "tr", "tee",
   "xargs", "watch", "timeout",
   "source", ".",

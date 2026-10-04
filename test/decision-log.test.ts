@@ -335,9 +335,9 @@ describe("unresolved-token log (logUnresolved)", () => {
     }
   });
 
-  it("writes one entry per call (ts, full token, cmd truncated to 200)", () => {
+  it("writes one entry per call (ts, full token, cmd truncated to 1000)", () => {
     logUnresolved({
-      cmd: "x".repeat(300),
+      cmd: "x".repeat(1200),
       cwd: "/c",
       token: "/x/$e/f",
       llm: ["/a"],
@@ -347,7 +347,7 @@ describe("unresolved-token log (logUnresolved)", () => {
     });
     const [entry] = fs.readFileSync(unresolvedFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(entry).toMatchObject({
-      cmd: "x".repeat(200),
+      cmd: "x".repeat(1000),
       cwd: "/c",
       token: "/x/$e/f",
       llm: ["/a"],
@@ -546,10 +546,10 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     expect(e.contextMisses).toEqual(["/home/u/sessions/x.jsonl"]);
   });
 
-  it("cmd is truncated to 200 (log economy)", () => {
-    logJudge({ kind: "infra", mode: "manual", stage: 1, error: "model-unresolved", cmd: "x".repeat(300) });
+  it("cmd is truncated to 1000 (log economy, still attributable — a heredoc head cut at 200 said nothing)", () => {
+    logJudge({ kind: "infra", mode: "manual", stage: 1, error: "model-unresolved", cmd: "x".repeat(1200) });
     const [e] = judgeLines();
-    expect(e.cmd).toHaveLength(200);
+    expect(e.cmd).toHaveLength(1000);
   });
 
   it("never throws when the log path is impossible", () => {
