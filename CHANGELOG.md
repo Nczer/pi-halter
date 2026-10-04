@@ -1,5 +1,51 @@
 # Changelog
 
+## 3.27.5 — 2026-10-04
+
+**Ledger mining, round 2 (`unresolved.jsonl` 2 lines, `judge.jsonl` 7).**
+
+- **A glued expansion minted a phantom variable name** (`unresolved.jsonl`:
+  `for d in */; do f=$(ls "$d"CHANGELOG.md …)`). tree-sitter splits
+  `"$d"CHANGELOG.md` into string + word; `resolveNodeText` concatenated the
+  child texts, and the result read as the name `dCHANGELOG` — no loop binds
+  that name, so the token was a sentinel no grant could ever bind (the line
+  records `decision:"always"` with `persisted:false`). Gluing now braces the
+  boundary expansion (`${d}CHANGELOG.md`): the same expansion written
+  unambiguously, so the resolver sees `d`. A word written unquoted keeps its
+  longer name — bash really does read `$dCHANGELOG` as one name.
+- **The embedded loop ref had no cwd-local classification.** Only the leading
+  form (`$d`, `$d/rest`) classified a cwd-local in-list; `"${d}CHANGELOG.md"`
+  over `for d in */` fell to `opaque`. It now classifies `cwdLocal` when the
+  static part is relative; an absolute static part stays opaque (this branch
+  cannot prove the pin — the trailing form covers the provable shape). The
+  ledger command now resolves against its base with no unresolvable token.
+- **A quoted command substitution hid its body's paths** (`judge.jsonl`
+  floorMiss `/tmp/cmd1.txt` for `"$(cat /tmp/cmd1.txt)"`). The unquoted form
+  is recursed into by the arg extraction; the quoted form is one opaque token
+  and nothing looked inside. The substitution RUNS, so every literal path its
+  body names is touched by the shell — they join the path set (the sentinel
+  stays: the substitution's *value* is still unknown).
+- **The judge packet carried no script for a launcher invocation**
+  (`…/node_modules/.bin/vite-node /tmp/hprobe.mts` — deferred twice with
+  nothing to judge). `identifyScriptFile` stopped at the first non-script
+  token, so a path-like launcher ended the scan, and `.mts` was not a script
+  extension. A path-like first token with no script extension now reads as a
+  launcher and the scan continues; `tsx`/`vite-node` join the interpreter list
+  and `vite-node` joins `pathAwareCommands` (the floor was blind to its
+  payload — the 2026-08-31 `tsx` shape again).
+- **Ledger lines were not attributable.** The 200-char `cmd` cap truncated a
+  heredoc command to its `cat > f <<EOF` head — the one part that says nothing
+  about the gap in the body. `LEDGER_CMD_MAX` = 1000.
+
+**Recorded, not fixed.** A loop-body assignment (`f=$(ls …)` inside `do … done`)
+never reaches the resolver — only statement-position assignments are recorded —
+so the ledger's `$f` stays a sentinel (it converged regardless: `persisted:
+true`). Recording body assignments would assume the body ran: `for d in; do
+D=./x; done; cat $D/secret` resolves inside the bar while bash opens `/secret`
+outside it. And the floor still cannot see a script body's runtime-assembled
+paths (`path.join(dir, ".nn.bak")` — the 09:01 judge line): `BODY_PATH_RE`
+matches literal absolute-looking paths only.
+
 ## 3.27.4 — 2026-10-04
 
 **Judge hygiene: the first week of `judge.jsonl` (7 lines — 4 infra, 3 paths,

@@ -346,6 +346,15 @@ export interface UnresolvedLogEntry {
 }
 
 /**
+ * Ledger economy: the operation text is truncated, but it must stay
+ * ATTRIBUTABLE — a line you cannot reconnect to a command cannot be mined.
+ * The old 200-char cut truncated a heredoc command to its `cat > f <<EOF`
+ * head, i.e. to the one part that says nothing about the floor gap in the
+ * script body (2026-10-04 judge.jsonl, unrecoverable).
+ */
+const LEDGER_CMD_MAX = 1000;
+
+/**
  * Record one unresolved token's fate (see UnresolvedLogEntry). The point
  * of this log: watching the convergence loop — first run prompts with an
  * LLM suggestion, the user's choice confirms, later runs auto-allow
@@ -363,7 +372,7 @@ export function logUnresolved(e: UnresolvedLogEntry): void {
     const entry: UnresolvedLogEntry = {
       ts: new Date().toISOString(),
       ...e,
-      cmd: e.cmd.slice(0, 200),
+      cmd: e.cmd.slice(0, LEDGER_CMD_MAX),
     };
     appendJsonl(file, JSON.stringify(entry) + "\n");
   } catch {
@@ -416,7 +425,7 @@ export interface JudgeLogEntry {
   contextMisses?: string[];
 }
 
-/** The operation a log line is about (logJudge truncates to 200). */
+/** The operation a log line is about (logJudge truncates to LEDGER_CMD_MAX). */
 function judgeCmdOf(pd: PromptData): string {
   return pd.type === "bash" ? pd.command : pd.type === "file" ? pd.filePath : `${pd.tool}/${pd.label}`;
 }
@@ -432,7 +441,7 @@ export function logJudge(e: Omit<JudgeLogEntry, "ts">): void {
     if (!file) return;
     // Log economy: the ledger is mineable by eye — truncate the operation.
     const line = { ts: new Date().toISOString(), ...e };
-    if (line.cmd) line.cmd = line.cmd.slice(0, 200);
+    if (line.cmd) line.cmd = line.cmd.slice(0, LEDGER_CMD_MAX);
     appendJsonl(file, JSON.stringify(line) + "\n");
   } catch {
     /* never throw */

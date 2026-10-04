@@ -113,18 +113,41 @@ function resolveNodeText(node: TSNode): string {
       return node.text;
     case "string":
     case "concatenation": {
-      let result = "";
+      const parts: string[] = [];
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i);
         if (!child) continue;
         if (node.type === "string" && child.type === '"') continue;
-        result += resolveNodeText(child);
+        parts.push(resolveNodeText(child));
       }
-      return result;
+      return glueParts(parts);
     }
     default:
       return node.text;
   }
+}
+
+/**
+ * Glue the parts of a compound word without inventing a longer variable
+ * name. Bash reads `$dCHANGELOG` as ONE name, but the AST says the expansion
+ * ended at `$d` (`"$d"CHANGELOG.md` = string + word). Concatenating the child
+ * texts mints a phantom name (`dCHANGELOG`), so the loop binding is lost and
+ * the token can never resolve — the 2026-10-04 unresolved ledger (`for d in
+ * glob; do f=$(ls "$d"CHANGELOG.md …)`). Bracing the boundary expansion is the
+ * same expansion written unambiguously (`${d}CHANGELOG.md`): every downstream
+ * text consumer still sees one token, and the resolver sees the real name.
+ * A name that genuinely continues (`$dCHANGELOG` written unquoted) is braced
+ * as itself — no change in meaning.
+ */
+function glueParts(parts: string[]): string {
+  let out = "";
+  for (const p of parts) {
+    if (out && p && /[\w]/.test(p[0])) {
+      out = out.replace(/\$([A-Za-z_][A-Za-z0-9_]*|\d)$/, "\${$1}");
+    }
+    out += p;
+  }
+  return out;
 }
 
 /** Extract arguments (text + source node) from a command node (skip command
@@ -711,9 +734,22 @@ function opaqueRef(node: TSNode, arg: string, cwd: string, segIdx: number, segme
   const emb = embeddedLoopRef(val);
   if (emb !== null) {
     const inList = enclosingLoopInList(node, emb.name);
-    if (inList !== null && inList.every(isLiteralInListWord)) {
-      return mk("loopList", undefined,
-        inList.map(w => emb.before + (dequoteInListWord(w) ?? w) + emb.after));
+    if (inList !== null) {
+      if (inList.every(isLiteralInListWord)) {
+        return mk("loopList", undefined,
+          inList.map(w => emb.before + (dequoteInListWord(w) ?? w) + emb.after));
+      }
+      // cwd-local in-list over a relative static part (`for d in */; do cat
+      // "${d}CHANGELOG.md"`): before + word + after stays under the runtime
+      // cwd. Only the leading form carried this classification, so the
+      // 2026-10-04 ledger token fell to "opaque" — a sentinel that can never
+      // converge. An absolute static part is NOT cwd-local (fail closed: the
+      // token lands wherever the prefix points, which this branch cannot
+      // prove); the trailing form already covers the provable pinned shape.
+      if (!emb.before.startsWith("/") && !emb.before.startsWith("~") &&
+          inList.every(w => isBareName(w) || isCwdLocalRelWord(w))) {
+        return mk("cwdLocal");
+      }
     }
   }
   return mk("opaque");
@@ -1577,6 +1613,10 @@ function patternRegionOpen(idxs: Set<number> | null, ai: number): boolean {
  */
 const BODY_PATH_RE = /(?<![\w:/.-])(?:~)?\/[\w.-]+(?:\/[\w.-]+)+/g;
 
+/** A command substitution inside argument TEXT (the quoted forms — the
+ *  unquoted ones arrive as their own node and are recursed into). */
+const SUBST_IN_TEXT_RE = /\$\(|`/;
+
 /** Scan script body text for path-like literals, resolved like any other
  *  extracted path (SAFE_SYSTEM_PATHS filter + dedup apply downstream). */
 function bodyPaths(text: string, cwd: string, out: string[], hop?: (written: string, resolved: string) => void): void {
@@ -1739,6 +1779,17 @@ export async function parseCommand(
           // command's assignments and the tracked effective cwd.
           const ref = opaqueRef(cmdNode, arg, cwd, segMap.get(cmdNode.id) ?? -1, segments);
           if (ref) opaque.push(ref);
+
+          // A QUOTED command substitution (`"$(cat /tmp/list.txt)"`) is one
+          // opaque token to the resolver, but the substitution itself RUNS:
+          // the shell touches every path its body names. The unquoted form is
+          // recursed into by the arg extraction; the quoted form never is, so
+          // the body's paths were invisible (2026-10-04 judge.jsonl floorMiss:
+          // `cat /tmp/cmd1.txt` inside "$(cat /tmp/cmd1.txt)"). Same rule as a
+          // script body above — the floor sees what the operation touches.
+          if (SUBST_IN_TEXT_RE.test(arg)) {
+            bodyPaths(arg, cwd, allPaths, recordHop);
+          }
 
           if (isPathCandidate(arg)) {
             // For flag values (--file=/path), resolve the value, not the flag itself.

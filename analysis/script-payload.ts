@@ -19,12 +19,12 @@ import { tokenizeSegment } from "./tokenizer";
 import { isTrustedScriptCommand } from "../config";
 
 /** Extensions whose content is worth reviewing (text scripts). */
-const SCRIPT_EXT_RE = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|php|lua|exs?)$/i;
+const SCRIPT_EXT_RE = /\.(sh|bash|zsh|py|pyi|js|mjs|cjs|mts|cts|ts|rb|pl|php|lua|exs?)$/i;
 const SCRIPT_INTERPRETERS = new Set([
   "python", "python3", "python2", "py",
   "node", "nodejs",
   "ruby", "perl", "php", "lua",
-  "deno", "bun",
+  "deno", "bun", "tsx", "vite-node",
   "bash", "sh", "zsh",
 ]);
 
@@ -59,7 +59,15 @@ export function identifyScriptFile(seg: string, base: string): string | null {
     const token = tokens[j];
     if (token.startsWith("-")) continue;
     if (token.includes("$") || token.includes("`")) break; // computed — unresolvable
-    if (!SCRIPT_EXT_RE.test(token)) break;
+    if (!SCRIPT_EXT_RE.test(token)) {
+      // A path-like first token with no script extension is a LAUNCHER, not
+      // the payload (`…/node_modules/.bin/vite-node /tmp/x.mts` — 2026-10-04
+      // judge.jsonl: no script identified, so the packet carried no content
+      // and the judge had nothing to judge). Keep scanning; anywhere else a
+      // non-script token ends the scan (`bash -c …`, `python3 -m x`).
+      if (j === startIdx && !isInterp) continue;
+      break;
+    }
     return path.resolve(base, expandTilde(token));
   }
   return null;

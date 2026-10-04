@@ -71,6 +71,24 @@ describe("findExecutedScript", () => {
   it("returns null when the file does not exist", async () => {
     expect(findExecutedScript(await analyze("python3 missing.py"), tmp)).toBeNull();
   });
+
+  // 2026-10-04 judge.jsonl: `…/node_modules/.bin/vite-node /tmp/hprobe.mts`
+  // identified no script, so the packet carried no content and the judge had
+  // nothing to judge (defer twice, prompt on a command the floor also could
+  // not see the payload of).
+  it("identifies the script behind a path-like launcher", async () => {
+    fs.writeFileSync(path.join(tmp, "probe.mts"), "console.log('mts payload')\n");
+    const s = findExecutedScript(
+      await analyze('./node_modules/.bin/vite-node probe.mts "x"'), tmp);
+    expect(s?.path).toBe(path.join(tmp, "probe.mts"));
+    expect(s?.content).toContain("mts payload");
+  });
+
+  it("a Node .mts payload is a script (the extension list must cover it)", async () => {
+    fs.writeFileSync(path.join(tmp, "x.mts"), "console.log(1)\n");
+    expect(findExecutedScript(await analyze("node x.mts"), tmp)?.path)
+      .toBe(path.join(tmp, "x.mts"));
+  });
 });
 
 describe("scriptFilePathInSegment (D19 — pure, no file read)", () => {
@@ -84,6 +102,18 @@ describe("scriptFilePathInSegment (D19 — pure, no file read)", () => {
     expect(scriptFilePathInSegment("python3 -u job.py", tmp)).toBe(path.join(tmp, "job.py"));
     expect(scriptFilePathInSegment("python3 -m x", tmp)).toBeNull();
     expect(scriptFilePathInSegment("python3 -c 'print(1)'", tmp)).toBeNull();
+  });
+
+  it("a path-like launcher does not end the scan; an interpreter's non-script token still does", () => {
+    // A path-like first token with no script extension reads as a LAUNCHER,
+    // so the payload one token later is identified. The misread direction (a
+    // reader invoked by absolute path — `/bin/cat job.py`) costs scrutiny,
+    // never grants: the payload is fenced for the judge and D19 only converts
+    // an auto-allow into a prompt.
+    expect(scriptFilePathInSegment("./node_modules/.bin/vite-node probe.mts", tmp))
+      .toBe(path.join(tmp, "probe.mts"));
+    expect(scriptFilePathInSegment("./tool run.py", tmp)).toBe(path.join(tmp, "run.py"));
+    expect(scriptFilePathInSegment("python3 -m x", tmp)).toBeNull();
   });
 
   it("computed paths, bare commands, and trusted skill scripts are null", () => {

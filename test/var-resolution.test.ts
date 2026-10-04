@@ -124,6 +124,14 @@ describe("assignment binding", () => {
     expect(r.unresolved).toEqual([]);
   });
 
+  it("a glued expansion binds the REAL name (the ledger token read as $dCHANGELOG)", async () => {
+    // Bash concatenates the value with the literal — the concrete name the
+    // shell opens, named instead of a sentinel.
+    const r = await resolve('d=/etc && cat "$d"passwd/x');
+    expect(r.paths).toEqual(["/etcpasswd/x"]);
+    expect(r.unresolved).toEqual([]);
+  });
+
   it("unbound ref stays a sentinel (reason var)", async () => {
     const r = await resolve("f=$g; cat $f");
     expect(r.paths).toEqual([]);
@@ -379,6 +387,21 @@ describe("embedded loop refs (2026-09-01 log case)", () => {
     expect(r.unresolved).toEqual([
       { token: "examiner_$y.txt", reason: "base", marker: expect.any(String) },
     ]);
+  });
+
+  // 2026-10-04 unresolved ledger: `for d in */; do f=$(ls "$d"CHANGELOG.md …)`
+  // — the glued expansion minted the name `dCHANGELOG`, so the loop binding
+  // was lost and the token was a sentinel no grant could ever bind.
+  it("a glued expansion over a cwd-local in-list bounds against the base → dropped", async () => {
+    const r = await resolve('for d in */; do f=$(ls "$d"CHANGELOG.md); done');
+    expect(r.paths).toEqual([]);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("the same loop after a cd names the base (grantable), not a sentinel", async () => {
+    const r = await resolve('cd /etc && for d in */; do f=$(ls "$d"CHANGELOG.md); done');
+    expect(r.paths).toEqual(["/etc"]);
+    expect(r.unresolved).toEqual([]);
   });
 });
 
