@@ -1,6 +1,43 @@
 # Changelog
 
-# Changelog
+## 3.27.3 — 2026-10-04
+
+**File operands stopped being swallowed by the script/pattern heuristics.**
+Mining `.log/unresolved.jsonl` + `.log/judge.jsonl` (22 + 7 lines) found two
+fail-open families in the path extractor: the commands still prompted (awk,
+shuf and short-tailed sed are not in the allow table), but with **no path
+warning** — and a signature grant for them would auto-allow silently.
+
+- **Position drift from numeric arguments.** tree-sitter parses a bare `2` as a
+  `number` node, and `extractCommandArgPairs` only accepted `WORD_TYPES`, so the
+  number was absent from the argument list while every helper that marks "the
+  flag's value is `args[i+1]`" counted it: `shuf -n 2 FILE`, `grep -e 2 FILE`,
+  `rg -e 2 FILE`, `sed -e 2 FILE`, `awk -F 2 … FILE` marked the FILE as data and
+  dropped it from the path set (`shuf -n 2 /etc/hosts` → `paths=[]`).
+  `extractCommandArgPairs` now accepts `number` children, so the index space
+  matches the shell's. Numeric args are inert downstream
+  (`isPathCandidate("2")` and `isOpaqueValue("2")` are false); global
+  `WORD_TYPES` is untouched.
+- **Text heuristics applied past the program position.** In `sed [flags] script
+  [files…]` / `awk [options] program [files…]` the program precedes every file
+  operand, yet `isAwkScriptArg`/`isSedPatternArg` ran on every argument: `awk
+  '{print $1}' /proc/$pid/status` lost the file (the `$` is in awk's syntax
+  class — but the parser sees UNEXPANDED text, so `$` is a path character here,
+  which is exactly what the opaque-ref layer exists for) and `sed 's/a/b/'
+  /tmp/x` lost it to the `/pattern/x` rule (a 1–3 letter last segment reads as a
+  sed command). New `patternRegionOpen(idxs, ai)` gate: the `/`-prefixed rules
+  only apply while the positional helper's program region is still open; the
+  structural rules (BEGIN/END blocks, action braces, `s/…/` forms) stay
+  unconditional. `$` was removed from awk's syntax class.
+- `sedScriptArgIndices` learned `-f/--file` (the script FILE stays path-checked
+  and the region ends there); `awkProgramArgIndices` now marks the `-f` flag
+  index for the same reason. `sed -f prog.sed /etc/$d/x` and `awk -f prog.awk
+  /etc/$d/x` mint the data file.
+- Preserved (probed before and after): `sed -n '/interface …/,$p' f`,
+  `awk 'BEGIN{…} /re/{…} END{…}' f`, `awk -W posix '{print $1}' f`,
+  `awk '/pat/' f`, `awk -F: '$1>420' f`, `awk -v l=$L … f`, `shuf -i 1-$n -n 2 f`,
+  `grep -vE "$re" f`, `rg -g '*.ts' pat f`, `sort -o OUT IN`.
+- `test/bash-parser.test.ts`: +8 cases named after the ledger commands.
 
 ## 3.27.2 — 2026-10-03
 

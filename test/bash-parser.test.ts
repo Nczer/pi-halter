@@ -1162,3 +1162,72 @@ describe("parseCommand: multi-line literal args are script bodies, not paths", (
     expect(r.opaque).toEqual([]);
   });
 });
+
+describe("parseCommand: file operands the script/pattern heuristics used to swallow (2026-10-04 ledger mining)", () => {
+  const has = (paths: string[], needle: string) => paths.some(p => p.includes(needle));
+
+  it("awk: a $-bearing FILE operand is a path, not awk syntax", async () => {
+    const r = await parseCommand(`awk '{print $1}' /proc/$pid/status`, cwd);
+    expect(has(r.paths, "/proc/$pid/status")).toBe(true);
+    expect(r.paths.some(p => p.includes("{print"))).toBe(false);
+  });
+
+  it("awk: a file after the program is never reclassified as a pattern", async () => {
+    const r = await parseCommand(`awk '{print $1}' /tmp/x`, cwd);
+    expect(has(r.paths, "/tmp/x")).toBe(true);
+    const spaced = await parseCommand(`awk '{print $1}' "/tmp/my file"`, cwd);
+    expect(has(spaced.paths, "/tmp/my file")).toBe(true);
+  });
+
+  it("awk -f: the program file and the data files stay path-checked", async () => {
+    const r = await parseCommand(`awk -f prog.awk /etc/$d/x`, cwd);
+    expect(has(r.paths, "/etc/$d/x")).toBe(true);
+  });
+
+  it("sed: a short-tailed FILE operand is not /pattern/x", async () => {
+    const r = await parseCommand(`sed 's/a/b/' /tmp/x`, cwd);
+    expect(has(r.paths, "/tmp/x")).toBe(true);
+    const ts = await parseCommand(`sed -i 's/a/b/' /tmp/a.ts`, cwd);
+    expect(has(ts.paths, "/tmp/a.ts")).toBe(true);
+    const d = await parseCommand(`sed 's/a/b/' /etc/$d/x`, cwd);
+    expect(has(d.paths, "/etc/$d/x")).toBe(true);
+  });
+
+  it("sed -f: the script file and the data files stay path-checked", async () => {
+    const r = await parseCommand(`sed -f prog.sed /etc/$d/x`, cwd);
+    expect(has(r.paths, "/etc/$d/x")).toBe(true);
+  });
+
+  it("a bare numeric argument is a real argument: the flag's value, not the next file", async () => {
+    // tree-sitter parses `2` as its own node type; excluding it shifted every
+    // "flag value at i+1" index onto the following FILE operand.
+    const shuf = await parseCommand("shuf -n 2 /etc/hosts", cwd);
+    expect(has(shuf.paths, "/etc/hosts")).toBe(true);
+    const two = await parseCommand("shuf -n 2 /etc/hosts /etc/hostname", cwd);
+    expect(has(two.paths, "/etc/hosts") && has(two.paths, "/etc/hostname")).toBe(true);
+    for (const cmd of ["grep -e 2 /etc/hosts", "rg -e 2 /etc/hosts", "sed -e 2 /etc/$d/x", "awk -F 2 '{print}' /etc/hosts"]) {
+      const r = await parseCommand(cmd, cwd);
+      expect(has(r.paths, cmd.includes("$d") ? "/etc/$d/x" : "/etc/hosts")).toBe(true);
+    }
+  });
+
+  it("numeric arguments are inert — they never become paths", async () => {
+    const r = await parseCommand("head -n 5 /etc/hosts", cwd);
+    expect(r.paths).toEqual([realPath("/etc/hosts")]);
+    const sleep = await parseCommand("sleep 5", cwd);
+    expect(sleep.paths).toEqual([]);
+  });
+
+  it("the documented pattern/script cases still never reach the path set", async () => {
+    const range = await parseCommand(`sed -n '/interface org.freedesktop.NetworkManager/,$p' /tmp/out.txt`, cwd);
+    expect(has(range.paths, "/tmp/out.txt")).toBe(true);
+    expect(range.paths.some(p => p.includes("interface"))).toBe(false);
+    const bare = await parseCommand(`sed -n /interface/,$p /tmp/out.txt`, cwd);
+    expect(bare.paths.some(p => p.includes("interface"))).toBe(false);
+    const addr = await parseCommand(`awk '/pat/' /etc/hosts`, cwd);
+    expect(addr.paths).toEqual([realPath("/etc/hosts")]);
+    const gawk = await parseCommand(`awk -W posix '{print $1}' /etc/hosts`, cwd);
+    expect(has(gawk.paths, "/etc/hosts")).toBe(true);
+    expect(gawk.paths.some(p => p.includes("{print"))).toBe(false);
+  });
+});
