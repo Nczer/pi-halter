@@ -1,9 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BuiltPrompt } from "./prompt-builder";
 import type { Store } from "../gate/store";
+import { withUILock } from "./ui-lock";
 /** Native select → option index, or null on cancel. Keeps index-based dispatch. */
 async function selectIndex(ctx: ExtensionContext, title: string, options: string[]): Promise<number | null> {
-  const sel = await ctx.ui.select(title, options);
+  // Serialized against consult/quiz: pi runs the tool calls of one message
+  // concurrently and a second dialog replaces this one (see ui-lock.ts).
+  const sel = await withUILock(() => ctx.ui.select(title, options));
   return sel === undefined ? null : options.indexOf(sel);
 }
 
@@ -323,7 +326,7 @@ export async function twoTierAlwaysPrompt(
         return "always";
       }
       if (idx === choices.length - 1) {
-        const reason = await ctx.ui.input("Reason for rejection:");
+        const reason = await withUILock(() => ctx.ui.input("Reason for rejection:"));
         if (reason === undefined) continue;
         return { kind: "no", reason: reason.trim() || "No reason provided" };
       }
@@ -358,7 +361,7 @@ export async function twoTierAlwaysPrompt(
     // ── Direct actions (no tier-2) ──
     if (idx === 0) return "yes";
     if (idx === choices.length - 1) {
-      const reason = await ctx.ui.input("Reason for rejection:");
+      const reason = await withUILock(() => ctx.ui.input("Reason for rejection:"));
       if (reason === undefined) continue;
       return { kind: "no", reason: reason.trim() || "No reason provided" };
     }
