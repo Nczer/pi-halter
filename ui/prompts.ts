@@ -4,7 +4,7 @@ import type { Store } from "../gate/store";
 import { withUILock } from "./ui-lock";
 /** Native select → option index, or null on cancel. Keeps index-based dispatch. */
 async function selectIndex(ctx: ExtensionContext, title: string, options: string[]): Promise<number | null> {
-  // Serialized against consult/quiz: pi runs the tool calls of one message
+  // Serialized against consult: pi runs the tool calls of one message
   // concurrently and a second dialog replaces this one (see ui-lock.ts).
   const sel = await withUILock(() => ctx.ui.select(title, options));
   return sel === undefined ? null : options.indexOf(sel);
