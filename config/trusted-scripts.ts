@@ -2,7 +2,8 @@ import path from "node:path";
 import os from "node:os";
 import { expandTilde } from "../analysis/path-util";
 import { tokenizeSegment } from "../analysis/tokenizer";
-import { SHELL_INTERPRETERS } from "./bash-patterns";
+import { skipEnvPrefixes } from "./bash-patterns";
+import { findScriptOperand } from "./script-operand";
 
 /** Directories whose scripts are auto-trusted (interpreter + script in this dir bypasses dangerous-pattern check). */
 const trustedScriptDirs: string[] = [
@@ -15,22 +16,9 @@ const TRUSTED_PACKAGES = new Set([
   "openpyxl", "pandas", "pillow", "pymupdf", "pypdf", "reportlab", "xlrd",
 ]);
 
-/** Pre-compiled regexes for interpreter detection and file extension check. */
-const INTERPRETER_RE = /^(python|node|ruby|php|lua|perl|deno|bun|jruby|pypy|graalvm|uv)/i;
-const FILE_EXT_RE = /\.\w{2,4}$/;
-
-/**
- * Check if a command token refers to a file path (direct exec) rather than a
- * bare command name: `/abs/path`, `~/path`, `./rel/path`, `rel/path`.
- */
-function isPathLikeToken(token: string): boolean {
-  return token.includes("/") || token.startsWith("~");
-}
-
 /**
  * Extract package name from a --with value, stripping extras like [pptx].
  * "markitdown[pptx]" → "markitdown"
- * "pymupdf" → "pymupdf"
  */
 function normalizePkg(name: string): string {
   return name.replace(/\[.*\]/, "").toLowerCase();
@@ -58,8 +46,70 @@ function isTrustedDepsPath(value: string, cwd: string): boolean {
 }
 
 /**
- * Check if a command segment is an interpreter (python, node, etc.) running
- * a script file from a trusted directory.
+ * Supply-chain defense for the `uv run` dependency flags: every --with
+ * package must be allowlisted, and every --with-editable/--with-requirements
+ * source must itself be a trusted path. True for commands that are not a
+ * `uv run` form (nothing to validate). Runs BEFORE the operand scan: an
+ * untrusted dependency set voids trust even when the script file itself
+ * sits in a trusted directory.
+ */
+function uvRunDepsTrusted(tokens: string[], cwd: string): boolean {
+  let i = skipEnvPrefixes(tokens);
+  if (tokens[i]?.toLowerCase() !== "uv" || tokens[i + 1]?.toLowerCase() !== "run") return true;
+  i += 2;
+  while (i < tokens.length) {
+    const t = tokens[i].toLowerCase();
+    if (t === "--with" && i + 1 < tokens.length) {
+      if (!arePackagesTrusted(tokens[i + 1])) return false;
+      i += 2;
+      continue;
+    }
+    if (t === "--with-editable" || t === "--with-requirements") {
+      const value = tokens[i + 1];
+      if (value === undefined || !isTrustedDepsPath(value, cwd)) return false;
+      i += 2;
+      continue;
+    }
+    if (t.startsWith("--with=")) {
+      if (!arePackagesTrusted(t.slice("--with=".length))) return false;
+      i++;
+      continue;
+    }
+    if (t.startsWith("--with-editable=") || t.startsWith("--with-requirements=")) {
+      if (!isTrustedDepsPath(t.slice(t.indexOf("=") + 1), cwd)) return false;
+      i++;
+      continue;
+    }
+    break;
+  }
+  return true;
+}
+
+/**
+ * Wrapper forms trust passes through. The fix here is about KNOWLEDGE (the
+ * judge packet finally gets the script's content for wrapped runs), not
+ * grants: the skills-dir bypass stays exactly as wide as it was. Pass-through
+ * wrappers (`timeout`, `env`, `xargs`, `watch`) and package FETCH runners
+ * (`npx`, `uvx`, `npm exec`) gain no bypass — a trusted script fan-outed by
+ * xargs, or a package fetched from the registry on cache miss, is not the
+ * form the trusted-skills-dir decision was made about. The two local run
+ * forms are the exception because trust parsed them before (uv run).
+ */
+const TRUST_TRANSPARENT_FORMS = new Set(["uv run", "deno run"]);
+
+/**
+ * Check if a command segment executes a script file from a trusted
+ * directory. The operand scan is the shared one (config/script-operand.ts,
+ * used by analysis/script-payload.ts for identification) — trust and
+ * knowledge must name the same file for the same form, or a wrapped run
+ * (`uv run --with <dep> python job.py`) gets the bypass without ever
+ * reaching the judge packet.
+ *
+ * `first` (any extension) is the trust operand: an extension-less
+ * executable in the skills dir is trusted even though it is not a text
+ * payload worth fencing. Command-string forms are NEVER trusted — the
+ * operand scan aborts on `-c`/`-m`/`-e`, so the quoted code cannot inherit
+ * trust from a path inside the string (`bash -c '~/skills/q.sh; rm -rf /'`).
  */
 export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
   const tokens = tokenizeSegment(segment);
@@ -67,89 +117,10 @@ export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
 
   // Normalize cwd once (tilde-expanding for robustness; runtime cwd is absolute).
   const base = path.resolve(expandTilde(cwd));
+  if (!uvRunDepsTrusted(tokens, base)) return false;
 
-  const cmd = tokens[0].toLowerCase();
-
-  // Direct exec (no interpreter): first token is a path that resolves inside
-  // the trusted skills dir. Skill scripts are invoked this way (they are
-  // executable, e.g. `~/.../skills/doc-search/scripts/q.sh` or
-  // `./scripts/find-sessions.sh`). A path token outside the trusted dir is a
-  // plain (untrusted) executable — not a trusted script.
-  if (isPathLikeToken(cmd)) {
-    const resolved = path.resolve(base, expandTilde(cmd));
-    return isTrustedScriptPath(resolved);
-  }
-
-  // Shell interpreters: `bash script.sh` / `sh script.sh` — trusted only when
-  // the first non-flag token is a script file that resolves inside the
-  // trusted dir. Command-string forms (`-c`, `--command`) are NEVER trusted:
-  // the quoted code is opaque to analysis (e.g. `bash -c '~/skills/q.sh; rm -rf /'`
-  // must not inherit trust from the path inside the string).
-  if (SHELL_INTERPRETERS.has(cmd)) {
-    for (let i = 1; i < tokens.length; i++) {
-      const t = tokens[i];
-      if (t === "-c" || t === "--command") return false;
-      if (t.startsWith("-")) continue; // skip flags like -e, -u, --norc
-      // First non-flag token must be the script file itself.
-      if (!FILE_EXT_RE.test(t)) return false;
-      const resolved = path.resolve(base, expandTilde(t));
-      return isTrustedScriptPath(resolved);
-    }
-    return false;
-  }
-
-  if (tokens.length < 2) return false;
-  if (!INTERPRETER_RE.test(cmd)) return false;
-
-  // Determine start index for script file search
-  let startIdx = 1;
-
-  // Handle `uv run [--with deps] script.py` pattern
-  if (cmd === "uv" && tokens[startIdx]?.toLowerCase() === "run") {
-    startIdx++;
-    // Skip --with, --with-editable, --with-requirements and their values
-    // Validate --with packages against allowlist (supply chain defense);
-    // --with-editable/--with-requirements sources must themselves be trusted paths.
-    while (startIdx < tokens.length) {
-      const t = tokens[startIdx].toLowerCase();
-      if (t === "--with" && startIdx + 1 < tokens.length) {
-        if (!arePackagesTrusted(tokens[startIdx + 1])) return false;
-        startIdx += 2;
-        continue;
-      }
-      if (t === "--with-editable" || t === "--with-requirements") {
-        const value = tokens[startIdx + 1];
-        if (value === undefined || !isTrustedDepsPath(value, cwd)) return false;
-        startIdx += 2;
-        continue;
-      }
-      if (t.startsWith("--with=")) {
-        const value = t.slice("--with=".length);
-        if (!arePackagesTrusted(value)) return false;
-        startIdx++;
-        continue;
-      }
-      if (t.startsWith("--with-editable=") || t.startsWith("--with-requirements=")) {
-        const value = t.slice(t.indexOf("=") + 1);
-        if (!isTrustedDepsPath(value, cwd)) return false;
-        startIdx++;
-        continue;
-      }
-      break;
-    }
-  }
-
-  // Find the script file argument (first non-flag token that looks like a file)
-  for (let i = startIdx; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith("-")) continue; // skip flags like -c, -m, -u, etc.
-    if (FILE_EXT_RE.test(token)) {
-      const resolved = path.resolve(base, expandTilde(token));
-
-      // Trusted static directory only
-      if (isTrustedScriptPath(resolved)) return true;
-      break;
-    }
-  }
-  return false;
+  const op = findScriptOperand(tokens);
+  if (!op?.first) return false;
+  if (!op.wrappers.every((w) => TRUST_TRANSPARENT_FORMS.has(w))) return false;
+  return isTrustedScriptPath(path.resolve(base, expandTilde(op.first.token)));
 }

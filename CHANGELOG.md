@@ -1,5 +1,54 @@
 # Changelog
 
+## 3.28.1 — 2026-10-14
+
+**Wrapped runs identified no script — the judge had nothing to read.**
+
+- **Reported live, then confirmed in the ledger.** A `npx tsx /tmp/…/probe.mts`
+  prompt read "the script's contents and npx network fetch are unverifiable →
+  DEFER". The same command run directly is judged ON its payload. Every skill-
+  script invocation is affected: `uv run --with <deps> python …` is the mandated
+  form, and identification failed for it.
+- **The cause was one token slot, not the judge.** `identifyScriptFile`
+  (`analysis/script-payload.ts`) only looked at `tokens[0]`, so any wrapper
+  (`npx`, `uv run`, `uvx`, `timeout`, `env`, `nice`, a path-like launcher) ended
+  the scan. All three consumers of the identification lost the same
+  information at once: the packet's fenced content, the D3/D11 conversions, and
+  the D13 `executedScriptPaths` ledger.
+- **One scan, two consumers: new `config/script-operand.ts`.** Trust
+  (`config/trusted-scripts.ts`) already parsed `uv run [--with …] job.py` while
+  identification did not — two parsers of the same forms, disagreeing, is what
+  made a run simultaneously bypassed and unread. The shared scan walks env
+  prefixes, `wrapperCommands`, the local run forms (`uv run`, `deno run`) and
+  `FETCH_PKG_FORMS` runners; trusted-scripts keeps only its supply-chain
+  validation (`--with` allowlist, trusted deps paths).
+- **The runner gate.** A package run form yields a payload only when the
+  package NAMES a runner (`npx tsx job.mts`, `uvx python job.py`). `npx eslint
+  a.ts` lints a.ts and `uvx black job.py` formats it — naming those as the
+  payload would mislabel the packet and over-claim "the floor saw the executed
+  path". Wrapping also never makes inline code (`timeout 60 python3 -c …`) or a
+  computed path (`npx tsx $ENTRY`) knowable.
+- **Knowledge, not grants.** Trust stays exactly as wide as before: the
+  skills-dir bypass does not become transitive through pass-through wrappers or
+  package FETCH runners (`timeout`/`xargs`/`watch`/`npx`/`uvx` identify the
+  script for the judge and still prompt). One deliberate widening: an
+  env-assignment prefix (`DEBUG=1 python3 ~/.pi/agent/skills/…/q.sh`) is now
+  transparent, as it already is everywhere else in the floor via
+  `skipEnvPrefixes`.
+- **Flow delta, no new stop.** A now-identified payload triggers the T3
+  stage-1 skip and the D19 outside-cwd blocker: wrapped runs decide at the
+  intent pass instead of the stateless one (one judge call, not two), and stage
+  2 still auto-allows on approve + low/medium. Net friction should fall — the
+  judge stops deferring on content it cannot see.
+- **Known limits recorded, not papered over.** The wrapper hop stops at a
+  wrapper's own flag value, so `xargs -a list.txt python3 job.py` stays
+  unidentified (no content, full command text still judged); a whole quoted
+  multi-word token is now rejected as an operand instead of being resolved as a
+  nonsense path (`watch -n 5 'python3 job.py'`).
+- **Tests:** `script-payload.test.ts` gains the wrapped-form table (run forms,
+  pass-through wrappers, the non-runner gate, inline/computed parity) and
+  `config-helpers.test.ts` pins that trust is not transitive through wrappers.
+
 ## 3.28.0 — 2026-10-04
 
 **Ledger mining, round 3: `perl` had no risk entry (deliberate policy flip).**

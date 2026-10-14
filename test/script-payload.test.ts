@@ -91,6 +91,65 @@ describe("findExecutedScript", () => {
   });
 });
 
+// 2026-10-14 judge.jsonl + unresolved.jsonl: every WRAPPED run identified no
+// script, so the packet carried no content and the judge could only defer
+// ("the script's contents … are unverifiable") — while the same command run
+// directly was judged on its payload. The mandated skill-script form
+// (`uv run --with <deps> python …`) is the commonest case.
+describe("wrapped run forms (identification walks past wrappers)", () => {
+  const p = (seg: string) => scriptFilePathInSegment(seg, tmp);
+  const analyze = (command: string, cwd = tmp) => analyzeCommand(command, cwd);
+
+  it("package run forms identify the payload when the package is a runner", () => {
+    expect(p("npx tsx probe.mts")).toBe(path.join(tmp, "probe.mts"));
+    expect(p("npx --yes tsx@5 probe.mts")).toBe(path.join(tmp, "probe.mts"));
+    expect(p("uvx python job.py")).toBe(path.join(tmp, "job.py"));
+    expect(p("npm exec tsx probe.mts")).toBe(path.join(tmp, "probe.mts"));
+  });
+
+  it("the local run forms identify the payload with or without a runner", () => {
+    expect(p("uv run job.py")).toBe(path.join(tmp, "job.py"));
+    expect(p("uv run --with openpyxl python job.py")).toBe(path.join(tmp, "job.py"));
+    expect(p("uv run --python 3.12 python job.py")).toBe(path.join(tmp, "job.py"));
+    expect(p("deno run --allow-read job.ts")).toBe(path.join(tmp, "job.ts"));
+  });
+
+  it("pass-through wrappers identify the payload of the inner command", () => {
+    expect(p("timeout 60 python3 job.py")).toBe(path.join(tmp, "job.py"));
+    expect(p("nice -n 5 node job.js")).toBe(path.join(tmp, "job.js"));
+    expect(p("env FOO=1 python3 job.py")).toBe(path.join(tmp, "job.py"));
+    expect(p("watch -n 5 bash job.sh")).toBe(path.join(tmp, "job.sh"));
+    expect(p("xargs -I{} python3 job.py {}")).toBe(path.join(tmp, "job.py"));
+    expect(p("FOO=1 python3 job.py")).toBe(path.join(tmp, "job.py"));
+  });
+
+  it("a non-runner package does not execute its file operand", () => {
+    // `uvx black job.py` FORMATS job.py, `npx eslint a.ts` LINTS a.ts —
+    // naming them as the payload would mislabel the packet and over-claim
+    // executedScriptPaths.
+    expect(p("npx eslint a.ts")).toBeNull();
+    expect(p("uvx black job.py")).toBeNull();
+    expect(p("npm run build")).toBeNull();
+    expect(p("timeout 60 grep -f pat.txt src")).toBeNull();
+  });
+
+  it("wrapping does not make inline code or computed paths knowable", () => {
+    expect(p("timeout 60 python3 -c 'print(1)'")).toBeNull();
+    expect(p("uv run --with openpyxl python -c 'print(1)'")).toBeNull();
+    expect(p("uv run -m pkg")).toBeNull();          // a module is not a file
+    expect(p("python3 -m pkg.entry")).toBeNull();
+    expect(p("npx tsx $ENTRY")).toBeNull();
+    expect(p("watch -n 5 'python3 job.py'")).toBeNull(); // opaque shell string
+  });
+
+  it("a wrapped payload reaches the packet content and the D13 ledger", async () => {
+    fs.writeFileSync(path.join(tmp, "probe.mts"), "console.log('wrapped payload')\n");
+    const a = await analyze("npx tsx probe.mts");
+    expect(findExecutedScript(a, tmp)?.content).toContain("wrapped payload");
+    expect(executedScriptPaths(a, tmp)).toEqual([path.join(tmp, "probe.mts")]);
+  });
+});
+
 describe("scriptFilePathInSegment (D19 — pure, no file read)", () => {
   it("interpreter-run and direct-exec forms resolve against the base", () => {
     expect(scriptFilePathInSegment("python3 job.py", tmp)).toBe(path.join(tmp, "job.py"));

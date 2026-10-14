@@ -16,17 +16,7 @@ import path from "node:path";
 import type {CommandAnalysis} from "./command-analysis";
 import { expandTilde } from "./path-util";
 import { tokenizeSegment } from "./tokenizer";
-import { isTrustedScriptCommand } from "../config";
-
-/** Extensions whose content is worth reviewing (text scripts). */
-const SCRIPT_EXT_RE = /\.(sh|bash|zsh|py|pyi|js|mjs|cjs|mts|cts|ts|rb|pl|php|lua|exs?)$/i;
-const SCRIPT_INTERPRETERS = new Set([
-  "python", "python3", "python2", "py",
-  "node", "nodejs",
-  "ruby", "perl", "php", "lua",
-  "deno", "bun", "tsx", "vite-node",
-  "bash", "sh", "zsh",
-]);
+import { isTrustedScriptCommand, findScriptOperand } from "../config";
 
 /** The identified script: resolved absolute path + full content. */
 export interface ExecutedScript {
@@ -39,38 +29,19 @@ export interface ExecutedScript {
 /**
  * The raw identification — the script file ONE segment executes (if any):
  * resolved absolute path. Null for forms without a resolvable file
- * (`bash -c`, computed paths) and non-script tokens. Trusted scripts are
- * NOT excluded here (see scriptFilePathInSegment / executedScriptPaths —
- * each consumer decides what trust means for it).
+ * (`bash -c`, computed paths) and non-script tokens. Wrappers are walked
+ * past (`npx tsx job.mts`, `uv run --with <dep> python job.py`) by the one
+ * shared operand scan (config/script-operand.ts) — the same scan trust
+ * uses, so the two can never disagree about which form names which file.
+ * Trusted scripts are NOT excluded here (see scriptFilePathInSegment /
+ * executedScriptPaths — each consumer decides what trust means for it).
  */
 export function identifyScriptFile(seg: string, base: string): string | null {
   const tokens = tokenizeSegment(seg);
   if (tokens.length < 1) return null;
-  // Raw first token (getFirstWord returns the basename — /bin/bash must
-  // still count as an interpreter).
-  const firstToken = tokens[0].toLowerCase();
-  const isInterp = SCRIPT_INTERPRETERS.has(path.basename(firstToken));
-  // Direct exec (./scripts/job.sh) or interpreter (python3 job.py).
-  if (!isInterp && !(firstToken.includes("/") || firstToken.startsWith("~"))) return null;
-
-  // First non-flag token that looks like a script file.
-  const startIdx = isInterp ? 1 : 0;
-  for (let j = startIdx; j < tokens.length; j++) {
-    const token = tokens[j];
-    if (token.startsWith("-")) continue;
-    if (token.includes("$") || token.includes("`")) break; // computed — unresolvable
-    if (!SCRIPT_EXT_RE.test(token)) {
-      // A path-like first token with no script extension is a LAUNCHER, not
-      // the payload (`…/node_modules/.bin/vite-node /tmp/x.mts` — 2026-10-04
-      // judge.jsonl: no script identified, so the packet carried no content
-      // and the judge had nothing to judge). Keep scanning; anywhere else a
-      // non-script token ends the scan (`bash -c …`, `python3 -m x`).
-      if (j === startIdx && !isInterp) continue;
-      break;
-    }
-    return path.resolve(base, expandTilde(token));
-  }
-  return null;
+  const op = findScriptOperand(tokens);
+  if (!op?.script) return null;
+  return path.resolve(base, expandTilde(op.script.token));
 }
 
 /**
