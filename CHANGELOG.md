@@ -1,5 +1,48 @@
 # Changelog
 
+## 3.29.0 — 2026-10-15
+
+**An interpreter's inline program is data, not a location — the role rule.**
+
+- **A program body became a location.** `python3 -c "…"` / `node -e "…"` bodies
+  were minted into the path set as one opaque ref whose "token" was the whole
+  mashed program: 13 of 28 `unresolved.jsonl` rows. The multi-line-literal guard
+  (3.26.1) was supposed to catch them but is voided by any `$` in the body
+  (`nodeHasRuntimeExpansion`), and program bodies are where `$` is densest —
+  the ledger class was double-quoted bodies naming `$HOME`.
+- **The rule, not the shape.** A location token is minted only at a FILE-operand
+  position of a path-aware command; at a program/pattern position the argument
+  is data and the shell touches no path named inside it. The parser already
+  modelled that for `sed` scripts, grep/rg patterns and awk programs; the
+  interpreter positions were the gap. Their flag set is read from
+  `config/script-operand.ts` (`INLINE_CODE_FLAGS`, plus php's `-r`) — the same
+  set that decides which operand the judge reads as the payload, so the path
+  view and the judge view cannot drift.
+- **Data is still read.** The program's path-like literals join the path set
+  (fail closed), with closed-set `$HOME`/`${HOME}` expanded exactly where the
+  shell would expand it: a double-quoted arg (an expansion child proves it) and
+  HOME not reassigned. A single-quoted body's `$HOME` belongs to the interpreter
+  and expands to nothing; `\$HOME` stays literal.
+- **No location from an unbindable prefix.** `BODY_PATH_RE` rejects a group
+  preceded by `$`/`{`/`}`: `${X}/a/b` is runtime-built, and slicing `/a/b` out
+  of it minted a nonexistent cwd-nested path — counted as INSIDE, the wrong
+  direction (the 3.28.2 side effect).
+- **Measured on the ledger.** Replaying the 26 distinct logged commands: the 13
+  body-class rows mint no token and produce no unresolved row (the one remaining
+  is a genuine unbound `$PI_SESSION_FILE`); the real `python3 -c` bodies now
+  contribute their true paths (`$HOME/.pi/agent/models.json` → the home path).
+  End-to-end decisions on those commands are unchanged (`prompt`, both before
+  and after) — the interpreter rows in `config/dangerous-patterns.ts` are what
+  judges them, which is why removing the mint opens nothing.
+- **The file position keeps its sentinel.** `cat "a\n$X/b"` still mints an
+  opaque ref: the argument's role decides, its shape does not.
+- **Docs:** `docs/architecture.md` gains "Argument roles (the data/location
+  rule)"; the sed/grep/awk grammars are stated as instances of it.
+- **Tests:** 9 in `bash-parser.test.ts` (both quoting directions, the brace
+  form, reassigned HOME, unbindable `${X}`, literal paths inside a program,
+  `php -r`, the file-position control); P9 in `verified-bypasses.test.ts` pins
+  that no inline-program vector auto-allows without a location token. 3931 pass.
+
 ## 3.28.3 — 2026-10-14
 
 **`head -n +$((MARK+1))` stopped 3 times: an arithmetic value was minted into a

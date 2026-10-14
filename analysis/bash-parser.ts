@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { allowedReadPaths, allowedWritePaths, pathAwareCommands } from "../config";
 import { expandTilde, resolvePathReal } from "./path-analysis";
-import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandHomeToken } from "./path-util";
+import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandHomeToken, expandHomeLiterals } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
+import { homeReassigned } from "./cwd-tracking";
+import { inlineCodeArgIndices } from "../config/script-operand";
 import type { ShellAssignment } from "./var-resolution";
 import { decodeAnsiCEscapes } from "./tokenizer";
 
@@ -1624,13 +1626,17 @@ function patternRegionOpen(idxs: Set<number> | null, ai: number): boolean {
  *
  * Shape: ~ or / start, ≥2 segments (one-segment tokens are almost always
  * regex/division noise), word chars only. The lookbehind rejects URL tails
- * (the second slash of http://…) and paths glued to a word char. `~` is
+ * (the second slash of http://…), paths glued to a word char, and a group
+ * whose prefix is an UNEXPANDED expansion (`${X}/a/b`): its location is
+ * runtime-built, so slicing `/a/b` out of it invents a cwd-nested path that
+ * points nowhere (and counts as INSIDE — wrong direction, 3.28.2 side effect).
+ * `~` is
  * optional BEFORE the required slash (a `(?:~\/)?` group needs a second
  * slash and can never match — it silently dropped the tilde, so `~/a/b`
  * landed as `/.thunderbird/a/b`, a nonexistent outside path: D13 ledger
  * 2026-09-11). With the tilde kept, expandTilde in bodyPaths resolves it.
  */
-const BODY_PATH_RE = /(?<![\w:/.-])(?:~)?\/[\w.-]+(?:\/[\w.-]+)+/g;
+const BODY_PATH_RE = /(?<![\w:/.{}$-])(?:~)?\/[\w.-]+(?:\/[\w.-]+)+/g;
 
 /** A command substitution inside argument TEXT (the quoted forms — the
  *  unquoted ones arrive as their own node and are recursed into). */
@@ -1751,6 +1757,10 @@ export async function parseCommand(
     const unsets = collectUnsets(tree.rootNode);
     const segMap = new Map<number, number>();
     const segments = extractSegmentsFromNode(tree.rootNode, assignments, segMap);
+    // Closed-set $HOME is off for this command (reassigned/unsets/env prefix):
+    // the same guard the resolver uses, so a body scan cannot expand $HOME to a
+    // value the shell would not have used (`HOME=/tmp python3 -c "…$HOME/x…"`).
+    const homeFixed = homeReassigned(segments, assignments);
 
     // Extract paths and opaque refs from command nodes
     const commandNodes = collectCommandNodes(tree.rootNode);
@@ -1799,6 +1809,11 @@ export async function parseCommand(
         // ranges — data, never files (see the helpers).
         const awkData = cmdName === "awk" ? awkDataArgIndices(args.map(a => a.text)) : null;
         const shufData = cmdName === "shuf" ? shufDataArgIndices(args.map(a => a.text)) : null;
+        // Inline-program positions for a runner (`python3 -c`, `node -e`,
+        // `php -r`, `uv`-style wrappers) — config/script-operand.ts owns the flag
+        // set so the judge packet and the path set cannot disagree about which
+        // operand is code and which is a file.
+        const inlinePrograms = inlineCodeArgIndices(cmdName, args.map(a => a.text));
         for (let ai = 0; ai < args.length; ai++) {
           const { text: arg, node: argNode } = args[ai];
           // A multi-line LITERAL argument is a script/data body (`node -e '…'`),
@@ -1808,6 +1823,22 @@ export async function parseCommand(
           // them into the path set (fail-closed, like every other path).
           if (isMultiLineLiteralArg(argNode)) {
             bodyPaths(arg, cwd, allPaths, recordHop);
+            continue;
+          }
+          // The ROLE rule: a location token is minted only at a FILE-operand
+          // position of a path-aware command. An interpreter's inline program is
+          // DATA — the shell hands the string to the interpreter and touches no
+          // path named inside it. Minting a ref there invented a location whose
+          // "token" was the whole mashed program (2026-10-15 unresolved.jsonl:
+          // 13 of 28 rows were python3/node bodies), because the multi-line guard
+          // above is voided by any `$` in the body (nodeHasRuntimeExpansion) and
+          // program bodies are where `$` is densest. The program itself DOES open
+          // those files, so its path-like text is scanned (fail closed): $HOME
+          // means the home dir only in a body the shell expands (an expansion
+          // child proves it) and only while HOME holds the closed-set value.
+          if (inlinePrograms.has(ai)) {
+            const shellExpands = !homeFixed && nodeHasRuntimeExpansion(argNode);
+            bodyPaths(shellExpands ? expandHomeLiterals(arg) : arg, cwd, allPaths, recordHop);
             continue;
           }
           // Skip inline script/pattern expressions that look like paths but aren't:

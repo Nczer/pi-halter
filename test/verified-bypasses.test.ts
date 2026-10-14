@@ -899,3 +899,56 @@ describe("P8: arithmetic expansion is not a location", () => {
     expect(d.kind).not.toBe("auto-allow");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// P9: an inline program is DATA, never a location (the role rule). The parser
+// minted a location token out of `python3 -c "…"` bodies whenever the body
+// carried any `$` — the multi-line-literal guard is voided by
+// nodeHasRuntimeExpansion — so the whole mashed script became an unresolvable
+// path token (2026-10-15 unresolved.jsonl: 13 of 28 rows). Dropping the mint
+// must not open the door: the interpreter rows (config/dangerous-patterns.ts)
+// are what judges these commands, and the body's own paths are still scanned.
+// ──────────────────────────────────────────────────────────────────────
+describe("P9: an inline interpreter program is data, not a location", () => {
+  it("python3 -c multi-line body reading $HOME/.aws/credentials → prompts", async () => {
+    const body = [
+      "import json",
+      "d = json.load(open('$HOME/.aws/credentials'))",
+      "print(d.get('providers'))",
+    ].join("\n");
+    const d = await decide({ type: "bash", command: `python3 -c "${body}"`, cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("node -e body reading $HOME/.ssh/id_rsa → prompts", async () => {
+    const d = await decide({
+      type: "bash",
+      command: `node -e "console.log(require('fs').readFileSync('$HOME/.ssh/id_rsa','utf8'))"`,
+      cwd,
+    }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("python3 -c body opening ~/.ssh/id_rsa (tilde in the interpreter's own string) → prompts", async () => {
+    const d = await decide({
+      type: "bash",
+      command: `python3 -c "print(open('~/.ssh/id_rsa').read())"`,
+      cwd,
+    }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("python3 -c with no path at all → still prompts (the interpreter row decides, not a path token)", async () => {
+    const d = await decide({ type: "bash", command: `python3 -c "print(1 + 1)"`, cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("uv run --with json python3 -c body reading a credential → prompts (wrapper does not launder it)", async () => {
+    const d = await decide({
+      type: "bash",
+      command: `uv run --with json python3 -c "print(open('$HOME/.config/gcloud/credentials.db').read())"`,
+      cwd,
+    }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+});

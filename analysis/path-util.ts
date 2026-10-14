@@ -51,6 +51,16 @@ export function expandHomeToken(p: string): string {
 }
 
 /**
+ * Expand every $HOME / ${HOME} occurrence INSIDE argument text (a script body
+ * or a quoted substitution), leaving other expansions alone. Only meaningful
+ * where the shell would expand — the caller checks that (a double-quoted arg)
+ * and that HOME is not reassigned. A backslash-escaped `\$HOME` stays literal.
+ */
+export function expandHomeLiterals(text: string): string {
+  return text.replace(/(?<!\\)\$(?:\{HOME\}|HOME)(?![A-Za-z0-9_])/g, os.homedir());
+}
+
+/**
  * Sentinel dir for paths whose runtime location is statically unbound (an
  * opaque expansion the analysis could not bind). It sits outside every real
  * dir, so the outside-cwd check can never drop a path carrying it.
