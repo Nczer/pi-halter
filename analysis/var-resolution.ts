@@ -1,8 +1,9 @@
 import path from "node:path";
+import os from "node:os";
 import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
 import { isCwdLocalSubstitution } from "./cwd-local";
-import { UNKNOWN_CWD_MARKER } from "./cwd-tracking";
+import { UNKNOWN_CWD_MARKER, homeReassigned } from "./cwd-tracking";
 import type { BashSegment, OpaqueRef } from "./bash-parser";
 
 /**
@@ -70,6 +71,11 @@ export interface OpaqueResolution {
 /** What a value expression stands for. */
 type SubResult = { kind: "literal"; value: string } | { kind: "cwdLocal" } | null;
 
+/** Static $HOME for this command, or null when the command reassigns HOME in
+ *  a position the resolver cannot see (env prefix, `unset HOME`). A HOME the
+ *  resolver DOES see (a standalone assignment) wins over it — see resolveRef. */
+type HomeStatic = string | null;
+
 /** Strictly unbounded value characters: a leftover $ expansion, a backtick
  *  substitution, or brace expansion (several names, one value). */
 const UNRESOLVED_RE = /[$`{}]/;
@@ -125,10 +131,19 @@ function resolveRef(
   def: string | null,
   assignments: Map<string, string[]>,
   depth: number,
+  homeStatic: HomeStatic,
 ): SubResult {
   const values = assignments.get(name);
-  if (values && values.length === 1) return resolveValue(values[0], depth + 1, assignments);
-  if (def !== null) return resolveValue(def, depth + 1, assignments);
+  if (values && values.length === 1) return resolveValue(values[0], depth + 1, assignments, homeStatic);
+  if (def !== null) return resolveValue(def, depth + 1, assignments, homeStatic);
+  // Bare `$HOME` / `${HOME}` with no local assignment: the same closed set the
+  // parser resolves in PATH position (HOME_TOKEN_RE / expandHomeToken) and the
+  // cd threading expands — so `f=$HOME/x; cat $f` binds exactly like `f=~/x`
+  // (which already did). Not `${HOME:-x}`: the closed set is the bare name, and
+  // a twice-assigned HOME is ambiguous, so no static fallback either.
+  if (name === "HOME" && def === null && !assignments.has("HOME") && homeStatic !== null) {
+    return { kind: "literal", value: homeStatic };
+  }
   return null; // env var with no local assignment and no default
 }
 
@@ -136,7 +151,7 @@ function resolveRef(
  *  literal — a `$` inside is a filename character, not an expansion), then
  *  substitute every $-reference. A whole-value cwd-local substitution
  *  models itself (its values are names relative to the base). */
-function resolveValue(raw: string, depth: number, assignments: Map<string, string[]>): SubResult {
+function resolveValue(raw: string, depth: number, assignments: Map<string, string[]>, homeStatic: HomeStatic): SubResult {
   if (depth > 4) return null;
   let val = raw;
   const sq = val.length >= 2 && val.startsWith("'") && val.endsWith("'");
@@ -154,7 +169,7 @@ function resolveValue(raw: string, depth: number, assignments: Map<string, strin
     if (isCwdLocalSubstitution(val.slice(2, -1))) return { kind: "cwdLocal" };
     return null; // other substitutions — runtime value
   }
-  const sub = substitute(val, assignments, depth);
+  const sub = substitute(val, assignments, depth, homeStatic);
   if (sub === null) return null;
   if (sub.kind === "cwdLocal") return sub; // whole-string substitution (substitute guarantees it)
   if (UNRESOLVED_RE.test(sub.value)) return null;
@@ -170,7 +185,7 @@ function resolveValue(raw: string, depth: number, assignments: Map<string, strin
 /** Substitute every `$NAME` / `${NAME…}` reference in `v`; null if any
  *  cannot be bounded. A cwdLocal value may only stand for the ENTIRE string
  *  (a glued literal would change where the names land). */
-function substitute(v: string, assignments: Map<string, string[]>, depth: number): SubResult {
+function substitute(v: string, assignments: Map<string, string[]>, depth: number, homeStatic: HomeStatic): SubResult {
   if (depth > 4) return null;
   let out = "";
   let i = 0;
@@ -183,7 +198,7 @@ function substitute(v: string, assignments: Map<string, string[]>, depth: number
     if (v[i + 1] === "{") {
       const expr = parseVarExpr(v, i);
       if (!expr) return null;
-      const r = resolveRef(expr.name, expr.def, assignments, depth);
+      const r = resolveRef(expr.name, expr.def, assignments, depth, homeStatic);
       if (r === null) return null;
       if (r.kind === "cwdLocal") {
         if (out !== "" || expr.end !== v.length) return null;
@@ -195,7 +210,7 @@ function substitute(v: string, assignments: Map<string, string[]>, depth: number
     }
     const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(v.slice(i + 1));
     if (!m) return null; // $?, $$, $@, trailing $ — unresolvable
-    const r = resolveRef(m[0], null, assignments, depth);
+    const r = resolveRef(m[0], null, assignments, depth, homeStatic);
     if (r === null) return null;
     if (r.kind === "cwdLocal") {
       if (out !== "" || i + 1 + m[0].length !== v.length) return null;
@@ -250,6 +265,7 @@ function resolveAt(
   assignments: ShellAssignment[],
   sessionCwd: string,
   isInside: (p: string) => boolean,
+  homeStatic: HomeStatic,
 ): OneRef {
   const base = effectiveCwds[idx] ?? null;
   // Literal-path in-list: the value is exactly one of the words — name every
@@ -271,7 +287,7 @@ function resolveAt(
   if (ref.kind === "cwdLocal") {
     sub = { kind: "cwdLocal" }; // in-list words (bare / globs / $(find …)) are base-relative by construction
   } else {
-    sub = resolveValue(ref.raw, 0, visibleAssignments(segments, idx, assignments));
+    sub = resolveValue(ref.raw, 0, visibleAssignments(segments, idx, assignments), homeStatic);
   }
   if (sub === null) return { kind: "sentinel", reason: "var" };
   let resolved: string;
@@ -297,6 +313,7 @@ function resolveOneRef(
   assignments: ShellAssignment[],
   sessionCwd: string,
   isInside: (p: string) => boolean,
+  homeStatic: HomeStatic,
 ): OneRef {
   // Base-independent: the in-list is statically pinned to a known root —
   // every expansion lands under prefixDir, whatever the cwd.
@@ -309,7 +326,7 @@ function resolveOneRef(
   }
   const out: string[] = [];
   for (const i of idxs) {
-    const r = resolveAt(ref, i, segments, effectiveCwds, assignments, sessionCwd, isInside);
+    const r = resolveAt(ref, i, segments, effectiveCwds, assignments, sessionCwd, isInside, homeStatic);
     if (r.kind === "sentinel") return r;
     if (r.kind === "outside") out.push(...r.paths);
   }
@@ -329,16 +346,23 @@ export function resolveOpaqueRefs(
   assignments: ShellAssignment[],
   sessionCwd: string,
   isInside: (p: string) => boolean,
+  unsets: string[],
 ): OpaqueResolution {
   const paths = new Set<string>();
   const unresolved: UnresolvedRef[] = [];
+  // Static $HOME, disabled when the command reassigns HOME where the resolver
+  // cannot see it (env prefix / `unset`). Token-scan only: a standalone
+  // `HOME=/x` segment IS in `assignments`, and that value is the true one.
+  // `unsets` is separate because an `unset` command is no segment at all.
+  const homeStatic: HomeStatic = (homeReassigned(segments) || unsets.includes("HOME"))
+    ? null : os.homedir();
   // Per TOKEN, not per occurrence: a token written N times is one unit for
   // every consumer (prompt lines, the gate's sentinel pass, the unresolved
   // ledger — per-occurrence entries were N identical rows, the ledger's
   // mysterious growth on long multi-line scripts).
   const seenTokens = new Set<string>();
   for (const ref of refs) {
-    const r = resolveOneRef(ref, segments, effectiveCwds, assignments, sessionCwd, isInside);
+    const r = resolveOneRef(ref, segments, effectiveCwds, assignments, sessionCwd, isInside, homeStatic);
     if (r.kind === "outside") for (const p of r.paths) paths.add(p);
     else if (r.kind === "sentinel") {
       if (seenTokens.has(ref.raw)) continue;

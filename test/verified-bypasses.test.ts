@@ -823,3 +823,50 @@ describe("P6: perl program body is code execution", () => {
     expect(d.kind).toBe("auto-allow");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// P7: a $HOME-valued assignment was unbindable — resolveRef treated `$HOME`
+// as "env var with no local assignment" and voided the whole value, so the
+// reference stayed an unbound sentinel (the ledger's 8× `$f` stops). The
+// parser already resolves $HOME in PATH position statically (HOME_TOKEN_RE)
+// and `f=~/x` already binds, so the value path was the only hole. The rows
+// below pin the closed set against reassignment/unset/quotes.
+// ──────────────────────────────────────────────────────────────────────
+describe("P7: $HOME-valued assignment binds (closed set)", () => {
+  it("f=$HOME/.ssh; cat $f/id_rsa → prompts (binding $HOME does not launder a credential)", async () => {
+    const d = await decide({ type: "bash", command: "f=$HOME/.ssh; cat $f/id_rsa", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("f=$HOME/../outside/x; cat $f → prompts (concrete outside path, .. collapsed)", async () => {
+    const d = await decide({ type: "bash", command: "f=$HOME/../outside-halter/x; cat $f", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("HOME=/tmp; f=$HOME/x; cat $f → auto-allow (the assignment names the real value — /tmp is read-allowed)", async () => {
+    // A standalone `HOME=` assignment IS visible to the resolver, so its value
+    // wins over the static home dir — this is the true runtime value, not a guess.
+    const d = await decide({ type: "bash", command: "HOME=/tmp; f=$HOME/x; cat $f", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("HOME=/tmp f=$HOME/x; cat $f → prompts (env-prefix HOME is invisible to the resolver: a guess stays a sentinel)", async () => {
+    const d = await decide({ type: "bash", command: "HOME=/tmp f=$HOME/x; cat $f", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("unset HOME; f=$HOME/x; cat $f → prompts (unset HOME: $HOME is empty at runtime)", async () => {
+    const d = await decide({ type: "bash", command: "unset HOME; f=$HOME/x; cat $f", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("f='$HOME/x'; cat $f → prompts (single quotes keep it literal: no expansion)", async () => {
+    const d = await decide({ type: "bash", command: "f='$HOME/x'; cat $f", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("f=\"$HOME/.pi\"; ls $f → auto-allow (the ledger case: the bound path is read-allowed)", async () => {
+    const d = await decide({ type: "bash", command: "f=\"$HOME/.pi\"; ls $f", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+});

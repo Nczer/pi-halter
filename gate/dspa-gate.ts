@@ -637,6 +637,7 @@ export async function checkDspaGate(
     analysis.assignments,
     pd.cwd,
     isInsideManualBar,
+    analysis.unsets,
   );
   resolvedOutside.push(...floor.paths);
   // D12 confirmed resolutions: the analysis layer already made a confirmed

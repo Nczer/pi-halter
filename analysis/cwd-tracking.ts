@@ -332,7 +332,9 @@ const ENV_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * argument, not an assignment, and `MY_HOME=`/`HOME_DIR=` are not HOME. A
  * false positive only reverts to the pre-fix behaviour (no expansion, so the
  * marker prompt). `export HOME=`/`declare HOME=` never become a segment (the
- * parser collects them into `assignments`), so that list is checked too.
+ * parser collects them into `assignments`), so that list is checked too; an
+ * `unset` is neither (its node type is `unset_command`, not a STATEMENT_ITEM)
+ * — the dataflow layer sees it through `parseCommand().unsets` instead.
  * Residuals: a HOME set by a sourced file or the outer shell is invisible to
  * the gate — bash's own `cd` fallback there is the passwd home, i.e. the same
  * value the closed set assumes.

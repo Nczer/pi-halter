@@ -1663,6 +1663,35 @@ export interface PathHop {
   resolved: string;
 }
 
+/** Variable names the command unsets (`unset HOME`, `unset -v HOME`).
+ *  An `unset` parses as its own node type (`unset_command`), which is not a
+ *  STATEMENT_ITEM and so never becomes a segment — the closed-set $HOME guard
+ *  (homeReassigned, cwd-tracking) cannot see it: `unset HOME; f=$HOME/x;
+ *  cat $f` would expand $HOME to the real home while bash expands it to the
+ *  empty string (runtime target `/x`). Over-collection is safe — it only
+ *  reverts a static expansion to the pre-existing sentinel (`unset -f HOME`
+ *  unsets a function, not the name). */
+function collectUnsets(root: TSNode): string[] {
+  const names: string[] = [];
+  const walk = (n: TSNode): void => {
+    if (n.type === "unset_command") {
+      const words = n.text.trim().split(/\s+/);
+      if (words[0] === "unset") {
+        for (const w of words.slice(1)) {
+          if (w.startsWith("-")) continue; // -v / -f / bundled flags
+          names.push(w.replace(/^['"]|['"]$/g, ""));
+        }
+      }
+    }
+    for (let i = 0; i < n.childCount; i++) {
+      const c = n.child(i);
+      if (c) walk(c);
+    }
+  };
+  walk(root);
+  return names;
+}
+
 /**
  * Single parse that extracts segments, paths, opaque refs, and assignments.
  */
@@ -1676,10 +1705,12 @@ export async function parseCommand(
   assignments: ShellAssignment[];
   hasParseError: boolean;
   hops: PathHop[];
+  /** Names passed to `unset` (see collectUnsets). */
+  unsets: string[];
 }> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], paths: [], opaque: [], assignments: [], hasParseError: false, hops: [] };
+  if (!tree) return { segments: [], paths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [] };
 
   try {
     // Check for ERROR nodes in the AST (malformed bash)
@@ -1698,6 +1729,7 @@ export async function parseCommand(
     // Extract segments (includes per-segment hasSubshell); the walk also
     // records standalone assignments and the node→segment index map.
     const assignments: ShellAssignment[] = [];
+    const unsets = collectUnsets(tree.rootNode);
     const segMap = new Map<number, number>();
     const segments = extractSegmentsFromNode(tree.rootNode, assignments, segMap);
 
@@ -1886,7 +1918,7 @@ export async function parseCommand(
       return true;
     });
 
-    return { segments, paths, opaque, assignments, hasParseError, hops };
+    return { segments, paths, opaque, assignments, hasParseError, hops, unsets };
   } finally {
     subshellCache = null;
     tree.delete();

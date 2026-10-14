@@ -70,6 +70,8 @@ export interface CommandAnalysis {
    * own stricter bar). Parsed segments carry subshell depth for scoping. */
   opaque: OpaqueRef[];
   assignments: ShellAssignment[];
+  /** Names passed to `unset` (HOME reassignment guard — see var-resolution). */
+  unsets: string[];
   parsedSegments: BashSegment[];
   /** Credential path detected in the command — never auto-allow; the prompt carries the very-high-risk warning. */
   hasCredentialPath: boolean;
@@ -209,6 +211,7 @@ async function analyzeTmuxSendKeysPayload(
       parsed.assignments,
       cwd,
       (p) => p === cwd || p.startsWith(cwd + "/"),
+      parsed.unsets,
     );
     paths.push(...parsed.paths, ...payloadOpaque.paths);
     for (const u of payloadOpaque.unresolved) paths.push(u.marker);
@@ -242,7 +245,7 @@ export async function analyzeCommand(
 ): Promise<CommandAnalysis> {
   // Single AST parse: segments, paths, opaque refs, and assignments in one pass
   const parseResult = await parseCommand(cmd, cwd);
-  const { segments, paths, opaque, assignments, hasParseError } = parseResult;
+  const { segments, paths, opaque, assignments, hasParseError, unsets } = parseResult;
   const segmentTexts = segments.map(s => s.text);
   const signatures = segmentTexts.map(getCommandSignature);
 
@@ -291,6 +294,7 @@ export async function analyzeCommand(
     assignments,
     cwd,
     (p) => getOutsideCwdPaths([p], cwd, options?.isInsideAllowedDir).length === 0,
+    unsets,
   );
   paths.push(...opaqueResolution.paths);
   for (const u of opaqueResolution.unresolved) {
@@ -454,6 +458,7 @@ export async function analyzeCommand(
     effectiveCwds,
     opaque,
     assignments,
+    unsets,
     parsedSegments: segments,
     hasCredentialPath: credentialCheck !== null,
     credentialRule: credentialCheck,

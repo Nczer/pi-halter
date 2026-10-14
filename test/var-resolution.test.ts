@@ -32,6 +32,7 @@ async function resolve(cmd: string) {
     p.assignments,
     CWD,
     strictInside,
+    p.unsets,
   );
 }
 
@@ -510,5 +511,65 @@ describe("decide level (the 2026-08-31 log shapes)", () => {
     expect(d.kind).toBe("prompt");
     if (d.kind !== "prompt" || d.promptData.type !== "bash") return;
     expect(d.promptData.outsideDirs).toContain(base);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────
+// Bare `$HOME` / `${HOME}` in an assignment VALUE binds to the static home dir
+// — the same closed set the parser resolves in path position (HOME_TOKEN_RE)
+// and the cd threading expands. Before this it was "env var with no local
+// assignment" → the whole value voided → an unbound sentinel that could never
+// converge (unresolved ledger 2026-10-14, `$f` ×8: f="$HOME/…/x.jsonl").
+// The strict predicate here makes home OUTSIDE, so a bound value must show up
+// as a concrete path — that is the proof it is no longer a sentinel.
+// ──────────────────────────────────────────────────────────────────
+describe("static $HOME in assignment values", () => {
+  it("f=$HOME/x binds; f=${HOME}/x binds (ledger case quoted too)", async () => {
+    for (const cmd of ["f=$HOME/x; cat $f", "f=${HOME}/x; cat $f", 'f="$HOME/x"; cat "$f"']) {
+      const r = await resolve(cmd);
+      expect(r.unresolved.map(u => u.token)).toEqual([]);
+      expect(r.paths).toContain(path.join(home, "x"));
+    }
+  });
+
+  it(".. collapses against the bound value (concrete, not opaque)", async () => {
+    const r = await resolve("f=$HOME/../x; cat $f");
+    expect(r.unresolved).toEqual([]);
+    expect(r.paths).toContain(path.join(path.dirname(home), "x"));
+  });
+
+  it("binds transitively through a second assignment", async () => {
+    const r = await resolve("f=$HOME/x; g=$f/y; cat $g");
+    expect(r.paths).toContain(path.join(home, "x/y"));
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("a standalone HOME= assignment names the true value (the map wins)", async () => {
+    const r = await resolve("HOME=/tmp; f=$HOME/x; cat $f");
+    expect(r.paths).toContain("/tmp/x");
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("reassignment the resolver cannot see stays a sentinel: env prefix, unset, ambiguous", async () => {
+    for (const cmd of [
+      "HOME=/tmp f=$HOME/x; cat $f", // env prefix: never reaches `assignments`
+      "unset HOME; f=$HOME/x; cat $f", // $HOME is empty at runtime
+      "HOME=/a; HOME=/b; f=$HOME/x; cat $f", // ambiguous: no static fallback
+    ]) {
+      const r = await resolve(cmd);
+      expect(r.unresolved.map(u => u.token)).toEqual(["$f"]);
+    }
+  });
+
+  it("single quotes keep $HOME literal — no expansion, no binding", async () => {
+    const r = await resolve("f='$HOME/x'; cat $f");
+    expect(r.unresolved.map(u => u.token)).toEqual(["$f"]);
+  });
+
+  it("known limit (unchanged): `${HOME:-d}` binds the stated default", async () => {
+    // The closed set is the bare name; a `:-` default keeps its old meaning and
+    // `${HOME:-d}/x` stays opaque as a token (HOME_TOKEN_RE needs `}` after HOME).
+    const r = await resolve("f=${HOME:-/tmp}/x; cat $f");
+    expect(r.paths).toContain("/tmp/x");
   });
 });
