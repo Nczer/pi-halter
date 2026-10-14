@@ -1,5 +1,55 @@
 # Changelog
 
+## 3.28.2 — 2026-10-14
+
+**`$f` was the ledger's most-stopped token, and its value was `$HOME/…`.**
+
+- **8 gate stops in one window for one token.** Its owner was an assignment
+  `f="$HOME/…/history.jsonl"`. The parser resolves a bare `$HOME` in *path*
+  position (the closed set: `HOME_TOKEN_RE` / `expandHomeToken`), but the
+  dataflow layer never applied that set inside an *assignment value*:
+  `resolveValue` returned null, `resolveAt` fell through to
+  `{kind:"sentinel", reason:"var"}`, and the marker `<unresolved-var>/$f` made
+  convergence impossible — `canAutoAllow` requires `outsidePaths.length === 0`,
+  so a sentinel stops every time. `~` and `f=~/x` were already bound; `$HOME`
+  was the hole.
+- **The closed set now binds in assignment values.** `resolveRef` substitutes
+  bare `$HOME`/`${HOME}` with `os.homedir()`, threaded as `homeStatic` through
+  `substitute`/`resolveValue`/`resolveRef`/`resolveAt`/`resolveOneRef`. Not a
+  new rule: the same set path position already trusts — a value the gate knows
+  without asking the shell.
+- **Guarded the way `~` is guarded.** A command that reassigns HOME where the
+  assignment map cannot see it — an env prefix (`HOME=/tmp f=$HOME/x; cat $f`)
+  — falls back to the sentinel, since the runtime value differs. A standalone
+  `HOME=/tmp` IS in `assignments`, so the map wins over the static value
+  (`export HOME=/x` and `readonly HOME=/x` reach the map too, and bind
+  `/x/j`). An ambiguous HOME (assigned twice in one command) gets no static
+  fallback. Binding is not a grant: `f=$HOME/.ssh; cat $f/id_rsa` still
+  prompts, and `$HOME/../x` collapses to a concrete outside path that prompts.
+- **`unset HOME` needed new parser surface.** `unset` parses as its own node
+  type, `unset_command`, which is not in `STATEMENT_ITEMS` and therefore never
+  becomes a segment — `homeReassigned` cannot see it, and the guard would have
+  expanded `$HOME` to the real home while bash expands it to the empty string.
+  `parseCommand()` now returns `unsets: string[]` and `resolveOpaqueRefs` takes
+  it as a required argument, so a caller that forgets it is a compile error.
+  `unset -f HOME` over-collects; the cost is one sentinel, i.e. the pre-3.28.2
+  behaviour.
+- **Known limits recorded, not papered over.** `${HOME:-/tmp}/x` binds `/tmp/x`
+  — the default form keeps its old meaning instead of being read as
+  unset-or-default. `unset` of an *assigned* var leaves the stale binding
+  (`f=x; unset f; cat $f` still binds `x`; 0 ledger occurrences) — a
+  pre-existing mis-binding, and the wider consequence of `unset_command` not
+  being a statement item is that every segment-based analysis is blind to
+  `unset`: `HOME_BUILTIN_RE`'s `export`/`declare`/`typeset`/`readonly`/
+  `unset` alternatives are dead (those forms reach `assignments` instead),
+  only `read HOME` is live.
+- **Tests:** `verified-bypasses.test.ts` gains P7 — the closed set pinned
+  against credential laundering, `..` collapse, env-prefix/`unset`/quote
+  guards, and the ledger case (`f="$HOME/.pi"; ls $f` auto-allows).
+  `var-resolution.test.ts` covers the binding forms, transitive `f`→`g`,
+  map-wins and the sentinel trio; `bash-parser.test.ts` pins `unsets`
+  collection.
+
 ## 3.28.1 — 2026-10-14
 
 **Wrapped runs identified no script — the judge had nothing to read.**

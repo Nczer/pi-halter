@@ -279,6 +279,14 @@ describe("parseCommand: opaque var markers (log FPs)", () => {
     expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
   });
 
+  // `unset` parses as unset_command, which never becomes a segment, so the
+  // closed-set $HOME guard needs the names explicitly (unset HOME; f=$HOME/x).
+  it("unsets are collected for the $HOME guard", async () => {
+    expect((await parseCommand("unset HOME; cat $f", cwd)).unsets).toEqual(["HOME"]);
+    expect((await parseCommand("unset -v -f A B; cat x", cwd)).unsets).toEqual(["A", "B"]);
+    expect((await parseCommand("ls file.txt", cwd)).unsets).toEqual([]);
+  });
+
   it("awk BEGIN/END program text is not a path — no opaque marker", async () => {
     const r = await parseCommand(`awk 'BEGIN{t=""} /^[A-Z]+$/{getline; t=$0} END{print t}' f.txt`, cwd);
     expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
