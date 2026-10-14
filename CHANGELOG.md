@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.28.3 — 2026-10-14
+
+**`head -n +$((MARK+1))` stopped 3 times: an arithmetic value was minted into a
+path token.**
+
+- **A number became a location.** `$((` matches `DOLLAR_EXPANSION_RE` (its
+  `$(` is an expansion), so `+$((MARK+1))` passed `isOpaqueValue`, became an
+  opaque ref, and was resolved to the marker path
+  `<unresolved-var>/$((MARK+1))`. A sentinel can never converge
+  (`canAutoAllow` requires `outsidePaths.length === 0`), so the token was an
+  unfixable stop — and it polluted the unresolved ledger with 3 rows of a
+  `head` line offset posing as a path.
+- **An expansion-free arithmetic span is not opaque.** `isOpaqueValue` now
+  returns false when the value's only runtime content is arithmetic
+  (`ARITH_SPAN_RE` requires the `((` form and rejects `$`/backtick inside the
+  span, so a nested substitution is never mistaken for arithmetic).
+- **The residue decides, unchanged elsewhere.** A token whose non-arithmetic
+  part still names a location keeps the marker: `$((n))/x`,
+  `$(echo $((n)))/x`, `/tmp/$((n+1)).txt` — and so does
+  `/tmp/x$(( $(date +%s) ))`, where the substitution's side effect is the only
+  thing being flagged.
+- **No arithmetic evaluation.** Nothing downstream needs the number — only the
+  absence of a fake path — so `$((…))` is not parsed further and `MARK=$((…)`
+  stays unbound.
+- **Tests:** `bash-parser.test.ts` pins the ledger case, the option/nested
+  sub-expression forms, and the path-bearing residues; P8 in
+  `verified-bypasses.test.ts` pins the end-to-end decisions (numeric argument
+  auto-allows, residue forms still prompt).
+
 ## 3.28.2 — 2026-10-14
 
 **`$f` was the ledger's most-stopped token, and its value was `$HOME/…`.**
