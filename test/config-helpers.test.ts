@@ -129,6 +129,23 @@ describe("isTrustedScriptCommand", () => {
     expect(isTrustedScriptCommand("uv run --with pymupdf,evil-package python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
   });
 
+  // The wrapper walk (2026-10-14) gained the judge CONTENT for wrapped runs;
+  // the skills-dir bypass stays exactly as wide as it was. Trust answers
+  // "may this script run unreviewed", and that decision was made about the
+  // bare interpreter form — not about a trusted script fan-outed over
+  // stdin-provided args, nor about a package fetched from the registry.
+  it("trust is not transitive through pass-through wrappers or fetch runners", () => {
+    expect(isTrustedScriptCommand("timeout 60 python3 ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("xargs python3 ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("watch -n 5 python3 ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("npx tsx ~/.pi/agent/skills/tool.mts", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("uvx python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+  });
+
+  it("an env-assignment prefix stays transparent for trust (as elsewhere in the floor)", () => {
+    expect(isTrustedScriptCommand("DEBUG=1 python3 ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+  });
+
   it("allows uv run with comma-separated known packages", () => {
     expect(isTrustedScriptCommand("uv run --with pypdf,reportlab python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
   });

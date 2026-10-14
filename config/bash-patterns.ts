@@ -240,7 +240,7 @@ export const FETCH_PKG_FORMS: Record<string, ReadonlySet<string> | "all"> = {
 };
 
 /** Strip a `@version` pin (`tsc@5.0.0` → `tsc`); keeps scoped `@scope/name`. */
-function stripPkgVersion(pkg: string): string {
+export function stripPkgVersion(pkg: string): string {
   const at = pkg.lastIndexOf("@");
   return at > 0 ? pkg.slice(0, at) : pkg;
 }

@@ -10,4 +10,5 @@ export { unconditionallySafeCommands, isAllowedCommand, isSafeSubcommand, pathAw
 export { allowedReadPaths, allowedWritePaths, warnPaths } from "./path-rules";
 export { dangerousCommandPatterns, dangerousContextPatterns } from "./dangerous-patterns";
 export { isTrustedScriptPath, isTrustedScriptCommand } from "./trusted-scripts";
+export { findScriptOperand, type ScriptOperand, type ScriptCandidate } from "./script-operand";
 export { DECISION_LOG_ENABLED } from "./logging";

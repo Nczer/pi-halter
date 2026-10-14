@@ -109,6 +109,7 @@ Config is split across focused modules in `config/`:
 | `config/path-rules.ts` | `warnPaths` (credential names — prompt tier), `allowedReadPaths`, `allowedWritePaths` |
 | `config/dangerous-patterns.ts` | `dangerousCommandPatterns`, `dangerousContextPatterns` (regex patterns) |
 | `config/trusted-scripts.ts` | `TRUSTED_PACKAGES` allowlist for `uv run --with`, `isTrustedScriptPath()`, `isTrustedScriptCommand()` |
+| `config/script-operand.ts` | `findScriptOperand()` — the one file-operand scan (interpreters, direct exec, `uv run`/`deno run`, `npx`/`uvx` package runners, pass-through wrappers) shared by identification and trust |
 
 ### Decision log
 

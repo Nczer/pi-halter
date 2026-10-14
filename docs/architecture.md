@@ -513,7 +513,8 @@ analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           executes, read in full),
                           evaluators/ (6 domain evaluators + builder + types)
 config/                   (unchanged) bash-patterns, path-rules,
-                          dangerous-patterns, trusted-scripts, logging, index
+                          dangerous-patterns, trusted-scripts, script-operand,
+                          logging, index
 handlers/                 (unchanged) bash, file, tool adapters
 plugins/                  (unchanged) loader + types (tool plugin contract)
 test/                     flat; the contract suites pin behavior
