@@ -870,3 +870,32 @@ describe("P7: $HOME-valued assignment binds (closed set)", () => {
     expect(d.kind).toBe("auto-allow");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// P8: `$((…))` matched DOLLAR_EXPANSION_RE (its `$(` is an expansion), so an
+// arithmetic argument was minted into the path set as an unresolvable token —
+// `head -n +$((MARK+1))` (ledger, 3×) could never converge. Arithmetic values
+// are numbers: they carry no location. The residue rule keeps a token whose
+// non-arithmetic part is path-bearing opaque.
+// ──────────────────────────────────────────────────────────────────────
+describe("P8: arithmetic expansion is not a location", () => {
+  it("n=5; head -n +$((n+1)) file.txt → auto-allow (numeric argument, no path token)", async () => {
+    const d = await decide({ type: "bash", command: "n=5; head -n +$((n+1)) file.txt", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: n=5; head -n $((n)) file.txt → auto-allow", async () => {
+    const d = await decide({ type: "bash", command: "n=5; head -n $((n)) file.txt", cwd }, createStore());
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("n=5; cat $((n))/x → prompts (path-bearing residue stays opaque)", async () => {
+    const d = await decide({ type: "bash", command: "n=5; cat $((n))/x", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("n=5; cat $(echo $((n)))/x → prompts (arithmetic inside a substitution: still opaque)", async () => {
+    const d = await decide({ type: "bash", command: "n=5; cat $(echo $((n)))/x", cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+});

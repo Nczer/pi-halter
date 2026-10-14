@@ -279,6 +279,38 @@ describe("parseCommand: opaque var markers (log FPs)", () => {
     expect(r.paths.some(p => p.includes(OPAQUE_VAR_DIR))).toBe(false);
   });
 
+  // Arithmetic expansions are numbers: they name no location, so minting a
+  // marker from them produces a token that can never converge (unresolved
+  // ledger 2026-10-14, `head -n +$((MARK+1))` ×3).
+  it("+$((MARK+1)) line offset — no opaque marker (ledger case)", async () => {
+    const r = await parseCommand("head -n +$((MARK+1)) file.txt", cwd);
+    expect(r.opaque).toEqual([]);
+  });
+
+  it("$(( )) in an option value and a nested sub-expression — no marker", async () => {
+    for (const cmd of ["head -n $((n)) f.txt", "echo $(( (a+1)*2 ))", "seq $((a)) $((a+10)) | head -n 3"]) {
+      const r = await parseCommand(cmd, cwd);
+      expect(r.opaque.filter(o => o.raw.includes("$(("))).toEqual([]);
+    }
+  });
+
+  it("path-bearing residue keeps the marker: $((n))/x, $(echo $((n)))/x, /tmp/$((n+1)).txt", async () => {
+    for (const cmd of ["cat $((n))/x", "cat $(echo $((n)))/x", "cat /tmp/$((n+1)).txt"]) {
+      const r = await parseCommand(cmd, cwd);
+      expect(r.opaque.some(o => o.raw.includes("$("))).toBe(true);
+    }
+  });
+
+  it("an expansion inside the arithmetic keeps the marker (its side effect is the flag)", async () => {
+    const r = await parseCommand("cat /tmp/x$(( $(date +%s) ))", cwd);
+    expect(r.opaque.map(o => o.raw)).toEqual(["/tmp/x$(( $(date +%s) ))"]);
+  });
+
+  it("nested command substitution is not arithmetic — marker stays", async () => {
+    const r = await parseCommand("cat /tmp/$(ls $(dirname x))", cwd);
+    expect(r.opaque.map(o => o.raw)).toEqual(["/tmp/$(ls $(dirname x))"]);
+  });
+
   // `unset` parses as unset_command, which never becomes a segment, so the
   // closed-set $HOME guard needs the names explicitly (unset HOME; f=$HOME/x).
   it("unsets are collected for the $HOME guard", async () => {

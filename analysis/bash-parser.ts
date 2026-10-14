@@ -283,7 +283,26 @@ const DOLLAR_EXPANSION_RE = /\$[\w({@*#?!$%-]/;
 function isOpaqueValue(val: string): boolean {
   if (val.includes("`")) return true; // command substitution — runtime value
   if (HOME_TOKEN_RE.test(val)) return false;
+  if (arithOnly(val)) return false;
   return DOLLAR_EXPANSION_RE.test(val);
+}
+
+/** One expansion-free `$(( … ))` span — `$((` required (so a nested `$(foo
+ *  $(bar))` is never mistaken for arithmetic), and no `$`/backtick inside (an
+ *  expansion inside the arithmetic keeps the token opaque: its side effect is
+ *  the only thing flagged). Non-greedy: the first `))` closes the span. */
+const ARITH_SPAN_RE = /\$\(\(([^`$]*)\)\)/g;
+
+/** True when the value's ONLY runtime content is arithmetic: an arithmetic
+ *  value is a number, it names no location, so the token must not become a
+ *  path marker (`head -n +$((MARK+1))`, unresolved ledger 2026-10-14 — a token
+ *  that can never converge). The residue decides: if anything is left after
+ *  every span — another expansion, or a `/` — the token is location-bearing and
+ *  stays opaque (`cat $((i))/a`, `cat $(echo $((n)))/x`). */
+function arithOnly(val: string): boolean {
+  if (!val.includes("$((")) return false;
+  const rest = val.replace(ARITH_SPAN_RE, "");
+  return !rest.includes("/") && !rest.includes("`") && !DOLLAR_EXPANSION_RE.test(rest);
 }
 
 /** Node types whose presence in an argument subtree means the value is
