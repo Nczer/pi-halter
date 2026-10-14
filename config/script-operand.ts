@@ -49,9 +49,11 @@ const RUNNER_STEM_RE = /^(python|pypy|node|ruby|php|lua|perl|deno|bun|jruby|graa
  * Flags that make the payload INLINE (a program string or a module), not a
  * file: the scan aborts rather than skipping them, so `bash -c 'x; y'` and
  * `python3 -c 'open("/etc/shadow")'` never name a script. `-` = stdin.
+ * `-r` is php's (`php -r 'code'`; without it a later file operand was named as
+ * the payload while php ran the string).
  */
 const INLINE_CODE_FLAGS = new Set([
-  "-c", "--command", "-m", "--module", "-e", "--eval", "-p", "--print", "-",
+  "-c", "--command", "-m", "--module", "-e", "--eval", "-p", "--print", "-r", "-",
 ]);
 
 /** `uv run` flags that take a value — skipping the value keeps the operand
@@ -145,8 +147,7 @@ function scanOperands(
   return { first, script, wrappers };
 }
 
-/** Index of the first token after `from` that is not a flag / K=V prefix. */
-function skipFlagsAndAssignments(tokens: string[], from: number): number {
+/** Index of the first token after `from` that is not a flag / K=V prefix. */function skipFlagsAndAssignments(tokens: string[], from: number): number {
   let i = from;
   while (i < tokens.length && (tokens[i].startsWith("-") || ASSIGNMENT_RE.test(tokens[i]))) i++;
   return i;
@@ -250,4 +251,35 @@ export function findScriptOperand(tokens: string[]): ScriptOperand | null {
     return null; // a bare command that runs no file
   }
   return null;
+}
+
+/**
+ * Arg positions whose value is INLINE CODE for this command: the operand of a
+ * runner's `-c` / `-e` / `-m` / `-r` flag, plus a self-contained `--command=CODE`.
+ *
+ * Third consumer of this file's knowledge (see the header): the path extractor
+ * must never mint a location token at a program position — the shell hands the
+ * string to the interpreter and touches no path named inside it (the role rule;
+ * 2026-10-15 unresolved.jsonl: 13 of 28 rows were `python3 -c` / `node -e`
+ * bodies whose "token" was the whole mashed program). The same flags make this
+ * scan refuse to name a script, so the two views cannot drift.
+ *
+ * Empty set for a command that takes no inline program (`sed`/`awk`/`grep`
+ * positions are the parser's own rules — the file-grained grammars differ).
+ */
+export function inlineCodeArgIndices(cmd: string, args: string[]): Set<number> {
+  const idxs = new Set<number>();
+  if (!isRunner(nameOf(cmd))) return idxs;
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i];
+    if (!t.startsWith("-")) continue;
+    const flag = t.split("=")[0];
+    if (!INLINE_CODE_FLAGS.has(flag)) continue;
+    if (t.length > flag.length) {
+      idxs.add(i); // `--command=CODE` (value glued): the token itself is code
+      continue;
+    }
+    if (i + 1 < args.length) idxs.add(i + 1); // the operand the flag consumes
+  }
+  return idxs;
 }

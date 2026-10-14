@@ -138,6 +138,27 @@ The body's own paths still get path checks; nested substitutions classify
 individually; any other body keeps the always-prompt flag. `find` and
 wrappers are excluded from the body set.
 
+### Argument roles (the data/location rule)
+
+A location token is minted only at a FILE-operand position of a path-aware
+command. Anywhere else the argument is DATA: the shell hands it to the program
+and touches no path named inside it, so minting a token there invents a
+location whose "token" is the program text and which can never converge (the
+2026-10-15 unresolved.jsonl case: 13 of 28 rows were `python3 -c` / `node -e`
+bodies — the multi-line-literal guard is voided by any `$` in the body, and
+program bodies are where `$` is densest). The grammars below are instances of
+this one rule (sed script, grep/rg pattern, awk program), and so is an
+interpreter's inline program (`-c`/`-e`/`-m`/`-r`, read from
+config/script-operand.ts — the same flag set that decides which operand the
+judge reads, so the two views cannot drift). Data is still read: path-like
+literals inside it join the path set (see D15), with closed-set `$HOME`
+expanded exactly where the shell would expand it (a double-quoted arg, HOME
+not reassigned), and no expansion the closed set cannot bind contributes a path
+(`${X}/a/b` names nothing statically, and slicing `/a/b` out of it points at a
+nonexistent cwd child counted as INSIDE — the wrong direction). A multi-line
+arg at a FILE position keeps its sentinel (`cat "a\n$X/b"`): the role decides,
+not the shape.
+
 ### Sed grammar
 
 `sed [flags] script [files…]`: the first non-flag arg (and `-e` values) is
@@ -169,7 +190,7 @@ Refs the command itself pins resolve instead of flagging:
 - an embedded loop ref over an all-literal in-list substitutes each word
   textually (one loop-bound `$var`, expansion-free static part);
 - path-like literals in script bodies (heredoc bodies, multi-line literal
-  args) join the path set fail-closed.
+  args, inline interpreter programs) join the path set fail-closed;
 
 ### File policy
 

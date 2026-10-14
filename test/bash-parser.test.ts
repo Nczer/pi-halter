@@ -1250,6 +1250,80 @@ describe("parseCommand: multi-line literal args are script bodies, not paths", (
   });
 });
 
+// The role rule: a location token is minted only at a FILE-operand position of
+// a path-aware command. An interpreter's inline program (`-c`/`-e`/`-m`) is
+// data — the shell hands the string to the interpreter and touches nothing.
+// The multi-line-literal guard could not carry this: it is voided by any `$`
+// in the body (nodeHasRuntimeExpansion), and program bodies are where `$` is
+// densest — so 13 of 28 unresolved.jsonl rows were python/node programs whose
+// "token" was the whole mashed script (2026-10-15).
+// See also test/verified-bypasses.test.ts P9 (the gate-side half).
+describe("parseCommand: an interpreter's inline program is data, not a location", () => {
+  const tmp = os.tmpdir();
+  const body = [
+    "import json",
+    "d = json.load(open('$HOME/.pi/agent/models.json'))",
+    "for p in d.get('providers', {}):",
+    "    print(p)",
+  ].join("\n");
+
+  it("python3 -c multi-line body with $HOME: no location token, and the real path is scanned", async () => {
+    const r = await parseCommand(`python3 -c "${body}"`, cwd);
+    expect(r.opaque).toEqual([]);
+    // The shell DOES expand $HOME here (double-quoted body), so the body names
+    // a real file — the scan reports it instead of inventing a location.
+    expect(r.paths).toContain(realPath(path.join(home, ".pi/agent/models.json")));
+  });
+
+  it("the ${HOME} brace form expands too (double-quoted body)", async () => {
+    const r = await parseCommand(`python3 -c "p = '\${HOME}/.pi/agent/models.json'"`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths).toContain(realPath(path.join(home, ".pi/agent/models.json")));
+  });
+
+  it("a single-quoted body's $HOME is the interpreter's own: no expansion, no fake path", async () => {
+    const r = await parseCommand(`python3 -c 'print(open("\${HOME}/.pi/agent/models.json").read())'`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths.filter((p) => p.includes("models.json"))).toEqual([]);
+  });
+
+  it("HOME reassigned in the command: the closed set is off, so nothing is expanded", async () => {
+    const r = await parseCommand(`HOME=/tmp python3 -c "p = '$HOME/.pi/agent/models.json'"`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths.filter((p) => p.includes("models.json"))).toEqual([]);
+  });
+
+  it("literal paths inside the program are still seen (fail closed)", async () => {
+    const r = await parseCommand(`node -e "require('fs').readFileSync('${tmp}/secret.txt','utf8')"`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths).toContain(realPath(path.join(tmp, "secret.txt")));
+  });
+
+  it("an expansion the closed set cannot bind contributes no path (no ${X}/a/b pseudo-location)", async () => {
+    const r = await parseCommand(`node -e "const p = '\${OTHER}/a/b'; console.log(p)"`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths).toEqual([]);
+  });
+
+  it("an interpreter flag-free operand stays path-checked", async () => {
+    const r = await parseCommand(`python3 ${tmp}/job.py`, cwd);
+    expect(r.paths).toContain(realPath(path.join(tmp, "job.py")));
+    expect(r.opaque).toEqual([]);
+  });
+
+  it("php -r program is data too", async () => {
+    const r = await parseCommand(`php -r "echo file_get_contents('$HOME/.aws/credentials');"`, cwd);
+    expect(r.opaque).toEqual([]);
+    expect(r.paths).toContain(realPath(path.join(home, ".aws/credentials")));
+  });
+
+  it("control: the same body at a FILE position stays opaque (fail closed)", async () => {
+    const r = await parseCommand('cat "a\n$X/b"', cwd);
+    expect(r.opaque.length).toBeGreaterThan(0);
+    expect(r.opaque.every((o) => o.kind === "opaque")).toBe(true);
+  });
+});
+
 describe("parseCommand: file operands the script/pattern heuristics used to swallow (2026-10-04 ledger mining)", () => {
   const has = (paths: string[], needle: string) => paths.some(p => p.includes(needle));
 
