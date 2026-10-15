@@ -1849,7 +1849,7 @@ describe("Bare location tokens (FastAllow must not out-run the base)", () => {
 describe("= in a bare filename (symlink probe is existence-gated, not `=`-skipped)", () => {
   it("a cwd symlink named a=b pointing outside prompts", async () => {
     // 2026-09-06: checkBareRelativeTokens skipped tokens containing `=`, so a
-    // symlink literally named `notes=v2.md → /home/u` bypassed the probe in
+    // symlink literally named `notes=v2.md → /Users/u` bypassed the probe in
     // every layer. The probe is existence-gated, so probing `=`-tokens is
     // exact (a real K=V assignment names no file).
     const link = path.join(cwd, "notes=v2.md");

@@ -123,8 +123,8 @@ function makePd(command: string, cwd: string, tokens: string[]): BashPromptData 
 const ON: JudgeSettings = { ...DEFAULT_JUDGE_SETTINGS, enabled: true, timeoutMs: 4000 };
 const OFF: JudgeSettings = { ...DEFAULT_JUDGE_SETTINGS, enabled: false };
 
-const CMD = `for e in a b; do grep -rn 'x' /home/u/ext/$e/*.ts; done`;
-const TOKEN = "/home/u/ext/$e/*.ts";
+const CMD = `for e in a b; do grep -rn 'x' /Users/u/ext/$e/*.ts; done`;
+const TOKEN = "/Users/u/ext/$e/*.ts";
 
 let tmp: string;
 beforeAll(() => {
@@ -143,7 +143,7 @@ beforeEach(() => {
 describe("resolveUnresolvedPaths", () => {
   it("returns null without an LLM call when the judge is off", async () => {
     const calls: CapturedCall[] = [];
-    const r = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel()), {
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(() => textReply("x"), calls),
       settings: OFF,
     });
@@ -153,7 +153,7 @@ describe("resolveUnresolvedPaths", () => {
 
   it("returns null when there are no unresolved tokens", async () => {
     const calls: CapturedCall[] = [];
-    const pd = makePd(CMD, "/home/u/project", []);
+    const pd = makePd(CMD, "/Users/u/project", []);
     pd.unresolved = undefined;
     const r = await resolveUnresolvedPaths(pd, makeCtx(fakeModel()), {
       stream: fixedStream(() => textReply("x"), calls),
@@ -165,7 +165,7 @@ describe("resolveUnresolvedPaths", () => {
 
   it("returns null when no model is resolvable", async () => {
     const calls: CapturedCall[] = [];
-    const r = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(undefined), {
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(undefined), {
       stream: fixedStream(() => textReply("x"), calls),
       settings: ON,
     });
@@ -175,7 +175,7 @@ describe("resolveUnresolvedPaths", () => {
 
   it("returns null on auth failure", async () => {
     const calls: CapturedCall[] = [];
-    const r = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel(), false), {
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel(), false), {
       stream: fixedStream(() => textReply("x"), calls),
       settings: ON,
     });
@@ -185,12 +185,12 @@ describe("resolveUnresolvedPaths", () => {
 
   it("maps the numbered results back to tokens", async () => {
     const calls: CapturedCall[] = [];
-    const tokens = [TOKEN, "/home/u/other/$f/*.ts"];
-    const r = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", tokens), makeCtx(fakeModel()), {
+    const tokens = [TOKEN, "/Users/u/other/$f/*.ts"];
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", tokens), makeCtx(fakeModel()), {
       stream: fixedStream(
         () => toolCallReply("report_paths", {
           results: [
-            { index: 0, known: true, dirs: ["/home/u/ext/a", "/home/u/ext/b"] },
+            { index: 0, known: true, dirs: ["/Users/u/ext/a", "/Users/u/ext/b"] },
             { index: 1, known: false, dirs: [] },
           ],
         }),
@@ -200,12 +200,12 @@ describe("resolveUnresolvedPaths", () => {
     });
     expect(calls).toHaveLength(1);
     expect(r).not.toBeNull();
-    expect([...(r ?? new Map()).entries()]).toEqual([[TOKEN, ["/home/u/ext/a", "/home/u/ext/b"]]]);
+    expect([...(r ?? new Map()).entries()]).toEqual([[TOKEN, ["/Users/u/ext/a", "/Users/u/ext/b"]]]);
   });
 
   it("the packet names the command, cwd, and the numbered tokens", async () => {
     const calls: CapturedCall[] = [];
-    await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel()), {
+    await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(
         () => toolCallReply("report_paths", { results: [{ index: 0, known: false, dirs: [] }] }),
         calls,
@@ -214,19 +214,19 @@ describe("resolveUnresolvedPaths", () => {
     });
     const user = String((calls[0]?.context as { messages: { content: string }[] }).messages[0].content);
     expect(user).toContain(CMD);
-    expect(user).toContain("Working directory: /home/u/project");
+    expect(user).toContain("Working directory: /Users/u/project");
     expect(user).toContain(`1. ${TOKEN}`);
   });
 
   it("drops relative dirs, sentinels, and non-strings; expands ~", async () => {
     const home = os.homedir();
-    const r = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel()), {
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(
         () => toolCallReply("report_paths", {
           results: [{
             index: 0,
             known: true,
-            dirs: ["rel/dir", "<unresolved-var>/x", 42, "~/.pi/agent/extensions/a", "  /home/u/ext/trim  "],
+            dirs: ["rel/dir", "<unresolved-var>/x", 42, "~/.pi/agent/extensions/a", "  /Users/u/ext/trim  "],
           }],
         }),
         [],
@@ -235,12 +235,12 @@ describe("resolveUnresolvedPaths", () => {
     });
     expect([...(r ?? new Map()).values()][0]).toEqual([
       path.join(home, ".pi/agent/extensions/a"),
-      "/home/u/ext/trim",
+      "/Users/u/ext/trim",
     ]);
   });
 
   it("caps dirs per token at 5", async () => {
-    const r = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel()), {
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(
         () => toolCallReply("report_paths", {
           results: [{
@@ -257,7 +257,7 @@ describe("resolveUnresolvedPaths", () => {
   });
 
   it("skips out-of-range indices and dedupes", async () => {
-    const r = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel()), {
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(
         () => toolCallReply("report_paths", {
           results: [
@@ -273,7 +273,7 @@ describe("resolveUnresolvedPaths", () => {
   });
 
   it("returns null when nothing is known", async () => {
-    const r = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel()), {
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(
         () => toolCallReply("report_paths", { results: [{ index: 0, known: false, dirs: [] }] }),
         [],
@@ -284,7 +284,7 @@ describe("resolveUnresolvedPaths", () => {
   });
 
   it("returns null on a reply without a tool call", async () => {
-    const r = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel()), {
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(() => textReply("I cannot tell."), [], ),
       settings: ON,
     });
@@ -292,12 +292,12 @@ describe("resolveUnresolvedPaths", () => {
   });
 
   it("returns null on malformed results / a throwing complete", async () => {
-    const bad = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel()), {
+    const bad = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(() => toolCallReply("report_paths", { results: "nope" }), []),
       settings: ON,
     });
     expect(bad).toBeNull();
-    const boom = await resolveUnresolvedPaths(makePd(CMD, "/home/u/project", [TOKEN]), makeCtx(fakeModel()), {
+    const boom = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: (() => {
         throw new Error("network down");
       }) as JudgeStreamFn,
@@ -313,14 +313,14 @@ describe("resolveUnresolvedPaths", () => {
       calls,
     );
     const ctx = makeCtx(fakeModel());
-    const pd = makePd(CMD, "/home/u/project", [TOKEN]);
+    const pd = makePd(CMD, "/Users/u/project", [TOKEN]);
     const r1 = await resolveUnresolvedPaths(pd, ctx, { stream: streamFn, settings: ON });
     const r2 = await resolveUnresolvedPaths(pd, ctx, { stream: streamFn, settings: ON });
     expect(calls).toHaveLength(1);
     expect(r1).not.toBeNull();
     expect(r2).toEqual(r1);
     // A changed command is a different key.
-    await resolveUnresolvedPaths(makePd(CMD + " 2>/dev/null", "/home/u/project", [TOKEN]), ctx, { stream: streamFn, settings: ON });
+    await resolveUnresolvedPaths(makePd(CMD + " 2>/dev/null", "/Users/u/project", [TOKEN]), ctx, { stream: streamFn, settings: ON });
     expect(calls).toHaveLength(2);
   });
 });

@@ -43,6 +43,38 @@
   `php -r`, the file-position control); P9 in `verified-bypasses.test.ts` pins
   that no inline-program vector auto-allows without a location token. 3931 pass.
 
+**Edit gating follows the harness matcher; judge path reports resolve both
+sides; the suite is platform-canonical (macOS run).**
+
+- **The edit pre-validation matched LESS than pi does — a gate bypass.** The
+  check skipped the gate when a block did not match EXACTLY once, on the
+  premise "pi will fail this edit". pi's edit tool (1.2.0) matches against the
+  original file but falls back to `normalizeForFuzzyMatch` (NFKC, per-line
+  trailing-whitespace trim, typographic quotes/dashes/spaces) and applies a
+  unique fuzzy hit — so an oldText differing only by that normalization ran
+  with NO prompt on exactly the edits manual mode prompts for (writes/edits).
+  `handlers/file.ts` `editWillApply` now mirrors the harness end to end
+  (`normalizeToLF`, the fuzzy lookup, fuzzy occurrence counting, the overlap
+  check, the whole-call no-change rule) — `false` (pass ungated) is returned
+  only when pi is guaranteed to fail. New tests pin: fuzzy-only match, CRLF
+  match, a no-op block beside an effective one, and "unique exactly but
+  duplicated fuzzily" (the one direction where passing through is still right).
+- **Judge path reports are realpath'd before comparison.** `judge/paths.ts`
+  `toAbs` used a lexical resolve while the floor's own paths are realpath'd —
+  on macOS every /tmp, /etc, /var path the judge reported became a false
+  `floorMisses` row (/tmp vs /private/tmp). The same seam sits under the D19
+  write bar (`dspa-gate.ts` `judgeWriteOutside`): an unresolved report under a
+  symlinked cwd path passed the bar while its real target was outside the
+  base. One change (`resolvePathReal`) fixes both; symlink-based regression
+  tests exercise it on Linux too (where realpath is otherwise identity).
+- **Tests: Linux-hardcoded fixtures canonicalized so the suite runs on macOS.**
+  The `/home/u` anonymized namespace moved to `/Users/u` (walk-up identity on
+  both platforms: /Users exists on macOS and realpath keeps it, does not exist
+  on Linux); `test/canon.ts` resolves system paths the way the gate does
+  (/tmp→/private/tmp, /etc→/private/etc, os.tmpdir()→/private/var/folders); the
+  D21 base is a hermetic `$HOME` fixture instead of the Linux-only
+  `/mnt/Ndr/…` path. 62 macOS failures → 0 (3937 pass).
+
 ## 3.28.3 — 2026-10-14
 
 **`head -n +$((MARK+1))` stopped 3 times: an arithmetic value was minted into a

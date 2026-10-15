@@ -16,6 +16,7 @@ import type {BashPromptData} from "../decide/types";
 import { createStore } from "../gate/store";
 import type { BashSegment } from "../analysis/bash-parser";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
+import { canon } from "./canon";
 
 const HOME = os.homedir();
 const DOC_EXTRACT = path.join(HOME, ".pi", "agent", "skills", "doc-extract");
@@ -458,7 +459,7 @@ describe("unknown-base integration (P1)", () => {
 
   it("absolute paths are still checked (and trusted) under an unknown base", async () => {
     const a = await analyzeCommand("cd $D && cat /var/tmp/halt-probe-abs.txt", CWD);
-    expect(a.paths).toContain("/var/tmp/halt-probe-abs.txt");
+    expect(a.paths).toContain(canon("/var/tmp/halt-probe-abs.txt"));
     const d = await decide({ type: "bash", command: "cd $D && cat /var/tmp/halt-probe-abs.txt", cwd: CWD }, createStore());
     expect(d.kind).toBe("prompt");
   }, 15000);
@@ -904,7 +905,7 @@ describe("loop cd $d base threading (single-candidate only, fail-closed otherwis
   it("single outside in-list dir: known local base → outside prompt (not unknown)", async () => {
     const r = await d("for d in /etc; do (cd $d && ls); done");
     expect(r.kind).toBe("prompt");
-    if (r.kind === "prompt") expect((r.promptData as BashPromptData).outsideDirs).toContain("/etc");
+    if (r.kind === "prompt") expect((r.promptData as BashPromptData).outsideDirs).toContain(canon("/etc"));
   }, 15000);
 
   it("cd $d outside a loop (no binding) is unchanged: unknown base", async () => {

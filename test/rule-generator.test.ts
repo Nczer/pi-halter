@@ -11,7 +11,7 @@ import { describe, it, expect } from "vitest";
 import { RuleGenerator } from "../decide/rule-generator";
 import type {BashPromptData, FilePromptData} from "../decide/types";
 
-const BASE = "/home/u/project";
+const BASE = "/Users/u/project";
 
 function bashPd(overrides: Partial<BashPromptData> = {}): BashPromptData {
   return {

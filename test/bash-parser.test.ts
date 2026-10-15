@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { afterEach, beforeAll, afterAll, describe, expect, it } from "vitest";
 import { parseCommand, OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
+import { canon } from "./canon";
 
 // Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /etc → /private/etc)
 const realPath = (p: string) => {
@@ -157,7 +158,7 @@ describe("parseCommand: paths", () => {
     // the static path set — only the judge saw it. Body paths now join the
     // path set like any other (SAFE_SYSTEM_PATHS filter + dedup apply).
     const r = await parseCommand("cat << 'EOF'\n/etc/passwd\nEOF", cwd);
-    expect(r.paths).toContain("/etc/passwd");
+    expect(r.paths).toContain(canon("/etc/passwd"));
   });
 
   it("keeps ~ in heredoc body paths so expandTilde resolves it (D13 ledger 2026-09-11)", async () => {
@@ -500,14 +501,14 @@ describe("parseCommand: grep PATTERN position is data, never a file (2026-08-26 
   });
 
   it("file-position args stay path-checked (the pattern is skipped, files are not)", async () => {
-    const r = await parseCommand("grep pattern /home/other/file", cwd);
-    expect(r.paths).toContain("/home/other/file");
+    const r = await parseCommand("grep pattern /Users/other/file", cwd);
+    expect(r.paths).toContain("/Users/other/file");
   });
 
   it("-f / --file switches the grammar: the pattern FILE stays path-checked", async () => {
     for (const cmd of ["grep -f /etc/patterns f", "grep --file=/etc/patterns f", "grep -ef /etc/patterns f"]) {
       const r = await parseCommand(cmd, cwd);
-      expect(r.paths, cmd).toContain("/etc/patterns");
+      expect(r.paths, cmd).toContain(canon("/etc/patterns"));
     }
   });
 
@@ -544,7 +545,7 @@ describe("parseCommand: rg shares grep's PATTERN position (2026-09-21 unresolved
 
   it("rg -f PATTERNFILE: the pattern file stays path-checked", async () => {
     const r = await parseCommand("rg -f /etc/patterns ./f", cwd);
-    expect(r.paths).toContain("/etc/patterns");
+    expect(r.paths).toContain(canon("/etc/patterns"));
   });
 });
 
@@ -621,7 +622,9 @@ describe("parseCommand: symlink hops (prompt display)", () => {
   const dirs: string[] = [];
 
   function makeRoot(): { base: string; real: string; link: string } {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), "halter-hop-"));
+    // Canonical root: the WHY of a hop is written→resolved, so the fixture's
+    // own root must already be resolved (macOS: /var/folders → /private/var/folders).
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "halter-hop-")));
     dirs.push(base);
     const real = path.join(base, "real");
     fs.mkdirSync(real);
@@ -1245,7 +1248,7 @@ describe("parseCommand: multi-line literal args are script bodies, not paths", (
 
   it("single-line args are unaffected", async () => {
     const r = await parseCommand("cat /tmp/foo.txt", cwd);
-    expect(r.paths).toContain("/tmp/foo.txt");
+    expect(r.paths).toContain(canon("/tmp/foo.txt"));
     expect(r.opaque).toEqual([]);
   });
 });

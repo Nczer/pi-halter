@@ -14,6 +14,7 @@ import path from "node:path";
 import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { gate } from "../gate/gate";
 import { createStore } from "../gate/store";
+import { canon } from "./canon";
 import {
   logDecision,
   resolveLogPath,
@@ -184,7 +185,7 @@ describe("decision log", () => {
   it("logs the prompted directory for file prompts (path-resolver debug)", async () => {
     // Inside cwd: the "Always (path)" dir is the resolved path's parent.
     await gate(
-      { type: "file", toolName: "write", filePath: "src/a/b.txt", cwd: "/home/u/project", resolvedPath: "/home/u/project/src/a/b.txt" } as FileRequest,
+      { type: "file", toolName: "write", filePath: "src/a/b.txt", cwd: "/Users/u/project", resolvedPath: "/Users/u/project/src/a/b.txt" } as FileRequest,
       noUiCtx, createStore(), noReject,
     );
     // Outside cwd: the outside dir (also the resolved path's parent).
@@ -192,8 +193,8 @@ describe("decision log", () => {
     // Root file: the prompt offers the file, not a dir → no promptDir.
     await gate({ type: "file", toolName: "write", filePath: "/top.txt", cwd: tmp } as FileRequest, noUiCtx, createStore(), noReject);
     const [inside, outside, root] = lines(logFile);
-    expect(inside).toMatchObject({ tool: "file", kind: "prompt", promptDir: "/home/u/project/src/a" });
-    expect(outside).toMatchObject({ tool: "file", kind: "prompt", promptDir: "/etc" });
+    expect(inside).toMatchObject({ tool: "file", kind: "prompt", promptDir: "/Users/u/project/src/a" });
+    expect(outside).toMatchObject({ tool: "file", kind: "prompt", promptDir: canon("/etc") });
     expect(root.promptDir).toBeUndefined();
     expect("promptDir" in root).toBe(false);
   });
@@ -424,7 +425,7 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
   const bashPd = {
     type: "bash" as const,
     command: "rm -rf /tmp/x",
-    cwd: "/home/u/project",
+    cwd: "/Users/u/project",
   } as any;
 
   beforeAll(() => {
@@ -512,7 +513,7 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
   });
 
   it("paths: a stage-2 context echo is its own field, and still writes a line", () => {
-    const cwd = "/home/u/project";
+    const cwd = "/Users/u/project";
     const pd = {
       type: "bash",
       command: "cat notes.md",
@@ -529,21 +530,21 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     const ctx = {
       sessionManager: {
         getBranch: () => [
-          { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "x", name: "read", arguments: { path: "/home/u/project/../sessions/x.jsonl" } }] } },
+          { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "x", name: "read", arguments: { path: "/Users/u/project/../sessions/x.jsonl" } }] } },
         ],
       },
     } as never;
     logJudgePaths(
       pd,
       createStore(),
-      v("approve", "low", [`${cwd}/notes.md`, "/home/u/sessions/x.jsonl", "/never/seen"]),
+      v("approve", "low", [`${cwd}/notes.md`, "/Users/u/sessions/x.jsonl", "/never/seen"]),
       "dspa",
       ctx,
     );
     const [e] = judgeLines();
     expect(e.kind).toBe("paths");
     expect(e.floorMisses).toEqual(["/never/seen"]);
-    expect(e.contextMisses).toEqual(["/home/u/sessions/x.jsonl"]);
+    expect(e.contextMisses).toEqual(["/Users/u/sessions/x.jsonl"]);
   });
 
   it("cmd is truncated to 1000 (log economy, still attributable — a heredoc head cut at 200 said nothing)", () => {

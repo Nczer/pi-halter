@@ -20,7 +20,7 @@ import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../gate/store";
 import type {BashPromptData, FilePromptData, ToolPromptData} from "../decide/types";
 
-const BASE = "/home/u/project";
+const BASE = "/Users/u/project";
 let store: ReturnType<typeof createStore>;
 
 beforeEach(() => {
@@ -86,18 +86,18 @@ describe("file", () => {
   });
 
   it("D3: a write into a session-granted dir is judgeable (floor passes)", async () => {
-    store.addAllowed({ writeDirs: ["/home/u/granted"] });
+    store.addAllowed({ writeDirs: ["/Users/u/granted"] });
     const r = await checkDspaGate(
-      filePd({ resolved: "/home/u/granted/out.txt", outsideDir: "/home/u/granted" }),
+      filePd({ resolved: "/Users/u/granted/out.txt", outsideDir: "/Users/u/granted" }),
       store,
     );
     expect(r.ok).toBe(true);
   });
 
   it("D3: the grant exemption never applies to reads", async () => {
-    store.addAllowed({ writeDirs: ["/home/u/granted"] });
+    store.addAllowed({ writeDirs: ["/Users/u/granted"] });
     const r = await checkDspaGate(
-      filePd({ resolved: "/home/u/granted/out.txt", outsideDir: "/home/u/granted", isWriteOp: false }),
+      filePd({ resolved: "/Users/u/granted/out.txt", outsideDir: "/Users/u/granted", isWriteOp: false }),
       store,
     );
     expect(r.ok).toBe(false);
@@ -105,9 +105,9 @@ describe("file", () => {
   });
 
   it("D3: credential-warned granted-dir writes still hit the floor", async () => {
-    store.addAllowed({ writeDirs: ["/home/u/granted"] });
+    store.addAllowed({ writeDirs: ["/Users/u/granted"] });
     const r = await checkDspaGate(
-      filePd({ resolved: "/home/u/granted/.env", outsideDir: "/home/u/granted", warnedRule: ".env" }),
+      filePd({ resolved: "/Users/u/granted/.env", outsideDir: "/Users/u/granted", warnedRule: ".env" }),
       store,
     );
     expect(r.ok).toBe(false);
@@ -128,8 +128,8 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
   });
 
   it("var with a granted dir resolves inside → judgeable", async () => {
-    store.addAllowed({ writeDirs: ["/home/u/granted"] });
-    const r = await checkDspaGate(bashPd('OUT=/home/u/granted/out; mkdir -p "$OUT"'), store);
+    store.addAllowed({ writeDirs: ["/Users/u/granted"] });
+    const r = await checkDspaGate(bashPd('OUT=/Users/u/granted/out; mkdir -p "$OUT"'), store);
     expect(r).toEqual({ ok: true });
   });
 
@@ -526,7 +526,7 @@ describe("bash", () => {
   });
 
   it("non-root scanner targets keep the ordinary outside-base reason", async () => {
-    for (const cmd of ["find /etc -name x", "grep -rn x /home/u", "ls /"]) {
+    for (const cmd of ["find /etc -name x", "grep -rn x /Users/u", "ls /"]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
       if (!r.ok) expect(r.reason, cmd).not.toContain("full filesystem scan");
@@ -655,7 +655,7 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
   });
 
   it("pure tilde targets are expanded, then judged as concrete paths (2026-08-31)", async () => {
-    vi.stubEnv("HOME", "/home/u"); // ~/project → inside BASE
+    vi.stubEnv("HOME", "/Users/u"); // ~/project → inside BASE
     try {
       // in-base: judgeable like the absolute-path form
       const r = await checkDspaGate(bashPd("rm -f ~/project/scratch.log"), store);
@@ -980,27 +980,27 @@ describe("rm carve-out — segment order (create-THEN-delete only)", () => {
     // 2026-09-06: the carve-out exempted rm targets with a self-write ANYWHERE
     // in the command — `rm f && echo x > f` (delete, then create outside) got
     // the create-then-delete exemption. The contract is an EARLIER write.
-    const r = await checkDspaGate(bashPd("rm /home/u/out.log && echo x > /home/u/out.log"), store);
+    const r = await checkDspaGate(bashPd("rm /Users/u/out.log && echo x > /Users/u/out.log"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("outside base");
   });
 
   it("a write with no rm still stops (outside write control)", async () => {
-    const r = await checkDspaGate(bashPd("echo x > /home/u/out.log"), store);
+    const r = await checkDspaGate(bashPd("echo x > /Users/u/out.log"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("outside base");
   });
 
   it("a write surviving its rm (re-written after) still stops", async () => {
     const r = await checkDspaGate(
-      bashPd("echo a > /home/u/out.log && rm /home/u/out.log && echo b > /home/u/out.log"), store,
+      bashPd("echo a > /Users/u/out.log && rm /Users/u/out.log && echo b > /Users/u/out.log"), store,
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("outside base");
   });
 
   it("create-then-delete of an outside file stays judgeable (contract control)", async () => {
-    const r = await checkDspaGate(bashPd("echo x > /home/u/out.log && rm /home/u/out.log"), store);
+    const r = await checkDspaGate(bashPd("echo x > /Users/u/out.log && rm /Users/u/out.log"), store);
     expect(r).toEqual({ ok: true });
   });
 });
@@ -1044,9 +1044,9 @@ describe("quoted command words (floor quote-awareness)", () => {
     // position (outsidePaths stays empty), so the outside target is a
     // JUDGE input (the packet's full raw text), not a floor stop. An
     // unobscured outside path still stops (Q1).
-    const r = await checkDspaGate(bashPd('f=rm; "$f" /home/u/notes.txt'), store);
+    const r = await checkDspaGate(bashPd('f=rm; "$f" /Users/u/notes.txt'), store);
     expect(r.ok).toBe(true);
-    const plain = await checkDspaGate(bashPd("cat /home/u/notes.txt"), store);
+    const plain = await checkDspaGate(bashPd("cat /Users/u/notes.txt"), store);
     expect(plain.ok).toBe(false);
     if (!plain.ok) expect(plain.reason).toContain("outside base");
   });
@@ -1225,6 +1225,22 @@ describe("D19: judgeWriteOutside — the write bar on the fresh report", () => {
     const a = path.join(PI, "a");
     const b = path.join(PI, "b");
     expect(judgeWriteOutside(bashPd("ls"), store, [`${a}/x.txt`, `${a}/y.txt`, `${b}/z.txt`])).toEqual([a, b]);
+  });
+
+  it("resolves reported writes: a symlink inside the cwd pointing out stops on its REAL dir", () => {
+    // The report is the path AS THE SHELL EXPANDS IT — a symlink component
+    // hides where the write lands. A lexical check would pass the bar (the
+    // path sits under the cwd); the bar must face the resolved location.
+    const real = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-d19-real-")));
+    const cwdDir = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-d19-cwd-")));
+    try {
+      fs.symlinkSync(real, path.join(cwdDir, "link"));
+      const r = judgeWriteOutside(bashPd("ls", { cwd: cwdDir }), store, [path.join(cwdDir, "link", "out.txt")]);
+      expect(r).toEqual([real]);
+    } finally {
+      fs.rmSync(real, { recursive: true, force: true });
+      fs.rmSync(cwdDir, { recursive: true, force: true });
+    }
   });
 });
 

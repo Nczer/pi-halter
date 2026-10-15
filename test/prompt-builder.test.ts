@@ -115,10 +115,10 @@ describe("bash body content", () => {
         command: "cd ~/.pi && python3 - <<'PYEOF'\nopen('x','w')\nPYEOF",
         segments: ["cd ~/.pi", "python3 - <<'PYEOF'"],
       }),
-      undefined, undefined, undefined, ["/home/u/.pi"],
+      undefined, undefined, undefined, ["/Users/u/.pi"],
     );
-    expect(prompt.body).toContain("⚠️ writes not granted: /home/u/.pi");
-    expect(prompt.writeGrantDirs).toEqual(["/home/u/.pi"]);
+    expect(prompt.body).toContain("⚠️ writes not granted: /Users/u/.pi");
+    expect(prompt.writeGrantDirs).toEqual(["/Users/u/.pi"]);
   });
 
   it("D18: no write-grant line when the gate stopped for another reason", () => {
@@ -773,8 +773,8 @@ describe("pdTargetLabel", () => {
         type: "file" as const,
         action: "Write",
         filePath: "a.md",
-        resolved: "/home/u/p/a.md",
-        cwd: "/home/u/p",
+        resolved: "/Users/u/p/a.md",
+        cwd: "/Users/u/p",
         outsideDir: null,
         isWriteOp: true,
         warnedRule: null,
@@ -782,7 +782,7 @@ describe("pdTargetLabel", () => {
         exists: false,
       },
     };
-    expect(pdTargetLabel(file.promptData)).toBe("Write /home/u/p/a.md");
+    expect(pdTargetLabel(file.promptData)).toBe("Write /Users/u/p/a.md");
   });
 });
 
@@ -844,31 +844,31 @@ describe("buildPrompt: unresolved references", () => {
 });
 
 describe("bash prompt: LLM/confirmed token resolutions", () => {
-  const token = "/home/u/ext/$e/*.ts";
+  const token = "/Users/u/ext/$e/*.ts";
 
   it("renders a `→ LLM:` line under a resolved token (first 3 dirs + N more)", () => {
     const prompt = buildPrompt(
       bashDecision({
         needsPathApproval: true,
-        outsideDirs: ["/home/u/ext/$e"],
+        outsideDirs: ["/Users/u/ext/$e"],
         unresolved: [{ token, reason: "var" }],
       }),
-      new Map([[token, ["/home/u/ext/a", "/home/u/ext/b", "/home/u/ext/c", "/home/u/ext/d", "/home/u/ext/e"]]]),
+      new Map([[token, ["/Users/u/ext/a", "/Users/u/ext/b", "/Users/u/ext/c", "/Users/u/ext/d", "/Users/u/ext/e"]]]),
     );
-    expect(prompt.body).toContain("→ LLM: /home/u/ext/a, /home/u/ext/b, /home/u/ext/c (+2 more)");
+    expect(prompt.body).toContain("→ LLM: /Users/u/ext/a, /Users/u/ext/b, /Users/u/ext/c (+2 more)");
   });
 
   it("renders `→ confirmed:` for user-confirmed resolutions", () => {
     const prompt = buildPrompt(
       bashDecision({
         needsPathApproval: true,
-        outsideDirs: ["/home/u/ext/$e"],
+        outsideDirs: ["/Users/u/ext/$e"],
         unresolved: [{ token, reason: "var" }],
       }),
-      new Map([[token, ["/home/u/ext/a"]]]),
+      new Map([[token, ["/Users/u/ext/a"]]]),
       new Set([token]),
     );
-    expect(prompt.body).toContain("→ confirmed: /home/u/ext/a");
+    expect(prompt.body).toContain("→ confirmed: /Users/u/ext/a");
     expect(prompt.body).not.toContain("→ LLM:");
   });
 
@@ -891,17 +891,17 @@ describe("bash prompt: LLM/confirmed token resolutions", () => {
         needsCommandApproval: true,
         needsPathApproval: true,
         signatures: ["grep"],
-        outsideDirs: ["/home/u/ext/$e"],
+        outsideDirs: ["/Users/u/ext/$e"],
         unresolved: [{ token, reason: "var" }],
       }),
-      new Map([[token, ["/home/u/ext/a", "/home/u/ext/b"]]]),
+      new Map([[token, ["/Users/u/ext/a", "/Users/u/ext/b"]]]),
     );
-    expect(prompt.pathGrantDirs).toEqual(["/home/u/ext/$e", "/home/u/ext/a", "/home/u/ext/b"]);
-    expect(prompt.resolverDirs).toEqual(["/home/u/ext/a", "/home/u/ext/b"]);
+    expect(prompt.pathGrantDirs).toEqual(["/Users/u/ext/$e", "/Users/u/ext/a", "/Users/u/ext/b"]);
+    expect(prompt.resolverDirs).toEqual(["/Users/u/ext/a", "/Users/u/ext/b"]);
     expect(prompt.includePathsOption).toBe(true);
-    expect(prompt.alwaysPathsLabel).toContain("Read /home/u/ext/a/*");
-    expect(prompt.alwaysPathsLabel).toContain("Read /home/u/ext/b/*");
-    expect(prompt.tier2Paths?.body).toContain("/home/u/ext/a/*");
+    expect(prompt.alwaysPathsLabel).toContain("Read /Users/u/ext/a/*");
+    expect(prompt.alwaysPathsLabel).toContain("Read /Users/u/ext/b/*");
+    expect(prompt.tier2Paths?.body).toContain("/Users/u/ext/a/*");
   });
 
   it("resolver dirs alone enable the paths option (no concrete dirs)", () => {
@@ -913,9 +913,9 @@ describe("bash prompt: LLM/confirmed token resolutions", () => {
         outsideDirs: [],
         unresolved: [{ token, reason: "var" }],
       }),
-      new Map([[token, ["/home/u/ext/a"]]]),
+      new Map([[token, ["/Users/u/ext/a"]]]),
     );
-    expect(prompt.pathGrantDirs).toEqual(["/home/u/ext/a"]);
+    expect(prompt.pathGrantDirs).toEqual(["/Users/u/ext/a"]);
     expect(prompt.includePathsOption).toBe(true);
     // Without resolutions the same prompt has nothing to grant.
     const bare = buildPrompt(

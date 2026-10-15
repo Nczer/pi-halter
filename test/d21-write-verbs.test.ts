@@ -16,15 +16,25 @@
  *     click) → the D18 write stop now fires deterministically (class 3),
  *     offering `Allow writes: B` — one click reaches steady state (S3b).
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { checkDspaGate } from "../gate/dspa-gate";
 import { baseWriteAccess } from "../analysis/cwd-tracking";
 import { createStore } from "../gate/store";
 import type { BashPromptData } from "../decide/types";
 
-const B = "/mnt/Ndr/Projects/MOSAC/Contract Document.corpus";
+// Hermetic base outside the manual bar (the incident shape: base outside cwd
+// AND outside config-allowed dirs — os.tmpdir() would be bar-admitted). The
+// base must EXIST (the cd base registers only for a real directory) and be
+// canonical on every platform. Created under $HOME, removed in afterAll.
+const B = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-d21-")));
+afterAll(() => {
+  try { fs.rmSync(B, { recursive: true, force: true }); } catch { /* best effort */ }
+});
 const CMD =
-  `cd "/mnt/Ndr/Projects/MOSAC/Contract Document.corpus" && mkdir -p corpus-patches/patches && ` +
+  `cd "${B}" && mkdir -p corpus-patches/patches && ` +
   `mv /tmp/ocrcheck/patch/*.txt corpus-patches/patches/ && mv /tmp/ocrcheck/findings.md corpus-patches/findings.md && ` +
   `ls corpus-patches/patches | wc -l`;
 
@@ -50,12 +60,12 @@ function bashPd(command: string, cwd: string): BashPromptData {
 
 describe("D21 gate scenarios (MOSAC incident)", () => {
   it("S1: base inside session cwd → floor passes (working set; judge decides)", async () => {
-    const r = await checkDspaGate(bashPd(CMD, "/mnt/Ndr/Projects/MOSAC"), createStore());
+    const r = await checkDspaGate(bashPd(CMD, path.dirname(B)), createStore());
     expect(r.ok).toBe(true);
   });
 
   it("S2: base outside cwd, no grants → read-bar stop carries writeOutside (merged options)", async () => {
-    const r = await checkDspaGate(bashPd(CMD, "/home/nczer"), createStore());
+    const r = await checkDspaGate(bashPd(CMD, "/Users/nczer"), createStore());
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe(`touches paths outside base (${B}); writes ${B}`);
@@ -66,7 +76,7 @@ describe("D21 gate scenarios (MOSAC incident)", () => {
   it("S3: base outside cwd, read-granted → D18 write stop with the 'Allow writes' option (D21 class 3)", async () => {
     const store = createStore();
     store.addAllowed({ readDirs: [B] });
-    const r = await checkDspaGate(bashPd(CMD, "/home/nczer"), store);
+    const r = await checkDspaGate(bashPd(CMD, "/Users/nczer"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe(`write outside base (${B})`);
@@ -77,7 +87,7 @@ describe("D21 gate scenarios (MOSAC incident)", () => {
   it("S3b: after the 'Allow writes' grant (write implies read) → floor passes", async () => {
     const store = createStore();
     store.addAllowed({ writeDirs: [B] });
-    const r = await checkDspaGate(bashPd(CMD, "/home/nczer"), store);
+    const r = await checkDspaGate(bashPd(CMD, "/Users/nczer"), store);
     expect(r.ok).toBe(true);
   });
 });
