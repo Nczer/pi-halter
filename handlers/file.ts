@@ -26,6 +26,93 @@ function uniqueIndexOf(haystack: string, needle: string): number {
   return haystack.indexOf(needle, first + 1) === -1 ? first : -1;
 }
 
+// ── pi edit-tool match semantics (mirrored from the harness) ────────────
+//
+// pi matches every block against the ORIGINAL file (not sequentially) — but
+// with two normalizations the exact-only check below would miss, and a miss
+// here is not cosmetic: the pre-validation's `return` skips the gate, so a
+// block pi WILL apply must never be classified as "guaranteed to fail".
+// Mirrored from the installed harness edit tool (normalizeToLF,
+// normalizeForFuzzyMatch, the fuzzy fallback, and fuzzy occurrence
+// counting); keep in sync if pi changes its matcher.
+
+/** Line-ending normalization: pi's `normalizeToLF`. */
+function normalizeEditText(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+/** pi's `normalizeForFuzzyMatch`: NFKC, per-line trailing-whitespace trim,
+ *  typographic quotes/dashes/spaces folded to ASCII. */
+function normalizeForFuzzyMatch(text: string): string {
+  return text
+    .normalize("NFKC")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
+    .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ");
+}
+
+/** pi's `fuzzyFindText`: exact hit first, then the fuzzy normalization. */
+function findEdit(base: string, oldText: string): { index: number; length: number } | null {
+  const exact = base.indexOf(oldText);
+  if (exact !== -1) return { index: exact, length: oldText.length };
+  const fBase = normalizeForFuzzyMatch(base);
+  const fOld = normalizeForFuzzyMatch(oldText);
+  const idx = fBase.indexOf(fOld);
+  return idx === -1 ? null : { index: idx, length: fOld.length };
+}
+
+/** pi's `countOccurrences` — always on the fuzzy normalization. */
+function countEdits(base: string, oldText: string): number {
+  return normalizeForFuzzyMatch(base).split(normalizeForFuzzyMatch(oldText)).length - 1;
+}
+
+/**
+ * Will pi's edit tool apply this multi-block edit? Mirrors the harness's
+ * matcher end to end: BOM-stripped LF-normalized base, exact-then-fuzzy
+ * lookup, fuzzy occurrence counting (a block that is unique exactly but
+ * duplicated fuzzily fails with the duplicate error), the overlap check,
+ * and the unchanged-replacement rejection. `false` = pi is guaranteed to
+ * fail this call, so the pre-validation may pass it through ungated.
+ */
+export function editWillApply(
+  rawContent: string,
+  edits: Array<{ oldText: string; newText: string }>,
+): boolean {
+  const base = normalizeEditText(rawContent.replace(/^\uFEFF/, ""));
+  const normalized = edits.map((e) => ({
+    oldText: normalizeEditText(e.oldText),
+    newText: normalizeEditText(e.newText),
+  }));
+  // pi rejects an empty oldText (getEmptyOldTextError) before matching.
+  if (normalized.some((e) => e.oldText.length === 0)) return false;
+  // The matcher base flips to the fuzzy normalization when ANY block misses
+  // exactly (pi's replacementBaseContent).
+  const needsFuzzy = normalized.some((e) => base.indexOf(e.oldText) === -1);
+  const matchBase = needsFuzzy ? normalizeForFuzzyMatch(base) : base;
+  const ranges: Array<[number, number]> = [];
+  for (const e of normalized) {
+    const m = findEdit(matchBase, e.oldText);
+    if (!m) return false; // not-found error
+    if (countEdits(matchBase, e.oldText) > 1) return false; // duplicate error
+    ranges.push([m.index, m.index + m.length]);
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  for (let i = 1; i < ranges.length; i++) {
+    if (ranges[i - 1][1] > ranges[i][0]) return false; // overlap error
+  }
+  // No-change rejection (getNoChangeError): decidable without simulating
+  // pi's splice only in the fully-exact all-identical case — every block
+  // replaces its range with the same text, so the result equals the base.
+  // A fuzzy no-op is NOT a failure: pi rewrites the matched lines from the
+  // trim-normalized base, so it usually IS a write — never claim it fails.
+  if (!needsFuzzy && normalized.every((e) => e.oldText === e.newText)) return false;
+  return true;
+}
+
 /**
  * The judge's view of an edit: the file AFTER all blocks are applied, each
  * replaced region shown with ±EDIT_VIEW_CONTEXT context lines. Line numbers
@@ -170,18 +257,9 @@ export async function handleFile(
         // event loop on a full synchronous read. The edit will simply prompt.
         if (fs.statSync(resolvedPath).size <= EDIT_PREVALIDATE_MAX_BYTES) {
           const content = fs.readFileSync(resolvedPath, "utf-8");
-          for (const edit of edits) {
-            if (edit.oldText === edit.newText) return; // Identical content — edit will fail
-            const matches: number[] = [];
-            let idx = 0;
-            while (idx < content.length) {
-              const pos = content.indexOf(edit.oldText, idx);
-              if (pos === -1) break;
-              matches.push(pos);
-              idx = pos + 1;
-            }
-            if (matches.length !== 1) return; // 0 or multiple matches — edit will fail
-          }
+          // Only a call pi WILL REJECT may pass through ungated (the
+          // editWillApply mirror decides); everything else reaches the gate.
+          if (!editWillApply(content, edits)) return;
           // Every block matches exactly once: swap the judge's input from the
           // bare newText blocks to the AFTER-EDIT file view (replaced regions
           // with context, line numbers). A fragment alone reads "truncated /

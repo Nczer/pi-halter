@@ -43,8 +43,8 @@
  * the opposite direction.
  * tools/log-inspect.mjs `dspa --paths` lists them.
  */
-import path from "node:path";
 import { expandTilde } from "../analysis/path-util";
+import { resolvePathReal } from "../analysis/path-analysis";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
 import type {PromptData} from "../decide/types";
@@ -65,10 +65,14 @@ function isSentinel(p: string): boolean {
 }
 
 /** One path to absolute form: ~ expanded, relatives resolved against `cwd`,
- * `..` collapsed (the floor's own paths are already resolved — comparing
- * un-normalized text against them would invent a mismatch). */
+ * `..` collapsed, THEN realpath'd (the floor's own paths are already
+ * resolved — comparing lexically-normalized text against them would invent
+ * a mismatch for every symlinked prefix, e.g. /tmp vs /private/tmp on
+ * macOS). The resolution also faces the D19 write bar
+ * (dspa-gate.judgeWriteOutside): an unresolved path under a symlink could
+ * pass the bar while its real target sits outside it. */
 function toAbs(p: string, cwd: string): string {
-  return path.resolve(cwd, p.startsWith("~") ? expandTilde(p) : p);
+  return resolvePathReal(p.startsWith("~") ? expandTilde(p) : p, cwd);
 }
 
 /**

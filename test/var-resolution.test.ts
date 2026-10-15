@@ -14,8 +14,9 @@ import { trackEffectiveCwd } from "../analysis/cwd-tracking";
 import { isCwdLocalSubstitution, isCwdLocalWord } from "../analysis/cwd-local";
 import {decide} from "../decide/engine";
 import { createStore } from "../gate/store";
+import { canon } from "./canon";
 
-const CWD = "/home/u/project";
+const CWD = "/Users/u/project";
 const home = os.homedir();
 const sessionCwd = path.join(home, "Projects");
 
@@ -121,7 +122,7 @@ describe("assignment binding", () => {
 
   it("absolute value resolves to the concrete outside path", async () => {
     const r = await resolve("f=/etc/passwd; cat \"$f\"");
-    expect(r.paths).toEqual(["/etc/passwd"]);
+    expect(r.paths).toEqual([canon("/etc/passwd")]);
     expect(r.unresolved).toEqual([]);
   });
 
@@ -162,13 +163,13 @@ describe("assignment binding", () => {
 
   it("subshell inherits the parent assignment", async () => {
     const r = await resolve("f=/etc/x; (cat $f)");
-    expect(r.paths).toEqual(["/etc/x"]);
+    expect(r.paths).toEqual([canon("/etc/x")]);
     expect(r.unresolved).toEqual([]);
   });
 
   it("export form binds (declaration_command)", async () => {
     const r = await resolve("export f=/etc/x; cat $f");
-    expect(r.paths).toEqual(["/etc/x"]);
+    expect(r.paths).toEqual([canon("/etc/x")]);
   });
 
   it("export form with a relative value resolves inside", async () => {
@@ -178,7 +179,7 @@ describe("assignment binding", () => {
 
   it("a bare `export f` re-exports the earlier assignment", async () => {
     const r = await resolve("f=/etc/x; export f; cat $f");
-    expect(r.paths).toEqual(["/etc/x"]);
+    expect(r.paths).toEqual([canon("/etc/x")]);
   });
 
   it("an exec form in the value stays opaque", async () => {
@@ -194,12 +195,12 @@ describe("assignment binding", () => {
 
   it("a cwd-local find value after a cd resolves against the cd base", async () => {
     const r = await resolve('f=$(find . -name \'*.log\' | head); cd /etc && cat "$f"');
-    expect(r.paths).toEqual(["/etc"]);
+    expect(r.paths).toEqual([canon("/etc")]);
   });
 
   it("a default chain resolves through the unbound vars", async () => {
     const r = await resolve('d=${PI_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/sockets}; mkdir -p "$d"');
-    expect(r.paths).toEqual(["/tmp/sockets"]);
+    expect(r.paths).toEqual([canon("/tmp/sockets")]);
   });
 
   it("an env prefix does not bind (command child, not statement position)", async () => {
@@ -214,7 +215,7 @@ describe("assignment binding", () => {
 
   it("a ref after a later reassignment sees only the earlier value", async () => {
     const r = await resolve("f=/etc/x; cat $f; f=./y");
-    expect(r.paths).toEqual(["/etc/x"]);
+    expect(r.paths).toEqual([canon("/etc/x")]);
   });
 });
 
@@ -275,7 +276,7 @@ describe("pinned in-lists (trailing static prefix)", () => {
 describe("assignment values with a glob tail (2026-08-31 log case)", () => {
   it("$F/*.js with F bound resolves to F's directory (the glob cannot cross /)", async () => {
     const r = await resolve('F=/var/lib/flatpak/x86_64/stable/1/app; grep -l "Notes" $F/*.js');
-    expect(r.paths).toEqual(["/var/lib/flatpak/x86_64/stable/1/app"]);
+    expect(r.paths).toEqual([canon("/var/lib/flatpak/x86_64/stable/1/app")]);
     expect(r.unresolved).toEqual([]);
   });
 
@@ -320,7 +321,7 @@ describe("literal-path loop in-lists (2026-08-31 log case)", () => {
 
   it("resolves every word to its concrete location (outside union)", async () => {
     const r = await resolve('for d in /var/data/a /var/data/b; do ls "$d"; done');
-    expect(r.paths).toEqual(["/var/data/a", "/var/data/b"]);
+    expect(r.paths).toEqual([canon("/var/data/a"), canon("/var/data/b")]);
     expect(r.unresolved).toEqual([]);
   });
 
@@ -333,7 +334,7 @@ describe("literal-path loop in-lists (2026-08-31 log case)", () => {
   it("a relative word resolves against the segment base; an outside word still names", async () => {
     const r = await resolve('for d in notes /etc/hostname; do ls "$d"; done');
     // notes → CWD/notes (inside, dropped); /etc/hostname → named.
-    expect(r.paths).toEqual(["/etc/hostname"]);
+    expect(r.paths).toEqual([canon("/etc/hostname")]);
     expect(r.unresolved).toEqual([]);
   });
 
@@ -359,14 +360,14 @@ describe("literal-path loop in-lists (2026-08-31 log case)", () => {
 
   it("a mixed in-list (bare + literal path) is loopList — the bare word binds the base", async () => {
     const r = await resolve('for d in notes /etc/hostname; do echo "$d"; ls "$d"; done');
-    expect(r.paths).toEqual(["/etc/hostname"]);
+    expect(r.paths).toEqual([canon("/etc/hostname")]);
     expect(r.unresolved).toEqual([]);
   });
 });
 
 describe("embedded loop refs (2026-09-01 log case)", () => {
   it("examiner_report_$y.txt over a literal in-list, tracked cd → inside, dropped", async () => {
-    const r = await resolve("cd /home/u/project/reports && for y in 2019 2020 2021 2022 2023; do grep -n -i paper examiner_report_$y.txt; done");
+    const r = await resolve("cd /Users/u/project/reports && for y in 2019 2020 2021 2022 2023; do grep -n -i paper examiner_report_$y.txt; done");
     expect(r.paths).toEqual([]);
     expect(r.unresolved).toEqual([]);
   });
@@ -379,7 +380,7 @@ describe("embedded loop refs (2026-09-01 log case)", () => {
 
   it("a cd outside names the concrete substituted files (grantable)", async () => {
     const r = await resolve("cd /etc && for y in 2019 2020; do grep -n -i paper examiner_report_$y.txt; done");
-    expect(r.paths).toEqual(["/etc/examiner_report_2019.txt", "/etc/examiner_report_2020.txt"]);
+    expect(r.paths).toEqual([canon("/etc/examiner_report_2019.txt"), canon("/etc/examiner_report_2020.txt")]);
     expect(r.unresolved).toEqual([]);
   });
 
@@ -401,7 +402,7 @@ describe("embedded loop refs (2026-09-01 log case)", () => {
 
   it("the same loop after a cd names the base (grantable), not a sentinel", async () => {
     const r = await resolve('cd /etc && for d in */; do f=$(ls "$d"CHANGELOG.md); done');
-    expect(r.paths).toEqual(["/etc"]);
+    expect(r.paths).toEqual([canon("/etc")]);
     expect(r.unresolved).toEqual([]);
   });
 });
@@ -415,7 +416,7 @@ describe("relative-glob loop in-lists (2026-08-31 log case)", () => {
 
   it("after a cd the effective base is named (grantable), not sentinel-prompted", async () => {
     const r = await resolve("cd /etc && for f in */x.ts; do cat \"$f\"; done");
-    expect(r.paths).toEqual(["/etc"]);
+    expect(r.paths).toEqual([canon("/etc")]);
     expect(r.unresolved).toEqual([]);
   });
 
@@ -435,7 +436,7 @@ describe("cwd-local grep -l substitution (2026-08-31 log case)", () => {
 
   it("after a cd the bound base is named (grantable), not sentinel-prompted", async () => {
     const r = await resolve('cd /etc && f=$(grep -rln \'pat\' config/ | head -1); cat "$f"');
-    expect(r.paths).toEqual(["/etc"]);
+    expect(r.paths).toEqual([canon("/etc")]);
     expect(r.unresolved).toEqual([]);
   });
 
@@ -546,7 +547,7 @@ describe("static $HOME in assignment values", () => {
 
   it("a standalone HOME= assignment names the true value (the map wins)", async () => {
     const r = await resolve("HOME=/tmp; f=$HOME/x; cat $f");
-    expect(r.paths).toContain("/tmp/x");
+    expect(r.paths).toContain(canon("/tmp/x"));
     expect(r.unresolved).toEqual([]);
   });
 
@@ -570,6 +571,6 @@ describe("static $HOME in assignment values", () => {
     // The closed set is the bare name; a `:-` default keeps its old meaning and
     // `${HOME:-d}/x` stays opaque as a token (HOME_TOKEN_RE needs `}` after HOME).
     const r = await resolve("f=${HOME:-/tmp}/x; cat $f");
-    expect(r.paths).toContain("/tmp/x");
+    expect(r.paths).toContain(canon("/tmp/x"));
   });
 });

@@ -9,13 +9,16 @@ import { RuleGenerator } from "../decide/rule-generator";
 import { buildPrompt, pdTargetLabel, summarizePrompt } from "../ui/prompt-builder";
 import {buildJudgmentPacket} from "../judge/packet";
 import { checkDspaGate } from "../gate/dspa-gate";
+import { canon } from "./canon";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
 let base: string;
 
 beforeEach(() => {
-  base = fs.mkdtempSync(path.join(os.tmpdir(), "tool-gate-"));
+  // Canonical (macOS: os.tmpdir() → /private/var/folders) — the gate
+  // resolves paths, so expectations must name the resolved form.
+  base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tool-gate-")));
 });
 
 function execReq(overrides: Partial<ToolRequest> = {}): ToolRequest {
@@ -129,7 +132,7 @@ describe("decide: tool requests", () => {
     const outside = await decide(fileReq({ path: "/etc/hosts" }), createStore());
     const pd2 = promptOf(outside).promptData;
     if (pd2.type === "tool") {
-      expect(pd2.outsideDir).toBe("/etc");
+      expect(pd2.outsideDir).toBe(canon("/etc"));
       expect(pd2.exists).toBe(true);
     } else {
       throw new Error("narrowing");

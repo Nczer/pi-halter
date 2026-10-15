@@ -11,7 +11,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { buildSessionContext, sessionContextPaths } from "../judge/session-context";
 import { createStore } from "../gate/store";
 
-const BASE = "/home/u/project";
+const BASE = "/Users/u/project";
 
 function userMsg(text: string): SessionEntry {
   return {
@@ -115,11 +115,11 @@ describe("tool-call digest", () => {
 
   it("targets: read/write paths, bash commands one-lined", () => {
     const ctx = makeCtx([
-      assistantToolCall("read", { path: "/home/u/project/src/f.ts" }),
+      assistantToolCall("read", { path: "/Users/u/project/src/f.ts" }),
       assistantToolCall("bash", { command: "python3 - <<'EOF'\nprint(1)\nEOF" }),
     ]);
     const out = buildSessionContext(ctx, createStore());
-    expect(out).toContain("read: /home/u/project/src/f.ts");
+    expect(out).toContain("read: /Users/u/project/src/f.ts");
     expect(out).toContain("bash: python3 - <<'EOF' print(1) EOF");
   });
 
@@ -193,16 +193,16 @@ describe("sessionContextPaths — the paths the section names (context-bleed cla
     const store = createStore();
     store.addAllowed({ writeDirs: ["/tmp/scratch"] });
     const ctx = makeCtx([
-      userMsg("compare /home/u/a.txt with /home/u/b.txt, then clean up."),
-      assistantToolCall("read", { path: "/home/u/project/x.ts" }),
+      userMsg("compare /Users/u/a.txt with /Users/u/b.txt, then clean up."),
+      assistantToolCall("read", { path: "/Users/u/project/x.ts" }),
       assistantToolCall("bash", { command: "ls -la" }),
       assistantProse("I considered /prose/only — prose is never a path source"),
       toolResult("TOOL_OUTPUT_MARKER /from/output"),
     ]);
     const out = sessionContextPaths(ctx, store);
-    expect(out).toContain("/home/u/a.txt");
-    expect(out).toContain("/home/u/b.txt");
-    expect(out).toContain("/home/u/project/x.ts");
+    expect(out).toContain("/Users/u/a.txt");
+    expect(out).toContain("/Users/u/b.txt");
+    expect(out).toContain("/Users/u/project/x.ts");
     expect(out).toContain("/tmp/scratch");
     expect(out).not.toContain("/prose/only");
     expect(out).not.toContain("/from/output");
@@ -220,7 +220,7 @@ describe("sessionContextPaths — the paths the section names (context-bleed cla
 
   it("store failure degrades to the session-derived paths only", () => {
     const broken = { listAllowedWriteDirs: () => { throw new Error("no store"); } } as any;
-    const ctx = makeCtx([assistantToolCall("read", { path: "/home/u/project/x.ts" })]);
-    expect(sessionContextPaths(ctx, broken)).toEqual(["/home/u/project/x.ts"]);
+    const ctx = makeCtx([assistantToolCall("read", { path: "/Users/u/project/x.ts" })]);
+    expect(sessionContextPaths(ctx, broken)).toEqual(["/Users/u/project/x.ts"]);
   });
 });

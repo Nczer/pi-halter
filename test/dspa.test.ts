@@ -18,6 +18,7 @@ import * as judgePrompt from "../judge/verdict";
 import * as promptFlow from "../ui/prompt-flow";
 import { setDspaActive, resetDspa, getDspaStats } from "../modes/dspa-mode";
 import { setDspatActive, resetDspat } from "../modes/dspat-mode";
+import { canon } from "./canon";
 import type {JudgeResult} from "../judge/judge";
 
 vi.mock("../judge/verdict", async (importOriginal) => {
@@ -52,7 +53,7 @@ function bashDecision(command: string): Decision {
   const pd: BashPromptData = {
     type: "bash",
     command,
-    cwd: "/home/u/project",
+    cwd: "/Users/u/project",
     outsideDirs: [],
     segments: [command],
     signatures: [command.split(/\s+/)[0]],
@@ -75,7 +76,7 @@ function fileDecision(): Decision {
     action: "Write",
     filePath: "/etc/hosts",
     resolved: "/etc/hosts",
-    cwd: "/home/u/project",
+    cwd: "/Users/u/project",
     outsideDir: "/etc",
     isWriteOp: true,
     warnedRule: null,
@@ -93,7 +94,7 @@ function egressRequest(): ToolRequest {
     label: 'search "pi coding agent" (query → exa.ai)',
     gate: "egress",
     consentKind: "web",
-    cwd: "/home/u/project",
+    cwd: "/Users/u/project",
     argsPreview: JSON.stringify({ query: "pi coding agent" }, null, 2),
   };
 }
@@ -112,7 +113,7 @@ function egressDecision(): Decision {
 
 function makeCtx() {
   return {
-    cwd: "/home/u/project",
+    cwd: "/Users/u/project",
     hasUI: true,
     ui: {
       notify: vi.fn(),
@@ -134,7 +135,7 @@ async function runGate(decision: Decision) {
   const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
   try {
     return await gate(
-      { type: "bash", command: "placeholder", cwd: "/home/u/project" },
+      { type: "bash", command: "placeholder", cwd: "/Users/u/project" },
       ctx,
       store,
       (d, r) => rejectBash(d, r, store, ctx),
@@ -167,7 +168,7 @@ async function runAnalyzedGate(
   const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(decision);
   try {
     return await gate(
-      { type: "bash", command: "placeholder", cwd: "/home/u/project" },
+      { type: "bash", command: "placeholder", cwd: "/Users/u/project" },
       makeCtx(),
       store,
       (d, r) => rejectBash(d, r, store, makeCtx()),
@@ -213,7 +214,7 @@ describe("auto-allow path", () => {
       .mockResolvedValue(bashDecision("make test"));
     try {
       const result = await gate(
-        { type: "bash", command: "make test", cwd: "/home/u/project" },
+        { type: "bash", command: "make test", cwd: "/Users/u/project" },
         ctx,
         store,
         (d, r) => rejectBash(d, r, store, ctx),
@@ -849,7 +850,7 @@ describe("decision-log mode tag", () => {
     const spy = vi.spyOn(decisionEngine, "decide").mockResolvedValue(bashDecision("make test"));
     try {
       await gate(
-        { type: "bash", command: "make test", cwd: "/home/u/project" },
+        { type: "bash", command: "make test", cwd: "/Users/u/project" },
         { hasUI: false } as any,
         createStore(),
         () => ({ block: true, reason: "no ui" }),
@@ -873,14 +874,14 @@ describe("decision-log mode tag", () => {
 describe("D3: granted-dir file writes are judged (dspa)", () => {
   // The full path: real decide() (no spy) — the auto-allow from the dir-grant
   // fast path is probed, re-decided as a prompt, and handed to the dspa flow.
-  const GRANTED = "/home/u/granted";
+  const GRANTED = "/Users/u/granted";
 
   function fileReq(): { type: "file"; toolName: "write"; filePath: string; cwd: string; content: string } {
     return {
       type: "file",
       toolName: "write",
       filePath: path.join(GRANTED, "out.txt"),
-      cwd: "/home/u/project",
+      cwd: "/Users/u/project",
       content: "hello",
     };
   }
@@ -946,19 +947,19 @@ describe("D3: granted-dir file writes are judged (dspa)", () => {
 describe("D13 — stage-2 path report (diagnostic log)", () => {
   it("stage-2 auto-allow logs judgePaths + floorMisses", async () => {
     await runAnalyzedGate(
-      "ls /home/u/project/target",
+      "ls /Users/u/project/target",
       verdict({ risk: "medium" }), // stage 1: no auto-allow
-      verdict({ paths: ["/home/u/project/target", "/etc/hostname"] }),
+      verdict({ paths: ["/Users/u/project/target", "/etc/hostname"] }),
     );
     const line = logLines().find((l) => l.kind === "auto-allow");
     expect(line).toBeDefined();
     if (!line) return;
-    expect(line.judgePaths).toEqual(["/home/u/project/target", "/etc/hostname"]);
-    expect(line.floorMisses).toEqual(["/etc/hostname"]);
+    expect(line.judgePaths).toEqual(["/Users/u/project/target", canon("/etc/hostname")]);
+    expect(line.floorMisses).toEqual([canon("/etc/hostname")]);
   });
 
   it("stage-1 auto-allow carries no path fields (stage 1 never reports)", async () => {
-    await runAnalyzedGate("ls /home/u/project/target", verdict({ risk: "low" }), null);
+    await runAnalyzedGate("ls /Users/u/project/target", verdict({ risk: "low" }), null);
     const line = logLines().find((l) => l.kind === "auto-allow");
     expect(line).toBeDefined();
     if (!line) return;
@@ -968,28 +969,28 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
 
   it("floor-covered report logs paths without misses", async () => {
     await runAnalyzedGate(
-      "ls /home/u/project/target",
+      "ls /Users/u/project/target",
       verdict({ risk: "medium" }),
-      verdict({ paths: ["/home/u/project/target/release"] }), // under a floor path
+      verdict({ paths: ["/Users/u/project/target/release"] }), // under a floor path
     );
     const line = logLines().find((l) => l.kind === "auto-allow");
     expect(line).toBeDefined();
     if (!line) return;
-    expect(line.judgePaths).toEqual(["/home/u/project/target/release"]);
+    expect(line.judgePaths).toEqual(["/Users/u/project/target/release"]);
     expect(line.floorMisses).toBeUndefined();
   });
 
   it("judge-declined fall-through logs the stage-2 report", async () => {
     await runAnalyzedGate(
-      "ls /home/u/project/target",
+      "ls /Users/u/project/target",
       verdict({ risk: "medium" }),
-      verdict({ approve: "deny", paths: ["/home/u/project/target", "/var/log/syslog"] }),
+      verdict({ approve: "deny", paths: ["/Users/u/project/target", "/var/log/syslog"] }),
     );
     const line = logLines()[0];
     expect(line.kind).toBe("prompt");
     expect(line.dspa).toBe("judge: declined (stage 2)");
-    expect(line.judgePaths).toEqual(["/home/u/project/target", "/var/log/syslog"]);
-    expect(line.floorMisses).toEqual(["/var/log/syslog"]);
+    expect(line.judgePaths).toEqual(["/Users/u/project/target", canon("/var/log/syslog")]);
+    expect(line.floorMisses).toEqual([canon("/var/log/syslog")]);
   });
 
   it("floor-stop fall-through logs misses (the parser-gap mining case)", async () => {
@@ -1006,8 +1007,8 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
     const line = logLines()[0];
     expect(line.kind).toBe("prompt");
     expect(String(line.dspa)).toContain("gate:");
-    expect(line.judgePaths).toEqual(["/etc/hostname", "/etc/shadow"]);
-    expect(line.floorMisses).toEqual(["/etc/shadow"]);
+    expect(line.judgePaths).toEqual([canon("/etc/hostname"), canon("/etc/shadow")]);
+    expect(line.floorMisses).toEqual([canon("/etc/shadow")]);
   });
 });
 
@@ -1073,17 +1074,17 @@ describe("D17 — always-on judge ledger (judge.jsonl)", () => {
 
   it("dspa: floor-PASSED mismatch → paths line with both sides (the durable parser-gap home)", async () => {
     await runAnalyzedGate(
-      "ls /home/u/project/target",
+      "ls /Users/u/project/target",
       verdict({ risk: "medium" }),
-      verdict({ paths: ["/home/u/project/target", "/etc/hostname"] }),
+      verdict({ paths: ["/Users/u/project/target", "/etc/hostname"] }),
     );
     const pathsLine = judgeLines().find((l) => l.kind === "paths");
     expect(pathsLine).toEqual(
       expect.objectContaining({
         mode: "dspa",
-        floorPaths: ["/home/u/project/target"],
-        judgePaths: ["/home/u/project/target", "/etc/hostname"],
-        floorMisses: ["/etc/hostname"],
+        floorPaths: ["/Users/u/project/target"],
+        judgePaths: ["/Users/u/project/target", canon("/etc/hostname")],
+        floorMisses: [canon("/etc/hostname")],
       }),
     );
   });

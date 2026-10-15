@@ -139,6 +139,56 @@ describe("handleFile edit pre-validation security", () => {
     expect(result).toBeUndefined();
   });
 
+  it("does NOT skip the prompt for a fuzzy-only match (pi applies it)", async () => {
+    // The old exact-only check classified this as "will fail" and passed it
+    // through ungated — pi's matcher applies it (trailing whitespace folds).
+    readSpy.mockReturnValue("hello world\n");
+    const result = await handleFile(
+      makeEditEvent("src/index.ts", "hello world  ", "replaced"),
+      makeCtx(),
+    );
+    expect(readSpy).toHaveBeenCalled();
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
+  });
+
+  it("does NOT skip the prompt for a CRLF-normalized match (pi applies it)", async () => {
+    readSpy.mockReturnValue("a\r\nb");
+    const result = await handleFile(
+      makeEditEvent("src/index.ts", "a\nb", "c"),
+      makeCtx(),
+    );
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
+  });
+
+  it("does NOT skip the prompt for a no-op block next to an effective one (pi applies the rest)", async () => {
+    // pi rejects no-change only when the WHOLE result is unchanged — one
+    // identical block does not fail a call whose other block writes.
+    readSpy.mockReturnValue("hello world");
+    const event = {
+      toolName: "edit",
+      input: {
+        path: "src/index.ts",
+        edits: [
+          { oldText: "world", newText: "world" },
+          { oldText: "hello", newText: "hi" },
+        ],
+      },
+    } as any;
+    const result = await handleFile(event, makeCtx());
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("no UI") });
+  });
+
+  it("skips prompt when the block is unique exactly but duplicated fuzzily (pi's duplicate error)", async () => {
+    // Exact count 1, fuzzy count 2 (typographic quotes fold to ASCII) → pi
+    // fails the call with the duplicate error; only then may it pass ungated.
+    readSpy.mockReturnValue("x = 'a'; y = \u2018a\u2019");
+    const result = await handleFile(
+      makeEditEvent("src/index.ts", "'a'", "b"),
+      makeCtx(),
+    );
+    expect(result).toBeUndefined();
+  });
+
   it("skips prompt when edits array is empty", async () => {
     const event = {
       toolName: "edit",

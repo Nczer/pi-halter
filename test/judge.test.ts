@@ -250,11 +250,11 @@ describe("judgment packet", () => {
       riskReasons: ["[Tool] python (script execution)"],
       severity: "high",
       hasUnsafePattern: true,
-      paths: ["/home/u/.pi"],
+      paths: ["/Users/u/.pi"],
       outsidePaths: [],
-      effectiveBase: "/home/u/.pi",
+      effectiveBase: "/Users/u/.pi",
     });
-    expect(p).toContain("effective base: /home/u/.pi (after cd)");
+    expect(p).toContain("effective base: /Users/u/.pi (after cd)");
     expect(p).not.toMatch(/granted|NOT granted/);
     expect(p).toContain("risk flags: high — [Tool] python (script execution)");
   });
@@ -262,7 +262,7 @@ describe("judgment packet", () => {
   it("D21: grant state never appears, and an absent effective base adds no line", () => {
     const p = buildJudgmentPacket({
       command: "cd /work && python3 -c 'x'",
-      cwd: "/home/u/project",
+      cwd: "/Users/u/project",
       segments: ["cd /work", "python3 -c 'x'"],
       riskReasons: ["[Tool] python (script execution)"],
       severity: "medium",
@@ -717,15 +717,15 @@ describe("buildJudgmentPacket: file operations", () => {
     const p = buildJudgmentPacket({
       type: "file",
       action: "write",
-      resolved: "/home/u/.pi/agent/halter.json",
+      resolved: "/Users/u/.pi/agent/halter.json",
       cwd: "/w",
-      outsideDir: "/home/u/.pi",
+      outsideDir: "/Users/u/.pi",
       isWriteOp: true,
       exists: true,
       warnedRule: null,
       symlinkHint: null,
     });
-    expect(p).toContain("file write (WRITE): /home/u/.pi/agent/halter.json");
+    expect(p).toContain("file write (WRITE): /Users/u/.pi/agent/halter.json");
     expect(p).toContain("OUTSIDE base");
     expect(p).toContain("REPLACE the existing");
     expect(p).not.toContain("## Command");

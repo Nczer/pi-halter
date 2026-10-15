@@ -14,6 +14,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { analyzeCommand, type CommandAnalysis } from "../analysis/command-analysis";
 import { OPAQUE_VAR_DIR } from "../analysis/path-util";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
+import { canon } from "./canon";
 
 // Resolve symlinks for path assertions (macOS: /tmp → /private/tmp, /etc → /private/etc)
 const realPath = (p: string) => {
@@ -610,12 +611,12 @@ describe("Tilde path tokens (word-initial ~)", () => {
 
   it("~user joins the path set (/home/<user>)", async () => {
     const a = await analyzeCommand("ls ~root", cwd);
-    expect(a.paths).toContain("/home/root");
+    expect(a.paths).toContain(canon("/home/root"));
   });
 
   it("~user/… resolves below the modeled home", async () => {
     const a = await analyzeCommand("cat ~root/.bashrc", cwd);
-    expect(a.paths).toContain("/home/root/.bashrc");
+    expect(a.paths).toContain(canon("/home/root/.bashrc"));
   });
 
   it("cd ~ is navigation, not a path (control)", async () => {
