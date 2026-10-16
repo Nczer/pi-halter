@@ -3,9 +3,9 @@ import path from "node:path";
 import fs from "node:fs";
 import { expandTilde, expandHomeToken } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
-import { tokenizeSegment } from "./tokenizer";
+import { tokenizeSegment, tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS } from "../config";
-import type { BashSegment } from "./bash-parser";
+import { hasRuntimeExpansionText, nonFileArgIndices, type BashSegment } from "./bash-parser";
 import type { ShellAssignment } from "./var-resolution";
 
 // ── cwd tracking across `cd` ───────────────────────────────────────────────
@@ -63,6 +63,20 @@ function stripEscapes(text: string): string {
   return result;
 }
 
+/** True for `cd $(…)` / ``cd `…` `` — a cd whose TARGET comes from a command
+ *  substitution. The segment contains a subshell, but the cd itself runs in the
+ *  CURRENT shell (the substitution is just its argument), so the cd persists and
+ *  the new cwd is real but unknowable. Read separately by resolveCdTarget's
+ *  subshell shortcut, which would otherwise report the stale (wrongly concrete)
+ *  base for every later segment. */
+function hasSubstitutedCdTarget(text: string): boolean {
+  const tokens = tokenizeSegment(text);
+  let ti = 0;
+  while (ti < tokens.length && ENV_ASSIGN_RE.test(tokens[ti])) ti++;
+  if (tokens[ti]?.toLowerCase() !== "cd") return false;
+  return tokens.slice(ti + 1).some((t) => /\$\(|`/.test(t));
+}
+
 /**
  * Resolve the target directory of a `cd` segment relative to the current base.
  * `cwd === null` means the base is already unknown (relative targets stay
@@ -74,8 +88,10 @@ export function resolveCdTarget(
   homeFixed = false,
 ): CdResolution {
   // Pipeline stages and subshells run in a subshell — their cd does not
-  // persist into subsequent segments.
-  if (seg.hasSubshell) return { kind: "unchanged" };
+  // persist into subsequent segments. A substitution in the TARGET is not that
+  // case (see hasSubstitutedCdTarget): the cd does persist, and the target loop
+  // below reports it as unknown instead of leaving the previous base in place.
+  if (seg.hasSubshell && !hasSubstitutedCdTarget(seg.text)) return { kind: "unchanged" };
   if (seg.ops.includes("|") || seg.ops.includes("|&")) return { kind: "unchanged" };
 
   const tokens = tokenizeSegment(seg.text);
@@ -351,7 +367,7 @@ export function homeReassigned(
     const tokens = tokenizeSegment(seg.text);
     let i = 0;
     while (i < tokens.length && ENV_ASSIGN_RE.test(tokens[i])) {
-      if (HOME_NAME_RE.test(tokens[i])) return true; // env prefix: HOME=/tmp cd …
+      if (tokens[i].startsWith("HOME=")) return true; // env prefix: HOME=/tmp cd …
       i++;
     }
     if (tokens[i] && HOME_BUILTIN_RE.test(tokens[i])
@@ -363,7 +379,7 @@ export function homeReassigned(
 }
 
 /** Path-aware commands that operate on the cwd when given no file args. */
-const CWD_DEFAULT_COMMANDS = new Set(["ls", "find", "du"]);
+const CWD_DEFAULT_COMMANDS = new Set(["ls", "find", "du", "rg", "fd"]);
 
 // Redirect operators. Output: [N]>, [N]>>, [N]&>, [N]>&(. Input: [N]< — but
 // not the heredoc forms (<< / <<<), which carry DATA, not a file target.
@@ -374,11 +390,15 @@ export const IN_REDIRECT_RE = /^(\d{0,1}<)(?!<)(.*)$/;
 export const BARE_REDIRECT_RE = /^(?:\d{0,1}(?:&?>|>&)|\d{0,1}<)$/;
 
 /** Token names a location resolvable (or already marker-flagged) by the path set. */
-function isResolvableTarget(t: string): boolean {
-  return t.startsWith("/") || t.startsWith("~") ||
-    t === "$HOME" || t.startsWith("$HOME/") || t === "${HOME}" || t.startsWith("${HOME}/") ||
-    t.startsWith("./") || t.startsWith("../") || (t.includes("..") && t.includes("/")) ||
-    t.includes("$") || t.includes("`");
+function isResolvableTarget(t: string, hasExpansion = true): boolean {
+  if (
+    t.startsWith("/") || t.startsWith("~") ||
+    t.startsWith("./") || t.startsWith("../") || (t.includes("..") && t.includes("/"))
+  ) {
+    return true;
+  }
+  if (!hasExpansion) return false;
+  return hasRuntimeExpansionText(t);
 }
 
 /**
@@ -476,7 +496,8 @@ function subshellBaseAccess(tokens: string[], base: CwdBase, homeFixed = false):
  * base is outside the manual bar, and the user typed the cd.
  */
 export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = false): string | null {
-  const tokens = tokenizeSegment(seg.text);
+  const quotedTokens = tokenizeSegmentQuoted(seg.text);
+  const tokens = quotedTokens.map((t) => t.text);
   let ti = 0;
   while (ti < tokens.length && ENV_ASSIGN_RE.test(tokens[ti])) ti++;
   const first = tokens[ti] ? path.basename(tokens[ti]).toLowerCase() : "";
@@ -487,10 +508,10 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
 
   // Only the first pipeline stage targets the base; later stages read stdin.
   // (`;`/`&&`/`||` already split into separate segments.)
-  const stage: string[] = [];
-  for (const t of tokens.slice(ti + 1)) {
-    if (t === "|" || t === "|&") break;
-    stage.push(t);
+  const stage: QuotedToken[] = [];
+  for (const qt of quotedTokens.slice(ti + 1)) {
+    if (!qt.quoted && (qt.text === "|" || qt.text === "|&")) break;
+    stage.push(qt);
   }
 
   const pathAware = first !== "" && pathAwareCommands.has(first);
@@ -498,55 +519,72 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
   // Redirect to a bare name reads/writes the base (see above).
   let bareRedirectTarget = false;
   for (let i = 0; i < stage.length; i++) {
-    const tok = stage[i];
-    let target: string | null = null;
+    const tok = stage[i].text;
+    let targetTok: QuotedToken | null = null;
     const m = tok.match(OUT_REDIRECT_RE) ?? tok.match(IN_REDIRECT_RE);
     if (m) {
       // `2>&1` parses as target "&1" — an fd reference, not a file. The
       // startsWith("&") check below skips it (log FP: counted as a bare
       // redirect target, adding a spurious base access / `.` outside-dir).
-      target = m[2] !== "" ? m[2] : (stage[i + 1] ?? null);
-    } else if (BARE_REDIRECT_RE.test(tok)) target = stage[i + 1] ?? null;
-    if (target === null || target.startsWith("&")) continue; // fd duplication (2>&1, > &1)
-    if (!isResolvableTarget(target)) bareRedirectTarget = true;
+      targetTok = m[2] !== ""
+        ? { ...stage[i], text: m[2] }
+        : (stage[i + 1] ?? null);
+    } else if (BARE_REDIRECT_RE.test(tok)) {
+      targetTok = stage[i + 1] ?? null;
+    }
+    if (targetTok === null || targetTok.text.startsWith("&")) continue; // fd duplication (2>&1, > &1)
+    if (!isResolvableTarget(targetTok.text, targetTok.hasExpansion ?? true)) bareRedirectTarget = true;
   }
 
   if (!pathAware && !bareRedirectTarget) return null;
 
   if (pathAware) {
-    let sawBareArg = false;
-    let sawPathLikeBare = false; // D20: contains `/` — resolves under the base
-    let sawResolvable = false;
+    // Separate command arguments from redirects so pattern/script argument
+    // positions (grep/rg patterns, sed scripts, awk programs/data, shuf
+    // ranges, inline code) are skipped with the exact same index logic
+    // parseCommand uses.
+    const cmdArgs: QuotedToken[] = [];
+    const inRedirectTargets: QuotedToken[] = [];
     for (let i = 0; i < stage.length; i++) {
-      const token = stage[i];
-      // Redirects are not file arguments — the command may still operate on
-      // the base (`ls 2>/dev/null`, `find . > /tmp/log`, `cat main.txt 2>&1`).
-      // A resolvable redirect target must not read as "own target" (it used to
-      // return null here, silently dropping the base flag — the 2>/dev/null
-      // hole behind the D13 judge-path lines with judgePaths === floorMisses).
-      // Output: skip the token, plus its unglued target (`> file`).
-      // Input: the target IS a file argument — unglued `<` skips only the
-      // operator (next token evaluated); glued `< file` evaluates `file`.
+      const qt = stage[i];
+      const token = qt.text;
       const mOut = token.match(OUT_REDIRECT_RE);
       if (mOut) {
         if (mOut[2] === "") i++; // unglued (`> file`): skip the target token too
         continue;
       }
       const mIn = token.match(IN_REDIRECT_RE);
-      if (mIn && mIn[2] === "") continue; // unglued `<`: operator only
-      let t = mIn ? mIn[2] : token;
-      // Flag with an embedded value: the VALUE is the target (--file=/x).
-      if (t.startsWith("-")) {
+      if (mIn) {
+        const target = mIn[2] !== "" ? { ...qt, text: mIn[2] } : (stage[++i] ?? null);
+        if (target && !target.text.startsWith("&")) inRedirectTargets.push(target);
+        continue;
+      }
+      cmdArgs.push(qt);
+    }
+    const skipArgs = nonFileArgIndices(first, cmdArgs.map((a) => a.text));
+
+    let sawBareArg = false;
+    let sawPathLikeBare = false; // D20: contains `/` — resolves under the base
+    let sawResolvable = false;
+    const evalFileToken = (qt: QuotedToken, isFlaggedArg: boolean): void => {
+      let t = qt.text;
+      if (isFlaggedArg && t.startsWith("-")) {
         const eq = t.indexOf("=");
-        if (eq === -1 || eq >= t.length - 1) continue; // bare flag / empty value
+        if (eq === -1 || eq >= t.length - 1) return; // bare flag / empty value
         t = t.slice(eq + 1);
       }
       // D20: no early return — a LATER bare arg still resolves under the
       // base, and a bare arg BEFORE it must not be dismissed by it.
-      if (isResolvableTarget(t)) { sawResolvable = true; continue; }
+      if (isResolvableTarget(t, qt.hasExpansion ?? true)) { sawResolvable = true; return; }
       sawBareArg = true;
       if (t.includes("/")) sawPathLikeBare = true;
+    };
+    for (let i = 0; i < cmdArgs.length; i++) {
+      if (skipArgs.has(i)) continue;
+      evalFileToken(cmdArgs[i], true);
     }
+    for (const rt of inRedirectTargets) evalFileToken(rt, false);
+
     // D20: a path-like bare arg resolves under the base even when the segment
     // also names resolvable targets (see the D20 note above).
     if (sawPathLikeBare) return base === null ? UNKNOWN_CWD_MARKER : base;
@@ -554,7 +592,7 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
     // segment names no resolvable target of its own.
     if (sawBareArg && !sawResolvable) return base === null ? UNKNOWN_CWD_MARKER : base;
     // No file args: only cwd-defaulting commands access the directory.
-    return CWD_DEFAULT_COMMANDS.has(first) ? (base === null ? UNKNOWN_CWD_MARKER : base) : null;
+    return !sawResolvable && CWD_DEFAULT_COMMANDS.has(first) ? (base === null ? UNKNOWN_CWD_MARKER : base) : null;
   }
   return base === null ? UNKNOWN_CWD_MARKER : base;
 }
@@ -644,10 +682,14 @@ export function baseWriteAccess(seg: BashSegment): boolean {
       while (k < st.length && ENV_ASSIGN_RE.test(st[k])) k++;
       const cmd = k < st.length ? path.basename(st[k]).toLowerCase() : "";
       const sedInPlace = cmd === "sed" &&
-        st.slice(k + 1).some((t) => t === "-i" || /^-i\./.test(t) || t.startsWith("--in-place"));
+        st.slice(k + 1).some((t) => /^-[a-bd-gj-zA-Z]*i[^\s/]*$/.test(t) || t.startsWith("--in-place"));
       if (!WRITE_VERB_BASE.has(cmd) && !sedInPlace) continue;
       sawVerb = true;
-      for (const t of st.slice(k + 1)) {
+      const stageArgs = st.slice(k + 1);
+      const skipVerbArgs = nonFileArgIndices(cmd, stageArgs);
+      for (let ai = 0; ai < stageArgs.length; ai++) {
+        if (skipVerbArgs.has(ai)) continue;
+        const t = stageArgs[ai];
         if (t.startsWith("-") || /^\d+$/.test(t)) continue;
         if (!isResolvableTarget(t)) return true;
       }
@@ -676,25 +718,50 @@ interface CwdDependentToken {
 
 function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
   const out: CwdDependentToken[] = [];
-  for (const token of tokenizeSegment(seg.text)) {
-    let t = token;
-    if (t.startsWith("-")) {
-      const eq = t.indexOf("=");
-      if (eq === -1 || eq >= t.length - 1) continue; // bare flag or empty value
-      t = t.slice(eq + 1);
+  const quotedTokens = tokenizeSegmentQuoted(seg.text);
+  // Split into pipeline stages so pattern/script positions per stage are skipped.
+  const stages: QuotedToken[][] = [];
+  let cur: QuotedToken[] = [];
+  for (const qt of quotedTokens) {
+    if (!qt.quoted && (qt.text === "|" || qt.text === "|&")) {
+      stages.push(cur);
+      cur = [];
+    } else {
+      cur.push(qt);
     }
-    // Only cwd-dependent tokens need re-resolving: ./x, ../x, $PWD/x.
-    // Absolute and ~/ paths resolve identically under any cwd.
-    if (t === "$PWD" || t === "${PWD}") {
-      out.push({ isPwd: true, rel: "" });
-      continue;
-    }
-    if (t.startsWith("$PWD/") || t.startsWith("${PWD}/")) {
-      out.push({ isPwd: true, rel: t.slice(t.indexOf("/") + 1) });
-      continue;
-    }
-    if (t.startsWith("./") || t.startsWith("../") || (t.includes("..") && t.includes("/"))) {
-      out.push({ isPwd: false, rel: t });
+  }
+  stages.push(cur);
+
+  for (const stage of stages) {
+    let ti = 0;
+    while (ti < stage.length && ENV_ASSIGN_RE.test(stage[ti].text)) ti++;
+    const cmd = stage[ti] ? path.basename(stage[ti].text).toLowerCase() : "";
+    const rest = stage.slice(ti + 1);
+    const skip = cmd && pathAwareCommands.has(cmd)
+      ? nonFileArgIndices(cmd, rest.map((r) => r.text))
+      : new Set<number>();
+    for (let i = 0; i < rest.length; i++) {
+      if (skip.has(i)) continue;
+      const qt = rest[i];
+      let t = qt.text;
+      if (t.startsWith("-")) {
+        const eq = t.indexOf("=");
+        if (eq === -1 || eq >= t.length - 1) continue; // bare flag or empty value
+        t = t.slice(eq + 1);
+      }
+      // Only cwd-dependent tokens need re-resolving: ./x, ../x, $PWD/x.
+      // Absolute and ~/ paths resolve identically under any cwd.
+      if ((qt.hasExpansion ?? true) && (t === "$PWD" || t === "${PWD}")) {
+        out.push({ isPwd: true, rel: "" });
+        continue;
+      }
+      if ((qt.hasExpansion ?? true) && (t.startsWith("$PWD/") || t.startsWith("${PWD}/"))) {
+        out.push({ isPwd: true, rel: t.slice(t.indexOf("/") + 1) });
+        continue;
+      }
+      if (t.startsWith("./") || t.startsWith("../") || (t.includes("..") && t.includes("/"))) {
+        out.push({ isPwd: false, rel: t });
+      }
     }
   }
   return out;

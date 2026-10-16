@@ -10,7 +10,8 @@
  * sections (segments, paths, reasons) keep display caps — they summarize;
  * the full text is what is judged.
  */
-import { findNetworkEgress } from "../config";
+import { findNetworkEgress, isTrustedScriptPath, registryRunDeps } from "../config";
+import { getDelegatedCommand } from "../analysis/segment-helpers";
 
 // ── Judgment packet ──
 
@@ -105,6 +106,7 @@ const PATHS_MAX = 20;
 const REASONS_MAX = 10;
 const SEGMENTS_MAX = 24;
 const SEGMENT_MAX_CHARS = 120;
+const DEPS_MAX = 8;
 
 export function headCut(text: string, max: number): { text: string; cut: boolean } {
   return text.length <= max
@@ -269,6 +271,31 @@ function buildBashPacket(input: JudgmentBashInput): string {
     `obfuscation: ${input.hasUnsafePattern ? "yes (unsafe patterns present)" : "no"} | parse error: ${input.hasParseError ? "yes" : "no"}`,
   );
   lines.push(`network: ${detectNetwork(input)}`);
+  // The registry packages a `uv run --with` form fetches at run time, marked
+  // with the operator's allowlist verdict (config/trusted-scripts.ts). The
+  // annotation above says only that `uv` can reach the network, which leaves
+  // the judge to guess a supply-chain question the operator already decided
+  // in config; naming the packages also lets it cross-check the script's
+  // imports. Facts, not a grant: the allowlist's enforcement stays in the
+  // trust check (an unallowlisted package voids trust — no auto-allow), never
+  // here, and the judge's rules about fetching remote content stand.
+  // A wrapper does not change what gets installed: for `timeout 60 uv run --with
+  // …` the packet names the inner form's deps (same look-through the signatures
+  // use; the walk lives in config, which segment-helpers imports, so it has to
+  // happen here).
+  const deps = registryRunDeps(
+    input.segments.map((s) => {
+      const inner = getDelegatedCommand(s);
+      return inner && inner.cmd === "uv" ? inner.tail : s;
+    }),
+  );
+  if (deps.length > 0) {
+    const shown = deps
+      .slice(0, DEPS_MAX)
+      .map((d) => `${d.name} (${d.allowlisted ? "on the operator's package allowlist" : "not on the operator's package allowlist"})`)
+      .join(", ");
+    lines.push(`registry deps (uv fetches these at run time): ${shown}${deps.length > DEPS_MAX ? ` (…${deps.length - DEPS_MAX} more)` : ""}`);
+  }
 
   const outside = new Set(input.outsidePaths ?? []);
   const paths = (input.paths ?? []).slice(0, PATHS_MAX);
@@ -290,7 +317,14 @@ function buildBashPacket(input: JudgmentBashInput): string {
     // Fence longer than any backtick run in the content (scripts contain ```).
     const maxRun = (content.match(/`+/g) ?? [""]).reduce((m, r) => Math.max(m, r.length), 0);
     const fence = "`".repeat(Math.max(3, maxRun + 1));
-    parts.push(`## Script: ${input.script.path} (untrusted)`, fence, content, fence, "");
+    // The heading names the trust state honestly. A script under the
+    // operator's trusted scripts dir is not an unknown file — its INVOCATION
+    // just lost trust (an unallowlisted dependency, a non-transparent
+    // wrapper), and "(untrusted)" overstated that as if the file were foreign.
+    const trustNote = isTrustedScriptPath(input.script.path)
+      ? "operator's trusted scripts dir — this invocation is not trusted"
+      : "untrusted";
+    parts.push(`## Script: ${input.script.path} (${trustNote})`, fence, content, fence, "");
   }
 
   // ── Notes ──

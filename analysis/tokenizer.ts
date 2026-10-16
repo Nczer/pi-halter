@@ -351,6 +351,8 @@ export interface QuotedToken {
   quoted: boolean;
   unquotedGlob: boolean;
   quotedWhole: boolean;
+  /** True when the token contains an unescaped, non-single-quoted `$` or backtick. */
+  hasExpansion?: boolean;
 }
 
 /**
@@ -367,26 +369,47 @@ export function tokenizeSegmentQuoted(cmd: string): QuotedToken[] {
   let quoted = false;
   let unquotedGlob = false;
   let unquotedChars = 0;
+  let hasExpansion = false;
   let inSingleQuote = false;
   let inDoubleQuote = false;
   let inAnsi = false;
   const s = cmd.trim(); // tokenizeSegment's trimInput=true
   const push = () => {
-    if (current) parts.push({ text: current, quoted, unquotedGlob, quotedWhole: quoted && unquotedChars === 0 });
+    if (current) {
+      parts.push({
+        text: current,
+        quoted,
+        unquotedGlob,
+        quotedWhole: quoted && unquotedChars === 0,
+        hasExpansion,
+      });
+    }
     current = "";
     quoted = false;
     unquotedGlob = false;
     unquotedChars = 0;
+    hasExpansion = false;
   };
   let i = 0;
   while (i < s.length) {
-    const wasQuoted = inSingleQuote || inDoubleQuote || inAnsi;
+    const wasSingleOrAnsi = inSingleQuote || inAnsi;
+    const wasDouble = inDoubleQuote;
+    const wasQuoted = wasSingleOrAnsi || wasDouble;
     const { append, advance, inSingleQuote: sq, inDoubleQuote: dq, inAnsi: an } = processChar(
       s, i, inSingleQuote, inDoubleQuote, inAnsi, true, true, true,
     );
     inSingleQuote = sq;
     inDoubleQuote = dq;
     inAnsi = an;
+
+    if (
+      (append === "$" || append === "`") &&
+      !wasSingleOrAnsi && !sq && !an &&
+      advance === 1 &&
+      (wasDouble || !isEscapedAt(s, i))
+    ) {
+      hasExpansion = true;
+    }
 
     // If inside quotes, just append (mirrors tokenizeWithSplit's null-split
     // path — the post-state quoted check; a closing quote appends "").

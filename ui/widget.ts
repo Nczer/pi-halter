@@ -1,93 +1,19 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { homedir } from "node:os";
+import {
+  combineCommonPaths,
+  filterSubPaths,
+  shortenHomePath,
+} from "./path-display";
 import { store } from "../gate/store";
 import { isDspActive } from "../modes/dsp-mode";
 import { isDspaActive, getDspaStats, getDspaJudgingStage } from "../modes/dspa-mode";
 import { isDspatActive, getDspatStats, getDspatJudgingStage } from "../modes/dspat-mode";
 import {judgeStatus} from "../judge/verdict";
 
-// ── Path deduplication ──
+// Path display helpers (sub-path dedup, ~-shortening, sibling combining,
+// dir-list summaries) live in ui/path-display.ts — shared with the bash prompt.
 
-/** Remove paths that are sub-paths of another entry in the same list. */
-export function filterSubPaths(paths: string[]): string[] {
-  const sorted = [...paths].sort();
-  const result: string[] = [];
-  for (const p of sorted) {
-    // Normalize: strip trailing slash for comparison
-    const pNorm = p.endsWith("/") ? p.slice(0, -1) : p;
-    let isSub = false;
-    for (const parent of result) {
-      const parentNorm = parent.endsWith("/") ? parent.slice(0, -1) : parent;
-      if (pNorm === parentNorm || pNorm.startsWith(parentNorm + "/")) { isSub = true; break; }
-    }
-    if (!isSub) result.push(p);
-  }
-  return result;
-}
-
-// ── Path display helpers ──
-
-/** Display-only shortening: absolute paths under $HOME render with a `~`
- *  prefix (cwd-relative paths pass through). Grants stay real — this only
- *  shapes the display. */
-export function shortenHomePath(p: string): string {
-  const home = homedir() + "/";
-  if (p.startsWith(home)) return "~" + p.slice(homedir().length);
-  return p;
-}
-
-/** Longest common prefix of two paths cut at a directory boundary (trailing
- *  slash); "" when the paths share no directory (incl. top-level siblings). */
-function commonDirPrefix(a: string, b: string): string {
-  let k = 0;
-  const min = Math.min(a.length, b.length);
-  while (k < min && a[k] === b[k]) k++;
-  const slash = a.lastIndexOf("/", k - 1);
-  return slash > 0 ? a.slice(0, slash + 1) : "";
-}
-
-/** Common directory prefix (trailing slash) over a whole group; "" when the
- *  shared part carries no directory boundary (top-level siblings). */
-function groupCommonDir(group: string[]): string {
-  const first = group[0];
-  let k = first.length;
-  for (const p of group.slice(1)) {
-    while (k > 0 && (k >= p.length || p[k - 1] !== first[k - 1])) k--;
-  }
-  const slash = first.lastIndexOf("/", k - 1);
-  return slash > 0 ? first.slice(0, slash + 1) : "";
-}
-
-/** Display-only combining of paths that share a directory prefix —
- *  a/b/x a/b/y → "a/b/x & y" (reconstructable: shared prefix + names).
- *  Applied after ~-shortening, and only when it actually saves width. */
-export function combineCommonPaths(paths: string[]): string {
-  const sorted = [...paths].sort();
-  const parts: string[] = [];
-  let i = 0;
-  while (i < sorted.length) {
-    let j = i + 1;
-    while (j < sorted.length && commonDirPrefix(sorted[i], sorted[j]) !== "") j++;
-    if (j - i >= 2) {
-      const group = sorted.slice(i, j);
-      const prefix = groupCommonDir(group);
-      if (prefix !== "") {
-        const combined = `${prefix.slice(0, -1)}/${group.map((p) => p.slice(prefix.length)).join(" & ")}`;
-        if (combined.length < group.join(" ").length) {
-          parts.push(combined);
-          i = j;
-          continue;
-        }
-      }
-    }
-    parts.push(sorted[i]);
-    i++;
-  }
-  return parts.join(" ");
-}
-
-// ── Command grouping ──
 
 /** Group command signature variants for compact display (e.g. "git(-am, -m)" or "ls(-a)"). */
 export function groupCommandVariants(items: string[]): string[] {

@@ -412,6 +412,48 @@ describe("Bash: granular allow (subcommand vs broader)", () => {
     }
   });
 
+  // Grant width (3.31.0): the dependency set is part of a `uv run` grant's
+  // identity. Every `uv run` form floors at code-exec review, so no decision
+  // path today turns on this alone — what it closes is the reuse of a grant
+  // minted for one form on another form's install set.
+  const pdOf = (d: Awaited<ReturnType<typeof decide>>): BashPromptData => {
+    if (d.kind !== "prompt") throw new Error(`expected a prompt, got ${d.kind}`);
+    return d.promptData as BashPromptData;
+  };
+
+  it("an Always minted for a bare `uv run` does not cover a later dependency form", async () => {
+    const bare = await decide({ type: "bash", command: "uv run python3 b.py", cwd }, createStore());
+    const minted = RuleGenerator.generatePrimaryRules(pdOf(bare)).bashSigs ?? [];
+    expect(minted).toEqual(["uv run"]); // what that "Always" stores — before 3.31.0 it covered every later `--with`
+    const store = createStore();
+    store.addAllowed({ bashSigs: minted });
+    expect(store.hasAllowedBashPrefix("uv run --with pdfplumber")).toBe(true); // the store's tier WOULD match; bash-rules refuses it here
+    const d = await decide({ type: "bash", command: "uv run --with pdfplumber python3 b.py", cwd }, store);
+    expect(pdOf(d).nonAllowedSegmentIndices).toEqual([0]);
+    const dWrapped = await decide({ type: "bash", command: "timeout uv run --with pdfplumber python3 b.py", cwd }, store);
+    expect(dWrapped.kind).toBe("prompt");
+  });
+
+  it("the grant minted for a dependency form names that dependency set", async () => {
+    const d = await decide({ type: "bash", command: "uv run --with pandas --frozen python3 b.py", cwd }, createStore());
+    const rules = RuleGenerator.generatePrimaryRules(pdOf(d));
+    expect(rules.bashSigs).toContain("uv run --frozen --with pandas");
+    expect(rules.bashSigs).not.toContain("uv run");
+  });
+
+  it("an ungrantable dependency form prompts, shows why, and mints no grant", async () => {
+    const store = createStore();
+    const d = await decide({ type: "bash", command: 'uv run --with "$PKG" python3 b.py', cwd }, store);
+    if (d.kind !== "prompt") throw new Error(`expected a prompt, got ${d.kind}`); // narrows for buildPrompt
+    const pd = d.promptData as BashPromptData;
+    expect(pd.ungrantableRunDeps).toEqual(["uv run --with <unresolved>"]);
+    expect(RuleGenerator.generatePrimaryRules(pd).bashSigs ?? []).not.toContain("uv run --with <unresolved>");
+    expect(buildPrompt(d).body).toContain("no grant for: uv run --with <unresolved>");
+    // And it stays a prompt however often it is approved.
+    store.addAllowed({ bashSigs: ["uv run --with pandas"] });
+    expect((await decide({ type: "bash", command: 'uv run --with "$PKG" python3 b.py', cwd }, store)).kind).toBe("prompt");
+  });
+
   it("allowing 'npm test' does not auto-allow 'npm install'", async () => {
     const store = createStore();
     store.addAllowed({ bashSigs: ["npm test"] });

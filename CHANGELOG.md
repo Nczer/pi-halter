@@ -1,5 +1,206 @@
 # Changelog
 
+## 3.33.0 — 2026-10-16
+**The bypass surface was the text layer: quote pairing, flag clusters, operand positions.**
+
+- **What was wrong (measured, not inferred).** A new audit class — P10 in
+  `test/verified-bypasses.test.ts`, 12 cases over 39 commands. Running that same
+  vector list against a 3.29.0 tree in the hermetic cwd, **22 of the 39 reached
+  `auto-allow`**; in this tree all 39 prompt (the other 17 already prompted and
+  stay as regression pins). None of the 22 needed a policy hole — each is a bug
+  in a string helper the whole gate reads:
+  - `stripQuotedStrings` ran four sequential `.replace()` passes, so quotes
+    paired **across different strings**: `echo '"' ; rm -rf src ; echo '"'`
+    erased the middle of the command before FastAllowRule ever saw it — a
+    recursive delete, auto-allowed. Same shape for an escaped quote before a
+    redirect (`grep \" f1 > pwned.txt '"'`) and for ANSI-C quoting (`$'\''`),
+    whose body desynchronized the passes.
+  - `hasWriteRedirect` excused any segment matching `/test\s/` or `/\[\s.*\]/`,
+    so the word `test ` anywhere suppressed the check: `echo test > pwned.txt`.
+  - In-place flags: `dangerousSedFlags`/`dangerousPerlFlags` required the `i`
+    between `[a-z]*`, so `-i~` and `-i_bak` were not in-place, and the context
+    patterns missed uppercase `-Ei`.
+  - sed script execution: `SED_S_EXEC_RE` hard-coded `/` as the `s` delimiter and
+    knew nothing about addresses or the standalone `e` command, so `s#.*#id#e`,
+    `s|.*|rm -rf src|e`, `1s/.*/id/e`, `s/.*/id/;e` and `sed 'e id' file` —
+    arbitrary command execution — auto-allowed.
+  - `find`/`fd` exec: `FIND_EXEC_RE` was not global, so only the *first* `-exec`
+    was inspected (`find . -exec echo ok \; -exec rm {} \;`); `--exec`/
+    `--exec-batch` were not matched at all (`fd --exec rm {}`); none of the three
+    exec regexes carried a word boundary.
+  - Pattern flags swallowed the file operand: `grep --regexp=foo /etc/passwd`,
+    `rg --regexp=foo /etc/passwd`, and after `cd /etc`, `grep '/root' passwd` and
+    `sed -n '/root/p' passwd` — the outside-cwd / base-access signal vanished
+    because the position logic took the pattern for a path candidate and the
+    operand for a pattern.
+- **One scanner, one owner.** `stripQuotedStrings` is now a single left-to-right
+  walk (`'…'`, `$'…'` with its own escape rules, `"…"`, `$"…"`, backslash
+  escapes, word-boundary `#` comments): a quote can no longer pair with a quote
+  in another string, and `\#`/`\"` cannot open a comment or a quote.
+  `stripHeredocBodies` replaced quote *counting* with the same walk, so an
+  unbalanced quote inside a heredoc body no longer hides the following line
+  (`cat .env`). In the parser, `nonFileArgIndices(cmd, args)` is now the single
+  answer to "which arguments are data, not files" — sed scripts, grep/rg patterns
+  and value flags (`-e`, `--regexp=`, `--regex=`, `--expression=`, `--source`;
+  rg-only value flags `-r`/`-E` kept separate from grep's boolean `-r`/`-E`), awk
+  programs and `-v var=val`, shuf ranges, inline interpreter code — consumed by
+  both `parseCommand` and `cwd-tracking`'s `baseAccessPath`, which had
+  reimplemented the position logic and disagreed with it. Redirect targets are now
+  skipped by role, not by regex, and `CWD_DEFAULT_COMMANDS` gains `rg`/`fd`.
+- **Tokens carry their own expansion state.** `tokenizeSegmentQuoted` reports
+  `hasExpansion`, so `cd /etc && cat '$HOME/file.txt'` (and `\$f`) is a
+  *relative* path under the new base — bash does not expand a single-quoted or
+  escaped `$` — instead of a closed-set `$HOME`; `isResolvableTarget` reads the
+  flag instead of `includes("$")`. Arithmetic spans are stripped by a
+  paren-aware scan, so `cat $(( (1+2) )) /etc/passwd` leaves no residual
+  `/etc/passwd` token, and a span containing `$`/backtick stays opaque.
+- **The obfuscation detectors match shell reality.** Character concatenation is
+  evaluated at real quote transitions (`ec"ho` yes; a literal `'` inside
+  `"foo'bar"` no), the contraction exclusions cover `'ve`/`'re`/`'ll`, `base64`
+  matches `-d` and `--decode`, the hex rule requires an actual `printf`,
+  `alias`/`declare` values may be quoted, and the xargs/find regexes gained word
+  boundaries. The sed/perl/sort/find danger checks read quote-stripped text: a
+  quoted `-i` inside a script no longer flags, and a real one no longer hides.
+- **What did NOT change.** No tier, floor or grant semantic moved — every fix is
+  at the text/analysis layer, and the affected commands land in tiers that
+  already existed (write redirect, code-exec review, `⚠️ outside cwd`, base
+  access). `[[ … ]]` bodies are still excised from redirect detection, but by
+  shape now, not by matching the word `test`.
+- **Tests:** the P10 block in `test/verified-bypasses.test.ts` (12 cases, 39
+  commands). The 22→0 auto-allow delta was measured by running that vector list
+  against 3.29.0, not by reading the regexes. 4020 pass (Linux).
+
+## 3.32.0 — 2026-10-16
+**A wide path tier reads as one location instead of a wall of `dir/*` entries.**
+
+- **What was wrong.** A prompt whose path tier covered many directories printed
+  all of them three times over: the `⚠️ outside cwd:` line joined every dir, and
+  both Always labels joined `Read <dir>/*` for every dir — no cap and no width
+  budget of their own. The common case was redundancy: a tier containing `/a`
+  also contained `/a/aa` and `/a/ab`, which the parent grant already covers, and
+  a set of sub-directories under one parent named that parent zero times.
+- **The rule** (`ui/path-display.ts`, shared with the widget): a dir covered by
+  another listed dir drops out of the display (`a/aa a/ab a` → `a`), and a set
+  hanging under one location is named once — body
+  `⚠️ outside cwd: ~/Projects/halter/ (4 dirs under it) +1 others`, label
+  `Read 4 dirs under ~/Projects/halter/ +1 more`. The covering dir is the
+  candidate with the most entries under it, ties broken to the deeper one, and
+  the filesystem root is never a candidate. Nothing is summarized below 4 dirs
+  (readable in full), a scattered set — nothing covering 2+ entries — is never
+  summarized either: the body lists every dir sibling-combined for width and the
+  label caps at 3 plus `…+N more dirs`. An unresolved marker dir disables the
+  summary, so that signal stays visible whole.
+- **What did NOT change.** This is display-only: `pathGrantDirs` and the minted
+  `readDirs` stay the exact dir list, the label deliberately avoids the
+  `<covering>/*` shape (that is a minted rule for a dir that is not itself
+  granted — its sub-dirs are), and the tier-2 confirmation still lists every
+  directory. Path display helpers moved from `ui/widget.ts` to the new module.
+
+## 3.31.0 — 2026-10-16
+**A `uv run` grant now names the dependencies it covers, and a judge failure says which kind it was.**
+
+- **What was wrong.** A session that had once Approved a bare `uv run` carried a
+  grant whose signature was `uv run`, and every `uv run --with pdfplumber …`
+  form *recorded* that grant as covering it — a dependency fetch booked under
+  the same bare name the operator had approved without seeing. Nothing
+  auto-allowed: a dependency form floors at code-exec review (measured with
+  grants `uv run`, `uv run --with pandas`, `python3`, and with dsp active), so
+  this is defence in depth, not an observed bypass. What is real is the record:
+  a signature counted as covered is reusable by other rules — the shape of the
+  `command -v` hole.
+- **The signature.** A dependency form is now `uv run --with pandas
+  --with-requirements /abs/req.txt`: registry names exact (case-folded,
+  extras-stripped — the same normalization trust uses), local sources resolved
+  to an absolute path against the cwd the shell would actually have at that
+  point in the chain. Dependency flags match exactly while every other flag
+  keeps prefix semantics: a form is an allowlist, and the prefix rule exists for
+  flag *omission*, which cannot silently add a fetch. Wrappers are looked
+  through (`timeout`/`env`/`xargs`/`command`), reusing `getDelegatedCommand`.
+  So a bare `uv run` Always covers only bare `uv run`, and `--with pandas` never
+  covers `--with pdfplumber`.
+- **Ungrantable forms fail closed.** A dependency no grant can name —
+  `<unresolved>` from an unresolvable cwd, or an opaque quoted value — marks the
+  segment ungrantable: the prompt carries `⚠️ no grant for: <sig> — a dependency
+  is not a name yet; this form prompts every time`, and `Always` is refused for
+  it. Granting a signature that under-names the fetch was the failure mode.
+- **Grant inertia, stated.** Pre-3.31.0 `uv run` grants stop matching dependency
+  forms: one re-prompt, fail closed, no migration. `generateBroaderRules` offers
+  no coarse rule for a dependency form. Bare `uv run` keeps its coarse
+  signature — the umbrella was never the problem, the unnamed deps were.
+- **Soundness prerequisite (pre-existing defect, fixed).** `cd $(dirname x) &&
+  uv run --with-requirements req.txt` left the pre-`cd` cwd as the base for
+  later segments, so the analysis named a file the command never reads
+  (`/Users/me/Projects/req.txt`). `resolveCdTarget` bailed out on *any*
+  subshell; it now bails only when the substitution is not the `cd` target
+  itself, so the base becomes unknown (`<unresolved>`, ungrantable) rather than
+  guessed. `(cd /tmp; pwd) && …` still restores the base.
+- **The judge's failure class reaches the surfaces.** `runJudgeStage` now
+  returns a `JudgeStageOutcome` — the verdict, or `judge()`'s typed
+  `failReason` plus model and latency — and every no-verdict line renders it:
+  `judge: stage 2 failed (timeout 8.0s)` in the decision log, `stage 2 produced
+  no verdict (no-tool-call 1.2s) — stateless stage-1 verdict only` in the dspa
+  note, `⚠️ Judge: no verdict — both stages failed (auth-failed)` under dspat,
+  and the "Judge again" note. The class used to stop at the judge ledger's infra
+  line, which is why "stage 2 fails while the server is up" (the report that
+  prompted this) was unmeasurable. `getJudgeVerdict`/`getStage2Verdict` stay as
+  `.verdict` wrappers; verdict stats and the diff/paths ledger are unchanged.
+- The judge packet names the deps of wrapped forms too (`timeout uv run --with
+  pandas …`), through the same look-through.
+
+## 3.30.0 — 2026-10-16
+**The judge is told which registry packages `uv run --with` fetches, and a trusted-dir script is labelled honestly.**
+
+- **A supply-chain decision the operator already made was invisible to the
+  judge.** A skills-dir script run as `uv run --with <unlisted-pkg>` loses trust
+  and prompts; the packet's only trace of the fetch was `network: yes (uv)`.
+  The judge was asked to weigh a package download while naming no package, and
+  could not tell a vetted `pandas` from `pdfplumber` — the one question the
+  operator answered in `TRUSTED_PACKAGES`.
+- **One walk, two consumers.** `uvRunDeps` (in `config/trusted-scripts.ts`) is
+  now the single scan over the `uv run` dependency flags; `uvRunDepsTrusted`
+  consumes it (semantics unchanged — the existing trust suite pins it) and the
+  new `registryRunDeps(segments)` exports the `--with` packages, normalized and
+  deduped, each marked `allowlisted`. Trust and the packet cannot disagree about
+  which command names which dependency — the drift `config/script-operand.ts`
+  exists to prevent.
+- **The packet line.** `registry deps (uv fetches these at run time): pandas
+  (on the operator's package allowlist), pdfplumber (not on the operator's
+  package allowlist)` — 8 names max, no line at all when the command names no
+  registry deps (`uvx`, `npm`, `--with-editable`/`--with-requirements` are local
+  paths, not registry fetches). Knowledge, never a grant: the allowlist's only
+  enforcement stays in `uvRunDepsTrusted`, and the judge's rule about fetching
+  remote content is untouched. The dump-the-allowlist alternative (past 12 names
+  into the system prompt) was rejected: tokens, and it invites a small model to
+  relitigate config (the D21 lesson).
+- **The script heading stopped lying about trust.** A payload inside the
+  operator's own trusted scripts dir is not a foreign file — its INVOCATION lost
+  trust (unallowlisted dep, non-transparent wrapper). `(untrusted)` overstated
+  that; it now reads `(operator's trusted scripts dir — this invocation is not
+  trusted)`. cwd-local scripts keep `(untrusted)`.
+- **Visible friction it exposes (pre-existing, unchanged):** matching strips
+  extras and case but not version specifiers, so a quoted pin is a different
+  name to the allowlist — measured on the real analysis path, `--with
+  "pandas>=2.0"`, `'pandas>=2.0'`, `pandas~=2.0` and `pandas@2.0` all void trust
+  and now print as e.g. `pandas>=2.0 (not on the operator's package
+  allowlist)`. Unquoted (`--with pandas>=2.0`), `>` is a shell redirect before uv
+  ever sees the pin: the segment's dep parses as `pandas` and the redirect is
+  gated separately as a write. The line names what the command fetches, not what
+  the user meant.
+- **Left open (unchanged, deliberate):** `fetchFormPackage`/`segmentFetchPackage`
+  do not see `uv run --with` deps, so such a prompt offers no `Trust: <pkg>`
+  tier and never converges (D10/D12); `getCommandSignature` drops flag values,
+  so every `uv run …` shares the signature `uv run` — one Always grant covers any
+  later dependency. Both need a policy decision, not this packet line.
+- **Docs:** `docs/architecture.md` — the judge's packet paragraph and "Trusted
+  scripts and packages" (incl. the exact-matching/pin semantics); README
+  module table + "Trusted code".
+- **Tests:** 7 new — 4 on `registryRunDeps` (`--with`/`--with=`, extras, env
+  prefix, quotes, multi-segment, `--with-editable` names nothing, dedupe) in
+  `config-helpers.test.ts`; 2 packet tests (deps line + no-line controls, the
+  trusted-dir label with the cwd-local control) in `judge.test.ts`; 1
+  end-to-end through `getJudgeVerdict`'s stream seam (analysis segments →
+  packet) in `judge-prompt.test.ts`. 3959 pass (macOS).
+
 ## 3.29.0 — 2026-10-15
 
 **An interpreter's inline program is data, not a location — the role rule.**

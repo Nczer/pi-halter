@@ -211,7 +211,37 @@ only: unsafe pipe stages, write redirects, and command substitution around a
 trusted script still prompt. `uv run --with <pkg>` trusts the invocation only
 when every `--with` package is in `TRUSTED_PACKAGES` and the script is in a
 trusted dir (`--with-requirements`/`--with-editable` sources must be trusted
-too; they bypass the package allowlist).
+too; they bypass the package allowlist). Matching is exact after extras and
+case are stripped (`markitdown[pptx]` → `markitdown` matches; a quoted pin,
+`--with 'pandas>=2.0'`, is a different name and voids trust — unquoted, `>` is
+a shell redirect before uv ever sees the pin, and the redirect is gated on its
+own).
+Trust and the judge packet read ONE scan (`uvRunDeps`, 3.30.0): the walk that
+gates trust is the walk that feeds `registryRunDeps()`, so the two can never
+disagree about which command names which dependency. Naming a package in the
+packet is knowledge, never a grant — the allowlist's only enforcement stays
+here.
+
+The same dependency identity carries into **grants** (3.31.0). A `uv run` form's
+bash signature names its dependencies — `uv run --with pandas
+--with-requirements req.txt` — with a local source resolved to an absolute path
+against the cwd the shell would actually have at that point in the chain, and
+with the wrapper looked through (`timeout`/`env`/`xargs`/`command`, the same rule
+as `command -v`). Consequences: a bare `uv run` Always covers only bare `uv run`;
+`--with pandas` never covers `--with pdfplumber` (dep flags are matched exactly,
+while every other flag keeps prefix semantics — a form is an allowlist, and the
+prefix rule exists for flag *omission*, which cannot silently add a fetch); a
+dependency that cannot be named (`<unresolved>` from an unresolvable cwd, an
+opaque quoted value) makes the whole segment ungrantable — the prompt says so and
+`Always` is refused for it, rather than granting a signature that
+under-names the fetch. This is defence in depth, not an observable fix: every
+`uv run` form already floors at code-exec review, so a coarse `uv run` grant
+never auto-allowed a dependency form — but the signature *recorded* it as
+covered, and a recorded grant is reusable by other rules (the shape of the
+`command -v` hole). Sibling fix, the soundness prerequisite: `cd $(…)` no longer
+leaves the pre-`cd` cwd as the base for later segments (a substitution inside
+`cd` is not eval-free), which is what made a path-named dependency nameable at
+all — the direction is fail-closed, the base becomes unknown, not guessed.
 
 ### Grants and two-tier confirmation
 
@@ -225,7 +255,23 @@ too; they bypass the package allowlist).
 "Always" always takes a second confirmation tier. Fetchable signatures get no
 exact-form option: a signature grant would short-circuit `decide()` before the
 floor is consulted, which is how `npx *` once disabled the floor
-session-wide.
+session-wide. A `uv run` dependency form with an unnameable source gets no
+signature grant at all (3.31.0): the segment is marked ungrantable, the prompt
+says why, and no broader rule is generated for it — a grant that covers fewer
+deps than the command fetches is the failure being removed.
+
+A wide dir tier summarizes **for display** (`ui/path-display.ts`): sub-paths of
+a listed dir drop out of the body line and the Always label (`a/aa a/ab a` →
+`a`), and a set under one parent is named once — body
+`⚠️ outside cwd: ~/Projects/halter/ (4 dirs under it) +1 others`, label
+`Read 4 dirs under ~/Projects/halter/ +1 more`. Picking: the candidate with the
+most entries under it, ties to the deeper one, root never a candidate. Not
+summarized: below 4 dirs; a scattered set (nothing covers 2+ — the body lists
+all, sibling-combined for width, the label caps at 3 + `…+N more dirs`); or when
+an unresolved marker dir is present. Display-only by construction: `pathGrantDirs`
+and the minted `readDirs` stay the exact set, the label never writes
+`<covering>/*` (rule shape for a dir that is not itself granted), and tier-2
+lists every directory.
 
 ## dspa regime
 
@@ -272,12 +318,18 @@ its deadline (the carried verdict is stage 1's or absent) — the prompt
 offers a repeatable `Judge again` option: a fresh, uncached stage-2 call
 (the model may have been busy loading). An approving verdict (low/medium
 risk) auto-allows with the normal dspa side effects; anything else re-shows
-the prompt with the new verdict (or a failure note). Legitimate stage-2
+the prompt with the new verdict (or a failure note naming the class —
+`timeout 8.0s`, `auth-failed`, `no-tool-call`). Legitimate stage-2
 verdicts (DEFER, REJECT, approve above authority) are judgments, not infra
 failures — never re-judged (Yes/No are the user's tools). Not offered when
 the judge is off (a choice, not a transient failure), after a floor stop
 (the deterministic layer cannot be re-judged), or without the permission
 request.
+The failure class is carried, never re-guessed: a judge stage returns a
+`JudgeStageOutcome` (the verdict, or `judge()`'s typed `failReason` plus model
+and latency), and every no-verdict surface — the dspa stop-tag, the prompt note,
+the dspat warning, the retry note — renders it. That is what makes "stage 2 fails
+while the server is up" answerable: the ledger says which kind of failure it was.
 EVERY floor stop is advisory (D16): the judge runs both stages and renders
 the verdict in the prompt — the stop stands. Auto-allowed operations toast.
 
@@ -339,7 +391,14 @@ widget while active.
 One one-shot model call per stage. The packet is the judge's entire input,
 untrimmed by design (D11): the full command text (heredoc bodies included),
 the analysis digest, and, when the operation executes a local script, its
-content in full as fenced untrusted data; file writes carry the full new
+content in full as fenced untrusted data — the heading states the trust state
+honestly (3.30.0): a script inside the operator's trusted scripts dir is shown
+as an invocation that lost trust, not as a foreign file. The digest names the
+registry packages a `uv run --with` form fetches, each marked with the
+operator's allowlist verdict (`registry deps (uv fetches these at run time):
+pandas (on the operator's package allowlist), …`; 3.30.0, max 8 named) —
+`network: yes (uv)` alone left the judge guessing about a supply-chain
+question config already answered; file writes carry the full new
 content, edits the after-edit view (replaced regions ±10 lines, line numbers).
 Only the digest sections head-cut (24 segments at ≤120 chars, 10 risk
 reasons, 20 paths); tool packets carry the plugin's argsPreview verbatim
@@ -472,7 +531,9 @@ at halter load.
   for mining (the pattern, the error name+message, the cwd).
 - **Widget** (`ui/widget.ts`): one status widget. Mode lines pinned on top (one
   line each: dsp warning, dspa health counts, dspat agreement), then the
-  session's active rules.
+  session's active rules. Path display (sub-path dedup, `~`-shortening, sibling
+  combining, dir-list summaries) lives in `ui/path-display.ts`, shared with the
+  bash prompt.
 
 ## Module map
 
@@ -519,6 +580,9 @@ ui/
   prompt-builder.ts       pure formatter: PromptData → prompt content
   prompts.ts              two-tier confirmation UI (native select/input)
   widget.ts               the unified status widget
+  path-display.ts         path display shared by widget + prompts: sub-path
+                          dedup, ~-shortening, sibling combining, dir-tier
+                          summaries (display-only — grants stay the exact set)
   tmux-render.ts          tmux display (renders the shared analysis/tmux
                           parse — what is judged is what is shown)
 analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,

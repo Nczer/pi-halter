@@ -952,3 +952,138 @@ describe("P9: an inline interpreter program is data, not a location", () => {
     expect(d.kind).not.toBe("auto-allow");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// P10: regex / quote-stripping / flag-position bypasses (2026-10-16 audit)
+// ──────────────────────────────────────────────────────────────────────
+describe("P10: regex, quote-stripping, and flag-position bypasses", () => {
+  it("stripQuotedStrings: single-quoted double-quote does not swallow across segments", async () => {
+    const d = await decide({
+      type: "bash",
+      command: `echo '"' ; rm -rf src ; echo '"'`,
+      cwd,
+    }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("stripQuotedStrings: unquoted \\\" does not pair with a later quote across redirect", async () => {
+    const d = await decide({
+      type: "bash",
+      command: `grep \\" file1 > pwned.txt '"'`,
+      cwd,
+    }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("stripQuotedStrings: ANSI-C $'\\'' does not leave an unclosed quote across redirect", async () => {
+    const d = await decide({
+      type: "bash",
+      command: `grep foo $'\\'' > pwned.txt $'\\''`,
+      cwd,
+    }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("hasWriteRedirect: quoted '[[ a ]]' or unanchored 'test' argument does not suppress redirect check", async () => {
+    for (const cmd of [`echo "[[ a ]]" > pwned.txt`, `echo test > pwned.txt`]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("grep/sed/awk explicit pattern/script flags (-e, --regexp=, --expression=) do not swallow the file operand", async () => {
+    for (const cmd of [
+      "grep --regexp=foo /etc/passwd",
+      "grep --regex=foo /etc/passwd",
+      "grep -e foo /etc/passwd",
+      "rg --regexp=foo /etc/passwd",
+      "sed --expression=s/a/b/ /etc/passwd",
+      "sed -e s/a/b/ /etc/passwd",
+      "awk -e '{print}' /etc/passwd",
+      "awk --source='{print}' /etc/passwd",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("sed in-place variants (-Ei, -i~, -i_bak) and GNU sed /e execution variants prompt", async () => {
+    for (const cmd of [
+      `sed -Ei 's/a/b/' file.txt`,
+      `sed -i~ 's/a/b/' file.txt`,
+      `sed -i_bak 's/a/b/' file.txt`,
+      `sed 's#.*#id#e' file.txt`,
+      `sed 's|.*|rm -rf src|e' file.txt`,
+      `sed '1s/.*/id/e' file.txt`,
+      `sed '/foo/s/.*/id/e' file.txt`,
+      `sed 's/.*/id/;e' file.txt`,
+      `sed 'e id' file.txt`,
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("find/fd -exec variants (--exec, /bin/rm, ./evil.sh, env rm, chained -exec) prompt", async () => {
+    for (const cmd of [
+      "fd --exec rm {}",
+      "fd --exec-batch rm {}",
+      "fd -x /bin/rm {}",
+      "find . -exec ./evil.sh {} \\;",
+      "find . -exec env rm {} \\;",
+      "find . -exec echo ok \\; -exec rm {} \\;",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("base64 -d / --decode pipe to shell is detected as obfuscated execution", async () => {
+    for (const cmd of [`echo "cm0=" | base64 -d | sh`, `echo "cm0=" | base64 --decode | bash`]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("single-quoted or backslash-escaped $HOME / $var under cd outside cwd prompts as a relative path", async () => {
+    for (const cmd of [
+      `cd /etc && cat '$HOME/file.txt'`,
+      `cd /etc && cat \\$HOME/file.txt`,
+      `cd /etc && cat '$f'`,
+      `cd /etc && cat \\$f`,
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("pattern/script arguments starting with / or $ do not suppress baseAccessPath on bare file operands", async () => {
+    for (const cmd of [
+      `cd /etc && grep '/root' passwd`,
+      `cd /etc && grep '$re' passwd`,
+      `cd /etc && sed -n '/root/p' passwd`,
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("nested parentheses in arithmetic expansion do not leave residual ') /etc/passwd' hiding outside paths", async () => {
+    const d = await decide({
+      type: "bash",
+      command: "cat $(( (1+2) )) /etc/passwd",
+      cwd,
+    }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("heredoc body with unbalanced quote does not hide credential read on subsequent line", async () => {
+    const d = await decide({
+      type: "bash",
+      command: "cat << EOF\n\"\nEOF\ncat .env",
+      cwd,
+    }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+});
+

@@ -5,7 +5,7 @@ import { buildPrompt, pdTargetLabel } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
 import { updateStatus } from "./widget";
 import { RuleGenerator } from "../decide/rule-generator";
-import {getJudgeVerdict, getStage2Verdict, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
+import {getJudgeVerdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
 import { dspaAutoAllowed } from "../gate/fallthrough";
 import { resolveUnresolvedPaths, type ResolutionMap } from "../judge/path-resolver";
 import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/dspat-mode";
@@ -172,8 +172,9 @@ export async function showPrompt(
         body: prompt.body + `\n⚠️ Judge invalid: ${jstatus.reason}`,
       };
     } else {
-      const v1 = await getJudgeVerdict(pd, ctx, store);
-      const v2 = await getStage2Verdict(pd, ctx, store);
+      const o1 = await getStage1Outcome(pd, ctx, store);
+      const o2 = await getStage2Outcome(pd, ctx, store);
+      const v1 = o1.verdict, v2 = o2.verdict;
       logJudgeDiff(pd, "dspat", v1, v2);
       if (v2) logJudgePaths(pd, store, v2, "dspat");
       const verdict = v2 ?? v1;
@@ -181,11 +182,12 @@ export async function showPrompt(
         dspatVerdict = verdict;
         prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(verdict, v2 ? 2 : 1) };
       } else {
-        // Both stages failed (auth, timeout, bad reply) — surface it
-        // instead of silently showing a bare prompt.
+        // Both stages failed (auth, timeout, bad reply) — surface it, with
+        // judge()'s typed class, instead of silently showing a bare prompt.
+        const why = judgeFailPhrase(o2) || judgeFailPhrase(o1);
         prompt = {
           ...prompt,
-          body: prompt.body + "\n⚠️ Judge: no verdict (both stages failed or timed out)",
+          body: prompt.body + `\n⚠️ Judge: no verdict — both stages failed${why ? ` (${why})` : ""}`,
         };
       }
     }
@@ -239,7 +241,8 @@ export async function showPrompt(
             // Immediate feedback while the re-run is in flight (the widget
             // line shows the stage too, but the prompt has the focus).
             try { ctx.ui.notify("⚖️ Judge: stage 2 re-running…"); } catch { /* no UI */ }
-            const v2 = await getStage2Verdict(pd, ctx, store);
+            const o2 = await getStage2Outcome(pd, ctx, store);
+            const v2 = o2.verdict;
             // D17: the retry's stage-2 verdict vs the carried stage-1
             // verdict is a stage pair too — log its disagreement.
             if (dspa.stage === 1 && dspa.verdict) logJudgeDiff(pd, "dspa", dspa.verdict, v2);
@@ -260,7 +263,7 @@ export async function showPrompt(
                     ? "— not auto-allowed (risk must be low or medium)"
                     : undefined,
                 )
-              : "🚧 DSPA: call again — stage 2 produced no verdict (timeout or call failure)";
+              : `🚧 DSPA: call again — stage 2 produced no verdict (${judgeFailPhrase(o2) || "no verdict returned"})`;
             return { autoAllowed: false, body: baseBody + "\n" + block };
           },
         }

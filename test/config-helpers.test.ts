@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { findNetworkEgress, isWriteOperation, isTrustedScriptCommand } from "../config";
+import { findNetworkEgress, isWriteOperation, isTrustedScriptCommand, registryRunDeps, uvRunFlags, resolveDepSource } from "../config";
+import { tokenizeSegmentQuoted } from "../analysis/tokenizer";
 import { dangerousPerlFlags } from "../config/bash-patterns";
 import { analyzeCommand } from "../analysis/command-analysis";
 
@@ -129,6 +130,66 @@ describe("isTrustedScriptCommand", () => {
     expect(isTrustedScriptCommand("uv run --with pymupdf,evil-package python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
   });
 
+  // The option walk must scan uv's WHOLE leading option region. It used to stop
+  // at the first token that was not a dependency flag, so any uv flag placed
+  // before --with hid the entire install set: `uv run --frozen --with evil …`
+  // read as "no dependencies" and the trusted-script bypass then vouched for an
+  // unvetted registry fetch (or an untrusted requirements file).
+  it("a uv option before --with does not hide the dependency set (3.31.0 trust defect)", () => {
+    for (const pre of ["--frozen", "--quiet", "--isolated", "--no-sync", "--offline", "--no-project"]) {
+      expect(isTrustedScriptCommand(`uv run ${pre} --with evil-package python ~/.pi/agent/skills/my-script.py`, "/tmp"), pre).toBe(false);
+    }
+  });
+
+  it("a uv option before --with-requirements does not hide the source", () => {
+    expect(isTrustedScriptCommand("uv run --isolated --with-requirements /tmp/evil.txt python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+  });
+
+  it("an unknown uv option is assumed to take a value", () => {
+    // Skipped as a flag, `pymupdf` would become the runner and the scan would
+    // stop before --with; assumed to take a value, the scan stays narrow but
+    // sees the dependency set (fail closed either way for trust).
+    expect(uvRunFlags(tokenizeSegmentQuoted("uv run --some-new-uv-flag pymupdf --with evil-package python x.py"))!.deps)
+      .toEqual([{ flag: "--with", value: "evil-package", opaque: false }]);
+  });
+
+  it("uv options after the dependency flags are still walked", () => {
+    expect(uvRunFlags(tokenizeSegmentQuoted("uv run --with pandas --frozen -p 3.12 python x.py")))
+      .toMatchObject({ uvFlags: ["--frozen"], pythonValues: ["3.12"] }); // -p is a value flag, not a bare option
+  });
+
+  it("inline values, -p shorthand and the equals form are walked", () => {
+    expect(uvRunFlags(tokenizeSegmentQuoted("uv run -p3.11 --with=pandas python x.py")))
+      .toMatchObject({ deps: [{ flag: "--with", value: "pandas" }], pythonValues: ["3.11"] });
+    expect(isTrustedScriptCommand("uv run --frozen -p3.11 --with pymupdf python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+    expect(isTrustedScriptCommand("uv run --frozen --with=evil-package python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+  });
+
+  it("a dangling dependency flag names nothing at all", () => {
+    expect(uvRunFlags(tokenizeSegmentQuoted("uv run --with-requirements"))!.danglingSource).toBe(true);
+    expect(isTrustedScriptCommand("uv run --with-requirements python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+  });
+
+  it("a run-time dependency value is marked opaque, not trusted", () => {
+    expect(uvRunFlags(tokenizeSegmentQuoted('uv run --with "$PKG" python x.py'))!.deps[0].opaque).toBe(true);
+    expect(uvRunFlags(tokenizeSegmentQuoted("uv run --with pkg*.txt python x.py"))!.deps[0].opaque).toBe(true);
+    expect(uvRunFlags(tokenizeSegmentQuoted('uv run --with "pandas>=2.0" python x.py'))!.deps[0]).toEqual({ flag: "--with", value: "pandas>=2.0", opaque: false });
+  });
+
+  it("registryRunDeps reports deps hidden behind other uv options", () => {
+    expect(registryRunDeps(["uv run --frozen --with pymupdf,evil-package python x.py"])).toEqual([
+      { name: "pymupdf", allowlisted: true },
+      { name: "evil-package", allowlisted: false },
+    ]);
+  });
+
+  it("resolveDepSource anchors a relative source to the run-time cwd", () => {
+    expect(resolveDepSource("req.txt", "/work")).toBe("/work/req.txt");
+    expect(resolveDepSource("./sub/req.txt", "/work")).toBe("/work/sub/req.txt");
+    expect(resolveDepSource("/abs/req.txt", "/work")).toBe("/abs/req.txt");
+    expect(resolveDepSource("~/req.txt", "/work")).toContain("req.txt");
+  });
+
   // The wrapper walk (2026-10-14) gained the judge CONTENT for wrapped runs;
   // the skills-dir bypass stays exactly as wide as it was. Trust answers
   // "may this script run unreviewed", and that decision was made about the
@@ -204,6 +265,54 @@ describe("isTrustedScriptCommand", () => {
     expect(isTrustedScriptCommand("bash", "/tmp")).toBe(false);
     expect(isTrustedScriptCommand("bash --norc", "/tmp")).toBe(false);
     expect(isTrustedScriptCommand("bash -e", "/tmp")).toBe(false);
+  });
+});
+
+// ── registryRunDeps — the uv --with packages the judge packet names ──
+
+describe("registryRunDeps", () => {
+  it("names the --with packages, marked against the operator allowlist", () => {
+    expect(registryRunDeps(["uv run --with pandas,openpyxl python3 job.py"])).toEqual([
+      { name: "pandas", allowlisted: true },
+      { name: "openpyxl", allowlisted: true },
+    ]);
+    expect(registryRunDeps(["uv run --with pdfplumber python3 job.py"])).toEqual([
+      { name: "pdfplumber", allowlisted: false },
+    ]);
+  });
+
+  it("reads the same forms trust reads (inline value, extras, env prefix, quotes)", () => {
+    expect(registryRunDeps(["uv run --with=pymupdf python3 job.py"])).toEqual([
+      { name: "pymupdf", allowlisted: true },
+    ]);
+    expect(registryRunDeps(['uv run --with "markitdown[pptx]" python3 job.py'])).toEqual([
+      { name: "markitdown", allowlisted: true },
+    ]);
+    expect(registryRunDeps(["DEBUG=1 uv run --with requests python3 job.py"])).toEqual([
+      { name: "requests", allowlisted: false },
+    ]);
+    // An unallowlisted dep in one segment still surfaces when another runs a
+    // trusted form (the packet names what any segment fetches).
+    expect(registryRunDeps([
+      "uv run --with pandas python3 a.py",
+      "uv run --with evil python3 b.py",
+    ])).toEqual([
+      { name: "pandas", allowlisted: true },
+      { name: "evil", allowlisted: false },
+    ]);
+  });
+
+  it("names no packages for anything that is not a uv run form", () => {
+    expect(registryRunDeps(["python3 job.py"])).toEqual([]);
+    expect(registryRunDeps(["uvx pymupdf -c 1"])).toEqual([]);
+    expect(registryRunDeps(["npm install pandas"])).toEqual([]);
+    // --with-editable/--with-requirements are local PATHS (the floor's path
+    // checks own them), not registry fetches — not named here.
+    expect(registryRunDeps(["uv run --with-editable ./pkg python3 job.py"])).toEqual([]);
+  });
+
+  it("dedupes a package repeated across segments", () => {
+    expect(registryRunDeps(["uv run --with pandas python3 a.py", "uv run --with pandas python3 b.py"])).toHaveLength(1);
   });
 });
 

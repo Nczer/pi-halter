@@ -233,6 +233,18 @@ describe("closed-set $HOME in cd targets (the <unresolved-cwd> regression)", () 
     expect(a.paths).not.toContain(UNKNOWN_CWD_MARKER);
   }, 15000);
 
+  it("a `cd $(…)` moves the base to a directory analysis cannot know", async () => {
+    // The substitution is cd's ARGUMENT, not a subshell group: the cd runs in the
+    // current shell and persists, so reporting the previous base for later
+    // segments named a directory the command is not in.
+    expect(trackEffectiveCwd([seg("cd $(dirname x)"), seg("ls")], BASE)).toEqual([BASE, null]);
+    const a = await analyzeCommand("cd $(dirname x) && ls f.txt", CWD);
+    expect(a.effectiveCwds[1]).toBeNull();
+    expect(a.paths).toContain(UNKNOWN_CWD_MARKER);
+    // A subshell GROUP is the other case: that cd never escapes, base unchanged.
+    expect(trackEffectiveCwd([seg("(cd $(dirname x))", [], true), seg("ls")], BASE)).toEqual([BASE, BASE]);
+  }, 15000);
+
   it("a HOME-reassigning command still lands on the marker (guard holds)", async () => {
     for (const cmd of [
       "export HOME=/tmp; cd $HOME && ls",

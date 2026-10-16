@@ -1394,4 +1394,39 @@ describe("parseCommand: file operands the script/pattern heuristics used to swal
     expect(has(gawk.paths, "/etc/hosts")).toBe(true);
     expect(gawk.paths.some(p => p.includes("{print"))).toBe(false);
   });
+
+  it("grep/sed/awk explicit pattern flags and negated/block sed addresses keep file operands and drop patterns", async () => {
+    for (const cmd of [
+      "grep --regexp=/root /etc/hosts",
+      "grep -e /root /etc/hosts",
+      "sed --expression=s/a/b/ /etc/hosts",
+      "sed '/foo/!d' /etc/hosts",
+      "sed '/foo/{p;q;}' /etc/hosts",
+      "awk -e '/root/' /etc/hosts",
+      "awk --source='/root/' /etc/hosts",
+    ]) {
+      const r = await parseCommand(cmd, cwd);
+      expect(r.paths, cmd).toEqual([realPath("/etc/hosts")]);
+    }
+  });
+
+  it("single-quoted or escaped $HOME and $var are literal relative paths, not runtime expansions", async () => {
+    for (const cmd of [
+      `cat '$HOME/sub'`,
+      `cat \\$HOME/sub`,
+      `cat '$f'`,
+      `cat \\$f`,
+    ]) {
+      const r = await parseCommand(cmd, cwd);
+      expect(r.opaque, cmd).toEqual([]);
+      expect(r.paths, cmd).toEqual([]);
+    }
+  });
+
+  it("nested parentheses inside $(( ... )) are stripped cleanly without leaking ')' into adjacent args", async () => {
+    const r = await parseCommand("cat $(( (1+2) )) /etc/hosts", cwd);
+    expect(r.paths).toEqual([realPath("/etc/hosts")]);
+    expect(r.opaque).toEqual([]);
+  });
 });
+

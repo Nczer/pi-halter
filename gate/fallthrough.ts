@@ -18,7 +18,7 @@ import type { Store } from "./store";
 import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decision-log";
 import { findExecutedScript } from "../analysis/script-payload";
 import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, type DspaGateResult } from "./dspa-gate";
-import {getJudgeVerdict, getStage2Verdict, judgeStatus} from "../judge/verdict";
+import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
 import { pdTargetLabel } from "../ui/prompt-builder";
 import { recordDspaAutoAllowed, recordDspaStop, updateDspaWidget } from "../modes/dspa-mode";
@@ -36,6 +36,10 @@ export interface DspaFallthrough {
   stage: 1 | 2 | null;
   /** Set when the gate passed but a judge stage produced no verdict — why. */
   note?: string;
+  /** judge()'s typed class for the stage-2 failure (`timeout 8.0s`), when the
+   *  intent pass produced none but stage 1 did — the ledger tag needs it,
+   *  because "stage 2 fails while the server is up" is otherwise unmeasurable. */
+  judgeFail?: string;
 }
 
 /**
@@ -47,15 +51,19 @@ export interface DspaFallthrough {
  * The stage is plumbing (which judge layer decided), not verdict content:
  *  - `judge: declined (stage 2)` — the intent pass rendered a verdict that
  *    did not auto-allow (the final call on the operation);
- *  - `judge: stage 2 failed` — the stateless pass rendered a verdict but
- *    the intent pass produced none (timeout/auth/model — an infra fact);
+ *  - `judge: stage 2 failed (timeout 8.0s)` — the stateless pass rendered a
+ *    verdict but the intent pass produced none (timeout/auth/model — an infra
+ *    fact, typed by judge());
  *  - `judge: <note>` — no verdict at all.
  * undefined outside dspa prompt fall-throughs.
  */
 export function dspaStopTag(f: DspaFallthrough | undefined): string | undefined {
   if (!f) return undefined;
   if (!f.gate.ok) return `gate: ${f.gate.reason}`;
-  if (f.verdict) return f.stage === 2 ? "judge: declined (stage 2)" : "judge: stage 2 failed";
+  if (f.verdict) {
+    if (f.stage === 2) return "judge: declined (stage 2)";
+    return `judge: stage 2 failed${f.judgeFail ? ` (${f.judgeFail})` : ""}`;
+  }
   return `judge: ${f.note ?? "no verdict"}`;
 }
 
@@ -189,7 +197,8 @@ export async function tryDspaAutoAllow(
     pd.type === "bash" && pd.analysis != null &&
     findExecutedScript(pd.analysis, pd.cwd) !== null;
   // Stage 1 — stateless (the packet's static analysis is the whole input).
-  const v1 = skipStage1 ? null : await getJudgeVerdict(pd, ctx, store);
+  const o1 = skipStage1 ? null : await getStage1Outcome(pd, ctx, store);
+  const v1 = o1?.verdict ?? null;
   // D19: a file script OUTSIDE the working set never auto-allows here —
   // its writes surface only in the stage-2 report, which the write bar
   // checks in the same pass (the stateless pass is eval-locked out of
@@ -199,7 +208,8 @@ export async function tryDspaAutoAllow(
     return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v1, stage: 1 } };
   }
   // Stage 2 — intent pass (session context, uncached, final verdict).
-  const v2 = await getStage2Verdict(pd, ctx, store);
+  const o2 = await getStage2Outcome(pd, ctx, store);
+  const v2 = o2.verdict;
   logJudgeDiff(pd, "dspa", v1, v2);
   // D19: the deterministic write bar on the judge's FRESH write report —
   // same pass, first run included, nothing learned or persisted. A
@@ -245,14 +255,21 @@ export async function tryDspaAutoAllow(
   let note: string | undefined;
   if (!v2 && !v1) {
     const jstatus = judgeStatus(ctx);
+    // The typed class from judge() (timeout / call-failed / auth / bad reply),
+    // not a guess: "stage 2 fails while the server is up" is only diagnosable
+    // if the prompt says which kind of failure it was.
+    const why = judgeFailPhrase(o2) || judgeFailPhrase(o1);
+    const stop = skipStage1
+      ? "stage 2 call failed (stage 1 skipped — script payload)"
+      : "judge call failed";
     note = jstatus.state === "invalid"
       ? `judge invalid: ${jstatus.reason}`
-      : skipStage1
-        ? "stage 2 call failed (stage 1 skipped — script payload)"
-        : "judge call failed";
+      : `${stop}${why ? ` (${why})` : ""}`;
   } else if (v1 && !v2) {
-    note = "stage 2 produced no verdict — stateless stage-1 verdict only";
+    const why = judgeFailPhrase(o2);
+    note = `stage 2 produced no verdict${why ? ` (${why})` : ""} — stateless stage-1 verdict only`;
   }
+  const judgeFail = v1 && !v2 ? judgeFailPhrase(o2) || undefined : undefined;
   // The judge (or its absence) is the stop here: classify by the FINAL
   // verdict — no verdict at all joins the defer (fail-safe) bucket.
   recordDspaStop(
@@ -262,6 +279,6 @@ export async function tryDspaAutoAllow(
   updateDspaWidget(ctx);
   return {
     autoAllowed: false,
-    fallthrough: { gate: gateResult, verdict: final, stage: v2 ? 2 : v1 ? 1 : null, note },
+    fallthrough: { gate: gateResult, verdict: final, stage: v2 ? 2 : v1 ? 1 : null, note, judgeFail },
   };
 }

@@ -266,6 +266,58 @@ describe("bash body content", () => {
     expect(prompt.body).not.toContain("🔗");
   });
 
+  it("body names the one parent a set of dirs hangs under", () => {
+    const prompt = buildPrompt(bashDecision({
+      outsideDirs: ["/proj/halter/a", "/proj/halter/b", "/proj/halter/c", "/proj/halter/d", "/mnt/other"],
+      needsPathApproval: true,
+    }));
+    expect(prompt.body).toContain("⚠️ outside cwd: /proj/halter/ (4 dirs under it) +1 others");
+    expect(prompt.body).not.toContain("/proj/halter/a");
+  });
+
+  it("body shows only the parent when the parent itself is in the grant set", () => {
+    const prompt = buildPrompt(bashDecision({
+      outsideDirs: ["/a/aa", "/a/ab", "/a"],
+      needsPathApproval: true,
+    }));
+    expect(prompt.body).toContain("⚠️ outside cwd: /a\n");
+    expect(prompt.body).not.toContain("/a/aa");
+  });
+
+  it("scattered dirs stay listed in full in the body", () => {
+    const prompt = buildPrompt(bashDecision({
+      outsideDirs: ["/vol1/a", "/vol2/b", "/vol3/c", "/vol4/d"],
+      needsPathApproval: true,
+    }));
+    for (const d of ["/vol1/a", "/vol2/b", "/vol3/c", "/vol4/d"]) {
+      expect(prompt.body).toContain(d);
+    }
+  });
+
+  it("Always label summarizes the tier; tier-2 and the grant set stay exact", () => {
+    const prompt = buildPrompt(bashDecision({
+      needsCommandApproval: true,
+      needsPathApproval: true,
+      signatures: ["grep"],
+      outsideDirs: ["/p/x/a", "/p/x/b", "/p/x/c", "/p/x/d", "/mnt/other"],
+    }));
+    expect(prompt.alwaysPathsLabel).toBe("Read 4 dirs under /p/x/ +1 more");
+    expect(prompt.alwaysLabel).toBe("grep *"); // commands keep their own label
+    expect(prompt.pathGrantDirs).toHaveLength(5); // display-only: minted set unchanged
+    expect(prompt.tier2Paths?.body).toContain("/p/x/a/*");
+    expect(prompt.tier2Paths?.body).toContain("/mnt/other/*");
+  });
+
+  it("scattered dirs cap the label at 3 entries + …+N more dirs", () => {
+    const prompt = buildPrompt(bashDecision({
+      needsPathApproval: true,
+      outsideDirs: ["/vol1/a", "/vol2/b", "/vol3/c", "/vol4/d", "/vol5/e"],
+    }));
+    expect(prompt.alwaysLabel).toBe(
+      "Read /vol1/a/*, Read /vol2/b/*, Read /vol3/c/* …+2 more dirs",
+    );
+  });
+
   it("unflagged chains list no segments (nothing to show)", () => {
     const segs = Array.from({ length: 12 }, (_, i) => `echo part ${i}`);
     const prompt = buildPrompt(bashDecision({

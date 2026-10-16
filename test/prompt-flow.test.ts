@@ -13,21 +13,27 @@ import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {Decision, PermissionRequest, PromptDecision} from "../decide/types";
 
-const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock, stage2Mock } = vi.hoisted(() => ({
+const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock, stage2Mock, failMock } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn(),
   verdictMock: vi.fn(),
   promptSpy: vi.fn(),
   resolverMock: vi.fn(),
   pathsRulesMock: vi.fn(),
   stage2Mock: vi.fn(),
+  // Extra outcome fields (the typed failure class judge() reports) — set by
+  // the failure-identity tests, empty for every existing test.
+  failMock: vi.fn(() => ({})),
 }));
 
 vi.mock("../judge/verdict", async (importOriginal) => ({
   judgeStatus: judgeStatusMock,
   getJudgeVerdict: verdictMock,
   getStage2Verdict: stage2Mock,
+  getStage1Outcome: async (...a: any[]) => ({ verdict: await verdictMock(...a), ...failMock() }),
+  getStage2Outcome: async (...a: any[]) => ({ verdict: await stage2Mock(...a), ...failMock() }),
   // Real renderer — the suggests-line assertions below exercise it.
   judgeVerdictBlock: (await importOriginal<typeof import("../judge/verdict")>()).judgeVerdictBlock,
+  judgeFailPhrase: (await importOriginal<typeof import("../judge/verdict")>()).judgeFailPhrase,
 }));
 vi.mock("../ui/prompts", () => ({ twoTierAlwaysPrompt: promptSpy }));
 vi.mock("../judge/path-resolver", () => ({ resolveUnresolvedPaths: resolverMock }));
@@ -70,6 +76,7 @@ beforeEach(() => {
   promptSpy.mockResolvedValue("yes");
   resolverMock.mockResolvedValue(null);
   pathsRulesMock.mockReturnValue(null);
+  failMock.mockReturnValue({});
 });
 
 function bashDecision(): Decision {
@@ -150,8 +157,18 @@ describe("/dspat active", () => {
     verdictMock.mockResolvedValue(null);
     stage2Mock.mockResolvedValue(null);
     await showPrompt(bashDecision(), ctx, store);
-    expect(shownPrompt().body).toContain("⚠️ Judge: no verdict (both stages failed or timed out)");
+    expect(shownPrompt().body).toContain("⚠️ Judge: no verdict — both stages failed");
     expect(judgeArg()).toBeUndefined();
+  });
+
+  it("the failure line carries judge()'s typed class and latency", async () => {
+    // The user's "stage 2 fails while the server is up" report is only
+    // measurable if the prompt says WHICH failure it was.
+    verdictMock.mockResolvedValue(null);
+    stage2Mock.mockResolvedValue(null);
+    failMock.mockReturnValue({ failReason: "timeout", latencyMs: 8020 });
+    await showPrompt(bashDecision(), ctx, store);
+    expect(shownPrompt().body).toContain("⚠️ Judge: no verdict — both stages failed (timeout 8.0s)");
   });
 
   it("D17: BOTH stages run (stage 2 never skipped, even on stage-1 approve+low)", async () => {
@@ -442,6 +459,13 @@ describe("Judge again wiring (dspa fall-through)", () => {
     const r = await retryArg()!.retry();
     expect(r.autoAllowed).toBe(false);
     expect(r.body).toContain("stage 2 produced no verdict");
+  });
+
+  it("retry() names the typed failure class in that note", async () => {
+    failMock.mockReturnValue({ failReason: "no-tool-call", latencyMs: 1200 });
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: true }, defer1, 1, "stage 2 unavailable"), request);
+    const r = await retryArg()!.retry();
+    expect(r.body).toContain("stage 2 produced no verdict (no-tool-call 1.2s)");
   });
 });
 

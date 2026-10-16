@@ -83,6 +83,13 @@ dspa applicability, and the fail-closed rules:
 filesystem root is never an Always grant: a root-only path prompt offers no dir
 tier, mixed prompts drop `/`, and a file prompt's dir umbrella stops before root.
 
+When a path tier spans many directories the prompt and the "Always" label name
+one location instead of listing every dir: a directory already covered by a
+listed parent is dropped (`a/aa a/ab a` → `a`), and a set hanging under one
+parent reads `Read 4 dirs under ~/Projects/halter/ +1 more`. Display only — the
+minted rules stay the exact dir list, and the confirmation tier names every
+directory.
+
 ### Regimes
 
 `manual` / `dspa` / `dspat` / `dsp` are one machine — enabling one leaves the
@@ -108,7 +115,7 @@ Config is split across focused modules in `config/`:
 | `config/bash-patterns.ts` | `unconditionallySafeCommands`, `pathAwareCommands`, `isAllowedCommand()`, `isSafeSubcommand()`, `isWriteOperation()`, `wrapperCommands`, `SHELL_INTERPRETERS`, `PACKAGE_MANAGERS`, `dangerousFindFlags`, `dangerousSedFlags`, `dangerousPerlFlags` |
 | `config/path-rules.ts` | `warnPaths` (credential names — prompt tier), `allowedReadPaths`, `allowedWritePaths` |
 | `config/dangerous-patterns.ts` | `dangerousCommandPatterns`, `dangerousContextPatterns` (regex patterns) |
-| `config/trusted-scripts.ts` | `TRUSTED_PACKAGES` allowlist for `uv run --with`, `isTrustedScriptPath()`, `isTrustedScriptCommand()` |
+| `config/trusted-scripts.ts` | `TRUSTED_PACKAGES` allowlist for `uv run --with`, `isTrustedScriptPath()`, `isTrustedScriptCommand()`, `registryRunDeps()` (the `--with` packages the judge packet names, marked with the allowlist verdict), `uvRunFlags()`/`resolveDepSource()` (the same scan as grant identity — a `uv run` signature names its deps) |
 | `config/script-operand.ts` | `findScriptOperand()` — the one file-operand scan (interpreters, direct exec, `uv run`/`deno run`, `npx`/`uvx` package runners, pass-through wrappers) shared by identification and trust |
 
 ### Decision log
@@ -136,7 +143,7 @@ jq -r 'select(.mode=="dspat" and .kind=="prompt") | .target' .log/decisions.json
 # manual-regime prompts (no judge mode active)
 jq -r 'select(.kind=="prompt" and .mode==null) | .reason' .log/decisions.jsonl | sort | uniq -c | sort -rn | head
 ```
-The dspa prompt line additionally carries a `dspa` stop-tag — which layer stopped the auto-allow: `gate: <reason>` (the deterministic floor; code-produced), `judge: declined (stage 2)` (the intent pass rendered a final verdict that did not auto-allow), `judge: stage 2 failed` (only the stateless verdict rendered), `judge: <note>` (no verdict at all). And the dspa auto-allow line's `reason` carries the approving stage + model (`dspa: judge approved (stage 2, <model>)`). A line whose final verdict is stage 2 additionally carries `judgePaths` / `judgePathMisses` (D13) — the judge's sanitized path report and the paths the floor never saw: model output, but diagnostic only — nothing in the gate reads it back; it exists to be mined (`dspa --paths`). Still no verdict *content* — verdicts stay session-scoped.
+The dspa prompt line additionally carries a `dspa` stop-tag — which layer stopped the auto-allow: `gate: <reason>` (the deterministic floor; code-produced), `judge: declined (stage 2)` (the intent pass rendered a final verdict that did not auto-allow), `judge: stage 2 failed (<class> <secs>)` (only the stateless verdict rendered; the class is `judge()`'s own — `timeout`, `auth-failed`, `no-tool-call`, `bad-args`, `call-failed`), `judge: <note>` (no verdict at all; the note carries the same class). The class is carried out of the judge call (`JudgeStageOutcome`), so an infra failure is identifiable in the ledger without re-running anything. And the dspa auto-allow line's `reason` carries the approving stage + model (`dspa: judge approved (stage 2, <model>)`). A line whose final verdict is stage 2 additionally carries `judgePaths` / `judgePathMisses` (D13) — the judge's sanitized path report and the paths the floor never saw: model output, but diagnostic only — nothing in the gate reads it back; it exists to be mined (`dspa --paths`). Still no verdict *content* — verdicts stay session-scoped.
 
 ### Iterating policy from the log (debug/fix cycle)
 
@@ -203,7 +210,8 @@ For analysis-level debugging (paths, markers, safety verdicts) use `analyzeComma
 ## Trusted code
 
 - **Skills dir** — scripts resolving into `~/.pi/agent/skills/` auto-allow: the directory is treated as user-curated. Three invocation forms qualify (interpreter + script, shell interpreter + script, direct exec); `-c`/`--command` is never trusted; trust covers the invocation only, never shell operators around it (unsafe pipe stages, write redirects, command substitution still prompt).
-- **`uv run --with`** — trusts the invocation only when every `--with` package is in `TRUSTED_PACKAGES` (edit `config/trusted-scripts.ts`; lowercase, no extras) and the script is in a trusted dir. `--with-requirements`/`--with-editable` sources must be trusted too (they bypass the package allowlist).
+- **`uv run --with`** — trusts the invocation only when every `--with` package is in `TRUSTED_PACKAGES` (edit `config/trusted-scripts.ts`; lowercase, no extras) and the script is in a trusted dir. `--with-requirements`/`--with-editable` sources must be trusted too (they bypass the package allowlist). Matching is exact after extras-stripping, so a quoted pin (`--with 'pandas>=2.0'`) is a different name and voids trust (unquoted, `>` is a shell redirect, not part of the name). The same scan feeds the judge packet (`registryRunDeps()`): when a `uv run --with` command does prompt, the packet names the packages and whether each is allowlisted, instead of leaving `network: yes (uv)` for the judge to guess about.
+- **A `uv run` grant names its dependencies (3.31.0)** — the bash signature of a dependency form is `uv run --with pandas --with-requirements /abs/req.txt`, so an Always minted for a bare `uv run` covers only bare `uv run`, and `--with pandas` never covers `--with pdfplumber`. A local source resolves against the cwd the shell would have at that point in the chain; a source that cannot be named (`<unresolved>`, an opaque quoted value) makes the form ungrantable — the prompt says `⚠️ no grant for: <sig> — a dependency is not a name yet; this form prompts every time`, and Always is refused, rather than granting a signature that under-names the fetch. Wrappers are looked through (`timeout`/`env`/`xargs`/`command`). Pre-3.31.0 `uv run` grants stop matching (one re-prompt, fail closed).
 
 Edge cases and the exact matching semantics: [docs/architecture.md](docs/architecture.md#trusted-scripts-and-packages).
 

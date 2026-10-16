@@ -10,6 +10,7 @@ import {
   hasTerminalEscape,
   echoInterpretsEscapes,
   isReadOnlySubshellText,
+  stripQuotedStrings,
 } from "../segment-helpers";
 
 /** Pre-compiled regex for heredoc-to-interpreter detection. */
@@ -65,16 +66,17 @@ export const ShellEvaluator: RiskEvaluator = {
       b.danger("shell output redirection (can overwrite files)");
     }
 
-    // sed/perl flags
-    if (effectiveFirst === "sed" && dangerousSedFlags.test(segment)) {
+    // sed/perl flags (check quote-stripped text so `-i` inside a quoted regex/script does not match)
+    const stripped = stripQuotedStrings(segment);
+    if (effectiveFirst === "sed" && dangerousSedFlags.test(stripped)) {
       b.high("sed -i (in-place file modification)");
     }
-    if (effectiveFirst === "perl" && dangerousPerlFlags.test(segment)) {
+    if (effectiveFirst === "perl" && dangerousPerlFlags.test(stripped)) {
       b.high("perl -pi/-i (in-place file modification)");
     }
 
     // sort -o/--output (writes/truncates a file)
-    if (effectiveFirst === "sort" && SORT_OUTPUT_RE.test(segment)) {
+    if (effectiveFirst === "sort" && SORT_OUTPUT_RE.test(stripped)) {
       b.high("sort -o/--output (can truncate files)");
     }
 

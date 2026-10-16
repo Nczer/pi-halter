@@ -5,9 +5,11 @@ import {
   isFindExecWrite,
   isFdExecWrite,
   isRgPreWrite,
+  stripQuotedStrings,
 } from "../segment-helpers";
 import { dangerousFindFlags } from "../../config/bash-patterns";
 import { tokenizeSegment } from "../tokenizer";
+import { sedScriptArgIndices } from "../bash-parser";
 
 /**
  * sed -f / --file: the script comes from a FILE, which can contain `s///e`
@@ -16,15 +18,40 @@ import { tokenizeSegment } from "../tokenizer";
  * `-f` may sit in a flag cluster (last letter, value follows); long forms are
  * --file / --file=script.
  */
-const SED_SCRIPT_FILE_FLAG_RE = /^(?:-[a-z]*f|--file(?:=\S+)?)$/;
+const SED_SCRIPT_FILE_FLAG_RE = /^(?:-[a-zA-Z]*f|--file(?:=\S+)?)$/;
 
 /**
  * The sed `e` flag on an s command executes the replacement text as a shell
- * command (`sed 's/x/echo pwned/e' file`). The e must sit in the FINAL flag
- * group of the s command (after the last delimiter): `s/a/b/e`, `s/a/b/eg`,
- * `s/a/b/e;w f`. `s/a/b/bee/` (e inside the replacement) does not match.
+ * command (`sed 's/x/echo pwned/e' file`, `sed 's|x|id|e' file`,
+ * `sed '1s/x/id/e' file`, `sed '{s/x/id/e}' file`). Any non-word/whitespace
+ * delimiter may be used (`\1` backreference), and `e` must sit in the final
+ * flag group after the closing delimiter. `s/a/b/bee/` does not match.
  */
-const SED_S_EXEC_RE = /\bs\/.*\/[a-z]*e[a-z]*(?:$|;)/;
+const SED_S_EXEC_RE = /(?:^|[;\s{}0-9$,/!])s([^\w\s\\])(?:\\.|(?!\1)[\s\S])*?\1(?:\\.|(?!\1)[\s\S])*?\1[gipmI0-9]*e[gipmI0-9]*(?:$|[;\s}])/;
+
+/**
+ * GNU sed standalone `e` command (`sed 'e id' file`, `sed 'e' file`,
+ * `sed '1e id' file`, `sed '/pat/e id' file`) — executes the command (or the
+ * pattern space when no command follows) in `/bin/sh`. Checked on sed script
+ * tokens only so a file operand named `e` is never mistaken for the command.
+ */
+const SED_E_CMD_RE = /(?:^|[;\n{])\s*(?:\d+|\/(?:\\.|[^/])*\/|\$)?\s*!?\s*e(?:\s+\S|$|[;\n}])/;
+
+function hasSedExecCommand(segment: string): boolean {
+  const tokens = tokenizeSegment(segment);
+  if (tokens.some(t => SED_S_EXEC_RE.test(t))) return true;
+  const args = tokens.slice(1);
+  for (const idx of sedScriptArgIndices(args)) {
+    let script = args[idx] ?? "";
+    if (script.startsWith("--expression=")) script = script.slice("--expression=".length);
+    else if (script.startsWith("-") && !script.startsWith("--")) {
+      const eIdx = script.indexOf("e");
+      if (eIdx > 0 && eIdx < script.length - 1) script = script.slice(eIdx + 1);
+    }
+    if (SED_S_EXEC_RE.test(script) || SED_E_CMD_RE.test(script)) return true;
+  }
+  return false;
+}
 
 /** Read-only interpreter invocation: `python3 --version` / `node --help`. */
 function isVersionOnly(rest: string[]): boolean {
@@ -48,12 +75,12 @@ interface ToolSegment { text: string; firstWord: string; rest: string[]; ops: st
 
 /** Tool command → handler (match, evaluate). */
 const TOOL_HANDLERS: Array<{ match: (seg: ToolSegment) => boolean; reason: string }> = [
-  { match: (s) => s.firstWord === "find" && dangerousFindFlags.test(s.text), reason: "find with dangerous flags" },
+  { match: (s) => s.firstWord === "find" && dangerousFindFlags.test(stripQuotedStrings(s.text)), reason: "find with dangerous flags" },
   { match: (s) => s.firstWord === "find" && isFindExecWrite(s.text), reason: "find -exec with write operation" },
   { match: (s) => s.firstWord === "fd" && isFdExecWrite(s.text), reason: "fd -x with write operation" },
   { match: (s) => s.firstWord === "rg" && isRgPreWrite(s.text), reason: "rg --pre with write operation" },
   { match: (s) => s.firstWord === "sed" && tokenizeSegment(s.text).slice(1).some(t => SED_SCRIPT_FILE_FLAG_RE.test(t)), reason: "sed -f (script file can execute commands and write files)" },
-  { match: (s) => s.firstWord === "sed" && tokenizeSegment(s.text).some(t => SED_S_EXEC_RE.test(t)), reason: "sed s///e (executes replacement as a shell command)" },
+  { match: (s) => s.firstWord === "sed" && hasSedExecCommand(s.text), reason: "sed s///e (executes replacement as a shell command)" },
   { match: (s) => ["curl", "wget"].includes(s.firstWord) && s.ops.includes("|"), reason: "curl/wget piped (possible remote code execution)" },
   { match: (s) => s.firstWord === "kubectl" && s.rest[0] === "delete", reason: "kubectl delete (resource deletion)" },
   { match: (s) => s.firstWord === "terraform" && s.rest[0] === "destroy", reason: "terraform destroy (infrastructure teardown)" },
