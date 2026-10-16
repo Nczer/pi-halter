@@ -214,6 +214,7 @@ export type JudgeFailReason =
   | "timeout"
   | "no-tool-call"
   | "bad-args"
+  | "truncated"
   | "call-failed";
 
 export interface JudgeResult {
@@ -241,6 +242,10 @@ export interface JudgeResult {
   cached: boolean;
   /** Set iff the result is a fail-safe defer. */
   failReason?: JudgeFailReason;
+  /** Judge calls spent on this operation (2; absent for a single call).
+   *  A retry that lands is the difference between a prompt defect and a
+   *  sampling accident, so it is recorded on success as well as failure. */
+  attempts?: number;
 }
 
 // The prompt asks for ONE plain sentence (2026-10-04: two sentences read as a
@@ -430,8 +435,80 @@ function enumMember(v: unknown, members: ReadonlySet<string>): string | null {
  * (no explanation) on ANY failure; only a complete, valid tool call yields
  * a real verdict — which is then LRU-cached (keyed on model + operation
  * bytes, so re-prompted or edited operations never reuse a stale verdict).
+ *
+ * One retry for a reply that arrived but carried no usable verdict
+ * (`no-tool-call` / `bad-args` / `truncated`). Those three are what sampling
+ * variance produces at temperature 1 — the 2026-10-16 wire replay got 88/88
+ * valid calls from the SAME packet, prompt, schema and sampling that produced
+ * a logged failure, so the second sample is worth the ~0.5s it costs. A
+ * timeout, transport error or unresolved model is NOT retried: the same
+ * request would buy the same answer at double the wait. Failures are never
+ * cached, so the retry is a real second call.
  */
 export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<JudgeResult> {
+  const first = await judgeOnce(input, opts);
+  if (!first.failReason || !RETRYABLE_FAILS.has(first.failReason)) return first;
+  // The retry gets the response cap the whole judge call had LEFT, not a
+  // fresh one: without this, two slow attempts cost twice JUDGE_RESPONSE_CAP_MS
+  // before the operator sees a prompt. The 1500ms floor keeps a retry
+  // meaningful even when the first attempt ran long.
+  const capMs = opts.capMs ?? JUDGE_RESPONSE_CAP_MS;
+  const second = await judgeOnce(input, { ...opts, capMs: Math.max(1500, capMs - first.latencyMs) });
+  second.attempts = 2;
+  if (second.failReason) second.reason = `${second.reason} attempts=2`;
+  return second;
+}
+
+/** The failure classes a fresh sample can plausibly fix (see `judge`). */
+const RETRYABLE_FAILS: ReadonlySet<JudgeFailReason> = new Set([
+  "no-tool-call",
+  "bad-args",
+  "truncated",
+]);
+
+/** Reply text the failure diagnostic keeps, per part. */
+const DIAG_HEAD_CHARS = 90;
+
+/** `stop=<normalized>/<provider finish_reason>` — the finish_reason is what
+ *  separates a generation the BUDGET ended (`length`) from one the MODEL
+ *  ended (`stop`), and pi keeps the provider's own word in `rawStopReason`. */
+function stopTag(reply: AssistantMessage): string {
+  return `stop=${reply.stopReason}${reply.rawStopReason ? `/${reply.rawStopReason}` : ""}`;
+}
+
+/**
+ * What the reply actually was, for the judge ledger. A failure that discards
+ * the reply cannot be diagnosed afterwards: the 2026-10-16 ledger had three
+ * `no-tool-call` lines and no way to tell prose-instead-of-a-call (a prompt
+ * or engine-parse problem), thinking-that-never-opened-the-call (a template
+ * problem), or a call cut mid-JSON by the token budget (a budget problem).
+ * Those need opposite fixes, so the ledger now carries the part kinds, the
+ * finish_reason, the token counts and the head of any text/thinking.
+ */
+function replyDiag(reply: AssistantMessage): string {
+  const kinds = reply.content.map((p) => p.type).join(",") || "none";
+  const u = reply.usage;
+  const bits = [
+    stopTag(reply),
+    `parts=${kinds}`,
+    u ? `out=${u.output} in=${u.input} cache=${u.cacheRead}${u.reasoning !== undefined ? ` think=${u.reasoning}` : ""}` : "",
+  ];
+  for (const p of reply.content) {
+    if (p.type === "toolCall") {
+      // The name the model DID call — a wrong or hallucinated tool name is a
+      // different defect from no call at all, and this is the only place it
+      // would ever be visible (the lookup is positional).
+      bits.push(`called=${p.name || "?"}(${Object.keys(p.arguments ?? {}).length} args)`);
+      break;
+    }
+    const body = p.type === "text" ? p.text : p.type === "thinking" ? p.thinking : "";
+    const head = body.replace(/\s+/g, " ").trim().slice(0, DIAG_HEAD_CHARS);
+    if (head) bits.push(`${p.type}="${head}"`);
+  }
+  return bits.filter(Boolean).join(" ");
+}
+
+async function judgeOnce(input: JudgmentInput, opts: JudgeOptions): Promise<JudgeResult> {
   const modelId = `${opts.model.provider}/${opts.model.id}`;
   const key = cacheKey(input, modelId);
   const hit = opts.uncached ? undefined : cacheGet(key);
@@ -497,13 +574,17 @@ export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<J
 
     if (reply.stopReason === "aborted") return fail("timeout");
     if (reply.stopReason === "error") return fail("call-failed", reply.errorMessage);
+    // The budget ended the generation, not the model: a distinct class, so a
+    // `truncated` line in the ledger is a budget/engine question and never
+    // counts as a model that refused to answer.
+    if (reply.stopReason === "length") return fail("truncated", replyDiag(reply));
 
     // Read the tool call by position (the first one), not by name — under
     // OAuth the provider rewrites the registered name.
     const call = reply.content.find(
       (part): part is ToolCall => part.type === "toolCall",
     );
-    if (!call) return fail("no-tool-call");
+    if (!call) return fail("no-tool-call", replyDiag(reply));
 
     const args = call.arguments ?? {};
     const explanation =
@@ -527,7 +608,7 @@ export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<J
       return fail("bad-args", `asked-user: ${JSON.stringify(args).slice(0, 200)}`);
     }
     if (explanation === "" || risk === null || approve === null) {
-      return fail("bad-args", JSON.stringify(args).slice(0, 200));
+      return fail("bad-args", `${JSON.stringify(args).slice(0, 200)} ${stopTag(reply)}`);
     }
     const reason = typeof args.reason === "string" ? sanitizeText(args.reason) : "";
     const exp = sentenceCut(explanation, EXPLANATION_MAX_CHARS);

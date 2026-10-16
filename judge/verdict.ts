@@ -287,7 +287,7 @@ async function runJudgeStage(
       // The ledger labels the line with judge()'s own typed class
       // (result.failReason) and keeps the message in `detail` — the 2026-10-04
       // ledger instead of seven rows all reading "no-explanation".
-      logJudgeInfra(pd, logMode, stage, result.failReason ?? "call-failed", `${model.provider}/${model.id}`, result.reason.slice(0, 200));
+      logJudgeInfra(pd, logMode, stage, result.failReason ?? "call-failed", `${model.provider}/${model.id}`, result.reason.slice(0, 400));
       return {
         verdict: null,
         failReason: result.failReason ?? "call-failed",

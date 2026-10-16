@@ -650,7 +650,13 @@ describe("D17: infra lines in the always-on judge ledger", () => {
       settings: ON,
     });
     expect(judgeLines().map((l) => l.error)).toEqual(["call-failed", "no-tool-call"]);
-    // The message stays in `detail` so each class is still diagnosable.
-    expect(judgeLines().map((l) => l.detail)).toEqual(["call-failed: boom", "no-tool-call"]);
+    // The message stays in `detail` so each class is still diagnosable, and
+    // from 3.34.0 the reply travels with it: finish_reason, part kinds, token
+    // counts, the reply head — and `attempts=2`, the one retry a
+    // verdict-less reply gets. `call-failed` gets no diagnostic (no reply).
+    expect(judgeLines().map((l) => l.detail)).toEqual([
+      "call-failed: boom",
+      'no-tool-call: stop=stop parts=text out=0 in=0 cache=0 text="I refuse to call tools" attempts=2',
+    ]);
   });
 });

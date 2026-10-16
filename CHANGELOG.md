@@ -1,5 +1,47 @@
 # Changelog
 
+## 3.35.0 — 2026-10-16
+**A judge failure used to record only that a failure happened.**
+
+- **What was wrong.** The 2026-10-16 judge ledger held 4 `no-tool-call` and 2
+  `bad-args` lines and nothing else: `fail()` threw the reply away and `judge()`
+  inspected only `aborted`/`error`, so three different worlds shared one tally —
+  a model that answered in prose, a turn that ended inside its own thinking
+  block, and a call cut off mid-JSON by the token budget. The third is
+  distinguishable on the wire (`finish_reason=length`, and pi preserves the
+  provider's own word in `rawStopReason`); halter never looked at it.
+- **The replay, recorded as a negative result.** The two commands that actually
+  failed, through the real packet, prompt, schema, sampling and streaming on the
+  live engine: **88/88 valid tool calls**. A valid verdict costs 4.2–7.7s and
+  555–616 completion tokens; forcing a tiny budget reproduced the exact ledger
+  signatures (no tool-call delta at all → `no-tool-call`; a cut mid-JSON → `{}`
+  through the adapter's partial-args parse → `bad-args`) at 170–561ms, which is
+  the "it failed in half a second" the operator saw. So the failure is
+  stochastic, and the ledger could not say which world it was — that is the
+  defect fixed here, not the sampling.
+- **The reply is now kept.** `replyDiag()`: `stop=<normalized>/<finish_reason>`,
+  the part kinds, the token counts (`out in cache think`), the head of any
+  text/thinking, and the name of a call that exists but is unusable
+  (`called=report_verdict(1 args)` — the lookup is positional, so a wrong name
+  was otherwise invisible). A `length` stop is its own class, **`truncated`**:
+  a budget cut must never count as a model refusing to answer. `bad-args`
+  carries the finish_reason tag; the ledger `detail` widened 200 → 400 chars.
+  These three lines are what settle an engine-vs-prompt-vs-budget argument from
+  the ledger instead of by argument.
+- **One retry, narrowly.** `no-tool-call` / `bad-args` / `truncated` get a
+  second sample: at temperature 1 they are what sampling variance produces (the
+  replay above answers the same request correctly), and a failure costs ~0.5s.
+  `timeout`, transport and unresolved-model are NOT retried — the same request
+  buys the same wait. The retry shares the response cap (it gets what the judge
+  call had left, 1500ms floor), so two slow attempts can never cost
+  2×`JUDGE_RESPONSE_CAP_MS`. Failures stay uncached; `attempts: 2` is recorded
+  on the result and in the ledger line, so the retry's own value is measurable.
+- **Tests.** 8 new: the diagnostic shape for each class, the unusable-call
+  name, a retry that lands (`attempts: 2`, two calls), a double failure
+  (`attempts=2` in the ledger line), and `timeout`/`call-failed` calling the
+  model exactly once. The D17 ledger test now pins the full detail string.
+  4027 tests pass.
+
 ## 3.34.0 — 2026-10-16
 **D14 read locality from URLs only; the read itself had two fail-opens.**
 
