@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.37.1 — 2026-10-16
+**A redirect inside a quoted shell payload is still a redirect.**
+
+- **What was wrong.** Step 1 made `sh -c '…'` decide write-ness from its body's
+  stage verbs, and `echo x > .bashrc` has no write verb — `echo` is on the
+  auto-allow table. The whole payload is ONE token to the outer-command
+  redirect scan (D18 rule 1), so `cd <base outside the write bar> && sh -c
+  'echo x > .bashrc'` **passed the floor outright**. It surfaced as control W8
+  of the step-2 replay (51 unique location-floor ledger prompts + 13 adversarial
+  controls, 64 rows, through the live judge): floor PASS, and the only reason
+  the command ever prompted was that the judge happened to deny it (medium).
+- **The fix.** `shellBodyWrites` checks the body's own output redirects first,
+  with the same exclusions as rule 1: fd operations (`>&2`, `>&-`) and absolute
+  targets (already in the path set) are not writes; a relative target, an
+  expansion (`> $out`) or a truncated body counts — fail-closed. Those
+  non-writing redirects are then stripped before the verb scan, because
+  splitting on `&` left a stray `2` stage from `>&2` — an unmodeled verb, which
+  fail-closes and would have turned every `cmd 2>&1` payload into a write.
+- **No over-stop.** `sh -c 'ls | wc -l'`, `bash -c 'grep -c x notes.txt
+  2>/dev/null'` and `sh -c 'cat a.txt | sort | uniq -c | sort -rn | head'` still
+  pass the floor; no location-floor ledger row gained a write claim from this
+  rule. The 6 rows that now carry `write outside base` are all real writes
+  (`cat > test/…`, `cat >> test/…`, `open(p,'w').write(…)`), checked by hand.
+- Suite 4051 / 51 files.
+
 ## 3.37.0 — 2026-10-16
 **An inline program is a write only when its own body says so.**
 

@@ -1,10 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { findNetworkEgress, isWriteOperation, isTrustedScriptCommand, registryRunDeps, uvRunFlags, resolveDepSource } from "../config";
 import { tokenizeSegmentQuoted } from "../analysis/tokenizer";
-import { dangerousPerlFlags } from "../config/bash-patterns";
+import { dangerousPerlFlags, codeBodiesWrite } from "../config/bash-patterns";
 import { analyzeCommand } from "../analysis/command-analysis";
 
 // ── isWriteOperation (from config) ──
+
+describe("codeBodiesWrite — a shell body's redirects (2026-10-16)", () => {
+  // The outer-command redirect scan cannot see inside a quoted payload: the
+  // whole `-c` argument is one token. The body's own redirect is the evidence.
+  it("an output redirect in a shell body writes the base", () => {
+    expect(codeBodiesWrite([{ text: "echo x > .bashrc", opaque: false }], true)).toBe(true);
+    expect(codeBodiesWrite([{ text: "echo x >> log.txt", opaque: false }], true)).toBe(true);
+    expect(codeBodiesWrite([{ text: "echo x > $out", opaque: false }], true)).toBe(true); // opaque target: fail-closed
+    // Not writes: fd dups, and absolute targets — those enter the path set.
+    expect(codeBodiesWrite([{ text: "echo x >&2", opaque: false }], true)).toBe(false);
+    expect(codeBodiesWrite([{ text: "ls 2>&1 | wc -l", opaque: false }], true)).toBe(false);
+    expect(codeBodiesWrite([{ text: "grep a f 2>/dev/null | wc -l", opaque: false }], true)).toBe(false);
+  });
+});
 
 describe("isWriteOperation", () => {
   it("detects always-write commands", () => {

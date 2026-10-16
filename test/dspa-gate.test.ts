@@ -1169,6 +1169,7 @@ describe("D18: write-mode base access (2026-09-12 incident)", () => {
     // now; anything the floor cannot read stays write-capable.
     for (const c of [
       `cd ${HOME_PI} && sh -c 'touch x'`,
+      `cd ${HOME_PI} && sh -c 'echo x > notes.txt'`, // the redirect is inside the payload: one quoted token
       `cd ${HOME_PI} && python3 - <<'PYEOF'\nopen('out.json','w')\nPYEOF`,
       `cd ${HOME_PI} && python3 -c "$CODE"`, // program text never handed over
       `cd ${HOME_PI} && python3 - <<EOF\nprint(open('$HOME/.ssh/id_rsa').read())\nEOF`, // shell expands the body
@@ -1178,6 +1179,7 @@ describe("D18: write-mode base access (2026-09-12 incident)", () => {
     }
     for (const c of [
       `cd ${HOME_PI} && sh -c 'touch x'`,
+      `cd ${HOME_PI} && sh -c 'echo x > notes.txt'`,
       `cd ${HOME_PI} && python3 - <<'PYEOF'\nopen('out.json','w')\nPYEOF`,
     ]) {
       const r = await checkDspaGate(bashPd(c), store);
