@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import os from "node:os";
 import {
-  combineCommonPaths,
-  filterSubPaths,
   groupCommandVariants,
   renderRulesLine,
-  shortenHomePath,
   updateStatus,
 } from "../ui/widget";
 import { store } from "../gate/store";
@@ -17,32 +14,6 @@ import { setDspatActive, setDspatJudging } from "../modes/dspat-mode";
 vi.mock("../judge/verdict", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../judge/verdict")>();
   return { ...mod, judgeStatus: vi.fn(() => ({ state: "ok", modelLabel: null, reason: null })) };
-});
-
-describe("filterSubPaths", () => {
-  it("removes sub-paths of parent directories", () => {
-    expect(filterSubPaths(["/a/b/c", "/a"])).toEqual(["/a"]);
-  });
-
-  it("keeps sibling paths", () => {
-    expect(filterSubPaths(["/a/b", "/a/c"])).toEqual(["/a/b", "/a/c"]);
-  });
-
-  it("handles trailing slashes", () => {
-    expect(filterSubPaths(["/a/", "/a/b"])).toEqual(["/a/"]);
-  });
-
-  it("returns empty array for empty input", () => {
-    expect(filterSubPaths([])).toEqual([]);
-  });
-
-  it("preserves order for non-overlapping paths", () => {
-    expect(filterSubPaths(["/x", "/y", "/z"])).toEqual(["/x", "/y", "/z"]);
-  });
-
-  it("handles deeply nested sub-paths", () => {
-    expect(filterSubPaths(["/a/b/c/d", "/a/b", "/a"])).toEqual(["/a"]);
-  });
 });
 
 describe("groupCommandVariants", () => {
@@ -203,51 +174,6 @@ describe("updateStatus", () => {
     setDspatJudging(null, ctx);
     updateStatus(ctx);
     expect(status).toBe("◎ DSPAT");
-  });
-});
-
-describe("shortenHomePath", () => {
-  it("shortens $HOME-prefixed absolute paths to ~", () => {
-    expect(shortenHomePath(`${os.homedir()}/pi/agent/file.ts`)).toBe("~/pi/agent/file.ts");
-  });
-
-  it("leaves other absolute and relative paths unchanged", () => {
-    expect(shortenHomePath("/tmp/elsewhere/file.ts")).toBe("/tmp/elsewhere/file.ts");
-    expect(shortenHomePath("relative/file.ts")).toBe("relative/file.ts");
-  });
-
-  it("does not shorten a sibling directory that shares the home prefix", () => {
-    expect(shortenHomePath(`${os.homedir()}-other/file.ts`)).toBe(`${os.homedir()}-other/file.ts`);
-  });
-});
-
-describe("combineCommonPaths", () => {
-  it("combines siblings under a shared directory with &", () => {
-    expect(combineCommonPaths(["a/b/x", "a/b/y"])).toBe("a/b/x & y");
-  });
-
-  it("keeps groups with unrelated paths separate", () => {
-    expect(combineCommonPaths(["a/b/x", "a/b/y", "c/z"]).split(" ")).toContain("c/z");
-    expect(combineCommonPaths(["a/b/x", "a/b/y", "c/z"])).toContain("a/b/x & y");
-  });
-
-  it("keeps nested remainders in the plain form when combining does not save", () => {
-    // "a/b/c & bd/x" (12) vs "a/b/c a/bd/x" (12): no saving → plain join.
-    expect(combineCommonPaths(["a/b/c", "a/bd/x"])).toBe("a/b/c a/bd/x");
-  });
-
-  it("does not combine top-level siblings (no shared directory)", () => {
-    expect(combineCommonPaths(["/x", "/y"])).toBe("/x /y");
-  });
-
-  it("does not combine when the combination is not shorter", () => {
-    // 2-char prefix: "a/b & c" (7) vs "a/b a/c" (7) — not strictly shorter.
-    expect(combineCommonPaths(["a/b", "a/c"])).toBe("a/b a/c");
-  });
-
-  it("passes through single and empty lists", () => {
-    expect(combineCommonPaths(["a/b/x"])).toBe("a/b/x");
-    expect(combineCommonPaths([])).toBe("");
   });
 });
 

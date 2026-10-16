@@ -195,6 +195,78 @@ describe("judgment packet", () => {
     expect(status).toContain("network: none");
   });
 
+  it("names the registry deps a uv run --with form fetches, with the allowlist verdict", () => {
+    // The supply-chain fact the packet used to hide: `network: yes (uv)` says
+    // only that a fetch is possible, so the judge could not tell a package the
+    // operator vetted in config from an arbitrary one. Knowledge, not a grant.
+    const p = buildJudgmentPacket({
+      command: "uv run --with pandas,pdfplumber python3 job.py",
+      cwd: "/w",
+      segments: ["uv run --with pandas,pdfplumber python3 job.py"],
+      riskReasons: [],
+      hasUnsafePattern: false,
+    });
+    expect(p).toContain("network: yes (uv)");
+    expect(p).toContain(
+      "registry deps (uv fetches these at run time): pandas (on the operator's package allowlist), pdfplumber (not on the operator's package allowlist)",
+    );
+    // No line at all for commands that name no registry deps.
+    const none = buildJudgmentPacket({ ...baseInput, segments: ["python3 job.py"] });
+    expect(none).not.toContain("registry deps");
+    const uvx = buildJudgmentPacket({
+      command: "uvx pymupdf -c 1",
+      cwd: "/w",
+      segments: ["uvx pymupdf -c 1"],
+      riskReasons: [],
+      hasUnsafePattern: false,
+    });
+    expect(uvx).not.toContain("registry deps");
+  });
+
+  it("names deps hidden behind other uv options and behind a wrapper", () => {
+    // The option walk used to stop at the first token that was not a dependency
+    // flag, so `--frozen` placed before `--with` made the whole install set
+    // invisible to the judge (and to the trust check).
+    const hidden = buildJudgmentPacket({
+      command: "uv run --frozen --python 3.12 --with pandas,pdfplumber python3 job.py",
+      cwd: "/w",
+      segments: ["uv run --frozen --python 3.12 --with pandas,pdfplumber python3 job.py"],
+      riskReasons: [],
+      hasUnsafePattern: false,
+    });
+    expect(hidden).toContain(
+      "registry deps (uv fetches these at run time): pandas (on the operator's package allowlist), pdfplumber (not on the operator's package allowlist)",
+    );
+    // A wrapper installs exactly what the inner form says, so it names nothing here.
+    const wrapped = buildJudgmentPacket({
+      command: "timeout 60 uv run --with pandas python3 job.py",
+      cwd: "/w",
+      segments: ["timeout 60 uv run --with pandas python3 job.py"],
+      riskReasons: [],
+      hasUnsafePattern: false,
+    });
+    expect(wrapped).toContain("registry deps (uv fetches these at run time): pandas (");
+  });
+
+  it("labels a trusted-scripts-dir payload by its invocation, not as a foreign file", () => {
+    // The file lives in the operator's own skills dir; only this invocation
+    // lost trust (an unallowlisted dep, a non-transparent wrapper). Calling it
+    // "(untrusted)" overstated that into "unknown file".
+    const scriptPath = path.join(os.homedir(), ".pi", "agent", "skills", "xlsx", "job.py");
+    const p = buildJudgmentPacket({
+      ...baseInput,
+      command: "uv run --with pandas python3 job.py",
+      segments: ["uv run --with pandas python3 job.py"],
+      script: { path: scriptPath, content: "import pandas\n" },
+    });
+    expect(p).toContain(
+      `## Script: ${scriptPath} (operator's trusted scripts dir — this invocation is not trusted)`,
+    );
+    // A cwd-local script keeps the plain label (judge-prompt.test.ts pins it).
+    const local = buildJudgmentPacket({ ...baseInput, script: { path: "/w/job.py", content: "x" } });
+    expect(local).toContain("## Script: /w/job.py (untrusted)");
+  });
+
   it("carries long commands in full, untrimmed (D11 — the heredoc body IS the write content)", () => {
     const long = "echo " + "x".repeat(10_000);
     const p = buildJudgmentPacket({

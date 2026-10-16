@@ -92,6 +92,32 @@ export function globUnverifiedToken(value: string | null | undefined): string {
  */
 export function stripHeredocBodies(cmd: string): string {
   const HEREDOC_START_RE = /<<(?!<)(-?)\s*(['"]?)([A-Za-z0-9_][A-Za-z0-9_.-]*)\2\s*(?:[#|&;].*)?$/;
+  /** True when `targetIdx` on `line` sits outside quotes and `#` comments. */
+  const isUnquotedAndUncommentedAt = (line: string, targetIdx: number): boolean => {
+    let inSingle = false;
+    let inDouble = false;
+    let escaped = false;
+    let prev = "\n";
+    for (let i = 0; i < line.length; i++) {
+      if (i === targetIdx && (inSingle || inDouble || escaped)) return false;
+      const c = line[i];
+      if (escaped) { escaped = false; prev = c; continue; }
+      if (inSingle) { if (c === "'") { inSingle = false; prev = c; } continue; }
+      if (inDouble) {
+        if (c === "\\") { escaped = true; continue; }
+        if (c === '"') { inDouble = false; prev = c; }
+        continue;
+      }
+      if (c === "\\") { escaped = true; continue; }
+      if (c === "'") { inSingle = true; prev = c; continue; }
+      if (c === '"') { inDouble = true; prev = c; continue; }
+      if (c === "#" && /[ \t\n;|&(]/.test(prev)) {
+        return i > targetIdx; // comment before `<<` → not a heredoc; after `<<` → valid trailing comment
+      }
+      prev = c;
+    }
+    return !inSingle && !inDouble && !escaped;
+  };
   /** Return the heredoc delimiter if this line unambiguously starts one, else null. */
   const findHeredocStart = (line: string): string | null => {
     const m = line.match(HEREDOC_START_RE);
@@ -100,15 +126,7 @@ export function stripHeredocBodies(cmd: string): string {
     // `<<` must be a standalone word: start of line or preceded by whitespace.
     // Glued forms (x<<EOF, =<<EOF) are literal words in bash, not redirects.
     if (opIdx > 0 && !/\s/.test(line[opIdx - 1])) return null;
-    const before = line.slice(0, opIdx);
-    // A word-boundary `#` before the operator puts it inside a comment —
-    // bash starts no heredoc there (covers `# c <<EOF` and `cmd;# c <<EOF`).
-    if (/^#|[\s;|&(]#/.test(before)) return null;
-    // Unbalanced unescaped quotes before the operator mean it sits inside a
-    // multi-line string — literal text, not a redirect.
-    const dq = (before.match(/(?<!\\)"/g) ?? []).length;
-    const sq = (before.match(/(?<!\\)'/g) ?? []).length;
-    if (dq % 2 || sq % 2) return null;
+    if (!isUnquotedAndUncommentedAt(line, opIdx)) return null;
     return m[3];
   };
   const lines = cmd.split("\n");

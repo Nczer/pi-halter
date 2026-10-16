@@ -23,10 +23,16 @@ import type {JudgeResult} from "../judge/judge";
 
 vi.mock("../judge/verdict", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../judge/verdict")>();
+  const getJudgeVerdict = vi.fn();
+  const getStage2Verdict = vi.fn();
   return {
     ...actual, // the D11 script-payload identification (analysis/) runs real
-    getJudgeVerdict: vi.fn(),
-    getStage2Verdict: vi.fn(),
+    getJudgeVerdict,
+    getStage2Verdict,
+    // The outcome entry points wrap the same mocks, so tests keep stubbing
+    // verdicts through getJudgeVerdict/getStage2Verdict.
+    getStage1Outcome: vi.fn(async (...a: any[]) => ({ verdict: await getJudgeVerdict(...a) })),
+    getStage2Outcome: vi.fn(async (...a: any[]) => ({ verdict: await getStage2Verdict(...a) })),
     judgeStatus: vi.fn(() => ({ state: "ok", modelLabel: "test/model (session)", reason: null })),
   };
 });
@@ -187,6 +193,16 @@ beforeEach(() => {
     modelLabel: "test/model (session)",
     reason: null,
   });
+  // Same for the outcome wrappers: tests that stub them directly (the
+  // failure-identity cases) must not leak into the next test.
+  vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(null);
+  vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(null);
+  vi.mocked(judgePrompt.getStage1Outcome).mockImplementation(
+    async (...a: any[]) => ({ verdict: await (judgePrompt.getJudgeVerdict as any)(...a) }),
+  );
+  vi.mocked(judgePrompt.getStage2Outcome).mockImplementation(
+    async (...a: any[]) => ({ verdict: await (judgePrompt.getStage2Verdict as any)(...a) }),
+  );
   resetDspa();
   resetDspat();
   fs.rmSync(tmpLog, { force: true });
@@ -733,6 +749,26 @@ describe("fall-through", () => {
     const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
     expect(fallthrough?.verdict).toBeNull();
     expect(logLines()[0].dspa).toBe("judge: judge call failed");
+  });
+
+  it("the judge stop-tag names the typed failure class", async () => {
+    // "stage 2 fails while the server is up" is only answerable if the ledger
+    // says WHICH failure: timeout vs auth vs a model that never called the tool.
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getStage1Outcome).mockResolvedValue({ verdict: null });
+    vi.mocked(judgePrompt.getStage2Outcome).mockResolvedValue({ verdict: null, failReason: "timeout", latencyMs: 8020 });
+    await runGate(bashDecision("make test"));
+    expect(logLines()[0].dspa).toBe("judge: judge call failed (timeout 8.0s)");
+  });
+
+  it("stage-1 verdict + a typed stage-2 failure → the tag names the class", async () => {
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(verdict({ approve: "deny", risk: "high" }));
+    vi.mocked(judgePrompt.getStage2Outcome).mockResolvedValue({ verdict: null, failReason: "no-tool-call" });
+    await runGate(bashDecision("make test"));
+    const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
+    expect(fallthrough?.judgeFail).toBe("no-tool-call");
+    expect(String(logLines()[0].dspa)).toBe("judge: stage 2 failed (no-tool-call)");
   });
 
   it("hard gate block (non-loopback network) → judge runs advisory, stop stands (D14)", async () => {

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
-import { isWriteOperation, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, fetchFormPackage } from "../config";
-import { splitIntoSegments, splitOnPipe, tokenizeSegment } from "./tokenizer";
+import { isWriteOperation, isAllowedCommand, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, fetchFormPackage, uvRunFlags, resolveDepSource, type UvRunDep, type UvRunFlags } from "../config";
+import { splitIntoSegments, splitOnPipe, tokenizeSegment, tokenizeSegmentQuoted } from "./tokenizer";
 
 // splitPipeline is splitOnPipe — same semantics (split on | not ||)
 export { splitOnPipe as splitPipeline };
@@ -18,8 +18,8 @@ const BACKTICK_RE = /`/;
 /** Write redirect patterns. */
 export const STARTS_WITH_REDIRECT_RE = /^[0-9]*&?>+/;
 const WRITE_REDIRECT_RE = />+\s*\S/;
-const IN_TEST_RE = /\[\s.*\]/;
-const TEST_CMD_RE = /test\s/;
+/** `[[ … ]]` conditional expressions where `>` is string comparison, not file redirection. */
+export const DOUBLE_BRACKET_COND_RE = /\[\[\s[\s\S]*?\s\]\]/g;
 /** Null redirect stripping. */
 const NULL_REDIRECT_RE1 = /[0-9]*&?>+\s*(?:\/dev\/(?:null|stderr))\b/g;
 const NULL_REDIRECT_RE2 = /[0-9]*>&[0-9]+/g;
@@ -49,9 +49,9 @@ const WRAPPER_VALUE_FLAGS: Record<string, Set<string>> = {
  * match — and read that answer from stdin when there is no tty, so
  * `echo y | find . -ok rm {} \;` deletes silently. The exec'd command must be
  * checked identically. */
-const FIND_EXEC_RE = /-(?:execdir|exec|okdir|ok)\b\s+(\S+)/;
-const FD_EXEC_RE = /-(?:x|X)\b\s+(\S+)/;
-const RG_PRE_RE = /--pre(?:=|\s+)(\S+)/;
+const FIND_EXEC_RE = /(?<![\w./-])-(?:execdir|exec|okdir|ok)\b\s+(\S+)/g;
+const FD_EXEC_RE = /(?<![\w./-])(?:-(?:x|X)\b|--exec(?:-batch)?(?:=|\s+))\s*(\S+)/g;
+const RG_PRE_RE = /(?<![\w./-])--pre(?:=|\s+)(\S+)/g;
 
 /**
  * Package-manager flags that consume the NEXT token as their value (space-separated
@@ -64,16 +64,6 @@ const PM_VALUE_FLAGS = new Set([
   "--workspace", "-w", "--loglevel", "--cwd", "--manifest-path", "--config",
   "--target", "--target-dir", "-Z", "--index-url", "--extra-index-url", "-i",
 ]);
-/** stripQuotedStrings. */
-const QUOTE_DOUBLE_RE = /"(?:[^"\\]|\\.)*"/g;
-const QUOTE_SINGLE_RE = /'[^']*'/g;
-const QUOTE_DOLLAR_RE = /\$'[^']*'/g;
-// Bash only treats `#` as a comment at the START of a word (line start or after
-// whitespace). A mid-word `#` is literal: `cat foo#;rm -rf .` executes rm.
-// A looser regex (\s*#) would strip the `;rm -rf .` and hide the chained command
-// from COMPOUND_RE in FastAllowRule — an auto-allow bypass.
-const QUOTE_COMMENT_RE = /(^|\s)#.*$/gm;
-
 /** Check if a string contains command substitution markers from stripQuotedStrings. */
 export function containsCommandSubstitution(s: string): boolean {
   return s.includes(CMD_SUBST_MARKER);
@@ -124,15 +114,89 @@ export function isReadOnlySubshellText(text: string): boolean {
   return true;
 }
 
+/**
+ * Replace quoted spans (`'…'`, `$'…'`, `"…"`, `$"…"`) with `__STR__` (or
+ * `__CMD_SUBST__` when a double-quoted span contains an unescaped `$(…)` /
+ * backtick) and strip word-boundary `#` comments in a single left-to-right
+ * pass. Sequential `.replace()` passes paired quotes across different strings
+ * (`echo '"' ; rm -rf src ; echo '"'`), treated `QUOTE_DOLLAR_RE` as dead code,
+ * and desynchronized on `$'\''`.
+ */
 export function stripQuotedStrings(cmd: string): string {
-  let s = cmd.replace(QUOTE_DOUBLE_RE, (match) => {
-    if (CMD_SUBST_IN_QUOTE_RE.test(match) || BACKTICK_RE.test(match)) return CMD_SUBST_MARKER;
-    return "__STR__";
-  });
-  s = s.replace(QUOTE_SINGLE_RE, "__STR__");
-  s = s.replace(QUOTE_DOLLAR_RE, "__STR__");
-  s = s.replace(QUOTE_COMMENT_RE, "$1");
-  return s;
+  let out = "";
+  let i = 0;
+  while (i < cmd.length) {
+    const ch = cmd[i];
+    const next = cmd[i + 1];
+
+    // Unquoted backslash escape: keep both chars so FastAllowRule still sees
+    // `/\\/` while preventing `\"`, `\'`, or `\#` from opening a quote/comment.
+    if (ch === "\\" && next !== undefined) {
+      out += ch + next;
+      i += 2;
+      continue;
+    }
+
+    // ANSI-C quoting ($'...') — `\'` and `\\` are escaped inside.
+    if (ch === "$" && next === "'") {
+      let j = i + 2;
+      while (j < cmd.length && cmd[j] !== "'") {
+        if (cmd[j] === "\\" && j + 1 < cmd.length) j += 2;
+        else j++;
+      }
+      if (j < cmd.length) {
+        out += "__STR__";
+        i = j + 1;
+        continue;
+      }
+    }
+
+    // Single-quoted string ('...') — no backslash escaping inside.
+    if (ch === "'") {
+      const close = cmd.indexOf("'", i + 1);
+      if (close !== -1) {
+        out += "__STR__";
+        i = close + 1;
+        continue;
+      }
+    }
+
+    // Double-quoted string ("..." or $"...").
+    if (ch === '"' || (ch === "$" && next === '"')) {
+      const start = ch === "$" ? i + 2 : i + 1;
+      let j = start;
+      let inner = "";
+      while (j < cmd.length && cmd[j] !== '"') {
+        if (cmd[j] === "\\" && j + 1 < cmd.length) {
+          // Escaped `\$` or `\` inside double quotes is literal, not a substitution.
+          if (cmd[j + 1] !== "$" && cmd[j + 1] !== "`") inner += cmd[j] + cmd[j + 1];
+          j += 2;
+        } else {
+          inner += cmd[j];
+          j++;
+        }
+      }
+      if (j < cmd.length) {
+        out += (CMD_SUBST_IN_QUOTE_RE.test(inner) || BACKTICK_RE.test(inner))
+          ? CMD_SUBST_MARKER
+          : "__STR__";
+        i = j + 1;
+        continue;
+      }
+    }
+
+    // Word-boundary `#` comment (start of line or preceded by whitespace).
+    if (ch === "#" && (i === 0 || /\s/.test(cmd[i - 1]))) {
+      const nl = cmd.indexOf("\n", i + 1);
+      if (nl === -1) break;
+      i = nl;
+      continue;
+    }
+
+    out += ch;
+    i++;
+  }
+  return out;
 }
 
 /**
@@ -312,12 +376,8 @@ export function hasWriteRedirect(cmd: string): boolean {
   if (STARTS_WITH_REDIRECT_RE.test(trimmed)) {
     if (!stripNullRedirects(trimmed).trim()) return false;
   }
-  const stripped = stripNullRedirects(noQuotes);
-  if (WRITE_REDIRECT_RE.test(stripped)) {
-    const inTest = IN_TEST_RE.test(stripped) || TEST_CMD_RE.test(stripped);
-    if (!inTest) return true;
-  }
-  return false;
+  const stripped = stripNullRedirects(noQuotes).replace(DOUBLE_BRACKET_COND_RE, "");
+  return WRITE_REDIRECT_RE.test(stripped);
 }
 
 /**
@@ -366,12 +426,91 @@ export function isWrapperRunningRelativePath(segment: string): boolean {
   return checkWrapperArg(segment, (arg) => isFirstTokenRelativePath(arg), true);
 }
 
+/** Rendered in place of a dependency value no grant can name (see segmentRunDepsUngrantable). */
+const UNRESOLVED_DEP = "<unresolved>";
+
+/** Render one dependency as grant identity: exact value (case-folded) for a
+ *  registry package, resolved absolute path for a local source. */
+function renderRunDep(dep: UvRunDep, base: string | null | undefined): string {
+  if (dep.opaque) return `${dep.flag} ${UNRESOLVED_DEP}`;
+  if (dep.flag === "--with") return `--with ${dep.value.toLowerCase()}`;
+  // A relative source resolves against the runtime cwd; when that cwd is not
+  // knowable (`cd $(…) && uv run …`) the same signature text would name a
+  // different file per cwd, so it names nothing at all.
+  if (!base) return `${dep.flag} ${UNRESOLVED_DEP}`;
+  return `${dep.flag} ${resolveDepSource(dep.value, base)}`;
+}
+
+/**
+ * The grant-identity items of a `uv run` form's options — uv's own option NAMES
+ * (sorted, deduped) plus the VALUES that decide what is downloaded: the
+ * dependency flags and `-p`/`--python`. Every other flag value stays out of
+ * signatures, as everywhere else. Sorting and deduping is what makes a grant
+ * match a reordered repeat of the same command.
+ *
+ * Null when `segment` is not a `uv run` form, is malformed (`--with-requirements`
+ * with no value), or has nothing to name — a bare `uv run` keeps the coarse
+ * signature (it syncs the project environment from pyproject.toml/uv.lock, which
+ * names nothing in the command, so there is nothing to put in the grant;
+ * documented in the README).
+ */
+function runDepItems(segment: string, base?: string | null): string[] | null {
+  const flags = uvRunFlags(tokenizeSegmentQuoted(segment));
+  if (!flags) return null;
+  if (flags.danglingSource) return null; // malformed: uv exits on it, no grant to scope
+  if (flags.deps.length === 0 && flags.uvFlags.length === 0 && flags.pythonValues.length === 0) return null;
+  const items = new Set<string>(flags.uvFlags);
+  for (const v of flags.pythonValues) items.add(`--python ${v.toLowerCase()}`);
+  for (const dep of flags.deps) items.add(renderRunDep(dep, base));
+  return [...items].sort();
+}
+
+/** The dependency-aware signature of a `uv run` form, or null to fall through
+ *  to the coarse package-manager signature (see runDepItems). */
+export function uvRunSignature(segment: string, base?: string | null): string | null {
+  const items = runDepItems(segment, base);
+  return items === null ? null : `uv run ${items.join(" ")}`;
+}
+
+/** uv's run options for a segment, looking THROUGH a pass-through wrapper:
+ *  `timeout 60 uv run --with pandas …` and `env FOO=1 uv run …` install exactly
+ *  what the inner form says, so the wrapper hides nothing. */
+function runFlagsOfSegment(segment: string): UvRunFlags | null {
+  const direct = uvRunFlags(tokenizeSegmentQuoted(segment));
+  if (direct) return direct;
+  const deleg = getDelegatedCommand(segment);
+  return deleg ? uvRunFlags(tokenizeSegmentQuoted(deleg.tail)) : null;
+}
+
+/** True when a segment (or a form wrapped around it) NAMES dependencies. Its
+ *  signature is the dependency set, so a coarser grant ("uv run", "timeout uv")
+ *  must not prefix-match it — the grant has to name the same set to apply. */
+export function segmentNamesRunDeps(segment: string): boolean {
+  return (runFlagsOfSegment(segment)?.deps.length ?? 0) > 0;
+}
+
+/** True when a `uv run` form cannot be granted at all: a dependency value the
+ *  shell decides at run time (`--with "$PKG"`, an unquoted glob), a source path
+ *  whose cwd is not knowable, or a dangling source flag. No Always can vouch
+ *  for what the value becomes, so the form prompts every time — and minting a
+ *  grant for it would only pollute the store (same reasoning as relative tools). */
+export function segmentRunDepsUngrantable(segment: string, base?: string | null): boolean {
+  const flags = runFlagsOfSegment(segment);
+  if (!flags) return false;
+  if (flags.danglingSource) return true;
+  return flags.deps.some((d) => d.opaque || (d.flag !== "--with" && !base));
+}
+
 /**
  * Extract a command signature, stripping redirects and quotes.
  * For pipelines, uses the first command's signature.
  * For package managers, includes the subcommand for granular allow control.
+ *
+ * `base` is the segment's EFFECTIVE cwd (null = the runtime cwd is not
+ * knowable). Only `uv run` uses it: its dependency sources are named by path,
+ * and a path identity means nothing without the directory it resolves against.
  */
-export function getCommandSignature(segment: string): string {
+export function getCommandSignature(segment: string, base?: string | null): string {
   const firstCmd = splitOnPipe(segment)[0] ?? segment;
   const cleaned = firstCmd
     .replace(SIG_REDIRECT_RE, "")
@@ -386,13 +525,29 @@ export function getCommandSignature(segment: string): string {
   // `timeout ssh`, and a bare `timeout` grant covers nothing wrapped at all.
   const deleg = resolveDelegatedTokens(tokens);
   if (deleg && !deleg.lookup) {
-    return `${cmdBase} ${deleg.cmd}`;
+    // A wrapped `uv run` keeps its dependency set in the signature: the wrapper
+    // is transparent to the grant, the install set it carries is not (a coarse
+    // "timeout uv" grant must not vouch for every later `--with`).
+    // The inner form is read from the RAW text, not from these stripped tokens:
+    // stripQuotedStrings collapses quoted values to `__STR__`, and a quoted pin
+    // (`--with "pandas>=2.0"`) has to keep its exact value to be grant identity.
+    const wrapped = deleg.cmd === "uv" ? getDelegatedCommand(cleaned) : null;
+    const inner = wrapped ? runDepItems(wrapped.tail, base) : null;
+    return inner === null ? `${cmdBase} ${deleg.cmd}` : `${cmdBase} ${deleg.cmd} ${inner.join(" ")}`;
   }
 
   // Package managers: include subcommand for granular control
   // npm test → "npm test", npm install → "npm install"
   // npm -v → "npm" (flag only, no subcommand)
   if (PACKAGE_MANAGERS.has(cmdBase)) {
+    // `uv run` names its ENTIRE install set (registry deps, local sources, the
+    // interpreter it may download), so the coarse "uv run" signature let one
+    // Always vouch for every later dependency. The dep-aware signature is the
+    // grant's identity; see uvRunSignature.
+    if (cmdBase === "uv") {
+      const runSig = uvRunSignature(firstCmd, base);
+      if (runSig !== null) return runSig;
+    }
     // Find the subcommand: first non-flag token, skipping values of flags that
     // consume the next token (--prefix /x). Inline values (--prefix=/x) are
     // part of the flag token and skipped with it.
@@ -416,13 +571,22 @@ export function getCommandSignature(segment: string): string {
  * Generic helper for find -exec, fd -x, rg --pre, etc.
  */
 function checkExecWrite(segment: string, regex: RegExp): boolean {
-  const match = segment.match(regex);
-  if (!match) return false;
-  // The exec'd command may be quoted (`find . -exec 'rm' {} \;` — runtime-
-  // verified to delete); strip surrounding quotes so it matches by name.
-  const cmd = match[1].replace(/^["']+|["']+$/g, "").toLowerCase();
-  const after = segment.slice(match.index! + match[0].length);
-  return isWriteOperation(cmd, after);
+  for (const match of segment.matchAll(regex)) {
+    // The exec'd command may be quoted (`find . -exec 'rm' {} \;` — runtime-
+    // verified to delete); strip surrounding quotes so it matches by name.
+    const rawCmd = match[1].replace(/^["']+|["']+$/g, "");
+    const after = segment.slice(match.index! + match[0].length);
+    if (isFirstTokenRelativePath(rawCmd)) return true;
+    const cmd = path.basename(rawCmd).toLowerCase();
+    const deleg = getDelegatedCommand(`${rawCmd} ${after}`);
+    if (deleg) {
+      if (isFirstTokenRelativePath(deleg.tail) || isWriteOperation(deleg.cmd, deleg.tail) || !isAllowedCommand(deleg.cmd)) {
+        return true;
+      }
+    }
+    if (isWriteOperation(cmd, after) || !isAllowedCommand(cmd)) return true;
+  }
+  return false;
 }
 
 export function isFindExecWrite(segment: string): boolean {

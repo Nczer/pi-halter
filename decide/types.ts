@@ -142,6 +142,16 @@ export interface BashPromptData {
    */
   fetchableForms?: Array<{ sig: string; pkg: string }>;
   /**
+   * Signatures of `uv run` segments NO command-tier grant can cover — a
+   * dependency value the shell decides at run time (`--with "$PKG"`, an
+   * unquoted glob) or a source path whose working directory is not statically
+   * known. Such sigs are excluded from the command tier and its rules (a grant
+   * keyed on `$PKG` is a grant keyed on whatever `PKG` becomes), and the prompt
+   * says so instead of offering an Always that does nothing. Absent on
+   * hand-constructed PromptData.
+   */
+  ungrantableRunDeps?: string[];
+  /**
    * The single analysis this decision was made from. Downstream consumers
    * (the /dspa hard gate, the judge packet) use it instead of re-parsing,
    * so they see exactly the analysis the decision was based on — one

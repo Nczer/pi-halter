@@ -8,7 +8,7 @@ import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs } from "./path-analysis";
 import { checkCommandForCredentialPaths } from "./credentials";
-import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE } from "./segment-helpers";
+import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE, segmentNamesRunDeps, segmentRunDepsUngrantable } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
 
 /** Safety verdict for a shell command. */
@@ -56,6 +56,13 @@ export interface CommandAnalysis {
   segments: string[];
   /** Command signatures for auto-allow matching (e.g. "git -R", "ls"). */
   signatures: string[];
+  /** Indices of segments that are `uv run` forms NAMING dependencies: their
+   * signature IS the dependency set, so a coarse grant must not prefix-match
+   * them (an Always for one dependency set never covers another). */
+  runDepSegmentIndices: number[];
+  /** Indices of `uv run` segments no grant can cover — a dependency value the
+   * shell decides at run time, or a source path whose cwd is not knowable. */
+  ungrantableRunDepSegmentIndices: number[];
   /** All extracted file/dir paths, resolved to absolute. */
   paths: string[];
   /** Detailed safety verdict. */
@@ -247,14 +254,22 @@ export async function analyzeCommand(
   const parseResult = await parseCommand(cmd, cwd);
   const { segments, paths, opaque, assignments, hasParseError, unsets } = parseResult;
   const segmentTexts = segments.map(s => s.text);
-  const signatures = segmentTexts.map(getCommandSignature);
 
   // Effective cwd per segment: a resolvable `cd` in an earlier top-level
   // segment changes the working directory for later segments — relative script
   // paths must be analyzed against it for the trusted-script bypass to work
   // (`cd <skill-dir> && uv run … scripts/x.py`). null = unknown base (a
   // non-literal cd or a `||` branch made the runtime cwd unresolvable).
+  // Computed BEFORE signatures: a `uv run` dependency source is a PATH and a
+  // path identity is meaningless without the directory it resolves against.
   const effectiveCwds = trackEffectiveCwd(segments, cwd, assignments);
+  const signatures = segmentTexts.map((s, i) => getCommandSignature(s, effectiveCwds[i]));
+  const runDepSegmentIndices = segmentTexts
+    .map((s, i) => (segmentNamesRunDeps(s) ? i : -1))
+    .filter(i => i >= 0);
+  const ungrantableRunDepSegmentIndices = segmentTexts
+    .map((s, i) => (segmentRunDepsUngrantable(s, effectiveCwds[i]) ? i : -1))
+    .filter(i => i >= 0);
 
   // Cwd-dependent tokens (./x, ../x, $PWD/x) in post-cd segments were resolved
   // by parseCommand against the session cwd — re-resolve them against the
@@ -441,6 +456,8 @@ export async function analyzeCommand(
   const analysis = {
     segments: segmentTexts,
     signatures,
+    runDepSegmentIndices,
+    ungrantableRunDepSegmentIndices,
     paths,
     hasParseError,
     safety: {

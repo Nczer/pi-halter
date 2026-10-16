@@ -26,7 +26,7 @@ import { analyzeCommand } from "../analysis/command-analysis";
 import { findExecutedScript } from "../analysis/script-payload";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { expandTilde } from "../analysis/path-util";
-import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeResult, JudgeSettings} from "./judge";
+import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeResult, JudgeSettings, JudgeFailReason} from "./judge";
 import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
 import { isDspaActive, setDspaJudging } from "../modes/dspa-mode";
@@ -196,9 +196,13 @@ export interface JudgePromptDeps {
 }
 
 /**
- * One judge stage for a prompt (bash / file), or null (never throws).
- * Shows a status widget while the model call is in flight. A verdict that
- * failed to produce an explanation (defer) is treated as "no verdict".
+ * One judge stage for a prompt (bash / file). Shows a status widget while the
+ * model call is in flight. A verdict that failed to produce an explanation
+ * (defer) is treated as "no verdict": `verdict` is null and the outcome says
+ * WHY (`failReason`, judge()'s typed class) — the prompt line and the ledger
+ * both need it, and a user who cannot see the ledger cannot measure the
+ * failures (2026-10-14: "stage 2 fails when the server is up" was unanswerable
+ * because the class stopped at the ledger).
  *
  * Stage 1 (stateless): today's packet + prompt, LRU-cached on the operation.
  * Stage 2 (dspa intent pass): same operation, plus the reasoning-blind
@@ -211,7 +215,7 @@ async function runJudgeStage(
   store: Store,
   deps: JudgePromptDeps,
   stage: 1 | 2,
-): Promise<JudgeResult | null> {
+): Promise<JudgeStageOutcome> {
   // The in-flight judging stage is tracked on the active mode module
   // (setDspaJudging/setDspatJudging) and painted inline on the status line
   // ("— judging stage 2…"). Only manual mode (on-demand Explain) keeps a
@@ -224,17 +228,17 @@ async function runJudgeStage(
   let widgetShown = false;
   try {
     const settings = deps.settings ?? readJudgeSettings();
-    if (!settings.enabled) return null; // off = the user's choice, stays silent
+    if (!settings.enabled) return { verdict: null }; // off = the user's choice, stays silent
 
     const model = resolveJudgeModel(settings, ctx.modelRegistry, ctx.model);
     if (!model) {
       logJudgeInfra(pd, logMode, stage, "model-unresolved");
-      return null;
+      return { verdict: null, failReason: "model-unresolved" };
     }
     const auth = await resolveJudgeAuth(model, ctx.modelRegistry);
     if (!auth) {
       logJudgeInfra(pd, logMode, stage, "auth-failed", `${model.provider}/${model.id}`);
-      return null;
+      return { verdict: null, failReason: "auth-failed", model: `${model.provider}/${model.id}` };
     }
 
     const input = await buildJudgmentInput(pd, store);
@@ -274,7 +278,7 @@ async function runJudgeStage(
       // only sees UNEXPECTED internal throws (session-context build, a
       // judge bug). Logged so no failure path is ever silent (D17).
       logJudgeInfra(pd, logMode, stage, "call-failed", `${model.provider}/${model.id}`);
-      return null;
+      return { verdict: null, failReason: "call-failed", model: `${model.provider}/${model.id}` };
     }
     if (!result.explanation) {
       // No usable explanation — covers timeout, a text-only reply, a refusal
@@ -284,11 +288,17 @@ async function runJudgeStage(
       // (result.failReason) and keeps the message in `detail` — the 2026-10-04
       // ledger instead of seven rows all reading "no-explanation".
       logJudgeInfra(pd, logMode, stage, result.failReason ?? "call-failed", `${model.provider}/${model.id}`, result.reason.slice(0, 200));
-      return null;
+      return {
+        verdict: null,
+        failReason: result.failReason ?? "call-failed",
+        failDetail: result.reason,
+        model: result.model,
+        latencyMs: result.latencyMs,
+      };
     }
-    return result;
+    return { verdict: result };
   } catch {
-    return null;
+    return { verdict: null, failReason: "call-failed" };
   } finally {
     try {
       if (dspaMode) setDspaJudging(null, ctx);
@@ -301,6 +311,30 @@ async function runJudgeStage(
 }
 
 /**
+ * A stage's result: the verdict, or — when there is none — what stopped it.
+ * `failReason` is set only when a call was attempted and produced nothing,
+ * so an absent one means "the judge was not run" (off) rather than a failure.
+ */
+export interface JudgeStageOutcome {
+  verdict: JudgeResult | null;
+  failReason?: JudgeFailReason;
+  /** judge()'s own one-line description of the failure. */
+  failDetail?: string;
+  /** The model attempted (provider/id), when a call was attempted. */
+  model?: string;
+  latencyMs?: number;
+}
+
+/** The failure identity for a prompt line or the decision line: `timeout 8.0s`.
+ *  Empty when the stage produced a verdict or was deliberately not run. */
+export function judgeFailPhrase(o: JudgeStageOutcome | null | undefined): string {
+  if (!o || o.verdict || !o.failReason) return "";
+  const parts: string[] = [o.failReason];
+  if (o.latencyMs) parts.push(`${(o.latencyMs / 1000).toFixed(1)}s`);
+  return parts.join(" ");
+}
+
+/**
  * Stage 1 — the stateless verdict (all modes: dspat display, dspa auto-
  * allow, on-demand Explain). See runJudgeStage.
  */
@@ -310,6 +344,17 @@ export async function getJudgeVerdict(
   store: Store,
   deps: JudgePromptDeps = {},
 ): Promise<JudgeResult | null> {
+  return (await runJudgeStage(pd, ctx, store, deps, 1)).verdict;
+}
+
+/** Stage 1 with its failure identity, for the sites that report why a stage
+ *  produced nothing. */
+export function getStage1Outcome(
+  pd: PromptData,
+  ctx: ExtensionContext,
+  store: Store,
+  deps: JudgePromptDeps = {},
+): Promise<JudgeStageOutcome> {
   return runJudgeStage(pd, ctx, store, deps, 1);
 }
 
@@ -325,6 +370,16 @@ export async function getStage2Verdict(
   store: Store,
   deps: JudgePromptDeps = {},
 ): Promise<JudgeResult | null> {
+  return (await runJudgeStage(pd, ctx, store, deps, 2)).verdict;
+}
+
+/** Stage 2 with its failure identity (the dspa fall-through note, "Judge again"). */
+export function getStage2Outcome(
+  pd: PromptData,
+  ctx: ExtensionContext,
+  store: Store,
+  deps: JudgePromptDeps = {},
+): Promise<JudgeStageOutcome> {
   return runJudgeStage(pd, ctx, store, deps, 2);
 }
 

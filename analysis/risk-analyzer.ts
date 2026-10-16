@@ -1,5 +1,5 @@
 import { isAllowedCommand } from "../config";
-import { getFirstWord, splitPipeline, stripNullRedirects, stripQuotedStrings } from "./segment-helpers";
+import { DOUBLE_BRACKET_COND_RE, getFirstWord, splitPipeline, stripNullRedirects, stripQuotedStrings } from "./segment-helpers";
 import type { SegmentRisk } from "./segment-analysis";
 
 // ── Types ──
@@ -42,7 +42,7 @@ export async function analyzeWholeCommandRisk(
   // Whole-command operator checks. Strip quoted strings first so operators that
   // appear inside quotes (e.g. a grep pattern containing "=>" or "<") are not
   // misread as shell redirects. Unquoted $(...) is preserved.
-  const cmdNoQuotes = stripQuotedStrings(cmd);
+  const cmdNoQuotes = stripQuotedStrings(cmd).replace(DOUBLE_BRACKET_COND_RE, "");
   const cmdNoNullRedirect = stripNullRedirects(cmdNoQuotes);
   const hasRealWriteRedirect = WHOLE_CMD_WRITE_REDIRECT_RE.test(cmdNoNullRedirect);
   if (hasRealWriteRedirect && !reasons.some(r => r.includes("shell output redirection"))) {

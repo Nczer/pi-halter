@@ -131,6 +131,17 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   }
 
   const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
+  // Dependency-bearing `uv run` forms: the signature IS the dependency set, so
+  // only an EXACT grant may apply — `hasAllowedBashPrefix` would let a coarse
+  // "uv run" grant (an older click, a hand-written pattern rule, or a bare
+  // nameless run) swallow every dependency set that starts with it, which is
+  // the exact umbrella the dep-aware signature exists to remove. Same reasoning
+  // that keeps fetchable run forms out of the coarse signature tier.
+  const runDepIdxSet = new Set(analysis.runDepSegmentIndices);
+  // A run form naming a dependency no grant can name (`--with "$PKG"`, an
+  // unquoted glob, a source path whose cwd is not knowable): no command-tier
+  // grant can vouch for what the value becomes, so it prompts every time.
+  const ungrantableRunDepSet = new Set(analysis.ungrantableRunDepSegmentIndices);
   const sigFirstWords = analysis.signatures.map(getFirstWord);
   // Wrapper transparency for grants: a segment that delegates to another
   // command (timeout/xargs/command/env …) is approved by
@@ -157,6 +168,7 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
       const ff = segmentFetchPackage(analysis.segments[segIdx] ?? "");
       if (ff && store.hasTrustedPackage(ff.pkg)) return true;
     }
+    if (ungrantableRunDepSet.has(segIdx)) return false;
     // Relative-path segments (./node_modules/.bin/npm test) must never inherit
     // grants for the bare command name — a repo-shipped executable named npm/pip
     // would otherwise inherit session-wide `npm *` grants. The ONLY approval
@@ -182,10 +194,11 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
       // by the segmentFetchPackage check above — it resolves the same
       // delegation — so only the grant checks differ here.)
       if (store.hasAllowedBash(deleg.cmd)) return true; // grant for wrapped cmd
+      if (runDepIdxSet.has(segIdx)) return false;
       return store.hasAllowedBashPrefix(deleg.cmd);
     }
     if (store.hasAllowedBash(sig)) return true;
-    if (store.hasAllowedBashPrefix(sig)) return true;
+    if (!runDepIdxSet.has(segIdx) && store.hasAllowedBashPrefix(sig)) return true;
     if (segIsSafeSubcommand[segIdx]) return true;
     return isAllowedCommand(sigFirstWords[segIdx]);
   };
@@ -218,6 +231,12 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
       fetchableForms.push({ sig, pkg: ff.pkg });
     }
   }
+  // Run forms no command-tier grant can cover (dependency decided at run time):
+  // the prompt must not offer a grant that would do nothing — and must say why
+  // the command keeps coming back.
+  const ungrantableRunDeps = [...new Set(
+    analysis.ungrantableRunDepSegmentIndices.map(i => analysis.signatures[i]),
+  )];
   return {
     kind: "prompt",
     promptData: {
@@ -247,6 +266,7 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
       needsPathApproval: prompt.needsPathApproval ?? false,
       unresolved: prompt.unresolved,
       fetchableForms: fetchableForms.length > 0 ? fetchableForms : undefined,
+      ungrantableRunDeps: ungrantableRunDeps.length > 0 ? ungrantableRunDeps : undefined,
       // Single analysis per decision: the /dspa gate and the judge packet
       // consume this instance instead of re-parsing (see BashPromptData).
       analysis,

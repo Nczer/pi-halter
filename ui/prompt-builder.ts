@@ -2,6 +2,7 @@ import path from "node:path";
 import type {PromptDecision, PromptData, BashPromptData, FilePromptData, ToolPromptData} from "../decide/types";
 
 import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./tmux-render";
+import { dirGrantLabel, dirListBody } from "./path-display";
 import { shortenToken } from "../analysis/path-util";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import type { ResolutionMap } from "../judge/path-resolver";
@@ -171,7 +172,7 @@ function riskReasonLines(reasons: string[]): string[] {
     return g;
   };
   for (const r of reasons) {
-    const m = /^\[([A-Za-z]+)\]\s?/.exec(r);
+    const m = /^\[([A-Za-z/]+)\]\s?/.exec(r);
     groupOf(m ? m[1] : "").items.push(r);
   }
   const ordered = [
@@ -183,12 +184,12 @@ function riskReasonLines(reasons: string[]): string[] {
   for (const g of ordered) {
     const single = g.items.filter((r) => !r.includes("\n"));
     if (single.length) {
-      const text = single.map((r) => r.replace(/^\[[A-Za-z]+\]\s*/, "")).join(", ");
+      const text = single.map((r) => r.replace(/^\[[A-Za-z/]+\]\s*/, "")).join(", ");
       lines.push(`\u26a0\ufe0f ${text}\n`);
     }
     for (const r of g.items.filter((x) => x.includes("\n"))) {
       const ls = r.split("\n");
-      lines.push(`\u26a0\ufe0f ${ls[0].replace(/^\[[A-Za-z]+\]\s*/, "")}\n` + ls.slice(1).map((l) => `  ${l}\n`).join(""));
+      lines.push(`\u26a0\ufe0f ${ls[0].replace(/^\[[A-Za-z/]+\]\s*/, "")}\n` + ls.slice(1).map((l) => `  ${l}\n`).join(""));
     }
   }
   return lines;
@@ -253,7 +254,11 @@ function buildBashPrompt(
   // prompt offers "Trust: <pkg> (session)" instead (deduped by package).
   const fetchableForms = data.fetchableForms ?? [];
   const fetchableSigSet = new Set(fetchableForms.map(f => f.sig));
-  const commandSigs = uniqueSigs.filter(s => !fetchableSigSet.has(s));
+  // Run forms no grant can cover: out of the command tier (the Always must not
+  // promise a rule that will never match) and named in the body instead.
+  const ungrantableRunDeps = data.ungrantableRunDeps ?? [];
+  const ungrantableSigSet = new Set(ungrantableRunDeps);
+  const commandSigs = uniqueSigs.filter(s => !fetchableSigSet.has(s) && !ungrantableSigSet.has(s));
   const trustPackages = [...new Set(fetchableForms.map(f => f.pkg))].sort();
   const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (commandSigs.length > 0 || pathGrantDirs.length > 0 || relToolIds.length > 0);
   const cmdBullets = [
@@ -287,7 +292,7 @@ function buildBashPrompt(
 
   if (needsPathApproval) {
     if (outsideDirs.length > 0) {
-      body += `\u26a0\ufe0f outside cwd: ${outsideDirs.join(", ")}\n`;
+      body += `\u26a0\ufe0f outside cwd: ${dirListBody(outsideDirs)}\n`;
     }
     // Symlink hops: a written token that resolves into an outside dir that
     // appears nowhere in the command text — render the chain so the dir
@@ -315,6 +320,15 @@ function buildBashPrompt(
   }
   if (riskDangerous) {
     for (const line of riskReasonLines(riskReasons)) body += line;
+  }
+  // Why a command keeps coming back: its dependency is not a name yet, so no
+  // Always can cover it (the sig itself shows `--with <unresolved>`).
+  const UNGRANTABLE_MAX = 3;
+  for (const sig of ungrantableRunDeps.slice(0, UNGRANTABLE_MAX)) {
+    body += `\u26a0\ufe0f no grant for: ${sig} \u2014 a dependency is not a name yet; this form prompts every time\n`;
+  }
+  if (ungrantableRunDeps.length > UNGRANTABLE_MAX) {
+    body += `\u26a0\ufe0f \u2026 ${ungrantableRunDeps.length - UNGRANTABLE_MAX} more ungrantable forms\n`;
   }
 
   // Segment breakdown — tmux chains keep the full formatted view (their
@@ -375,11 +389,15 @@ function buildBashPrompt(
       }
     : undefined;
 
+  // Dir tiers read as one summary, not a wall of `dir/*` entries: a dir that
+  // is already covered by a listed parent is dropped, and a set hanging under
+  // one location is named once ("6 dirs under X/ +2 more"). Display-only —
+  // pathGrantDirs still carries every dir, and tier-2 lists them all.
   const alwaysLabel = (needsCommandApproval && (commandSigs.length > 0 || relToolIds.length > 0))
     ? [...commandSigs.map(s => s + " *"), ...relToolIds.map(r => r.sig + " (this cwd)")].join(", ")
-    : (needsPathApproval ? pathGrantDirs.map(d => `Read ${d}/*`).join(", ") : "");
+    : (needsPathApproval ? dirGrantLabel(pathGrantDirs) : "");
   const alwaysPathsLabel = hasBoth && pathGrantDirs.length > 0
-    ? pathGrantDirs.map(d => `Read ${d}/*`).join(", ")
+    ? dirGrantLabel(pathGrantDirs)
     : undefined;
 
   return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption: false, includeAlwaysOption, alwaysLabel, alwaysPathsLabel, pathGrantDirs, trustPackages: trustPackages.length > 0 ? trustPackages : undefined, resolverDirs: resolverDirs.length > 0 ? resolverDirs : undefined, writeGrantDirs: writeGrantDirs && writeGrantDirs.length > 0 ? writeGrantDirs : undefined };

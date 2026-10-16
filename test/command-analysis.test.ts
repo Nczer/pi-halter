@@ -64,6 +64,96 @@ describe("Signatures: basic", () => {
   });
 });
 
+describe("Signatures: uv run dependency identity", () => {
+  // A `uv run` fetches whatever its dependency flags name, so the dependency set
+  // IS the grant's identity: one Always on `uv run --with pandas` must not cover
+  // `uv run --with evil`, and a coarser grant must not prefix-match a dep form.
+  it("bare uv run keeps the coarse signature (a project sync names nothing)", async () => {
+    const a = await analyzeCommand("uv run python3 b.py", cwd);
+    expect(a.signatures).toEqual(["uv run"]);
+    expect(a.runDepSegmentIndices).toEqual([]);
+  });
+
+  it("the dependency set is the signature", async () => {
+    const a = await analyzeCommand("uv run --with pandas python3 b.py", cwd);
+    expect(a.signatures).toEqual(["uv run --with pandas"]);
+    expect(a.runDepSegmentIndices).toEqual([0]);
+    expect(a.ungrantableRunDepSegmentIndices).toEqual([]);
+  });
+
+  it("order and repeats are canonicalized", async () => {
+    const a = await analyzeCommand("uv run --with pdfplumber --with pandas --with pandas python3 b.py", cwd);
+    expect(a.signatures).toEqual(["uv run --with pandas --with pdfplumber"]);
+  });
+
+  it("uv's own options and the downloaded interpreter are part of the identity", async () => {
+    const a = await analyzeCommand("uv run --with pandas --frozen -p 3.11 python3 b.py", cwd);
+    expect(a.signatures).toEqual(["uv run --frozen --python 3.11 --with pandas"]);
+  });
+
+  it("an option placed before the deps does not hide them (walk fix)", async () => {
+    const a = await analyzeCommand("uv run --isolated --with-requirements evil.txt python3 b.py", cwd);
+    expect(a.signatures).toEqual([`uv run --isolated --with-requirements ${path.join(cwd, "evil.txt")}`]);
+  });
+
+  it("extras and pins are exact identity, not normalized", async () => {
+    const a = await analyzeCommand('uv run --with "markitdown[pptx]" --with "pandas>=2.0" python3 b.py', cwd);
+    expect(a.signatures).toEqual(["uv run --with markitdown[pptx] --with pandas>=2.0"]);
+  });
+
+  it("a local dependency source is named by its resolved path", async () => {
+    const a = await analyzeCommand("uv run --with-editable ./pkg python3 b.py", cwd);
+    expect(a.signatures).toEqual([`uv run --with-editable ${path.join(cwd, "pkg")}`]);
+  });
+
+  it("the source resolves against the RUNTIME cwd, not the invocation cwd", async () => {
+    fs.mkdirSync(path.join(cwd, "sub"), { recursive: true }); // a `cd` to a missing dir fails: the cwd would not move
+    const a = await analyzeCommand("cd sub && uv run --with-requirements req.txt python3 b.py", cwd);
+    expect(a.signatures[1]).toEqual(`uv run --with-requirements ${path.join(cwd, "sub", "req.txt")}`);
+  });
+
+  it("an unknowable cwd leaves the source unnamed — and ungrantable", async () => {
+    // `cd $(…)` moves the real cwd somewhere static analysis cannot know, so a
+    // path signature would name a file the command does not read.
+    const a = await analyzeCommand("cd $(dirname x) && uv run --with-requirements req.txt python3 b.py", cwd);
+    expect(a.effectiveCwds[1]).toBeNull();
+    expect(a.signatures[1]).toEqual("uv run --with-requirements <unresolved>");
+    expect(a.ungrantableRunDepSegmentIndices).toEqual([1]);
+  });
+
+  it("a value the shell decides at run time cannot be granted", async () => {
+    const expansion = await analyzeCommand('uv run --with "$PKG" python3 b.py', cwd);
+    expect(expansion.signatures).toEqual(["uv run --with <unresolved>"]);
+    expect(expansion.ungrantableRunDepSegmentIndices).toEqual([0]);
+    const glob = await analyzeCommand("uv run --with pkg*.txt python3 b.py", cwd);
+    expect(glob.ungrantableRunDepSegmentIndices).toEqual([0]);
+  });
+
+  it("a wrapper is transparent to the grant, its dependency set is not", async () => {
+    const timeout = await analyzeCommand("timeout 60 uv run --with pandas python3 b.py", cwd);
+    expect(timeout.signatures).toEqual(["timeout uv --with pandas"]);
+    expect(timeout.runDepSegmentIndices).toEqual([0]);
+    const env = await analyzeCommand("env FOO=1 uv run --frozen --with pandas python3 b.py", cwd);
+    expect(env.signatures).toEqual(["env uv --frozen --with pandas"]);
+  });
+
+  it("a wrapper of a non-fetch command is unaffected", async () => {
+    const a = await analyzeCommand("timeout 60 curl -s example.com", cwd);
+    expect(a.signatures).toEqual(["timeout curl"]);
+    expect(a.runDepSegmentIndices).toEqual([]);
+  });
+
+  it("a pipeline signs the fetching stage", async () => {
+    const a = await analyzeCommand("uv run --with pandas python3 b.py | tee out", cwd);
+    expect(a.signatures).toEqual(["uv run --with pandas"]);
+  });
+
+  it("a dangling source flag yields no dep identity", async () => {
+    const a = await analyzeCommand("uv run --with-requirements", cwd);
+    expect(a.signatures).toEqual(["uv run"]);
+  });
+});
+
 describe("Signatures: compound", () => {
   it("&& chain → 2 signatures", async () => {
     const a = await analyzeCommand("ls && cat file.txt", cwd);

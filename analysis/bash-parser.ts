@@ -207,19 +207,24 @@ function extractCommandArgs(node: TSNode): string[] {
   return extractCommandArgPairs(node).map(p => p.text);
 }
 
-/** Extract redirect destinations from a file_redirect node. */
-function extractRedirectPaths(node: TSNode): string[] {
-  const paths: string[] = [];
-  if (node.type !== "file_redirect") return paths;
+/** Extract redirect destinations (text + node) from a file_redirect node. */
+function extractRedirectPairs(node: TSNode): { text: string; node: TSNode }[] {
+  const pairs: { text: string; node: TSNode }[] = [];
+  if (node.type !== "file_redirect") return pairs;
 
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
     if (WORD_TYPES.has(child.type)) {
-      paths.push(resolveNodeText(child));
+      pairs.push({ text: resolveNodeText(child), node: child });
     }
   }
-  return paths;
+  return pairs;
+}
+
+/** Extract redirect destinations from a file_redirect node. */
+function extractRedirectPaths(node: TSNode): string[] {
+  return extractRedirectPairs(node).map(p => p.text);
 }
 
 /** Recursively collect argument text from an AST node. */
@@ -289,11 +294,46 @@ function isOpaqueValue(val: string): boolean {
   return DOLLAR_EXPANSION_RE.test(val);
 }
 
-/** One expansion-free `$(( … ))` span — `$((` required (so a nested `$(foo
- *  $(bar))` is never mistaken for arithmetic), and no `$`/backtick inside (an
- *  expansion inside the arithmetic keeps the token opaque: its side effect is
- *  the only thing flagged). Non-greedy: the first `))` closes the span. */
-const ARITH_SPAN_RE = /\$\(\(([^`$]*)\)\)/g;
+/** True when a token's text carries a runtime expansion or closed-set $HOME
+ *  that the parser handles (shared with cwd-tracking's isResolvableTarget). */
+export function hasRuntimeExpansionText(val: string): boolean {
+  const v = flagValue(val);
+  return HOME_TOKEN_RE.test(v) || isOpaqueValue(v);
+}
+
+/** Strip every expansion-free `$(( … ))` span from `val`, honoring nested
+ *  parentheses inside the arithmetic expression and closing at the first
+ *  matching `))` at depth 0. A span containing `$` or backtick is left intact
+ *  so its side effect keeps the token opaque. */
+function stripArithSpans(val: string): string {
+  let out = "";
+  let i = 0;
+  while (i < val.length) {
+    if (val.startsWith("$((", i)) {
+      let depth = 0;
+      let j = i + 3;
+      let closed = -1;
+      while (j < val.length) {
+        const ch = val[j];
+        if (ch === "$" || ch === "`") break;
+        if (ch === "(") { depth++; j++; continue; }
+        if (ch === ")") {
+          if (depth > 0) { depth--; j++; continue; }
+          if (val[j + 1] === ")") { closed = j + 2; break; }
+          break;
+        }
+        j++;
+      }
+      if (closed !== -1) {
+        i = closed;
+        continue;
+      }
+    }
+    out += val[i];
+    i++;
+  }
+  return out;
+}
 
 /** True when the value's ONLY runtime content is arithmetic: an arithmetic
  *  value is a number, it names no location, so the token must not become a
@@ -303,7 +343,7 @@ const ARITH_SPAN_RE = /\$\(\(([^`$]*)\)\)/g;
  *  stays opaque (`cat $((i))/a`, `cat $(echo $((n)))/x`). */
 function arithOnly(val: string): boolean {
   if (!val.includes("$((")) return false;
-  const rest = val.replace(ARITH_SPAN_RE, "");
+  const rest = stripArithSpans(val);
   return !rest.includes("/") && !rest.includes("`") && !DOLLAR_EXPANSION_RE.test(rest);
 }
 
@@ -315,6 +355,7 @@ const RUNTIME_EXPANSION_TYPES = new Set([
   "array_expansion",
   "command_substitution",
   "process_substitution",
+  "arithmetic_expansion",
 ]);
 
 /** True when the argument node's subtree contains a runtime shell expansion. */
@@ -608,7 +649,7 @@ function trailingLoopRef(val: string): { prefix: string; name: string } | null {
  * gate-stopped although all five names sat inside the known base).
  */
 function embeddedLoopRef(val: string): { name: string; before: string; after: string } | null {
-  const m = val.match(/^(.*?)\$\{(\w+)\}(.*?)$/s) ?? val.match(/^(.*?)\$(\w+)(.*?)$/);
+  const m = val.match(/^(.*?)\$\{(\w+)\}(.*?)$/s) ?? val.match(/^(.*?)\$(\w+)(.*?)$/s);
   if (!m) return null;
   const staticPart = m[1] + m[3];
   if (/[\$`\\]/.test(staticPart)) return null; // exactly one expansion, no escapes
@@ -777,9 +818,9 @@ function opaqueRef(node: TSNode, arg: string, cwd: string, segIdx: number, segme
 }
 
 /** Check if a token looks like a filesystem path worth resolving. */
-function isPathCandidate(token: string): boolean {
+function isPathCandidate(token: string, hasExpansion = true): boolean {
   if (!token) return false;
-  if (HOME_TOKEN_RE.test(token)) return true; // $HOME/… / ${HOME}/… — expanded below
+  if (hasExpansion && HOME_TOKEN_RE.test(token)) return true; // $HOME/… / ${HOME}/… — expanded below
   if (URL_PATTERN.test(token)) return false; // URL
 
   // For flag values like --file=/etc/passwd or -f=/etc/passwd,
@@ -1362,16 +1403,17 @@ function isSedPatternArg(arg: string): boolean {
   // on a busctl pipe) floor-stopped on this shape as "unresolvable".
   if (/\/,(?:\$|\+\d+|-\d+|\d+)[a-zA-Z]{0,3}$/.test(arg)) return true;
 
-  // Single address: /pattern/ or /pattern/p
-  // Find the last `/` — if what follows is a short letter sequence (sed command)
-  // or empty, it's a pattern, not a path.
+  // Single address: /pattern/ or /pattern/p, /pattern/!d, /pattern/{p;q;}
+  // Find the last `/` — if what follows is a short command sequence, negated
+  // command, line offset, or brace action block, it's a pattern, not a path.
+  if (arg.includes("{") && arg.includes("}")) return true;
   const lastSlashIdx = arg.lastIndexOf("/");
   if (lastSlashIdx > 0) {
     const afterLastSlash = arg.slice(lastSlashIdx + 1);
     // Empty → /pattern/ (address with no explicit command, defaults to print)
     if (afterLastSlash.length === 0) return true;
-    // 1-3 letters → /pattern/p, /pattern/d, /pattern/gp, etc.
-    if (afterLastSlash.length <= 3 && /^[a-zA-Z]+$/.test(afterLastSlash)) return true;
+    // Optional `!` + 1-3 letters → /pattern/p, /pattern/!d, /pattern/gp, etc.
+    if (/^!?[a-zA-Z]{1,3}$/.test(afterLastSlash)) return true;
     // Line offset → /pattern/+5, /pattern/+5p, /pattern/+120p (GNU sed)
     if (/^\+\d+[a-zA-Z]{0,3}$/.test(afterLastSlash)) return true;
   }
@@ -1386,16 +1428,21 @@ function isSedPatternArg(arg: string): boolean {
  * (-i, -i.bak, --in-place=suffix). A bare literal path in script position
  * is still returned — the caller keeps it path-checked (fail closed).
  */
-function sedScriptArgIndices(args: string[]): Set<number> {
+export function sedScriptArgIndices(args: string[]): Set<number> {
   const idxs = new Set<number>();
   let scriptSeen = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "-e" || a === "--expression") {
-      if (i + 1 < args.length) idxs.add(i + 1);
+      scriptSeen = true;
+      if (i + 1 < args.length) { idxs.add(i + 1); i++; }
       continue;
     }
-    if (a.startsWith("--expression=")) continue; // self-contained flag
+    if (a.startsWith("--expression=")) {
+      scriptSeen = true;
+      idxs.add(i);
+      continue;
+    }
     // -f FILE: the script comes from a file (the FILE stays path-checked) and
     // every later argument is a file. The flag index itself is marked so the
     // pattern region ends there (see patternRegionOpen).
@@ -1405,16 +1452,66 @@ function sedScriptArgIndices(args: string[]): Set<number> {
       if (i + 1 < args.length) i++;
       continue;
     }
-    if (a.startsWith("--file=") || (a.startsWith("-f") && a.length > 2 && !a.startsWith("--"))) {
+    if (a.startsWith("--file=")) {
       scriptSeen = true;
       idxs.add(i);
       continue;
     }
-    if (a.startsWith("-")) continue; // flag (value inline, if any)
+    if (a.startsWith("-") && !a.startsWith("--") && a !== "-") {
+      const iPos = a.indexOf("i");
+      const ePos = a.indexOf("e");
+      const fPos = a.indexOf("f");
+      const firstEF =
+        ePos > 0 && (fPos < 0 || ePos < fPos) ? "e"
+        : fPos > 0 ? "f"
+        : null;
+      if (firstEF && (iPos < 0 || (firstEF === "e" ? ePos < iPos : fPos < iPos))) {
+        scriptSeen = true;
+        const pos = firstEF === "e" ? ePos : fPos;
+        if (pos === a.length - 1) {
+          if (firstEF === "e") {
+            if (i + 1 < args.length) { idxs.add(i + 1); i++; }
+          } else {
+            idxs.add(i);
+            if (i + 1 < args.length) i++;
+          }
+        } else {
+          idxs.add(i);
+        }
+        continue;
+      }
+      continue;
+    }
+    if (a.startsWith("-")) continue; // long flag
     if (!scriptSeen) { scriptSeen = true; idxs.add(i); }
   }
   return idxs;
 }
+
+/** Two-token flags of `grep` / `rg` whose value is data (count/glob/type/replace),
+ *  never a file or the search pattern itself. `-r` (`--replace`) and `-E`
+ *  (`--encoding`) are rg-only value flags; in `grep` `-r` is `--recursive` and
+ *  `-E` is `--extended-regexp` (both boolean). */
+const SEARCH_VALUE_FLAGS = new Set([
+  "-A", "--after-context",
+  "-B", "--before-context",
+  "-C", "--context",
+  "-m", "--max-count",
+  "-D", "--devices",
+  "-d", "--directories",
+  "--label", "--binary-files", "--color", "--colour",
+  "--exclude", "--exclude-dir", "--include",
+]);
+const RG_ONLY_VALUE_FLAGS = new Set([
+  "-g", "--glob", "--iglob",
+  "-t", "--type",
+  "-T", "--type-not",
+  "-r", "--replace",
+  "-M", "--max-columns",
+  "-E", "--encoding",
+  "-j", "--threads",
+  "--max-depth", "--max-filesize", "--path-separator",
+]);
 
 /**
  * Indices of the PATTERN argument of a grep-shaped search command — `grep`
@@ -1426,41 +1523,67 @@ function sedScriptArgIndices(args: string[]): Set<number> {
  * `//` is a network-prefix absolute) into a phantom root child ("outside
  * /"). -f / --file switches the grammar: its value IS a file (pattern file
  * — stays path-checked), and every later non-flag argument is a plain file.
- *
- * rg drags along value-taking flags grep lacks (-g/--glob, -t/--type,
- * -m/--max-count, -A/-B/-C, --pre, -r/--replace, …), so "first non-flag" can
- * pick the flag's VALUE as the pattern. Both mistakes are conservative: a
- * flag value is never a file (rg globs/types/pattern files touch nothing),
- * and a real pattern pushed one slot right stays path-checked — over-flag,
- * never an under-flag. Keeping the flag list out means it cannot drift.
  */
-function searchPatternArgIndices(args: string[]): Set<number> {
+function searchPatternArgIndices(cmdName: string, args: string[]): Set<number> {
   const idxs = new Set<number>();
   let patternSeen = false;
   let filePatterns = false;
+  let flagsDone = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "-e" || a === "--regexp" || a === "--regex") {
-      if (i + 1 < args.length) idxs.add(i + 1);
+    if (!flagsDone && a === "--") {
+      flagsDone = true;
       continue;
     }
-    if (a.startsWith("--regexp=") || a.startsWith("--regex=")) continue;
-    if (a === "-f" || a === "--file") {
-      filePatterns = true;
-      if (i + 1 < args.length) i++; // the pattern FILE — keep path-checked
-      continue;
-    }
-    if (a === "--file=" || (a.startsWith("-f") && a.length > 2 && !a.startsWith("--"))) {
-      filePatterns = true; // -fFILE inline, or --file= (stdin)
-      continue;
-    }
-    if (a.startsWith("-") && a !== "-") {
-      // Flag cluster (-vE, -ef, …): an f whose value is the next argument
-      // (-ef FILE) makes it a pattern file; -fe consumes the rest of the
-      // cluster as that value. Either way: later args are files, not patterns.
-      if (a.endsWith("f")) { filePatterns = true; if (i + 1 < args.length) i++; }
-      else if (a.includes("f")) filePatterns = true;
-      continue;
+    if (!flagsDone) {
+      if (a === "-e" || a === "--regexp" || a === "--regex") {
+        patternSeen = true;
+        if (i + 1 < args.length) { idxs.add(i + 1); i++; }
+        continue;
+      }
+      if (a.startsWith("--regexp=") || a.startsWith("--regex=")) {
+        patternSeen = true;
+        idxs.add(i);
+        continue;
+      }
+      if (a === "-f" || a === "--file") {
+        filePatterns = true;
+        if (i + 1 < args.length) i++; // the pattern FILE — keep path-checked
+        continue;
+      }
+      if (a.startsWith("--file=")) {
+        filePatterns = true; // --file=FILE (kept path-checked) or --file= (stdin)
+        continue;
+      }
+      if (SEARCH_VALUE_FLAGS.has(a) || (cmdName === "rg" && RG_ONLY_VALUE_FLAGS.has(a))) {
+        if (i + 1 < args.length) { idxs.add(i + 1); i++; }
+        continue;
+      }
+      if (a.startsWith("-") && !a.startsWith("--") && a !== "-") {
+        // Short flag cluster (-vE, -ef, -ie, -efoo, …):
+        // - ending in `e` (-ve PAT): next token is the pattern;
+        // - ending in `f` (-vf FILE, -ef FILE): next token is a file (kept path-checked);
+        // - `e` before `f` with inline tail (-efoo): inline `-e` pattern;
+        // - `f` with inline tail (-fFILE): inline pattern file.
+        if (a.endsWith("e")) {
+          patternSeen = true;
+          if (i + 1 < args.length) { idxs.add(i + 1); i++; }
+        } else if (a.endsWith("f")) {
+          filePatterns = true;
+          if (i + 1 < args.length) i++;
+        } else {
+          const ePos = a.indexOf("e");
+          const fPos = a.indexOf("f");
+          if (ePos > 0 && (fPos < 0 || ePos < fPos)) {
+            patternSeen = true;
+            idxs.add(i);
+          } else if (fPos > 0) {
+            filePatterns = true;
+          }
+        }
+        continue;
+      }
+      if (a.startsWith("-")) continue; // long flag
     }
     if (!patternSeen && !filePatterns) { patternSeen = true; idxs.add(i); }
   }
@@ -1474,7 +1597,7 @@ function searchPatternArgIndices(args: string[]): Set<number> {
  * position and grep's PATTERN position; the text heuristic isAwkScriptArg
  * keeps covering odd positions). -f / --file flips the grammar: its value is
  * a program FILE (stays path-checked) and every later non-flag argument is a
- * file. Two-token flags (-F / --field-separator, -v / --assign) consume a
+ * file. Two-token flags (-F / --field-separator, -v / --assign, -W) consume a
  * value that is never the program.
  */
 function awkProgramArgIndices(args: string[]): Set<number> {
@@ -1482,6 +1605,16 @@ function awkProgramArgIndices(args: string[]): Set<number> {
   let programFixed = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (a === "-e" || a === "--source") {
+      programFixed = true;
+      if (i + 1 < args.length) { idxs.add(i + 1); i++; }
+      continue;
+    }
+    if (a.startsWith("--source=")) {
+      programFixed = true;
+      idxs.add(i);
+      continue;
+    }
     if (a === "-f" || a === "--file") {
       programFixed = true;
       idxs.add(i); // the flag marks the program region; its FILE stays path-checked
@@ -1493,8 +1626,8 @@ function awkProgramArgIndices(args: string[]): Set<number> {
       idxs.add(i);
       continue;
     }
-    if (a === "-F" || a === "--field-separator" || a === "-v" || a === "--assign") {
-      if (i + 1 < args.length) i++; // flag value (sep / assignment) — not the program
+    if (a === "-F" || a === "--field-separator" || a === "-v" || a === "--assign" || a === "-W") {
+      if (i + 1 < args.length) i++; // flag value (sep / assignment / option) — not the program
       continue;
     }
     if (a.startsWith("--field-separator=") || a.startsWith("--assign=")) continue;
@@ -1520,11 +1653,20 @@ function awkDataArgIndices(args: string[]): Set<number> {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "-v" || a === "--assign") {
-      if (i + 1 < args.length) idxs.add(i + 1);
+      if (i + 1 < args.length) { idxs.add(i + 1); i++; }
       continue;
     }
     if (a.startsWith("--assign=")) continue; // self-contained flag
     if (/^-v[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { idxs.add(i); continue; }
+    if (a === "-e" || a === "--source") {
+      programSeen = true;
+      if (i + 1 < args.length) i++;
+      continue;
+    }
+    if (a.startsWith("--source=")) {
+      programSeen = true;
+      continue;
+    }
     if (a === "-f" || a === "--file") {
       programSeen = true;
       if (i + 1 < args.length) i++; // the program FILE — keep path-checked
@@ -1534,8 +1676,8 @@ function awkDataArgIndices(args: string[]): Set<number> {
       programSeen = true; // -fFILE / --file= — program from a file
       continue;
     }
-    if (a === "-F" || a === "--field-separator") {
-      if (i + 1 < args.length) i++; // separator value — not the program
+    if (a === "-F" || a === "--field-separator" || a === "-W") {
+      if (i + 1 < args.length) i++; // separator / option value — not the program
       continue;
     }
     if (a.startsWith("--field-separator=")) continue;
@@ -1618,6 +1760,45 @@ function patternRegionOpen(idxs: Set<number> | null, ai: number): boolean {
 }
 
 /**
+ * Indices of arguments to `cmdName` that sit in a DATA / PATTERN / SCRIPT
+ * position rather than a file-operand position (sed scripts, grep/rg patterns
+ * and data-flag values, awk programs and `-v`/`var=val` data, shuf ranges,
+ * inline interpreter code). Shared by parseCommand and cwd-tracking so the
+ * two never disagree on which arguments are files.
+ */
+export function nonFileArgIndices(cmdName: string, args: string[]): Set<number> {
+  const skip = new Set<number>();
+  const sedScripts = cmdName === "sed" ? sedScriptArgIndices(args) : null;
+  const grepPatterns = cmdName === "grep" || cmdName === "rg" || cmdName === "egrep" || cmdName === "fgrep"
+    ? searchPatternArgIndices(cmdName, args)
+    : null;
+  const awkPrograms = cmdName === "awk" ? awkProgramArgIndices(args) : null;
+  const awkData = cmdName === "awk" ? awkDataArgIndices(args) : null;
+  const shufData = cmdName === "shuf" ? shufDataArgIndices(args) : null;
+  const inlinePrograms = inlineCodeArgIndices(cmdName, args);
+
+  for (let ai = 0; ai < args.length; ai++) {
+    const arg = args[ai];
+    if (inlinePrograms.has(ai)) { skip.add(ai); continue; }
+    const isSedFileFlag = arg === "-f" || arg === "--file" || arg.startsWith("--file=") ||
+      (arg.startsWith("-") && !arg.startsWith("--") && arg.includes("f") && (arg.indexOf("e") < 0 || arg.indexOf("f") < arg.indexOf("e")));
+    if (
+      (cmdName === "sed" && !isSedFileFlag && (
+        (sedScripts !== null && sedScripts.has(ai) && (arg.startsWith("-") || !/^(?:\/|\.\/|\.\.\/|~)/.test(arg))) ||
+        (patternRegionOpen(sedScripts, ai) && isSedPatternArg(arg))
+      )) ||
+      (cmdName === "awk" && !isSedFileFlag && (awkPrograms !== null && awkPrograms.has(ai) || isAwkScriptArg(arg, patternRegionOpen(awkPrograms, ai)))) ||
+      (grepPatterns !== null && grepPatterns.has(ai)) ||
+      (cmdName === "awk" && awkData !== null && awkData.has(ai)) ||
+      (cmdName === "shuf" && shufData !== null && shufData.has(ai))
+    ) {
+      skip.add(ai);
+    }
+  }
+  return skip;
+}
+
+/**
  * A path-like literal inside SCRIPT BODY text (a heredoc body, a
  * multi-line literal argument — `python3 - << 'EOF' … open('/var/lib/…')
  * … EOF`). The shell never touches these paths, but the script does, and
@@ -1626,17 +1807,21 @@ function patternRegionOpen(idxs: Set<number> | null, ai: number): boolean {
  *
  * Shape: ~ or / start, ≥2 segments (one-segment tokens are almost always
  * regex/division noise), word chars only. The lookbehind rejects URL tails
- * (the second slash of http://…), paths glued to a word char, and a group
- * whose prefix is an UNEXPANDED expansion (`${X}/a/b`): its location is
- * runtime-built, so slicing `/a/b` out of it invents a cwd-nested path that
- * points nowhere (and counts as INSIDE — wrong direction, 3.28.2 side effect).
- * `~` is
- * optional BEFORE the required slash (a `(?:~\/)?` group needs a second
+ * (the second slash of http://…), paths glued to a word char, escaped
+ * slashes (`\/` inside regex literals), regex quantifiers/closers (`+`, `*`,
+ * `?`, `)`, `]` in `s/[0-9]+/bar/g`), and a group whose prefix is an
+ * UNEXPANDED expansion (`${X}/a/b`): its location is runtime-built, so
+ * slicing `/a/b` out of it invents a cwd-nested path that points nowhere
+ * (and counts as INSIDE — wrong direction, 3.28.2 side effect).
+ * `~` is optional BEFORE the required slash (a `(?:~\/)?` group needs a second
  * slash and can never match — it silently dropped the tilde, so `~/a/b`
  * landed as `/.thunderbird/a/b`, a nonexistent outside path: D13 ledger
  * 2026-09-11). With the tilde kept, expandTilde in bodyPaths resolves it.
  */
-const BODY_PATH_RE = /(?<![\w:/.{}$-])(?:~)?\/[\w.-]+(?:\/[\w.-]+)+/g;
+const BODY_PATH_RE = /(?<![\w:/.{}$\-\\+*?)\]])(?:~)?\/[\w.-]+(?:\/[\w.-]+)+/g;
+
+/** Unquoted JS/Perl regex literal with flags (+ optional method chain) like `/foo/g.test` or `/foo/gi`. */
+const JS_REGEX_LITERAL_RE = /^\/([^/]+)\/[dgimsuvy]+(?:\.[A-Za-z_$][\w$]*)?$/;
 
 /** A command substitution inside argument TEXT (the quoted forms — the
  *  unquoted ones arrive as their own node and are recursed into). */
@@ -1646,8 +1831,15 @@ const SUBST_IN_TEXT_RE = /\$\(|`/;
  *  extracted path (SAFE_SYSTEM_PATHS filter + dedup apply downstream). */
 function bodyPaths(text: string, cwd: string, out: string[], hop?: (written: string, resolved: string) => void): void {
   for (const m of text.matchAll(BODY_PATH_RE)) {
-    const resolved = resolvePathReal(expandTilde(m[0]), cwd);
-    hop?.(m[0], resolved);
+    const raw = m[0];
+    const idx = m.index ?? 0;
+    const prev = idx > 0 ? text[idx - 1] : "";
+    if (prev !== "'" && prev !== '"' && prev !== "`") {
+      const rm = JS_REGEX_LITERAL_RE.exec(raw);
+      if (rm && !fs.existsSync("/" + rm[1])) continue;
+    }
+    const resolved = resolvePathReal(expandTilde(raw), cwd);
+    hop?.(raw, resolved);
     out.push(resolved);
   }
 }
@@ -1790,30 +1982,9 @@ export async function parseCommand(
       const args = extractCommandArgPairs(cmdNode);
 
       if (cmdName && pathAwareCommands.has(cmdName)) {
-        // Sed: the script argument is not a file (sed [flags] script [files…])
-        // — the `sed -n "$(grep … | cut …),+12p" f` line-range idiom must not
-        // produce <unresolved-var>. File-position args keep the opaque marker.
-        const sedScripts = cmdName === "sed" ? sedScriptArgIndices(args.map(a => a.text)) : null;
-        // Grep/rg: the PATTERN position is data, never a file (see
-        // searchPatternArgIndices) — skipping it also keeps pattern-position
-        // vars ($re in `grep -vE "$re" f`, `$1`/`$pat` in an `rg` helper
-        // function) out of the opaque ref set, where they would floor-stop
-        // the command (2026-09-21 unresolved.jsonl: 4 of 11 stops came from
-        // an rg pattern-position var).
-        const grepPatterns = cmdName === "grep" || cmdName === "rg" ? searchPatternArgIndices(args.map(a => a.text)) : null;
-        // Awk: the program position is data, never a file (see
-        // awkProgramArgIndices) — a bare filter (`awk -F: '$1>420' f`) is
-        // program text whose `$1` is awk field syntax, not a shell var.
-        const awkPrograms = cmdName === "awk" ? awkProgramArgIndices(args.map(a => a.text)) : null;
-        // Awk/shuf data positions: -v values, assignment operands, numeric
-        // ranges — data, never files (see the helpers).
-        const awkData = cmdName === "awk" ? awkDataArgIndices(args.map(a => a.text)) : null;
-        const shufData = cmdName === "shuf" ? shufDataArgIndices(args.map(a => a.text)) : null;
-        // Inline-program positions for a runner (`python3 -c`, `node -e`,
-        // `php -r`, `uv`-style wrappers) — config/script-operand.ts owns the flag
-        // set so the judge packet and the path set cannot disagree about which
-        // operand is code and which is a file.
-        const inlinePrograms = inlineCodeArgIndices(cmdName, args.map(a => a.text));
+        const argTexts = args.map(a => a.text);
+        const inlinePrograms = inlineCodeArgIndices(cmdName, argTexts);
+        const skipArgs = nonFileArgIndices(cmdName, argTexts);
         for (let ai = 0; ai < args.length; ai++) {
           const { text: arg, node: argNode } = args[ai];
           // A multi-line LITERAL argument is a script/data body (`node -e '…'`),
@@ -1841,25 +2012,20 @@ export async function parseCommand(
             bodyPaths(shellExpands ? expandHomeLiterals(arg) : arg, cwd, allPaths, recordHop);
             continue;
           }
-          // Skip inline script/pattern expressions that look like paths but aren't:
-          //   sed: script position, /pattern/p, /describe(...)/,/^});/p, s/foo/bar/
-          //   awk: /pattern/ {print}, /foo/ {action}
-          //   grep: PATTERN position, -e PATTERN
-          if ((cmdName === "sed" && (
-              (sedScripts !== null && sedScripts.has(ai) && !/^(?:\/|\.\/|~\/)/.test(arg)) ||
-              (patternRegionOpen(sedScripts, ai) && isSedPatternArg(arg))
-            )) ||
-              (cmdName === "awk" && (awkPrograms !== null && awkPrograms.has(ai) || isAwkScriptArg(arg, patternRegionOpen(awkPrograms, ai)))) ||
-              (grepPatterns !== null && grepPatterns.has(ai)) ||
-              (cmdName === "awk" && awkData !== null && awkData.has(ai)) ||
-              (cmdName === "shuf" && shufData !== null && shufData.has(ai))) {
-            continue;
-          }
+          if (skipArgs.has(ai)) continue;
+
+          // Only arguments whose AST subtree carries a runtime shell expansion
+          // can be variable/substitution references or closed-set $HOME:
+          // single-quoted (`cat '$f'`, `cat '$HOME/.pi'`) and backslash-escaped
+          // (`cat \$f`, `cat \$HOME/.pi`) arguments are literal relative names.
+          const hasExpansion = nodeHasRuntimeExpansion(argNode);
 
           // Opaque expansion in path position (cat $X, -f=$X, cat ./$Y) →
           // classified OpaqueRef, resolved by the analysis layer against the
           // command's assignments and the tracked effective cwd.
-          const ref = opaqueRef(cmdNode, arg, cwd, segMap.get(cmdNode.id) ?? -1, segments);
+          const ref = hasExpansion
+            ? opaqueRef(cmdNode, arg, cwd, segMap.get(cmdNode.id) ?? -1, segments)
+            : null;
           if (ref) opaque.push(ref);
 
           // A QUOTED command substitution (`"$(cat /tmp/list.txt)"`) is one
@@ -1869,17 +2035,18 @@ export async function parseCommand(
           // the body's paths were invisible (2026-10-04 judge.jsonl floorMiss:
           // `cat /tmp/cmd1.txt` inside "$(cat /tmp/cmd1.txt)"). Same rule as a
           // script body above — the floor sees what the operation touches.
-          if (SUBST_IN_TEXT_RE.test(arg)) {
+          if (hasExpansion && SUBST_IN_TEXT_RE.test(arg)) {
             bodyPaths(arg, cwd, allPaths, recordHop);
           }
 
-          if (isPathCandidate(arg)) {
+          if (isPathCandidate(arg, hasExpansion)) {
             // For flag values (--file=/path), resolve the value, not the flag itself.
             // isPathCandidate already accepts these; match its extraction logic.
             const resolveArg = arg.startsWith("-") && arg.includes("=")
               ? arg.slice(arg.indexOf("=") + 1)
               : arg;
-            const resolvedArg = resolvePathReal(expandHomeToken(expandTilde(resolveArg)), cwd);
+            const expanded = hasExpansion ? expandHomeToken(expandTilde(resolveArg)) : expandTilde(resolveArg);
+            const resolvedArg = resolvePathReal(expanded, cwd);
             recordHop(resolveArg, resolvedArg);
             allPaths.push(resolvedArg);
           }
@@ -1893,8 +2060,10 @@ export async function parseCommand(
         for (let i = 0; i < args.length; i++) {
           const arg = args[i].text;
           let target: string | null = null;
+          let targetNode: TSNode = args[i].node;
           if (arg === "-o" || arg === "--output") {
             target = args[i + 1]?.text ?? null;
+            if (args[i + 1]) targetNode = args[i + 1].node;
           } else if (arg.startsWith("--output=")) {
             target = arg.slice("--output=".length);
           } else if (/^-[a-zA-Z]*o/.test(arg)) {
@@ -1902,14 +2071,23 @@ export async function parseCommand(
             // token as its argument (-ox → x); if it's the last char, the
             // argument is the next token (-ro FILE → FILE).
             const oIdx = arg.indexOf("o");
-            target = oIdx === arg.length - 1 ? (args[i + 1]?.text ?? null) : arg.slice(oIdx + 1);
+            if (oIdx === arg.length - 1) {
+              target = args[i + 1]?.text ?? null;
+              if (args[i + 1]) targetNode = args[i + 1].node;
+            } else {
+              target = arg.slice(oIdx + 1);
+            }
           }
           // `-` means stdout; skip it and bare flags (e.g. `sort -o -k 1`).
           if (target && target !== "-" && !target.startsWith("-")) {
-            const ref = opaqueRef(cmdNode, target, cwd, segMap.get(cmdNode.id) ?? -1, segments);
+            const hasExpansion = nodeHasRuntimeExpansion(targetNode);
+            const ref = hasExpansion
+              ? opaqueRef(cmdNode, target, cwd, segMap.get(cmdNode.id) ?? -1, segments)
+              : null;
             if (ref) opaque.push(ref);
             else {
-              const resolvedTarget = resolvePathReal(expandHomeToken(expandTilde(target)), cwd);
+              const expanded = hasExpansion ? expandHomeToken(expandTilde(target)) : expandTilde(target);
+              const resolvedTarget = resolvePathReal(expanded, cwd);
               recordHop(target, resolvedTarget);
               allPaths.push(resolvedTarget);
             }
@@ -1938,13 +2116,15 @@ export async function parseCommand(
     const extractRedirects = (node: TSNode): void => {
       if (SKIP_TYPES.has(node.type)) return;
       if (node.type === "file_redirect") {
-        for (const p of extractRedirectPaths(node)) {
+        for (const { text: p, node: pNode } of extractRedirectPairs(node)) {
           if (isMultiLineLiteralText(p)) continue; // script/data body, not a path
-          if (isPathCandidate(p)) {
-            const resolvedP = resolvePathReal(expandHomeToken(expandTilde(p)), cwd);
+          const hasExpansion = nodeHasRuntimeExpansion(pNode);
+          if (isPathCandidate(p, hasExpansion)) {
+            const expanded = hasExpansion ? expandHomeToken(expandTilde(p)) : expandTilde(p);
+            const resolvedP = resolvePathReal(expanded, cwd);
             recordHop(p, resolvedP);
             redirectPaths.push(resolvedP);
-          } else {
+          } else if (hasExpansion) {
             // `> $X` — write destination only knowable at runtime → opaque ref.
             const ref = opaqueRef(node, p, cwd, segMap.get(node.id) ?? -1, segments);
             if (ref) opaque.push(ref);

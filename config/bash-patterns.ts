@@ -117,13 +117,13 @@ export const pathAwareCommands = new Set([
 ]);
 
 /** Flags on `find` that make it dangerous (excluding -exec which depends on the subcommand). */
-export const dangerousFindFlags = /-(?:delete|empty|truncate|fprint|fprintf|fls)\b/;
+export const dangerousFindFlags = /(?<![\w./-])-(?:delete|truncate|fprint|fprintf|fls)\b/;
 
 /**
  * Flags that make `sed` dangerous (in-place editing). `-i` may carry a backup
- * suffix (the letters right after `i`): `-in` = in-place with backup suffix
- * "n" on GNU/BSD sed — there is no "next-line" flag, so any cluster containing
- * `i` is in-place.
+ * suffix (the characters right after `i`: `-in`, `-i.bak`, `-i~`, `-i_bak`):
+ * there is no "next-line" flag, so any short cluster containing `i` before an
+ * inline-value `-e`/`-f` is in-place (incl. uppercase `-E` in `-Ei`).
  *
  * The lookbehind restricts the match to a real flag token (preceded by
  * whitespace or start of context). Unanchored, a mid-word dash inside a path
@@ -131,10 +131,10 @@ export const dangerousFindFlags = /-(?:delete|empty|truncate|fprint|fprintf|fls)
  * (the "i" in "session") and flagged read-only `sed -n` as in-place.
  * Long form only allows the valid GNU sed spellings `--in-place` / `--in-place=suffix`.
  */
-export const dangerousSedFlags = /(?<![\w./-])-[a-z]*i[a-z]*(?:\.\S*)?(?:\s|$)|(?<![\w./-])--in-place(?:=|\s|$)/;
+export const dangerousSedFlags = /(?<![\w./-])-[a-bd-gj-zA-Z]*i[^\s/]*(?:\s|$)|(?<![\w./-])--in-place(?:=|\s|$)/;
 
 /** Flags that make `perl` dangerous (in-place editing via -i, optional suffix). */
-export const dangerousPerlFlags = /(?<![\w./-])-[a-z]*i[a-z]*(?:\.\S*)?(?:\s|$)/;
+export const dangerousPerlFlags = /(?<![\w./-])-[a-bd-zA-Z]*i[^\s/]*(?:\s|$)/;
 
 /** Command + subcommand pairs that are always safe (read-only, no side effects). */
 const allowedBashSubcommands = new Set([

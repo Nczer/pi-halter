@@ -12,7 +12,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createStore } from "../gate/store";
-import {getJudgeVerdict, getStage2Verdict, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
+import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
 import { analyzeCommand } from "../analysis/command-analysis";
 import {DEFAULT_JUDGE_SETTINGS, JudgeStreamFn, JudgeResult, JudgeSettings} from "../judge/judge";
 import type {BashPromptData as BashPromptDataType} from "../decide/types";
@@ -236,6 +236,24 @@ describe("getJudgeVerdict", () => {
     const packet = String(calls[0].context.messages[0].content);
     expect(packet).toContain("## Script: " + path.join(tmp, "job.py") + " (untrusted)");
     expect(packet).toContain("import os");
+  });
+
+  it("a uv run --with command names its fetched deps in the packet (end to end)", async () => {
+    // The chain, not just the builder: gate-side analysis segments →
+    // registryRunDeps → packet. A cwd-local script keeps the plain label.
+    fs.writeFileSync(path.join(tmp, "job.py"), "import pandas\nprint('job')\n");
+    const calls: CapturedCall[] = [];
+    const { ctx } = makeCtx(fakeModel());
+    await getJudgeVerdict(makePd("uv run --with pandas,evil python3 job.py", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    const packet = String(calls[0].context.messages[0].content);
+    expect(packet).toContain("network: yes (uv)");
+    expect(packet).toContain(
+      "registry deps (uv fetches these at run time): pandas (on the operator's package allowlist), evil (not on the operator's package allowlist)",
+    );
+    expect(packet).toContain("## Script: " + path.join(tmp, "job.py") + " (untrusted)");
   });
 
   it("bash -c commands get no script section in the packet", async () => {
@@ -527,6 +545,49 @@ describe("getJudgeVerdict: file content threading", () => {
 });
 
 // ── D17: judge infra ledger (runJudgeStage failure sites) ──
+
+describe("JudgeStageOutcome: the failure identity the prompt line needs", () => {
+  it("a failed stage says WHY (typed class), not just that it failed", async () => {
+    const { ctx } = makeCtx(undefined);
+    const o = await getStage2Outcome(makePd("outcome-nomodel", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), []),
+      settings: ON,
+    });
+    expect(o.verdict).toBeNull();
+    expect(o.failReason).toBe("model-unresolved");
+    expect(judgeFailPhrase(o)).toBe("model-unresolved");
+  });
+
+  it("auth failure → the outcome names the model too", async () => {
+    const { ctx } = makeCtx(fakeModel(), false);
+    const o = await getStage2Outcome(makePd("outcome-noauth", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), []),
+      settings: ON,
+    });
+    expect(o.verdict).toBeNull();
+    expect(o.failReason).toBe("auth-failed");
+    expect(o.model).toBe("llama-cpp/qwen3-27b");
+    expect(judgeFailPhrase(o)).toBe("auth-failed");
+  });
+
+  it("a stage that rendered a verdict carries no failure", async () => {
+    const { ctx } = makeCtx(fakeModel());
+    const o = await getStage1Outcome(makePd("outcome-ok", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), []),
+      settings: ON,
+    });
+    expect(o.verdict).not.toBeNull();
+    expect(o.failReason).toBeUndefined();
+    expect(judgeFailPhrase(o)).toBe("");
+    expect(judgeFailPhrase(null)).toBe("");
+  });
+
+  it("judgeFailPhrase formats class + seconds", () => {
+    expect(judgeFailPhrase({ verdict: null, failReason: "timeout", latencyMs: 8020 })).toBe("timeout 8.0s");
+    expect(judgeFailPhrase({ verdict: null, failReason: "no-tool-call" })).toBe("no-tool-call");
+    expect(judgeFailPhrase({ verdict: null })).toBe(""); // judge not run (off) — not a failure
+  });
+});
 
 describe("D17: infra lines in the always-on judge ledger", () => {
   const judgeLog = path.join(os.tmpdir(), `judge-infra-${process.pid}.jsonl`);
