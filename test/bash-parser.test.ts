@@ -1430,3 +1430,65 @@ describe("parseCommand: file operands the script/pattern heuristics used to swal
   });
 });
 
+
+describe("parseCommand: an opaque argv0 never silences the operand model (2026-10-16 probe)", () => {
+  const has = (paths: string[], needle: string) => paths.some(p => p.includes(needle));
+
+  it("a provable variable verb applies that program's operand model", async () => {
+    const r = await parseCommand("C=cat; $C /etc/shadow", cwd);
+    expect(has(r.paths, "/etc/shadow")).toBe(true);
+    expect(r.obscuredArgv0).toEqual([]);
+    const rm = await parseCommand("C=rm; $C -rf /etc", cwd);
+    expect(has(rm.paths, "/etc")).toBe(true);
+    const q = await parseCommand('C=cat; "$C" /etc/shadow', cwd);
+    expect(has(q.paths, "/etc/shadow")).toBe(true);
+  });
+
+  it("an unquoted variable value word-splits: the rest of the value is arguments", async () => {
+    const r = await parseCommand('C="rm -rf /etc"; $C', cwd);
+    expect(has(r.paths, "/etc")).toBe(true);
+    // A quoted use site is one argv — no split (a multi-word single argv is no
+    // program; the position is flagged instead).
+    const q = await parseCommand('C="rm -rf /etc"; "$C"', cwd);
+    expect(has(q.paths, "/etc")).toBe(false);
+    expect(q.obscuredArgv0).toEqual(["$C"]);
+  });
+
+  it("an unprovable verb still counts every operand (worst case) and says so", async () => {
+    const unset = await parseCommand("$C /etc/shadow", cwd);
+    expect(has(unset.paths, "/etc/shadow")).toBe(true);
+    expect(unset.obscuredArgv0).toEqual(["$C"]);
+    // The shapes the text-level check could not see: a flag or a path follows.
+    const mount = await parseCommand('V="mount"; $V -o bind / /mnt', cwd);
+    expect(has(mount.paths, "/mnt")).toBe(true);
+    expect(mount.obscuredArgv0).toEqual(["$V"]);
+    const loop = await parseCommand("for p in a b; do $p /etc/x; done", cwd);
+    expect(has(loop.paths, "/etc/x")).toBe(true);
+    expect(loop.obscuredArgv0).toEqual(["$p"]);
+  });
+
+  it("negatives: nothing is taken from an ambiguous or non-literal value", async () => {
+    const twice = await parseCommand("C=cat; C=tail; $C /etc/shadow", cwd);
+    expect(has(twice.paths, "/etc/shadow")).toBe(true); // worst case, not the model
+    expect(twice.obscuredArgv0).toEqual(["$C"]);
+    const subst = await parseCommand("C=$(which cat); $C /etc/shadow", cwd);
+    expect(subst.obscuredArgv0).toEqual(["$C"]);
+    const glued = await parseCommand("D=/opt/bin; $D/tool /etc/x", cwd);
+    expect(glued.obscuredArgv0).toEqual(["$D/tool"]);
+    const sub = await parseCommand("(C=cat; $C /x); $C /etc/y", cwd);
+    expect(sub.obscuredArgv0).toEqual(["$C"]); // per TOKEN, not per occurrence
+    // The subshell assignment is not visible to the outer segment (var-resolution
+    // scoping), so nothing is taken from it either way.
+    expect(has(sub.paths, "/etc/y")).toBe(true);
+  });
+
+  it("a literal verb off the path-aware set keeps the closed set's blind spot", async () => {
+    // The boundary of this fix (documented): the variable form is worst-cased,
+    // the typed form of the same unknown verb is not — that is the closed set's
+    // false-positive budget, and only a policy addition (a sandbox-tool set)
+    // changes it.
+    const r = await parseCommand("firejail --dev-bind / / echo OK", cwd);
+    expect(r.paths).toEqual([]);
+    expect(r.obscuredArgv0).toEqual([]);
+  });
+});

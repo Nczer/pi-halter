@@ -1059,17 +1059,35 @@ describe("quoted command words (floor quote-awareness)", () => {
     }
   });
 
-  it("a quoted variable command position is judgeable (T2) — the raw text is what the judge weighs", async () => {
-    // The obscured-position stop is gone (T2). Note the honest limit: the
-    // static path pipeline does not bind arguments under an obscured
-    // position (outsidePaths stays empty), so the outside target is a
-    // JUDGE input (the packet's full raw text), not a floor stop. An
-    // unobscured outside path still stops (Q1).
+  it("a quoted variable command position stops once the value is provable (2026-10-16)", async () => {
+    // T2's accepted limit was that the static path pipeline bound nothing under
+    // an obscured position, so the outside target was judge input only. The
+    // floor now counts operands there (worst case — a quoted use site is one
+    // argv, so no verb model applies), so the Q1 outside-base stop applies
+    // again: the variable form reaches the typed form's verdict.
     const r = await checkDspaGate(bashPd('f=rm; "$f" /Users/u/notes.txt'), store);
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("outside base");
     const plain = await checkDspaGate(bashPd("cat /Users/u/notes.txt"), store);
     expect(plain.ok).toBe(false);
     if (!plain.ok) expect(plain.reason).toContain("outside base");
+  });
+
+  it("an unprovable variable command position stays judgeable (T2) — worst-case operands, flagged position", async () => {
+    // The name is unknown, so every operand is counted (the outside path still
+    // stops); with everything in-base there is nothing to stop and the judge
+    // weighs the raw text, which carries the obscured-position flag.
+    const outside = await checkDspaGate(bashPd('"$f" /Users/u/notes.txt'), store);
+    expect(outside.ok).toBe(false);
+    if (!outside.ok) expect(outside.reason).toContain("outside base");
+    const inBase = await checkDspaGate(bashPd('"$f" notes.txt'), store);
+    expect(inBase.ok).toBe(true);
+  });
+
+  it("a variable-held verb counts its operands worst case (mount-style bind forms)", async () => {
+    const r = await checkDspaGate(bashPd('V="mount"; $V -o bind / /mnt'), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("outside base");
   });
 });
 
