@@ -867,10 +867,11 @@ paths + config write paths + project-pi). Stop: `write outside base
      — the file lands in the base. Resolvable targets and fd references
      (`2>&1`, `>&1`) don't count; input redirects (`<`) read the base.
   2. opaque inline-code execution: an interpreter (script or shell) fed by
-     a heredoc or a `-c`/`-e` payload — the floor does not interpret
-     script bodies (D1), so the code may write anywhere under the base.
-     The check is SCOPE, not content: `python3 - <<EOF print(1)` under an
-     ungranted base stops exactly like the incident.
+     a heredoc or a `-c`/`-e` payload. As of the 2026-10-16 amendment the
+     BODY decides: inspected code with no write primitive reads the base, it
+     does not write it; anything the floor cannot read is write-capable.
+     (It used to be SCOPE, not content — `python3 - <<EOF print(1)` under an
+     ungranted base stopped exactly like the incident. See the amendment.)
   3. (D21, 2026-09-13) a write-verb stage — mkdir, mv, cp, touch, tee, ln,
      chmod, chown, chgrp, install; sed only with `-i`/`--in-place` — with
      at least one bare (non-resolvable) target under the re-based base:
@@ -907,6 +908,42 @@ paths + config write paths + project-pi). Stop: `write outside base
   latched on `write: NOT granted` and denied legitimate bounded writes.
   The packet now carries the base dir only; the verdict weighs affected
   scope only when unreasonable/unsafe (D21).
+
+**Amendment — body evidence (2026-10-16).** Trigger class (2) was literally
+`hasHeredoc || hasInlineFlag`: every interpreter under a re-based base was a
+write whatever its code did. The 2026-10-16 ledger priced that: 16 of the 51
+unique location-floor prompts asserted `write outside base`, and replaying the
+ledger through the gate with the body rule left 14 of them not stopping at all
+and 2 stopping read-shaped. The one row still ambiguous was
+`grep -rn … 2>/dev/null` — my check net keyed on its own discard redirect. No
+row that lost a write claim contains a write constructor; 5 rows gained one
+(`cat > test/…` under a re-based base — real writes that used to be reported
+as a compound location stop). The over-grant was the worse half: the Always-Allow
+tier of those prompts offered a session **WRITE** grant (`writeOutside` →
+`writeGrantDirs`, and `writeDirs` imply `readDirs`) for commands that only read.
+
+- Write-ness of a body is decided once, in `config/bash-patterns.ts`:
+  `codeBodiesWrite(bodies, shell)` / `codeWriteCapable(command, text)` over
+  `CODE_WRITE_RES` (open-mode arguments, `write_text`/`writeFileSync`, `os`/
+  `shutil` mutations, subprocess/exec, php/ruby primitives, file verbs inside
+  strings, path-shaped redirects, `eval`/`exec`, a quoted `'>'` mode), plus a
+  stage-verb rule for shell bodies (`sh -c '…'`: a stage whose verb writes, or
+  that the allow table has no model for, writes — the write-verb test runs
+  first because `isAllowedCommand` is the auto-allow table, not a read set:
+  `touch` is on it) and an in-place-flag check (`perl -pi -e`).
+- The bodies reach that decision through a new segment field,
+  `BashSegment.codeBodies` — each inline `-c`/`-e` program and each heredoc
+  body, tagged `opaque` when the shell expanded part of it, when the verb was
+  unknown, or when the operand is a variable (`-c "$CODE"`). Absent means the
+  caller has no text for it: write-capable. `WRITE_HANDLERS`' interpreter arms
+  (the wrapper/`find -exec` risk sites) consult the same evidence.
+- The same evidence kills the heredoc false positives: a body mints path tokens
+  only when the verb it feeds is an interpreter (or an argv0 that cannot be
+  named — no verb, no evidence it is data). `cat > out.ts <<'TS' … TS` is DATA:
+  the `/etc/shadow` inside a test fixture is that file's content, not a location
+  the command can reach (6 of the 51 prompts).
+- D18's incident case is unchanged: `python3 - <<'PYEOF' … open(p,'w') …` under
+  an ungranted base still stops on `write outside base`.
 
 ### D19. The write bar on the judge's fresh report — same pass (2026-09-12)
 

@@ -452,6 +452,118 @@ const ALWAYS_WRITE_ARCHIVE_PKG = new Set([
   "npx",
 ]);
 
+// ── Inline-code write evidence ───────────────────────────────────────────
+//
+// An interpreter used to be write-capable BY SHAPE: a `-c`/`-e` flag or a
+// heredoc was enough. The 2026-10-16 ledger is what that costs — 8 of 74
+// prompts said `write outside base` for commands that read
+// (`cd ~/x && python3 -c "json.load(open('f.json'))"` under a re-based cwd),
+// and the Always-Allow tier of those prompts stored a session WRITE grant for
+// a read. Body evidence decides now: inspected code with no write primitive
+// touches the base it runs in, it does not write it. The one direction that
+// stays fail-closed is the body we cannot read — a program that arrives from
+// a variable or a command substitution, a heredoc the shell expands, a
+// decoded blob, or a body the caller never hands us.
+
+/** One code body a segment hands to an interpreter, as the parser saw it. */
+export interface CodeBody {
+  text: string;
+  /** True when the text is not what the interpreter ran: the shell expanded
+   * part of it (`$f`, `$( )`, an unquoted heredoc), or it came from a
+   * variable. An opaque body is write-capable — no argument about it. */
+  opaque: boolean;
+}
+
+/** Write primitives in code (python / node / perl / ruby / php / shell-in-code). */
+const CODE_WRITE_RES: RegExp[] = [
+  // open(path, "w") / .open(p, "a") / mode="w+" — a bare open(path) is a read,
+  // so the mode must be its own argument (`[^)]*` would match the path).
+  /\bopen\s*\([\s\S]{0,200}?,\s*['"][rwaebxtn+]{1,4}['"]\s*[,)]/,
+  /\bmode\s*=\s*['"][^'"\s]{1,6}[wa+]/,
+  // handle / pathlib / node-fs writes.
+  /\.(?:write_text|write_bytes|writelines|writeFileSync|appendFileSync|writeFile|appendFile)\s*\(/,
+  /\b(?:write|append)File(?:Sync)?\s*\(/,
+  /\.(?:touch|unlink|rmdir|mkdir|makedirs|rename)\s*\(/,
+  // module-level filesystem mutations.
+  /\b(?:os|shutil)\s*\.\s*(?:remove|rmdir|removedirs|renames?|replace|truncate|unlink|makedirs?|mkdir|move|copytree|copyfile|copy2?|chown|chmod|link|symlink|startfile|execl?p?[ec]?[vl]*|spawn[lv]\w*)\s*\(/,
+  /\bfs(?:Promises)?\s*\.\s*(?:writeFile|appendFile|unlink|rm|mkdir|rmdir|rename|copyFile|cp|truncate|chmod|chown|symlink|link)\w*\s*\(/,
+  /\b(?:unlinkSync|rmSync|mkdirSync|rmdirSync|renameSync|truncateSync|copyFileSync|cpSync|rimraf)\s*\(/,
+  // code that runs a program: what that program does is not in this text.
+  /\b(?:os\.system|os\.popen|subprocess|execSync|spawnSync|execFileSync|child_process|shell\s*=\s*True)\b/,
+  // ruby / php write and exec primitives.
+  /\b(?:FileUtils|Pathname)\s*\.\s*(?:mv|rm|rm_rf|cp|copy|remove)\b|\bFile\.(?:delete|write|open|rename|unlink|touch|mkdir)\b|\bIO\.write\b/,
+  /\b(?:file_put_contents|fwrite|fputs|passthru|shell_exec|proc_open|popen|mkdir|rmdir|touch|rename|unlink|chmod|chown|copy)\s*\(/,
+  // a shell command inside a string, in the verbs that create or change files.
+  /(?:^|[\s;'"`])(?:rm|mv|cp|dd|tee|install|truncate|touch|chmod|chown|chgrp|ln|mkdir|rmdir|rename|unlink|patch)\s+[-'"$\w]/,
+  // a mode string passed as an argument: perl `open(my $f, '>', $p)`, C-style
+  // fopen. Python's open(f,'w') is caught above; a bare '>' only appears here.
+  /,\s*['"][+<>]{1,2}r?['"]\s*[,)]/,
+  /\bsed\s+(?:-[a-zA-Z]*[iI]\b|--in-place)/,
+  /\bdd\s+if=/,
+  // a redirect to something path-shaped (`x > 5` and `-> "T"` are not one).
+  /(?:^|[\s;'"`])>{1,2}\s*['"]?(?=[./~$]|\w+[./])[\w./~$-]+/,
+  // the body assembles more code.
+  /\b(?:eval|exec)\s*\(/,
+];
+
+/** Body text that means we are not reading what runs: a substitution the shell
+ * performed, a command substitution, a decoded blob, a pipe into a program. */
+const OPAQUE_CODE_BODY_RE = /\$\(|`|\|\s*(?:sh|bash|zsh|dash|ksh|python\d*|node|perl|ruby|php)\b|base64\s+(?:-d|--decode)/;
+
+/** An in-place flag on the invocation itself (`perl -pi -e`, `ruby -i`, the sed
+ * form) writes its operand whatever the program body says. */
+const IN_PLACE_FLAG_RE = /(?:^|\s)-[a-zA-Z]*i[a-zA-Z]*(?=\s)/;
+
+/** A shell body (`sh -c '…'`) is a list of shell commands, so its write-ness
+ * is decided by the verbs it runs. The write-verb check runs before the set
+ * check because `isAllowedCommand` is the auto-allow table, not a read set —
+ * `touch` is on it. A stage with no model at all is assumed to write.
+ * A python body has no such verb set — its write-ness comes from CODE_WRITE_RES. */
+function shellBodyWrites(body: string): boolean {
+  const stages = body.split(/[;\n|&]+/).map((s) => s.trim()).filter(Boolean);
+  if (stages.length === 0) return false;
+  for (const st of stages) {
+    const raw = st.replace(/^['"`]+/, "").split(/[\s'"`]+/)[0].toLowerCase();
+    if (!raw) return true;
+    const verb = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+    if (isWriteOperation(verb, st)) return true;
+    if (!isAllowedCommand(verb)) return true;
+  }
+  return false;
+}
+
+/**
+ * Does the code a segment hands to an interpreter write anything the shell
+ * would not have written by itself?
+ * @param bodies  the bodies the parser saw; an empty list means the caller
+ *                knows the segment has inline code but has no text for it —
+ *                not inspectable, so write-capable.
+ * @param shell   the verb is a shell (`sh -c`), so decide by stage verbs.
+ */
+export function codeBodiesWrite(bodies: CodeBody[], shell = false): boolean {
+  if (bodies.length === 0) return true;
+  for (const b of bodies) {
+    if (b.opaque || OPAQUE_CODE_BODY_RE.test(b.text)) return true;
+    if (shell ? shellBodyWrites(b.text) : CODE_WRITE_RES.some((re) => re.test(b.text))) return true;
+  }
+  return false;
+}
+
+/**
+ * Text-only form, for callers that have segment text and no body records
+ * (`isWriteOperation`). Only an inline program the text itself carries is
+ * inspectable: a script FILE's content was never handed over (`bash script.sh`
+ * is opaque code), and a heredoc body does not appear in segment text at all.
+ */
+export function codeWriteCapable(command: string, text: string): boolean {
+  if (IN_PLACE_FLAG_RE.test(text)) return true;
+  const inline = text.match(/(?:^|\s)-[ce]\s+(["'])([\s\S]*?)\1/);
+  if (!inline) return true; // no program text in hand
+  const body = inline[2];
+  if (OPAQUE_CODE_BODY_RE.test(body)) return true;
+  return SHELL_INTERPRETERS.has(command) ? shellBodyWrites(body) : CODE_WRITE_RES.some((re) => re.test(body));
+}
+
 // ── Write operation handlers ──
 
 /** Command → write check (match, evaluate). */
@@ -461,8 +573,10 @@ const WRITE_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: s
   { match: (c) => c === "sed", evaluate: (_, ctx) => dangerousSedFlags.test(ctx) },
   { match: (c) => c === "tee", evaluate: (_, ctx) => TEE_WRITE_RE.test(ctx) },
   { match: (c) => c === "sort", evaluate: (_, ctx) => SORT_OUTPUT_RE.test(ctx) },
-  { match: (c) => SHELL_INTERPRETERS.has(c), evaluate: () => true },
-  { match: (c) => SCRIPT_INTERPRETERS.has(c), evaluate: () => true },
+  // An interpreter is write-capable on the evidence of its code, not on the
+  // shape of the call (see the body-evidence block above).
+  { match: (c) => SHELL_INTERPRETERS.has(c), evaluate: (cmd, ctx) => codeWriteCapable(cmd, ctx) },
+  { match: (c) => SCRIPT_INTERPRETERS.has(c), evaluate: (cmd, ctx) => codeWriteCapable(cmd, ctx) },
 ];
 
 /**

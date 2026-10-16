@@ -1,5 +1,59 @@
 # Changelog
 
+## 3.37.0 — 2026-10-16
+**An inline program is a write only when its own body says so.**
+
+- **What was wrong.** D18's trigger class (2) was literally
+  `hasHeredoc || hasInlineFlag`: any interpreter fed by a heredoc or a
+  `-c`/`-e` payload under a re-based base was declared a WRITE, whatever the
+  code did. `cd ~/Strata && python3 -c "json.load(open('strata-iq3_s.json'))"`
+  — a read — was reported as `write outside base (…/Strata)`, and its
+  fall-through prompt offered a session **WRITE** grant (`writeOutside` →
+  `writeGrantDirs`, and a write dir implies a read dir): the floor was about to
+  widen the write bar for a command that only reads. The same shape minted path
+  tokens out of heredoc bodies that are data, not code — `cat > out.ts <<'TS'
+  … TS` reported `/etc/shadow`, which is inside the new file's own content, as a
+  location the command can reach.
+- **What the ledger priced.** Of the 51 unique location-floor prompts in
+  `.log/decisions.jsonl` through 2026-10-16, 16 asserted `write outside base`.
+  Replayed through the gate with the body rule, **all 16 lost that claim**: 7
+  have no write construct anywhere in the raw text, and the single row still
+  matching my widest check net was `grep -rn … 2>/dev/null` — the net keyed on
+  its own discard redirect. 5 rows gained a write claim instead (`cat >
+  test/…` under a re-based base: real writes that used to be reported as a
+  compound location stop). 6 of the 51 were heredoc-body path false positives.
+- **The detector (`config/bash-patterns.ts`).** `codeBodiesWrite(bodies, shell)`
+  and `codeWriteCapable(command, text)` over `CODE_WRITE_RES` — open-mode
+  arguments, `write_text`/`writeFileSync`, `os`/`shutil` mutations,
+  subprocess/exec, php/ruby primitives, file verbs inside strings,
+  path-shaped redirects, `eval`/`exec`, a quoted `'>'` mode — plus a stage-verb
+  rule for shell bodies (`sh -c '…'`: a stage whose verb writes, or that the
+  allow table has no model for, writes; the write-verb test runs FIRST because
+  `isAllowedCommand` is the auto-allow table, not a read set — `touch` is on it)
+  and an in-place-flag check (`perl -pi -e`).
+- **Fail-closed is the loosening guard.** A body the floor cannot read stays
+  write-capable: a program from a variable (`-c "$CODE"`), a heredoc the shell
+  expands, a script FILE operand (`bash script.sh`), or no body text at all.
+  D18's incident case — `python3 - <<'PYEOF' … open(p,'w') …` under an ungranted
+  base — still stops on `write outside base`.
+- **Threading.** New segment field `BashSegment.codeBodies`: every inline
+  `-c`/`-e` program and every heredoc body, each tagged `opaque` when the shell
+  expanded part of it, when the verb was unknown, or when the operand is a
+  variable. Heredoc bodies attach through `heredocOwner()`, which reaches the
+  owning command as a **sibling** — tree-sitter hangs `heredoc_body` under
+  `redirected_statement`, so there is no `command` ancestor (the first
+  implementation fail-closed silently on this). `WRITE_HANDLERS`' interpreter
+  arms consult the same evidence, so wrapper/`find -exec` sites agree with the
+  base rule.
+- **Scope left alone on purpose.** The location stop for reads outside the read
+  bar still fires — removing that is the read/write mode split, not this change.
+  What step 1 removes is the false WRITE assertion and the write grant riding on
+  it, encoded by the new gate test `a read-shaped command under a re-based base
+  never asserts a write` (`r.writeOutside` undefined).
+- Docs: D18 trigger class (2) amended + new "Amendment — body evidence
+  (2026-10-16)" paragraph in `docs/dspa-redesign.md`.
+- Suite 4050 / 51 files.
+
 ## 3.36.0 — 2026-10-16
 **A variable holding the program name used to switch the operand model off entirely.**
 

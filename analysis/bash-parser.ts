@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { allowedReadPaths, allowedWritePaths, pathAwareCommands } from "../config";
+import { allowedReadPaths, allowedWritePaths, pathAwareCommands, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, type CodeBody } from "../config";
 import { expandTilde, resolvePathReal } from "./path-analysis";
 import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandHomeToken, expandHomeLiterals } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
@@ -955,6 +955,14 @@ export interface BashSegment {
   subshellTexts?: string[];
   /** Operator preceding this segment in the flat list ("&&", "||", ";", "&"). */
   precedingOp?: string;
+  /**
+   * Code this segment hands to an interpreter (an inline `-c`/`-e` program, a
+   * heredoc body), as the parser saw it. `baseWriteAccess` decides write-ness
+   * from that evidence instead of from the shape of the call — an interpreter
+   * whose inspected body writes nothing does not write the base it runs in.
+   * Absent means the caller has no body text: not inspectable, write-capable.
+   */
+  codeBodies?: CodeBody[];
   /** Segment runs in a background subshell (its cd does not persist into later segments). */
   backgrounded?: boolean;
   /**
@@ -2019,6 +2027,20 @@ export async function parseCommand(
       if (!hopSeen.has(key)) { hopSeen.add(key); hops.push({ written, resolved }); }
     };
 
+    // Code bodies, attached to the segment that runs them (segMap is the
+    // command-node → segment-index map the segment builder filled). The write
+    // decision is made from body text in cwd-tracking, so the text has to
+    // reach the same segment the base is tracked on.
+    const bodiesBySegment = new Map<number, CodeBody[]>();
+    const addCodeBody = (cmdNode: TSNode, body: CodeBody): void => {
+      const si = segMap.get(cmdNode.id) ?? -1;
+      if (si < 0) return; // no segment record for this command: the floor
+      // keeps its write-capable default rather than assume a read.
+      const list = bodiesBySegment.get(si);
+      if (list) list.push(body);
+      else bodiesBySegment.set(si, [body]);
+    };
+
     for (const cmdNode of commandNodes) {
       // Path-qualified invocations (`/usr/bin/python3`, `~/.pi/…/.bin/tsx`)
       // name the same command by its basename — path collection and the
@@ -2074,6 +2096,17 @@ export async function parseCommand(
         }
       }
 
+      // Code bodies for every runner, path-aware or not: `sh -c` is not in
+      // pathAwareCommands, but its program string is still the thing that
+      // would write the base, and the write decision is made from that text.
+      const runner = prog && (SHELL_INTERPRETERS.has(prog) || SCRIPT_INTERPRETERS.has(prog)) ? prog : null;
+      if (runner) {
+        for (const ai of inlineCodeArgIndices(runner, argvList.map((a) => a.text))) {
+          const arg = argvList[ai];
+          addCodeBody(cmdNode, { text: arg.text, opaque: nodeHasRuntimeExpansion(arg.node) });
+        }
+      }
+
       if ((prog && pathAwareCommands.has(prog)) || (argv0Opaque && prog === null)) {
         const argTexts = argvList.map(a => a.text);
         const inlinePrograms = prog ? inlineCodeArgIndices(prog, argTexts) : new Set<number>();
@@ -2087,6 +2120,7 @@ export async function parseCommand(
           // them into the path set (fail-closed, like every other path).
           if (isMultiLineLiteralArg(argNode)) {
             bodyPaths(arg, cwd, allPaths, recordHop);
+            addCodeBody(cmdNode, { text: arg, opaque: nodeHasRuntimeExpansion(argNode) });
             continue;
           }
           // The ROLE rule: a location token is minted only at a FILE-operand
@@ -2189,12 +2223,55 @@ export async function parseCommand(
       }
     }
 
-    // Script-body paths from heredocs (`python3 - << 'EOF' …`): the body is
-    // opaque to the shell (SKIP_TYPES), but the script it feeds touches real
-    // files — extract the path-like literals (fail-closed).
+    // Script bodies. A heredoc body is CODE only when the verb it feeds is an
+    // interpreter; `cat > out.ts <<'TS' … TS` hands the bytes to a program that
+    // copies them, so the path-like strings inside the body are the file's
+    // content, not locations the command touches (2026-10-16 ledger: 6 of 74
+    // prompts stopped on `/etc/shadow` and `/Users/u/project` written INSIDE a
+    // test file the command created in-base). An argv0 we cannot name keeps the
+    // scan — no verb means no evidence it is data.
+    const codeVerb = (name: string | null): boolean =>
+      name === null || SHELL_INTERPRETERS.has(name) || SCRIPT_INTERPRETERS.has(name);
+    // Whose body is a heredoc? tree-sitter attaches the redirect (body and all)
+    // under `redirected_statement`, where the command that CONSUMES the heredoc
+    // is a sibling to the left — `cat > f <<'TS'` has no `command` ancestor of
+    // the body node. Descend the nearest left sibling for it; a pipeline hands
+    // its heredoc to the last stage (`gen | python3 - <<EOF`).
+    const lastCommandIn = (n: TSNode): TSNode | null => {
+      if (n.type === "command") return n;
+      for (let i = n.childCount - 1; i >= 0; i--) {
+        const c = n.child(i);
+        if (c) { const r = lastCommandIn(c); if (r) return r; }
+      }
+      return null;
+    };
+    const heredocOwner = (body: TSNode): TSNode | null => {
+      const red = body.parent;
+      const stmt = red?.parent;
+      if (!stmt) return null;
+      if (stmt.type === "command") return stmt;
+      for (let i = stmt.childCount - 1; i >= 0; i--) {
+        const c = stmt.child(i);
+        if (!c || c.id === red!.id || c.type === "heredoc_body" || c.type === "heredoc_end" || c.type === ">") continue;
+        const cmd = lastCommandIn(c);
+        if (cmd) return cmd;
+      }
+      return null;
+    };
     const collectHeredocBodies = (node: TSNode): void => {
       if (node.type === "heredoc_body") {
-        bodyPaths(node.text, cwd, allPaths);
+        const owner = heredocOwner(node);
+        const nameNode = owner ? commandNameNode(owner) : null;
+        const verb = nameNode ? path.basename(getCommandName(owner!) ?? "") : "";
+        // An opaque verb (`$PY - <<EOF`) states no identity to reason about:
+        // the body stays CODE, whatever the closed set would have said.
+        const opaqueVerb = nameNode === null || nodeHasRuntimeExpansion(nameNode);
+        if (!opaqueVerb && !codeVerb(verb || null)) {
+          // DATA: the paths inside are the file's content, nothing more.
+        } else {
+          if (owner) addCodeBody(owner, { text: node.text, opaque: opaqueVerb || nodeHasRuntimeExpansion(node) });
+          bodyPaths(node.text, cwd, allPaths);
+        }
         return;
       }
       for (let i = 0; i < node.childCount; i++) {
@@ -2241,6 +2318,10 @@ export async function parseCommand(
       return true;
     });
 
+    for (const [si, bodies] of bodiesBySegment) {
+      const seg = segments[si];
+      if (seg) seg.codeBodies = bodies;
+    }
     return { segments, paths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0 };
   } finally {
     subshellCache = null;
