@@ -153,11 +153,29 @@ describe("parseCommand: paths", () => {
     expect(r.paths).toContain(realPath("/tmp/file with spaces.txt"));
   });
 
-  it("extracts path-like literals from heredoc bodies (fail-closed: the script may touch them)", async () => {
+  it("extracts path-like literals from an interpreter's heredoc body (fail-closed: the script may touch them)", async () => {
     // 2026-08-31 D13 mining: a heredoc open('/var/lib/…') was invisible to
     // the static path set — only the judge saw it. Body paths now join the
     // path set like any other (SAFE_SYSTEM_PATHS filter + dedup apply).
-    const r = await parseCommand("cat << 'EOF'\n/etc/passwd\nEOF", cwd);
+    const r = await parseCommand("python3 - << 'EOF'\nopen('/etc/passwd','w')\nEOF", cwd);
+    expect(r.paths).toContain(canon("/etc/passwd"));
+  });
+
+  it("a non-interpreter heredoc body is DATA: its path strings mint nothing (2026-10-16)", async () => {
+    // 6 of the 74 prompts in the 2026-10-16 ledger were this shape: the
+    // command wrote a file INSIDE the base and stopped on path strings
+    // written inside that file. `cat` copies bytes — it touches nothing the
+    // body mentions, and the judge reading `/etc/shadow` out of a test
+    // fixture is not a location the command can reach.
+    const r = await parseCommand(
+      "cat > test/out.ts << 'EOF'\nimport fs from 'node:fs';\nfs.writeFileSync('/etc/passwd','x')\nconst p = '/Users/u/project';\nEOF", cwd);
+    expect(r.paths).not.toContain(canon("/etc/passwd"));
+    expect(r.paths).not.toContain(canon("/Users/u/project"));
+  });
+
+  it("an opaque verb keeps a heredoc body CODE (`$PY - <<EOF`) (2026-10-16)", async () => {
+    // No literal verb means no evidence the body is data.
+    const r = await parseCommand("PY=python3; $PY - << 'EOF'\nopen('/etc/passwd','w')\nEOF", cwd);
     expect(r.paths).toContain(canon("/etc/passwd"));
   });
 

@@ -1160,16 +1160,55 @@ describe("D18: write-mode base access (2026-09-12 incident)", () => {
     if (!r.ok) expect(r.reason).toBe(`write outside base (${HOME_PI})`);
   });
 
-  it("inline -c/-e and heredoc scripts stop; the floor does not read the code", async () => {
-    // Even an innocent-looking inline body triggers — this is a SCOPE check,
-    // not a content check (the judge reads the code).
+  it("an inline body that WRITES stops; one the floor can read and that reads does not", async () => {
+    // D18 (2026-09-12) stopped on the SHAPE of the call: any -c/-e/heredoc
+    // under a re-based base was a write to the base. The 2026-10-16 ledger put
+    // 8 of its 74 prompts in that shape while reading
+    // (`json.load(open('settings-ext.json'))`), and the Always-Allow tier of
+    // those prompts stored a session WRITE grant for a read. The body decides
+    // now; anything the floor cannot read stays write-capable.
     for (const c of [
-      `cd ${HOME_PI} && sh -c 'echo hi'`,
-      `cd ${HOME_PI} && python3 - <<'PYEOF'\nprint(1)\nPYEOF`,
+      `cd ${HOME_PI} && sh -c 'touch x'`,
+      `cd ${HOME_PI} && python3 - <<'PYEOF'\nopen('out.json','w')\nPYEOF`,
+      `cd ${HOME_PI} && python3 -c "$CODE"`, // program text never handed over
+      `cd ${HOME_PI} && python3 - <<EOF\nprint(open('$HOME/.ssh/id_rsa').read())\nEOF`, // shell expands the body
     ]) {
       const r = await checkDspaGate(bashPd(c), store);
       expect(r.ok, c).toBe(false);
+    }
+    for (const c of [
+      `cd ${HOME_PI} && sh -c 'touch x'`,
+      `cd ${HOME_PI} && python3 - <<'PYEOF'\nopen('out.json','w')\nPYEOF`,
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
       if (!r.ok) expect(r.reason, c).toBe(`write outside base (${HOME_PI})`);
+    }
+    for (const c of [
+      `cd ${HOME_PI} && python3 -c "import json; print(json.load(open('settings-ext.json')))"`,
+      `cd ${HOME_PI} && python3 - <<'PYEOF'\nprint(1)\nPYEOF`,
+      `cd ${HOME_PI} && sh -c 'ls'`, // every stage on the closed read set
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(true);
+    }
+  });
+
+  it("a read-shaped command under a re-based base never asserts a write", async () => {
+    // The requirement this whole change exists for: "if I allow write when I
+    // actually only want read, it defeats the purpose". The base is outside
+    // the read bar, so the location floor still stops (step 3 makes that
+    // judgeable) — but the stop is READ-shaped: it must not carry
+    // writeOutside, because that field is what turns the prompt's tier-1
+    // offer into a session WRITE grant (ui/prompt-builder.ts, and writeDirs
+    // imply readDirs in gate/store.ts).
+    const r = await checkDspaGate(bashPd(
+      `cd /Users/u/data && python3 -c "import json; print(json.load(open('/Users/u/other/f.json')))"`,
+      { cwd: BASE },
+    ), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain("touches paths outside base");
+      expect(r.writeOutside).toBeUndefined();
     }
   });
 

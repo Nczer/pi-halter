@@ -33,10 +33,14 @@ describe("isWriteOperation", () => {
     expect(isWriteOperation("sed", "sed -n '95,115p' packages/coding-agent/src/core/agent-session.ts")).toBe(false);
   });
 
-  it("detects perl as write (script interpreter = arbitrary code execution)", () => {
+  it("decides an interpreter by its code, not its shape (2026-10-16)", () => {
+    // An in-place flag writes whatever the body says; a script FILE's content
+    // is never handed to the floor (opaque code); an inline body it CAN read
+    // decides for itself.
     expect(isWriteOperation("perl", "perl -pi -e 's/foo/bar/g' file.txt")).toBe(true);
-    expect(isWriteOperation("perl", "perl -e 'print 42'")).toBe(true);
     expect(isWriteOperation("perl", "perl script.pl")).toBe(true);
+    expect(isWriteOperation("perl", "perl -e 'unlink $ARGV[0]'")).toBe(true);
+    expect(isWriteOperation("perl", "perl -e 'print 42'")).toBe(false);
   });
 
   // The perl -i cases now prompt for a second reason (script execution), so

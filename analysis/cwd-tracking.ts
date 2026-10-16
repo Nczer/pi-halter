@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { expandTilde, expandHomeToken } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
 import { tokenizeSegment, tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
-import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS } from "../config";
+import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS, codeBodiesWrite } from "../config";
 import { hasRuntimeExpansionText, nonFileArgIndices, type BashSegment } from "./bash-parser";
 import type { ShellAssignment } from "./var-resolution";
 
@@ -697,11 +697,19 @@ export function baseWriteAccess(seg: BashSegment): boolean {
     if (sawVerb) return false; // only resolvable targets: the path set covers them
   }
 
-  // (2) Opaque inline-code execution under the base.
+  // (2) Inline code under the base — but the BODY decides, not the shape of
+  // the call. An interpreter whose code the parser could read and which
+  // contains no write primitive reads the base, it does not write it: 8 of the
+  // 74 prompts in the 2026-10-16 ledger were `write outside base` on commands
+  // like `cd ~/x && python3 -c "json.load(open('f.json'))"`, and their
+  // Always-Allow tier would have stored a session WRITE grant for a read.
+  // A body we cannot read (a program from a variable, a heredoc the shell
+  // expands, a body the parser never saw) stays write-capable.
   if (!SCRIPT_INTERPRETERS.has(first) && !SHELL_INTERPRETERS.has(first)) return false;
   const hasHeredoc = seg.ops.includes("<<") || stage.some((t) => t.startsWith("<<"));
   const hasInlineFlag = stage.includes("-c") || stage.includes("-e");
-  return hasHeredoc || hasInlineFlag;
+  if (!hasHeredoc && !hasInlineFlag) return false;
+  return codeBodiesWrite(seg.codeBodies ?? [], SHELL_INTERPRETERS.has(first));
 }
 
 /**
