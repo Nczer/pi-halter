@@ -514,13 +514,42 @@ const OPAQUE_CODE_BODY_RE = /\$\(|`|\|\s*(?:sh|bash|zsh|dash|ksh|python\d*|node|
  * form) writes its operand whatever the program body says. */
 const IN_PLACE_FLAG_RE = /(?:^|\s)-[a-zA-Z]*i[a-zA-Z]*(?=\s)/;
 
+/** An output redirect inside a shell body (`sh -c 'echo x > f'`) lands in the
+ * effective cwd, which is the re-based base — the outer-command redirect scan
+ * never sees it, because the whole payload is one quoted token. Same
+ * exclusions as that scan: an fd dup (`2>&1`) and a numeric fd are not writes,
+ * an absolute target is already in the path set. Anything else (including an
+ * expansion or a truncated body) counts — fail-closed. */
+function shellBodyRedirect(body: string): boolean {
+  const re = /(?:\d*>>?|&>)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body))) {
+    const rest = body.slice(m.index + m[0].length).trimStart();
+    // `&` stays part of the token: `>&2` / `>&-` are fd operations, not writes.
+    const tok = (rest.match(/^[^\s'"`;|()]+/) ?? [""])[0];
+    if (!tok) return true;
+    if (tok.startsWith("&") || /^\d+$/.test(tok)) continue;
+    if (tok.startsWith("/") || tok.startsWith("~")) continue;
+    return true;
+  }
+  return false;
+}
+
 /** A shell body (`sh -c '…'`) is a list of shell commands, so its write-ness
  * is decided by the verbs it runs. The write-verb check runs before the set
  * check because `isAllowedCommand` is the auto-allow table, not a read set —
  * `touch` is on it. A stage with no model at all is assumed to write.
  * A python body has no such verb set — its write-ness comes from CODE_WRITE_RES. */
 function shellBodyWrites(body: string): boolean {
-  const stages = body.split(/[;\n|&]+/).map((s) => s.trim()).filter(Boolean);
+  if (shellBodyRedirect(body)) return true;
+  // Only fd operations and absolute-target redirects reach here (everything
+  // else was a write above). Drop them so the verb scan sees real stages —
+  // splitting on `&` would otherwise leave a stray `2` from `>&2`.
+  const stages = body
+    .replace(/(?:\d*>>?|&>|<)+\s*(?:&[\d-]+|(?:~|\/)[^\s'"`;|)]*)/g, " ")
+    .split(/[;\n|&]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (stages.length === 0) return false;
   for (const st of stages) {
     const raw = st.replace(/^['"`]+/, "").split(/[\s'"`]+/)[0].toLowerCase();
