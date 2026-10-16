@@ -33,7 +33,7 @@ function fakeModel(id = "qwen3-27b", provider = "llama-cpp"): Model<any> {
   } as unknown as Model<any>;
 }
 
-function assistantMsg(parts: unknown[], stopReason = "stop", errorMessage?: string): AssistantMessage {
+function assistantMsg(parts: unknown[], stopReason = "stop", errorMessage?: string, extra?: Record<string, unknown>): AssistantMessage {
   return {
     role: "assistant",
     content: parts as never,
@@ -44,7 +44,18 @@ function assistantMsg(parts: unknown[], stopReason = "stop", errorMessage?: stri
     stopReason: stopReason as never,
     errorMessage,
     timestamp: Date.now(),
+    ...extra,
   } as unknown as AssistantMessage;
+}
+
+/** Usage as a real local call reports it (2026-10-16 wire replay: a valid
+ *  verdict costs ~600 output tokens; a failure that talks instead costs ~40). */
+function usageOf(out: number, reasoning?: number): Record<string, unknown> {
+  return {
+    input: 1523, output: out, cacheRead: 1518, cacheWrite: 0, totalTokens: 1523 + out,
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
 }
 
 const VERDICT = {
@@ -443,6 +454,138 @@ describe("judge call", () => {
     expect(r.risk).toBeNull();
   });
 
+  // ── Failure diagnostics (2026-10-16 judge-ledger investigation) ──────
+  // Three `no-tool-call` ledger lines and no way to tell why: a model that
+  // talked instead of calling, a turn swallowed by its own thinking block, and
+  // a call cut mid-JSON by the token budget. Each needs the opposite fix, so
+  // the ledger now carries the reply.
+  it("diagnoses no-tool-call with finish_reason, parts, tokens and the text head", async () => {
+    const r = await judge(baseInput, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(
+        () =>
+          assistantMsg(
+            [{ type: "text", text: "Sure — that command just lists the build directory, it is safe." }],
+            "stop",
+            undefined,
+            { rawStopReason: "stop", usage: usageOf(41, 12) },
+          ),
+        [],
+      ),
+    });
+    expect(r.failReason).toBe("no-tool-call");
+    expect(r.reason).toContain("stop=stop/stop");
+    expect(r.reason).toContain("parts=text");
+    expect(r.reason).toContain("out=41 in=1523 cache=1518 think=12");
+    expect(r.reason).toContain('text="Sure — that command just lists');
+  });
+
+  it("labels a budget cut `truncated`, not no-tool-call (finish_reason=length)", async () => {
+    const r = await judge(baseInput, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(
+        () =>
+          assistantMsg(
+            [{ type: "thinking", thinking: "The user wants to know whether this delete is reversible…" }],
+            "length",
+            undefined,
+            { rawStopReason: "length", usage: usageOf(561, 561) },
+          ),
+        [],
+      ),
+    });
+    expect(r.failReason).toBe("truncated");
+    expect(r.reason).toContain("stop=length/length");
+    expect(r.reason).toContain('thinking="The user wants to know whether');
+    expect(r.reason).toContain("out=561");
+  });
+
+  it("names the call a truncated reply was mid-way through", async () => {
+    const r = await judge(baseInput, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(
+        () =>
+          assistantMsg(
+            [{ type: "toolCall", id: "1", name: "report_verdict", arguments: { approve: "approve" } as never }],
+            "length",
+            undefined,
+            { rawStopReason: "length", usage: usageOf(170) },
+          ),
+        [],
+      ),
+    });
+    expect(r.failReason).toBe("truncated");
+    expect(r.reason).toContain("called=report_verdict(1 args)");
+  });
+
+  it("bad-args carries the finish_reason, so a cut call is not read as a confused model", async () => {
+    const r = await judge(baseInput, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(
+        () => toolCallReply({ example: "test" }),
+        [],
+      ),
+    });
+    expect(r.failReason).toBe("bad-args");
+    expect(r.reason).toContain('{"example":"test"}');
+    expect(r.reason).toContain("stop=stop");
+  });
+
+  it("retries once a verdict-less reply — the second sample usually lands", async () => {
+    const calls: CapturedCall[] = [];
+    let n = 0;
+    const r = await judge({ ...baseInput, command: "git status" }, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(
+        () => (++n === 1 ? assistantMsg([{ type: "text", text: "That looks fine." }], "stop", undefined, { rawStopReason: "stop" }) : toolCallReply(VERDICT)),
+        calls,
+      ),
+    });
+    expect(calls.length).toBe(2);
+    expect(r.approve).toBe("approve");
+    expect(r.attempts).toBe(2);
+    expect(r.failReason).toBeUndefined();
+  });
+
+  it("a retry that also fails reports attempts=2 and keeps the second diagnostic", async () => {
+    const calls: CapturedCall[] = [];
+    const r = await judge({ ...baseInput, command: "du -sh ." }, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(() => assistantMsg([{ type: "text", text: "I have a question about this." }], "stop", undefined, { rawStopReason: "stop" }), calls),
+    });
+    expect(calls.length).toBe(2);
+    expect(r.failReason).toBe("no-tool-call");
+    expect(r.attempts).toBe(2);
+    expect(r.reason).toContain("attempts=2");
+    expect(r.reason).toContain('text="I have a question');
+  });
+
+  it("does not retry a timeout or a transport error — the same request buys the same wait", async () => {
+    const aborted: CapturedCall[] = [];
+    const t = await judge({ ...baseInput, command: "ls a" }, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(() => assistantMsg([], "aborted"), aborted),
+    });
+    expect(t.failReason).toBe("timeout");
+    expect(aborted.length).toBe(1);
+    expect(t.attempts).toBeUndefined();
+    const failed: CapturedCall[] = [];
+    const c = await judge({ ...baseInput, command: "ls b" }, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(() => assistantMsg([], "error", "boom"), failed),
+    });
+    expect(c.failReason).toBe("call-failed");
+    expect(failed.length).toBe(1);
+  });
+
   it("accepts a boolean approve — the shape a local model sends (2026-09-20 judge log)", async () => {
     // Grammar-constrained local models emit {"approve":true,…} for the enum
     // field; the whole verdict used to be thrown away as bad-args (and logged
@@ -629,7 +772,9 @@ describe("judge cache", () => {
     const r2 = await judge(baseInput, opts);
     expect(r1.failReason).toBe("no-tool-call");
     expect(r2.cached).toBe(false);
-    expect(calls).toHaveLength(2);
+    // 4 = 2 calls × (first attempt + the one retry a verdict-less reply
+    // gets). A cached defer would leave it at 0 more than the first run.
+    expect(calls).toHaveLength(4);
   });
 
   it("uncached: the same operation calls the model again and pollutes nothing", async () => {

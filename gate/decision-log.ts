@@ -407,9 +407,13 @@ export interface JudgeLogEntry {
   // "no-explanation" and put the real class in `detail`, so the ledger could
   // not be counted by cause).
   error?: JudgeFailReason;
-  // kind: "infra" — the normalized sub-reason (JudgeResult.reason, ≤200ch):
-  // "timeout" / "no-tool-call" / "bad-args: {…}" / "bad-args: asked-user:
-  // {…}" / "call-failed: <msg>".
+  // kind: "infra" — the normalized sub-reason (JudgeResult.reason, ≤400ch):
+  // "timeout" / "no-tool-call: <reply diagnostic>" / "truncated: <same>" /
+  // "bad-args: {…} stop=<stop>/<finish_reason>" / "bad-args: asked-user:
+  // {…}" / "call-failed: <msg>". The diagnostic (replyDiag in judge.ts) is
+  // what makes a no-verdict line countable by CAUSE, not just by class —
+  // `stop=…/length` is a budget, `/stop` with prose is a prompt or
+  // engine-parse problem, and they must not share one tally.
   detail?: string;
   // kind: "paths" — both sides of the floor↔judge disagreement: the floor's
   // own path set (sentinels included), the report as sanitized, and the
