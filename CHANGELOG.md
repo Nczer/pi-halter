@@ -1,5 +1,56 @@
 # Changelog
 
+## 3.36.0 — 2026-10-16
+**A variable holding the program name used to switch the operand model off entirely.**
+
+- **What was wrong.** Operand minting is keyed on the verb: the parser mints
+  path tokens only for commands whose name is on the path-aware set
+  (`config/bash-patterns.ts:91`). `C=cat; $C /etc/shadow` has no static name,
+  so no model engaged and the parse returned `paths=[]` — the argument that
+  would have stopped the command disappeared because the *identity* moved into
+  a variable. Same for `"$f" /Users/u/notes.txt`, which used to pass the floor
+  (`outside base` never fired) while the typed `cat /Users/u/notes.txt` stopped.
+- **The probe that corrected the plan.** The triggering live case was a Steam
+  launch (`srt-bwrap --dev-bind / / bwrap --dev-bind / / …`, decision-log L94,
+  auto-allowed) versus a manual sandbox-tool probe that stopped (L26). The
+  hypothesis was variable blindness; a probe disproved it — literal
+  `firejail --dev-bind / / echo OK` and `/usr/bin/bwrap --dev-bind / /` both
+  give `paths=[]` too, because no sandbox or mount tool is on the 80-entry
+  path-aware set. L26 stopped because it was wrapped in `timeout` (which is on
+  the set): the two ledger lines differed by a wrapper, not by the path shape.
+  So this release fixes the opaque-argv0 half; the missing sandbox-tool set is
+  a separate policy decision, deliberately deferred.
+- **Provable verbs get their model.** `provableArgv0Name` binds the variable
+  when the command text proves the value: assigned exactly once in the scope
+  visible to that segment (the same pre-fork visibility var-resolution uses),
+  literal value (no `$`, backtick, brace, glob, escape; quote pair stripped).
+  `C=cat; $C /etc/shadow` now mints `/etc/shadow`; bash word-splitting is
+  modelled too, so `C="rm -rf /etc"; $C` mints `/etc` (the value's tail becomes
+  arguments), while the quoted `"$C"` stays one argv.
+- **Unprovable verbs get the worst case.** Unset, assigned twice, `C=$(…)`,
+  glued `$D/tool`, `${C:-cat}`, loop variables: with no name there is no
+  verb-keyed flag/path class to consult, so every non-flag operand is treated
+  as a candidate file operand — the opposite of the old silence.
+- **Deliberate asymmetry.** A *literal* verb off the closed set keeps that set's
+  blind spot (that is where its false-positive budget lives). A variable-held
+  verb states no identity, which is how a verb-keyed rule gets dodged, so it
+  gets no benefit of the doubt. Closing the sandbox-tool gap means adding those
+  verbs to the set, not widening this rule.
+- **The obscured position is a flag, not a path.** The raw token goes to a new
+  parse field `obscuredArgv0` (per-token dedup) → `CommandAnalysis` → folded
+  into `safety.hasUnsafePattern` (so it reaches the packet's `obfuscation:`
+  line and keeps the command out of `canBeAutoAllowed`). No `<unresolved-var>`
+  sentinel: a program name is not a filesystem location.
+- **Reversals recorded.** Six `cases-data` rows (`$(cat /etc/passwd)`, the
+  `&&`/`||`/`;`/`|` backtick forms) flip `unsafe false → true`: a substitution
+  in command position makes the program identity a runtime value. Their
+  decisions stay `prompt`. The old text-level regex
+  (`OBfus_VAR_HOLDING_CMD_RE`) still marks `$VAR`-led segments, so a provable
+  verb remains labeled unsafe — two sources for one signal; retiring the regex
+  is a follow-up.
+- Docs: D23 in `docs/dspa-redesign.md` (rule, invariants, the asymmetry, what
+  stays open). Suite 4047 (+20).
+
 ## 3.35.0 — 2026-10-16
 **A judge failure used to record only that a failure happened.**
 

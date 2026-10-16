@@ -858,28 +858,71 @@ function isPathCandidate(token: string, hasExpansion = true): boolean {
 
 // ── Command name extraction ────────────────────────────────────────────────
 
-/** Get the command name from a command AST node. */
-function getCommandName(node: TSNode): string | null {
+/** The node standing in argv0 (the walk getCommandName uses, as a node). */
+function commandNameNode(node: TSNode): TSNode | null {
   if (node.type !== "command") return null;
-
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
-    if (child.type === "command_name") {
-      // command_name may contain multiple children (e.g., "npm" "run")
-      // For our purposes, get the first word. Lowercase to match pathAwareCommands.
-      if (child.childCount > 0) {
-        const text = child.child(0)?.text;
-        return text ? text.toLowerCase() : null;
-      }
-      return null;
-    }
-    // First word-like child is the command name
-    if (WORD_TYPES.has(child.type)) {
-      return resolveNodeText(child).toLowerCase();
-    }
+    // command_name may contain multiple children (e.g., "npm" "run"): the
+    // first word is the name.
+    if (child.type === "command_name") return child.childCount > 0 ? child.child(0) : null;
+    if (WORD_TYPES.has(child.type)) return child;
   }
   return null;
+}
+
+/** Get the command name from a command AST node. */
+function getCommandName(node: TSNode): string | null {
+  const n = commandNameNode(node);
+  if (!n) return null;
+  // A command_name child is read raw (tree-sitter already worded it); a
+  // word-like child goes through the dequoting/escape walk.
+  return n.parent?.type === "command_name"
+    ? n.text.toLowerCase()
+    : resolveNodeText(n).toLowerCase();
+}
+
+/** An assignment value that is not a statically known program name. */
+const NON_LITERAL_VALUE_RE = /[$`{}*?[\]\\]/;
+
+/**
+ * The program name an opaque argv0 stands for, when the command's own text
+ * proves it: the variable is assigned exactly ONCE in the scope visible to
+ * this segment (the same visibility var-resolution uses — a ( ) subshell sees
+ * only pre-fork assignments), and the value carries no expansion or glob.
+ * The WHOLE value is returned, because bash word-splits an unquoted `$C`:
+ * `C="rm -rf /etc"; $C` hands the shell argv [rm, -rf, /etc] — the first word
+ * is the program, the rest are its arguments (see the caller's splice). With a
+ * quoted `"$C"` there is no split, so the whole (trimmed) value IS the argv —
+ * a multi-word single argv is no program on the closed set, which lands in the
+ * caller's unknown-program rule rather than a guess.
+ * Anything else — unset, reassigned, `C=$(…)`, `C="x $y"`, glued `$DIR/bin`,
+ * `${C:-cat}` — → null: the caller's unknown-program rule applies rather than
+ * a guess. (The same assigned-exactly-once + literal invariants the opaque-REF
+ * resolver documents.)
+ */
+function provableArgv0Name(
+  nameNode: TSNode,
+  segments: BashSegment[],
+  assignments: ShellAssignment[],
+  segIdx: number,
+): string | null {
+  const m = resolveNodeText(nameNode).trim().match(/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/);
+  if (!m || segIdx < 0 || segIdx >= segments.length) return null;
+  let bound = segIdx;
+  if ((segments[segIdx].subshellDepth ?? 0) > 0) {
+    let i = segIdx;
+    while (i > 0 && (segments[i - 1].subshellDepth ?? 0) > 0) i--;
+    bound = i;
+  }
+  const values = assignments.filter((a) => a.name === m[1] && a.at <= bound);
+  if (values.length !== 1) return null;
+  let v = values[0].value.trim();
+  const q = v.match(/^(['"])(.*)\1$/s);
+  if (q) v = q[2];
+  if (!v || NON_LITERAL_VALUE_RE.test(v)) return null;
+  return v;
 }
 
 /** Collect all command nodes from the AST. */
@@ -1924,10 +1967,15 @@ export async function parseCommand(
   hops: PathHop[];
   /** Names passed to `unset` (see collectUnsets). */
   unsets: string[];
+  /** Opaque argv0 tokens whose program name the text cannot prove
+   *  ($CMD start, "$PY" job.py with PY unset) — the command position is
+   *  obscured AND unverifiable, so the analysis is blind there by
+   *  construction. Callers treat a non-empty list like an unsafe pattern. */
+  obscuredArgv0: string[];
 }> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], paths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [] };
+  if (!tree) return { segments: [], paths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [], obscuredArgv0: [] };
 
   try {
     // Check for ERROR nodes in the AST (malformed bash)
@@ -1957,6 +2005,7 @@ export async function parseCommand(
     // Extract paths and opaque refs from command nodes
     const commandNodes = collectCommandNodes(tree.rootNode);
     const allPaths: string[] = [];
+    const obscuredArgv0: string[] = [];
     const opaque: OpaqueRef[] = [];
     // Symlink hops (written ≠ resolved) for prompt display. Dot-prefixed
     // tokens are excluded: threadCwdPaths re-resolves them against the
@@ -1981,12 +2030,56 @@ export async function parseCommand(
       const cmdName = rawName ? path.basename(rawName) : null;
       const args = extractCommandArgPairs(cmdNode);
 
-      if (cmdName && pathAwareCommands.has(cmdName)) {
-        const argTexts = args.map(a => a.text);
-        const inlinePrograms = inlineCodeArgIndices(cmdName, argTexts);
-        const skipArgs = nonFileArgIndices(cmdName, argTexts);
-        for (let ai = 0; ai < args.length; ai++) {
-          const { text: arg, node: argNode } = args[ai];
+      // An opaque argv0 (`$C -rf /etc`, `"$PY" job.py`) names no program on the
+      // closed set, so the operand model below never runs and the segment's OWN
+      // literal operands leave no trace: `C=cat; $C /etc/shadow` minted nothing
+      // (paths=[], no risk, no sentinel, judgeable) where `cat /etc/shadow`
+      // stops on the base — the location bar was one variable away from argv0
+      // (2026-10-16 probe). Two cases:
+      //  - the value is provable (see provableArgv0Name): apply THAT program's
+      //    operand model, so the variable form reaches the typed form's verdict;
+      //  - it is not (or names a program off the closed set): there is no model
+      //    to apply, so every non-flag operand is treated as a candidate file
+      //    operand — worst case, not best. A LITERAL program name off the closed
+      //    set keeps that set's accepted blind spot (that is where its
+      //    false-positive budget lives); the difference is that a variable-held
+      //    verb states no identity to reason about, which is exactly how a rule
+      //    keyed on the verb gets dodged.
+      let prog = cmdName;
+      const nameNode = prog && !pathAwareCommands.has(prog) ? commandNameNode(cmdNode) : null;
+      const argv0Opaque = nameNode !== null && nodeHasRuntimeExpansion(nameNode);
+      let argvList = args;
+      if (argv0Opaque && nameNode) {
+        const value = provableArgv0Name(nameNode, segments, assignments, segMap.get(cmdNode.id) ?? -1);
+        // A quoted use site (`"$C"`) is ONE argv — no word split — so the whole
+        // value is the name (a value with spaces in it is no program on the
+        // closed set, which lands in the worst-case branch anyway).
+        const words = value === null ? [] : nameNode.type === "string" ? [value.trim()] : value.split(/\s+/);
+        const head = words.length > 0 ? words[0].toLowerCase() : null;
+        prog = head && pathAwareCommands.has(head) ? head : null;
+        if (prog === null) {
+          const tok = resolveNodeText(nameNode).trim();
+          if (tok && !obscuredArgv0.includes(tok)) obscuredArgv0.push(tok);
+        }
+        // Word-split splice (see provableArgv0Name): the value's remaining words
+        // ARE the arguments, so `C="rm -rf /etc"; $C` must not leave them
+        // invisible. The synthetic args carry the argv0 node — it is the token
+        // whose expansion produced them, so the runtime-expansion checks stay
+        // true of them, as they are of the `$C` itself.
+        if (words.length > 1) {
+          argvList = [
+            ...words.slice(1).map((text) => ({ text, node: nameNode })),
+            ...args,
+          ];
+        }
+      }
+
+      if ((prog && pathAwareCommands.has(prog)) || (argv0Opaque && prog === null)) {
+        const argTexts = argvList.map(a => a.text);
+        const inlinePrograms = prog ? inlineCodeArgIndices(prog, argTexts) : new Set<number>();
+        const skipArgs = prog ? nonFileArgIndices(prog, argTexts) : new Set<number>();
+        for (let ai = 0; ai < argvList.length; ai++) {
+          const { text: arg, node: argNode } = argvList[ai];
           // A multi-line LITERAL argument is a script/data body (`node -e '…'`),
           // not a path: classifying it would mint an opaque ref whose "token"
           // is the whole script, bloating the prompt and the decision log.
@@ -2148,7 +2241,7 @@ export async function parseCommand(
       return true;
     });
 
-    return { segments, paths, opaque, assignments, hasParseError, hops, unsets };
+    return { segments, paths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0 };
   } finally {
     subshellCache = null;
     tree.delete();

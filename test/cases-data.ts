@@ -295,8 +295,8 @@ export const cases: TestCase[] = [
 
   // subshells (always unsafe)
   // ═══════════════════════════════════════════════════════════
-  { cmd: "$(cat /etc/passwd)", simple: false, unsafe: false, decision: "prompt", desc: "command substitution (read-only inner: no unsafe pattern; still prompts — unallowlisted signature)" },
-  { cmd: "`whoami`", simple: false, unsafe: false, decision: "prompt", desc: "backtick substitution (read-only inner; still prompts — unallowlisted signature)" },
+  { cmd: "$(cat /etc/passwd)", simple: false, unsafe: true, decision: "prompt", desc: "command substitution in command position — the program identity is a runtime value (read-only inner; prompts on the unallowlisted signature too)" },
+  { cmd: "`whoami`", simple: false, unsafe: true, decision: "prompt", desc: "backtick substitution in command position (obscured argv0; unallowlisted signature)" },
   { cmd: "cat <(ls)", simple: true, unsafe: false, decision: "auto-allow", desc: "process substitution (read-only inner — auto-allow)" },
   { cmd: "(rm a && ls b) | cat", simple: false, unsafe: true, decision: "prompt", desc: "subshell with rm in pipeline (subshell not dropped)" },
   { cmd: "(ls a && ls b) | cat", simple: true, unsafe: false, decision: "auto-allow", desc: "subshell with safe cmds in pipeline (segments extracted)" },
@@ -625,6 +625,14 @@ export const cases: TestCase[] = [
   // ═══════════════════════════════════════════════════════════
   { cmd: "CMD=rm; $CMD a", simple: false, unsafe: true, decision: "prompt", desc: "variable holding rm (variable indirection obfuscation)" },
   { cmd: "CMD=sudo; $CMD rm a", simple: false, unsafe: true, decision: "prompt", desc: "variable holding sudo (variable indirection obfuscation)" },
+  // The shapes the text-level regex could not see (a flag or a path after the
+  // variable, no follower at all) — the parse now owns this flag.
+  { cmd: "C=cat; $C /etc/shadow", simple: false, unsafe: false, decision: "prompt", desc: "provable variable verb: the operand model of cat applies, so the outside path is a floor/path stop (not a silent pass)" },
+  { cmd: "C=\"rm -rf /etc\"; $C", simple: false, unsafe: false, decision: "prompt", desc: "word-split value: the value's remaining words are the arguments (/etc reached)" },
+  { cmd: "V=\"mount\"; $V -o bind / /mnt", simple: false, unsafe: true, decision: "prompt", desc: "provable verb off the path-aware set: no operand model applies, so every operand counts (worst case) and the position is flagged" },
+  { cmd: "$C /etc/shadow", simple: false, unsafe: true, decision: "prompt", desc: "unset variable verb: operands counted worst-case, position flagged as unverifiable" },
+  { cmd: "C=cat; C=tail; $C /etc/shadow", simple: false, unsafe: true, decision: "prompt", desc: "variable assigned twice: no value is taken (exactly-once invariant), worst case + flag" },
+  { cmd: "C=$(which cat); $C notes.md", simple: false, unsafe: true, decision: "prompt", desc: "variable value is a substitution: nothing provable, worst case + flag" },
 
   // ═══════════════════════════════════════════════════════════
   // traps — deferred execution
@@ -836,10 +844,10 @@ export const cases: TestCase[] = [
   // ═══════════════════════════════════════════════════════════
   // backtick substitution inside compound
   // ═══════════════════════════════════════════════════════════
-  { cmd: "ls && `whoami`", simple: false, unsafe: false, decision: "prompt", desc: "&& with backtick (read-only inner; still prompts — unallowlisted signature)" },
-  { cmd: "ls || `whoami`", simple: false, unsafe: false, decision: "prompt", desc: "|| with backtick (read-only inner; still prompts — unallowlisted signature)" },
-  { cmd: "ls ; `whoami`", simple: false, unsafe: false, decision: "prompt", desc: "; with backtick (read-only inner; still prompts — unallowlisted signature)" },
-  { cmd: "`echo foo` | cat", simple: false, unsafe: false, decision: "prompt", desc: "backtick in pipeline (read-only inner; still prompts — unallowlisted signature)" },
+  { cmd: "ls && `whoami`", simple: false, unsafe: true, decision: "prompt", desc: "&& with backtick in command position (obscured argv0; unallowlisted signature)" },
+  { cmd: "ls || `whoami`", simple: false, unsafe: true, decision: "prompt", desc: "|| with backtick in command position (obscured argv0; unallowlisted signature)" },
+  { cmd: "ls ; `whoami`", simple: false, unsafe: true, decision: "prompt", desc: "; with backtick in command position (obscured argv0; unallowlisted signature)" },
+  { cmd: "`echo foo` | cat", simple: false, unsafe: true, decision: "prompt", desc: "backtick in pipeline command position (obscured argv0; unallowlisted signature)" },
   { cmd: "cat `echo /etc/hosts`", simple: true, unsafe: false, decision: "prompt", desc: "backtick as arg (read-only inner; still prompts — unresolved-var path approval)" },
   { cmd: "echo 'hello `whoami` world'", simple: true, unsafe: false, decision: "auto-allow", desc: "backtick in single quotes (literal, safe)" },
   { cmd: 'echo "hello `whoami` world"', simple: true, unsafe: false, decision: "auto-allow", desc: "backtick in double quotes (read-only inner — auto-allow)" },

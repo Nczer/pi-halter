@@ -79,6 +79,11 @@ export interface CommandAnalysis {
   assignments: ShellAssignment[];
   /** Names passed to `unset` (HOME reassignment guard — see var-resolution). */
   unsets: string[];
+  /** Opaque argv0 tokens the text cannot resolve to a program name ($CMD start,
+   *  "$PY" job.py with PY unset). The location model falls back to worst-case
+   *  operand minting there (see parseCommand), and the command position counts
+   *  as an unsafe pattern, so the judge packet sees the position is obscured. */
+  obscuredArgv0: string[];
   parsedSegments: BashSegment[];
   /** Credential path detected in the command — never auto-allow; the prompt carries the very-high-risk warning. */
   hasCredentialPath: boolean;
@@ -252,7 +257,7 @@ export async function analyzeCommand(
 ): Promise<CommandAnalysis> {
   // Single AST parse: segments, paths, opaque refs, and assignments in one pass
   const parseResult = await parseCommand(cmd, cwd);
-  const { segments, paths, opaque, assignments, hasParseError, unsets } = parseResult;
+  const { segments, paths, opaque, assignments, hasParseError, unsets, obscuredArgv0 } = parseResult;
   const segmentTexts = segments.map(s => s.text);
 
   // Effective cwd per segment: a resolvable `cd` in an earlier top-level
@@ -466,9 +471,11 @@ export async function analyzeCommand(
       // simple) must not carry the payload through SafetyRule's signature
       // branch. Non-tmux commands are unaffected (flags stay at their
       // direct-command values).
-      canBeAutoAllowed: !hasUnsafe && !tmuxPayloadUnsafe && tmuxPayloadSimple,
+      canBeAutoAllowed: !hasUnsafe && !tmuxPayloadUnsafe && tmuxPayloadSimple && obscuredArgv0.length === 0,
       isSimple: allSimple && tmuxPayloadSimple,
-      hasUnsafePattern: hasUnsafe || tmuxPayloadUnsafe,
+      // An unresolved opaque argv0 is an obscured command position the analysis
+      // cannot verify: the packet's obfuscation flag must say yes (T2).
+      hasUnsafePattern: hasUnsafe || tmuxPayloadUnsafe || obscuredArgv0.length > 0,
     },
     risk: { ...wholeRisk, reasons: riskReasons },
     relativePathSegmentIndices,
@@ -476,6 +483,7 @@ export async function analyzeCommand(
     opaque,
     assignments,
     unsets,
+    obscuredArgv0,
     parsedSegments: segments,
     hasCredentialPath: credentialCheck !== null,
     credentialRule: credentialCheck,

@@ -69,7 +69,7 @@ the full command + analysis + content and decides.
 |---|---|
 | credential-pattern paths/rules | secrets are a class, not a judgment |
 | parse errors | unverifiable |
-| obscured command position (`$f`, `$( )` as the command) | cannot verify what runs |
+| obscured command position (`$f`, `$( )` as the command) | cannot verify what runs (advisory since D16; since D23 the operand model still runs there) |
 | network egress (command or URL) | exfiltration surface (Q2, resolved: hard for phase 1; a trusted-domains setting is the future opening) |
 | paths outside the **manual** bar (bash `outsidePaths`, file `outsideDir`; the bar is what manual mode auto-allows — D11) | **scope grants are the user's call, never the judge's** (Q1, re-confirmed D11) |
 | rm carve-out violations (non-explicit/outside/self-writes not cleaned up) | unchanged; the carve-out stays |
@@ -1101,6 +1101,76 @@ paying two sequential judge calls).
   floor); `recordDspaStop("gate", model)` uses the carried verdict's model.
 
 Suite 3828.
+
+### D23. An opaque argv0 never silences the operand model (2026-10-16)
+
+A live command (`…/srt-bwrap --dev-bind / / bwrap --dev-bind / / …` — the
+Steam launch probe, decision-log L94) auto-allowed while a near-identical
+manual probe of the same sandbox tool stopped (L26). The audit premise was
+"variable blindness"; a probe disproved it. Neither form minted anything:
+`firejail --dev-bind / / echo OK` and `/usr/bin/bwrap --dev-bind / /` both
+return `paths=[]`, because operand minting is gated on the closed
+**path-aware verb set** (`config/bash-patterns.ts:91`, 80 entries) and no
+sandbox/mount tool is on it. L26 stopped only because it was wrapped in
+`timeout` (a path-aware verb) — the difference between the two ledger lines
+was a wrapper, not the path shape.
+
+Two separate gaps follow, and they were deliberately split:
+
+- **Gap A (fixed here): the argv0 is opaque.** `C=cat; $C /etc/shadow` — the
+  verb is a runtime value, so the verb-keyed model never engages and the
+  operands go uncounted. `pathAwareCommands` membership was read as "no known
+  verb → no operand minting", which is the wrong default when the identity is
+  unknown rather than merely unlisted.
+- **Gap B (deferred, option C′): sandbox tools are off the closed set**,
+  `bwrap`/`firejail`/`srt-bwrap`/`unshare`/`mount` included. That is a policy
+  addition (operand minting + dangerous-flag stops for a tool family) with its
+  own false-positive cost, not part of this rule.
+
+**The rule** (parse layer, `analysis/bash-parser.ts`):
+
+1. **A provable argv0 gets its program's model.** `provableArgv0Name` binds
+   the variable when the command text *proves* the value: assigned exactly
+   once in the scope visible to that segment (same pre-fork visibility
+   var-resolution uses — a `( )` subshell sees only assignments made before
+   the fork), and the value is literal — no `$`, backtick, brace, glob, or
+   escape, quote pair stripped. `C=cat; $C /etc/shadow` then mints
+   `/etc/shadow` like the typed form; the variable form reaches the typed
+   form's verdict.
+2. **Word splitting is bash's, so it is modelled.** An unquoted `$C` splits:
+   `C="rm -rf /etc"; $C` hands the shell `[rm, -rf, /etc]` — the value's
+   remaining words become synthetic arguments carrying the argv0 node. A
+   quoted `"$C"` is one argv: the whole trimmed value is the name (a value
+   with spaces in it is no verb on the closed set → rule 3).
+3. **Unknown program name ⇒ worst-case operands.** An unprovable argv0
+   (unset, reassigned twice, `C=$(…)`, glued `$DIR/bin`, `${C:-cat}`) or a
+   provable one off the closed set: the verb-keyed flag/path classes do not
+   exist, so **every non-flag operand is a candidate file operand** — worst
+   case, not best, and the opposite of the old silence.
+4. **A literal verb off the closed set keeps that set's blind spot** —
+   deliberate asymmetry. The closed set is a false-positive budget for
+   *known* verbs (`ls`, `cat` and friends, where minting every argument would
+   be noise). A variable-held verb states no identity at all, which is exactly
+   how a verb-keyed rule gets dodged, so it gets no benefit of the doubt.
+   Closing gap B means adding verbs to the set, not widening rule 4.
+5. **The obscured position is a flag, not a location.** The token goes to the
+   parse result's `obscuredArgv0` (per-token dedup), surfaced on
+   `CommandAnalysis` and folded into `safety.hasUnsafePattern` (packet
+   `obfuscation:`), which also keeps it out of `canBeAutoAllowed`. No
+   `<unresolved-var>`-style sentinel: the argv0 is a shell token, not a
+   filesystem location, and a marker would invent one for a program name —
+   the docs' own warning about opaque refs.
+
+**Accepted overlap.** The older text-level check (`OBfus_VAR_HOLDING_CMD_RE`,
+`analysis/obfuscation.ts:6`) still flags any `$VAR`-led segment, so a
+*provable* verb stays labeled unsafe even though the parse is quiet — two
+sources for one signal. The parse is the accurate one; retiring the regex is
+a follow-up (evaluators and case rows read the techniques list today).
+
+**Still open after this rule:** variable-held *flags* under a literal verb
+that is off the closed set (rule 4's shape with `$V` arguments), and gap B.
+
+Suite 4047.
 
 ## 4. Phasing
 

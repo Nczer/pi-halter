@@ -282,9 +282,23 @@ describe("allSimple: unsafe commands", () => {
 });
 
 describe("hasUnsafePattern: unsafe", () => {
-  it("read-only subshell is not an unsafe pattern; dirty inner still is", async () => {
-    expect((await analyzeCommand("$(cat /etc/passwd)", cwd)).safety.hasUnsafePattern).toBe(false);
+  it("a substitution in command position is an unsafe pattern; in argument position it is not", async () => {
+    // The program IDENTITY is the runtime value — that is what the flag marks.
+    expect((await analyzeCommand("$(cat /etc/passwd)", cwd)).safety.hasUnsafePattern).toBe(true);
     expect((await analyzeCommand("$(rm -rf /tmp/xyz)", cwd)).safety.hasUnsafePattern).toBe(true);
+    expect((await analyzeCommand('echo "x $(whoami) y"', cwd)).safety.hasUnsafePattern).toBe(false);
+  });
+
+  it("an opaque argv0: the parse flags what the text-level check cannot see", async () => {
+    // `$C /etc/shadow` — the text check needs a word after the variable, so
+    // only the parse-level fact (obscuredArgv0) flags this shape.
+    expect((await analyzeCommand("$C /etc/shadow", cwd)).safety.hasUnsafePattern).toBe(true);
+    // A provable value leaves the parse quiet…
+    const provable = await analyzeCommand("C=cat; $C notes.md", cwd);
+    expect(provable.obscuredArgv0).toEqual([]);
+    // …while the older text-level check still marks any `$VAR`-led segment
+    // (two sources for one signal today; the parse is the accurate one).
+    expect(provable.safety.hasUnsafePattern).toBe(true);
   });
 
   it("sed -i is unsafe", async () => {
