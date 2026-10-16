@@ -338,8 +338,10 @@ export function gitNetworkSubcommand(words: string[]): string | null {
 /** git subcommands that talk to a remote. */
 export const GIT_NETWORK_SUBCOMMANDS = new Set(["push", "fetch", "pull", "clone"]);
 
-/** http(s) URL in command text (non-global). */
-export const NETWORK_URL_RE = /https?:\/\/[^\s"'`)\]]+/;
+/** http(s) URL in command text (non-global). The bracket alternative keeps a
+ *  bracketed IPv6 host whole (`http://[::1]:9931/x`): the plain class used to
+ *  stop at `]`, so the host reached the loopback check truncated. */
+export const NETWORK_URL_RE = /https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s"'`)\]])+/;
 
 export const NETWORK_URL_RE_GLOBAL = new RegExp(NETWORK_URL_RE.source, "g");
 

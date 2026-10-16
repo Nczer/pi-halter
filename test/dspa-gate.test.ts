@@ -331,6 +331,15 @@ describe("bash", () => {
       "curl -s http://localhost:8080/health",
       "PORT=41184; B=\"http://127.0.0.1:$PORT\"; curl -s \"$B/notes\" | head",
       "wget http://127.0.0.1:8000/file -O /tmp/file",
+      // D14: the scheme carries nothing the host parse lacks, so a target
+      // written without one is as provable as the qualified form.
+      "curl -s -m 5 127.0.0.1:9931/models",
+      "curl localhost:8080/props",
+      "curl [::1]:9931/models",
+      "wget 127.0.0.1:8000/file -O /tmp/file",
+      // D14: the URL regex keeps a bracketed IPv6 host whole (it used to stop
+      // at `]`, so the host reached the check truncated → unprovable).
+      "curl -s http://[::1]:41184/ping",
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(true);
@@ -343,9 +352,21 @@ describe("bash", () => {
       ["curl -s http://127.0.0.1:1/ok http://evil.com/x", "mixed loopback + external"],
       ['curl -s "$B/notes"', "variable-only target (no URL proves locality)"],
       ["curl -s http://$HOST/x", "variable host"],
-      ["curl -s http://[::1]:41184/ping", "bracketed IPv6 (URL regex truncates — unprovable)"],
       ["ssh 127.0.0.1", "non-URL egress form"],
       ["rsync -a host::src /tmp", "non-curl/wget egress form"],
+      // Scheme-less targets: provable locality is still a HOST question, so
+      // these stay stops for the same reason their qualified counterparts do.
+      ["curl -s 127.0.0.1.evil.com/x", "hostname that only looks like loopback"],
+      ["curl -s evil.example.com:8080/x", "scheme-less external target"],
+      ["curl -s 127.0.0.1@evil.com/x", "userinfo-smuggled host, scheme-less"],
+      ["curl -s 127.0.0.1", "bare host — no port or path, unprovable"],
+      ["curl -O pkg.tgz", "no destination stated at all"],
+      // A destination the host parse cannot read is not the same as no
+      // destination: dropping it would leave the loopback hosts to satisfy
+      // `every()` and judge a command that leaves the machine.
+      ["curl -x evil.com:8080 http://127.0.0.1/y", "proxy value is real egress"],
+      ["curl --proxy socks5://evil.com:1080 http://127.0.0.1/y", "scheme the URL scan does not know"],
+      ["curl ftp://evil.com/f http://127.0.0.1/y", "non-http URL alongside a local one"],
     ];
     for (const [cmd, what] of cases) {
       const r = await checkDspaGate(bashPd(cmd), store);

