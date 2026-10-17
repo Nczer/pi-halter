@@ -468,7 +468,7 @@ function subshellBaseAccess(tokens: string[], base: CwdBase, homeFixed = false):
  *
  * parseCommand does not collect `cd` targets (a cd performs no file access),
  * so the outside-cwd bar for "what happens under a threaded base" lives here.
- * A path-aware segment whose first-stage tokens name no resolvable target
+ * A path-aware segment whose stage tokens name no resolvable target
  * (`/x`, `~/x`, closed-set $HOME, `./x`, `../x`, or an expansion — the last
  * already marker-flagged by the parser) operates on the base itself:
  * `cd /var/tmp && ls`, `cd $D && find .`, `cd /var/tmp && cat main.txt`.
@@ -502,51 +502,69 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
   while (ti < tokens.length && ENV_ASSIGN_RE.test(tokens[ti])) ti++;
   const first = tokens[ti] ? path.basename(tokens[ti]).toLowerCase() : "";
 
-  if (seg.hasSubshell || first === "(" || first === "{") {
+  const stages = splitQuotedStages(quotedTokens.slice(ti));
+  if (seg.hasSubshell || stages.some((st) => st[0] && (st[0].text === "(" || st[0].text === "{"))) {
     return subshellBaseAccess(tokens, base, homeFixed);
   }
 
-  // Only the first pipeline stage targets the base; later stages read stdin.
-  // (`;`/`&&`/`||` already split into separate segments.)
-  const stage: QuotedToken[] = [];
-  for (const qt of quotedTokens.slice(ti + 1)) {
-    if (!qt.quoted && (qt.text === "|" || qt.text === "|&")) break;
-    stage.push(qt);
-  }
-
-  const pathAware = first !== "" && pathAwareCommands.has(first);
-
-  // Redirect to a bare name reads/writes the base (see above).
+  // EVERY pipeline stage resolves its operands under the base: a pipeline
+  // shares one effective cwd, so a later stage's bare operand lands in the
+  // re-based directory (`cd /etc && true | cat passwd` reads /etc/passwd —
+  // the 2026-10-17 round-6 reproducers). Only stage 0 reads the terminal's
+  // stdin; stage 2+ read the pipe, which does not make their explicit file
+  // operands stdin. (`;`/`&&`/`||` already split into separate segments.)
+  //
+  // The saw* flags stay SEGMENT-wide on purpose: a bare no-slash operand in a
+  // later stage is a pattern/search term when any stage of the pipe names a
+  // resolvable target (`cat /etc/passwd | grep root`), so suppressing it on
+  // the stage's own tokens alone would re-introduce the D20-era FPs.
+  let sawBareArg = false;
+  let sawPathLikeBare = false; // D20: contains `/` — resolves under the base
+  let sawResolvable = false;
+  let sawPathAware = false;
+  let sawCwdDefault = false;
   let bareRedirectTarget = false;
-  for (let i = 0; i < stage.length; i++) {
-    const tok = stage[i].text;
-    let targetTok: QuotedToken | null = null;
-    const m = tok.match(OUT_REDIRECT_RE) ?? tok.match(IN_REDIRECT_RE);
-    if (m) {
-      // `2>&1` parses as target "&1" — an fd reference, not a file. The
-      // startsWith("&") check below skips it (log FP: counted as a bare
-      // redirect target, adding a spurious base access / `.` outside-dir).
-      targetTok = m[2] !== ""
-        ? { ...stage[i], text: m[2] }
-        : (stage[i + 1] ?? null);
-    } else if (BARE_REDIRECT_RE.test(tok)) {
-      targetTok = stage[i + 1] ?? null;
+
+  for (const stage of stages) {
+    let k = 0;
+    while (k < stage.length && ENV_ASSIGN_RE.test(stage[k].text)) k++;
+    const head = stage[k];
+    if (!head) continue;
+    const cmd = path.basename(head.text).toLowerCase();
+    const rest = stage.slice(k + 1);
+    const pathAware = cmd !== "" && pathAwareCommands.has(cmd);
+    if (pathAware) sawPathAware = true;
+    if (CWD_DEFAULT_COMMANDS.has(cmd)) sawCwdDefault = true;
+
+    // Redirect to a bare name reads/writes the base (see above).
+    for (let i = 0; i < rest.length; i++) {
+      const tok = rest[i].text;
+      let targetTok: QuotedToken | null = null;
+      const m = tok.match(OUT_REDIRECT_RE) ?? tok.match(IN_REDIRECT_RE);
+      if (m) {
+        // `2>&1` parses as target "&1" — an fd reference, not a file. The
+        // startsWith("&") check below skips it (log FP: counted as a bare
+        // redirect target, adding a spurious base access / `.` outside-dir).
+        targetTok = m[2] !== ""
+          ? { ...rest[i], text: m[2] }
+          : (rest[i + 1] ?? null);
+      } else if (BARE_REDIRECT_RE.test(tok)) {
+        targetTok = rest[i + 1] ?? null;
+      }
+      if (targetTok === null || targetTok.text.startsWith("&")) continue; // fd duplication (2>&1, > &1)
+      if (!isResolvableTarget(targetTok.text, targetTok.hasExpansion ?? true)) bareRedirectTarget = true;
     }
-    if (targetTok === null || targetTok.text.startsWith("&")) continue; // fd duplication (2>&1, > &1)
-    if (!isResolvableTarget(targetTok.text, targetTok.hasExpansion ?? true)) bareRedirectTarget = true;
-  }
 
-  if (!pathAware && !bareRedirectTarget) return null;
+    if (!pathAware) continue;
 
-  if (pathAware) {
     // Separate command arguments from redirects so pattern/script argument
     // positions (grep/rg patterns, sed scripts, awk programs/data, shuf
     // ranges, inline code) are skipped with the exact same index logic
     // parseCommand uses.
     const cmdArgs: QuotedToken[] = [];
     const inRedirectTargets: QuotedToken[] = [];
-    for (let i = 0; i < stage.length; i++) {
-      const qt = stage[i];
+    for (let i = 0; i < rest.length; i++) {
+      const qt = rest[i];
       const token = qt.text;
       const mOut = token.match(OUT_REDIRECT_RE);
       if (mOut) {
@@ -555,17 +573,14 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
       }
       const mIn = token.match(IN_REDIRECT_RE);
       if (mIn) {
-        const target = mIn[2] !== "" ? { ...qt, text: mIn[2] } : (stage[++i] ?? null);
+        const target = mIn[2] !== "" ? { ...qt, text: mIn[2] } : (rest[++i] ?? null);
         if (target && !target.text.startsWith("&")) inRedirectTargets.push(target);
         continue;
       }
       cmdArgs.push(qt);
     }
-    const skipArgs = nonFileArgIndices(first, cmdArgs.map((a) => a.text));
+    const skipArgs = nonFileArgIndices(cmd, cmdArgs.map((a) => a.text));
 
-    let sawBareArg = false;
-    let sawPathLikeBare = false; // D20: contains `/` — resolves under the base
-    let sawResolvable = false;
     const evalFileToken = (qt: QuotedToken, isFlaggedArg: boolean): void => {
       let t = qt.text;
       if (isFlaggedArg && t.startsWith("-")) {
@@ -584,17 +599,22 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
       evalFileToken(cmdArgs[i], true);
     }
     for (const rt of inRedirectTargets) evalFileToken(rt, false);
-
-    // D20: a path-like bare arg resolves under the base even when the segment
-    // also names resolvable targets (see the D20 note above).
-    if (sawPathLikeBare) return base === null ? UNKNOWN_CWD_MARKER : base;
-    // Old rule, preserved exactly: bare no-slash args flag only when the
-    // segment names no resolvable target of its own.
-    if (sawBareArg && !sawResolvable) return base === null ? UNKNOWN_CWD_MARKER : base;
-    // No file args: only cwd-defaulting commands access the directory.
-    return !sawResolvable && CWD_DEFAULT_COMMANDS.has(first) ? (base === null ? UNKNOWN_CWD_MARKER : base) : null;
   }
-  return base === null ? UNKNOWN_CWD_MARKER : base;
+
+  if (!sawPathAware && !bareRedirectTarget) return null;
+  // No path-aware stage but a bare redirect target (`echo x > f`): the file
+  // lands in the base, which is all this segment says (D7 sentinel stop when
+  // the base itself is unresolvable).
+  if (!sawPathAware) return base === null ? UNKNOWN_CWD_MARKER : base;
+
+  // D20: a path-like bare arg resolves under the base even when the segment
+  // also names resolvable targets (see the D20 note above).
+  if (sawPathLikeBare) return base === null ? UNKNOWN_CWD_MARKER : base;
+  // Old rule, preserved exactly: bare no-slash args flag only when the
+  // segment names no resolvable target of its own.
+  if (sawBareArg && !sawResolvable) return base === null ? UNKNOWN_CWD_MARKER : base;
+  // No file args: only cwd-defaulting commands access the directory.
+  return !sawResolvable && sawCwdDefault ? (base === null ? UNKNOWN_CWD_MARKER : base) : null;
 }
 
 /**
@@ -607,8 +627,9 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
  * non-write-granted extension dir; Q1 says scope grants are the user's
  * call, never the judge's). Three deterministic classes:
  *  - a bare output-redirect target (`echo x > f`, `cmd >> f`, `cmd 2> f`)
- *    — the file lands in the base. Resolvable targets and fd references
- *    (2>&1, >&1) don't count; input redirects (`<`) read the base.
+ *    — the file lands in the base, in ANY stage of the pipe (`cat x | wc -l
+ *    > f`). Resolvable targets and fd references (2>&1, >&1) don't count;
+ *    input redirects (`<`) read the base.
  *  - opaque inline-code execution: an interpreter (script or shell) fed by
  *    a heredoc or a -c/-e payload. The floor does not interpret script
  *    bodies (D1), so the code may write anywhere under the base. A path-
@@ -637,28 +658,28 @@ export function baseWriteAccess(seg: BashSegment): boolean {
   const first = tokens[ti] ? path.basename(tokens[ti]).toLowerCase() : "";
   if (seg.hasSubshell || first === "(" || first === "{") return false;
 
-  // Only the first pipeline stage targets the base (same as baseAccessPath).
-  const stage: string[] = [];
-  for (const t of tokens.slice(ti + 1)) {
-    if (t === "|" || t === "|&") break;
-    stage.push(t);
-  }
+  // Every stage of the pipe resolves operands under the base (same reasoning
+  // as baseAccessPath): `cat x | wc -l > out` writes the base, not only the
+  // head stage's redirect.
+  const stages = splitPlainStages(tokens.slice(ti));
 
   // (1) Bare output-redirect target: the file lands in the base.
-  for (let i = 0; i < stage.length; i++) {
-    const tok = stage[i];
-    const mOut = tok.match(OUT_REDIRECT_RE);
-    if (mOut) {
-      const target = mOut[2] !== "" ? mOut[2] : (stage[i + 1] ?? null);
-      if (target === null || target.startsWith("&") || /^\d+$/.test(target)) continue; // fd duplication
-      if (!isResolvableTarget(target)) return true;
-      continue;
-    }
-    if (BARE_REDIRECT_RE.test(tok)) {
-      // Bare `<` is an input redirect (a read); only the `>` forms write.
-      if (tok.includes(">")) {
-        const target = stage[i + 1] ?? null;
-        if (target !== null && !target.startsWith("&") && !/^\d+$/.test(target) && !isResolvableTarget(target)) return true;
+  for (const stage of stages) {
+    for (let i = 0; i < stage.length; i++) {
+      const tok = stage[i];
+      const mOut = tok.match(OUT_REDIRECT_RE);
+      if (mOut) {
+        const target = mOut[2] !== "" ? mOut[2] : (stage[i + 1] ?? null);
+        if (target === null || target.startsWith("&") || /^\d+$/.test(target)) continue; // fd duplication
+        if (!isResolvableTarget(target)) return true;
+        continue;
+      }
+      if (BARE_REDIRECT_RE.test(tok)) {
+        // Bare `<` is an input redirect (a read); only the `>` forms write.
+        if (tok.includes(">")) {
+          const target = stage[i + 1] ?? null;
+          if (target !== null && !target.startsWith("&") && !/^\d+$/.test(target) && !isResolvableTarget(target)) return true;
+        }
       }
     }
   }
@@ -669,13 +690,6 @@ export function baseWriteAccess(seg: BashSegment): boolean {
   // the effective cwd: `cat x | tee f`); flags and bare numbers are not
   // targets; resolvable targets enter the path set themselves.
   {
-    const stages: string[][] = [];
-    let cur: string[] = [];
-    for (const t of tokens.slice(ti)) {
-      if (t === "|" || t === "|&") { stages.push(cur); cur = []; }
-      else cur.push(t);
-    }
-    stages.push(cur);
     let sawVerb = false;
     for (const st of stages) {
       let k = 0;
@@ -705,11 +719,51 @@ export function baseWriteAccess(seg: BashSegment): boolean {
   // Always-Allow tier would have stored a session WRITE grant for a read.
   // A body we cannot read (a program from a variable, a heredoc the shell
   // expands, a body the parser never saw) stays write-capable.
-  if (!SCRIPT_INTERPRETERS.has(first) && !SHELL_INTERPRETERS.has(first)) return false;
-  const hasHeredoc = seg.ops.includes("<<") || stage.some((t) => t.startsWith("<<"));
-  const hasInlineFlag = stage.includes("-c") || stage.includes("-e");
-  if (!hasHeredoc && !hasInlineFlag) return false;
-  return codeBodiesWrite(seg.codeBodies ?? [], SHELL_INTERPRETERS.has(first));
+  for (const stage of stages) {
+    let k = 0;
+    while (k < stage.length && ENV_ASSIGN_RE.test(stage[k])) k++;
+    const cmd = k < stage.length ? path.basename(stage[k]).toLowerCase() : "";
+    const shell = SHELL_INTERPRETERS.has(cmd);
+    if (!SCRIPT_INTERPRETERS.has(cmd) && !shell) continue;
+    const rest = stage.slice(k + 1);
+    const hasHeredoc = seg.ops.includes("<<") || rest.some((t) => t.startsWith("<<"));
+    const hasInlineFlag = rest.includes("-c") || rest.includes("-e");
+    if (!hasHeredoc && !hasInlineFlag) continue;
+    if (codeBodiesWrite(seg.codeBodies ?? [], shell)) return true;
+  }
+  return false;
+}
+
+/** Quote-aware pipeline-stage split over tokenized segment text. */
+function splitQuotedStages(tokens: QuotedToken[]): QuotedToken[][] {
+  const stages: QuotedToken[][] = [];
+  let cur: QuotedToken[] = [];
+  for (const qt of tokens) {
+    if (!qt.quoted && (qt.text === "|" || qt.text === "|&")) {
+      stages.push(cur);
+      cur = [];
+    } else {
+      cur.push(qt);
+    }
+  }
+  stages.push(cur);
+  return stages;
+}
+
+/** Same split for plain (quote-stripped) tokens. */
+function splitPlainStages(tokens: string[]): string[][] {
+  const stages: string[][] = [];
+  let cur: string[] = [];
+  for (const t of tokens) {
+    if (t === "|" || t === "|&") {
+      stages.push(cur);
+      cur = [];
+    } else {
+      cur.push(t);
+    }
+  }
+  stages.push(cur);
+  return stages;
 }
 
 /**
@@ -728,17 +782,7 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
   const out: CwdDependentToken[] = [];
   const quotedTokens = tokenizeSegmentQuoted(seg.text);
   // Split into pipeline stages so pattern/script positions per stage are skipped.
-  const stages: QuotedToken[][] = [];
-  let cur: QuotedToken[] = [];
-  for (const qt of quotedTokens) {
-    if (!qt.quoted && (qt.text === "|" || qt.text === "|&")) {
-      stages.push(cur);
-      cur = [];
-    } else {
-      cur.push(qt);
-    }
-  }
-  stages.push(cur);
+  const stages = splitQuotedStages(quotedTokens);
 
   for (const stage of stages) {
     let ti = 0;
