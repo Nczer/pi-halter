@@ -623,6 +623,36 @@ describe("base-access flagging (cd is navigation, not access)", () => {
     expect(a.paths).toContain("/var/tmp");
   }, 15000);
 
+  it("every pipeline stage resolves its operands under the tracked base (3.38.0 stage model)", async () => {
+    // A pipeline shares one effective cwd, so a later stage's bare operand
+    // lands in the re-based dir — stage 0's shape says nothing about it.
+    // The round-6 reproducers (`cd /etc && true | cat passwd` and kin) were
+    // auto-allowing because only stage 0 was scanned.
+    for (const cmd of [
+      "cd /var/tmp && true | cat main.txt",
+      "cd /var/tmp && echo x | grep needle main.txt",
+      "cd /var/tmp && true | head -n 5 main.txt",
+      "cd /var/tmp && true | wc -l < main.txt",
+      "cd /var/tmp && true | ls",
+      "cd /var/tmp && true | jq .a/b",
+    ]) {
+      const a = await analyzeCommand(cmd, CWD);
+      expect(a.paths, cmd).toContain("/var/tmp");
+    }
+  }, 15000);
+
+  it("a resolvable target in one stage still suppresses a bare pattern in another", async () => {
+    // D20's suppression is segment-wide on purpose: `needle` in a later
+    // stage is a search term while the pipe names a real target.
+    for (const cmd of [
+      "cd /var/tmp && cat /etc/hostname | grep needle",
+      "cd /var/tmp && rg needle /tmp/halter-probe.txt | wc -l",
+    ]) {
+      const a = await analyzeCommand(cmd, CWD);
+      expect(a.paths, cmd).not.toContain("/var/tmp");
+    }
+  }, 15000);
+
   it("cd into a credential dir still prompts (raw-text scan is path-set independent)", async () => {
     expect((await d("cd $HOME/.ssh && ls")).kind).toBe("prompt");
     expect((await d("cd $HOME/.ssh")).kind).toBe("prompt");
@@ -1072,6 +1102,10 @@ describe("baseWriteAccess (D18)", () => {
       "echo hi 2> f",
       "cmd > f",
       "F=1 echo hi > f",
+      // The write lands in the base in ANY stage of the pipe (3.38.0).
+      "echo x | wc -l > f",
+      "cat x | sed 's/a/b/' > f",
+      "true | tee f",
     ]) {
       expect(baseWriteAccess(seg(t)), t).toBe(true);
     }
@@ -1085,6 +1119,8 @@ describe("baseWriteAccess (D18)", () => {
       "echo hi 2>&1",
       "echo hi > &1",
       "cmd >&1",
+      "echo x | wc -l > /abs/f",
+      "cat f | grep needle",
     ]) {
       expect(baseWriteAccess(seg(t)), t).toBe(false);
     }
@@ -1102,6 +1138,8 @@ describe("baseWriteAccess (D18)", () => {
     expect(baseWriteAccess(seg("perl -e 'x'"))).toBe(true);
     expect(baseWriteAccess(seg("node -e 'x'"))).toBe(true);
     expect(baseWriteAccess(seg("sh -c 'x'"))).toBe(true);
+    // An interpreter in a later stage runs its code under the base too.
+    expect(baseWriteAccess(seg("cat x | python3 -c 'x'"))).toBe(true);
     // Conservative: a heredoc is present even next to a path-qualified
     // script arg — the code may still touch the base.
     expect(baseWriteAccess(seg("python3 /abs/s.py <<'EOF'", ["<<"]))).toBe(true);
