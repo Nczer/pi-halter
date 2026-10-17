@@ -760,7 +760,7 @@ export const cases: TestCase[] = [
   { cmd: "python3 ~/.pi/agent/skills/docx/scripts/comment.py x.docx | bash", simple: false, unsafe: true, decision: "prompt", desc: "TRUST BYPASS: pipe to shell after trusted .py (flagged unsafe — 2026-08-24)" },
   { cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query | ./evil", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: pipe to relative-path script" },
   { cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query > ./pwned.txt", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: write redirect after trusted script" },
-  { cmd: "python3 ~/.pi/agent/skills/docx/scripts/comment.py x.docx \"$(rm -rf /tmp/xyz)\"", simple: false, unsafe: false, decision: "prompt", desc: "TRUST BYPASS: command substitution in trusted script args" },
+  { cmd: "python3 ~/.pi/agent/skills/docx/scripts/comment.py x.docx \"$(rm -rf /tmp/xyz)\"", simple: false, unsafe: true, decision: "prompt", desc: "TRUST BYPASS: command substitution in trusted script args — the body is analyzed (G5), so the out-of-cwd rm is an unsafe pattern, not just a non-simple one" },
   { cmd: "~/.pi/agent/skills/doc-search/scripts/q.sh /corpus query | head -5", simple: true, unsafe: false, decision: "auto-allow", desc: "trusted script piped to safe stage stays auto-allow" },
   { cmd: "./scripts/find-ghidra.sh", simple: false, unsafe: false, decision: "prompt", desc: ".sh via ./ (path-like token excluded from allowlist)" },
   { cmd: "../scripts/foo.sh", simple: false, unsafe: false, decision: "prompt", desc: "../ relative path (not in allowlist → prompt)" },
@@ -782,13 +782,13 @@ export const cases: TestCase[] = [
   { cmd: 'printf "<%s>" hello', simple: true, unsafe: false, decision: "auto-allow", desc: "printf with quoted lt/gt (not real redirects)" },
 
   // ═══════════════════════════════════════════════════════════
-  // process substitution <() — detected as subshell → not simple
+  // process substitution <() — the body is analyzed as a program (G5): the
   // ═══════════════════════════════════════════════════════════
-  { cmd: "cat <(ls)", simple: true, unsafe: false, decision: "auto-allow", desc: "process substitution (read-only inner — auto-allow)" },
-  { cmd: "cat <(rm file)", simple: false, unsafe: true, decision: "prompt", desc: "process substitution with rm (subshell + dangerous)" },
+  { cmd: "cat <(ls)", simple: true, unsafe: false, decision: "auto-allow", desc: "process substitution, body reads inside cwd" },
+  { cmd: "cat <(rm file)", simple: false, unsafe: true, decision: "prompt", desc: "process substitution with rm (body write verb)" },
   { cmd: "grep foo <(find . -delete)", simple: false, unsafe: true, decision: "prompt", desc: "process substitution with find -delete" },
-  { cmd: "diff <(sort a) <(sort b)", simple: false, unsafe: true, decision: "prompt", desc: "dual process substitution (subshell = unsafe)" },
-  { cmd: "diff <(sort a) <(rm b)", simple: false, unsafe: true, decision: "prompt", desc: "dual process substitution, one unsafe" },
+  { cmd: "diff <(sort a) <(sort b)", simple: true, unsafe: false, decision: "auto-allow", desc: "dual process substitution, both bodies read inside cwd — same verdict as `sort a` / `sort b` run directly (G5: the old prompt came from `sort` missing the read-only name table, not from anything the bodies do)" },
+  { cmd: "diff <(sort a) <(rm b)", simple: false, unsafe: true, decision: "prompt", desc: "dual process substitution, one body writes" },
 
   // ═══════════════════════════════════════════════════════════
   // deeply nested compound structures

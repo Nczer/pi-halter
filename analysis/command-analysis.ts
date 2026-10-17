@@ -132,6 +132,122 @@ const TMUX_PAYLOAD_MAX_DEPTH = 3;
 const TMUX_PAYLOAD_ENTER_RE = /\s+(?:Enter|C-m)\s+/;
 const TMUX_PAYLOAD_QUOTE_RE = /^("|')(.*)\1$/;
 
+/** Relative tokens under an unknown base resolve to `/x` — outside every
+ * allowed dir — so trust checks fail and the path bar forces approval. */
+const UNKNOWN_BASE_CWD = "/";
+
+/** Nested `$(…)` depth cap (same shape as the tmux payload recursion). */
+const SUBST_MAX_DEPTH = 3;
+
+/**
+ * Analyze command-substitution and process-substitution BODIES (G5).
+ *
+ * `$(…)` is not text — it is a program the shell runs before the outer command
+ * starts, in the parent segment's cwd. The old check here was a name list
+ * (`READONLY_SUBSHELL_CMDS`) over the body TEXT: it could not see flags
+ * (`fd -x rm`), a relative operand (`cat .env`), or a `cd` inside the body
+ * (`$(cd /etc && cat passwd)`), and it was a second allow table drifting from
+ * the real one. Verified live at 3.37.1: `echo $(cat /etc/passwd)`,
+ * `echo $(cat .env)` and `echo $(fd -x rm)` all auto-allowed — the path set was
+ * empty because path minting only walks args of a PATH-AWARE command, and the
+ * outer command (`echo`) is not one.
+ *
+ * So each body is parsed with `parseCommand` and put through the same segment
+ * pipeline as a top-level command, rooted at the parent segment's effective
+ * base: its own `cd` re-bases only the body (a substitution runs in a
+ * subshell), its dot tokens and base access are threaded like any segment's,
+ * and its operands join the command's path set. Bodies of bodies recurse to
+ * `SUBST_MAX_DEPTH`; beyond the cap, or for a body the parser cannot read,
+ * the command is unsafe (fail closed).
+ *
+ * `byParent` carries the body's segments keyed by the parent segment index so
+ * the grant identity covers them — a stage list is "the programs this segment
+ * runs", and a substitution body is one of those.
+ */
+async function analyzeSubstBodies(
+  segments: BashSegment[],
+  effectiveCwds: CwdBase[],
+  normBase: string,
+  depth: number,
+): Promise<{
+  byParent: Map<number, Array<{ seg: BashSegment; base: CwdBase }>>;
+  paths: string[];
+  simple: boolean;
+  unsafe: boolean;
+  reasons: string[];
+  /** Credential rule matched inside a body (see the credential bar note below). */
+  credential: string | null;
+}> {
+  const byParent = new Map<number, Array<{ seg: BashSegment; base: CwdBase }>>();
+  const paths: string[] = [];
+  const reasons: string[] = [];
+  let credential: string | null = null;
+  if (depth > SUBST_MAX_DEPTH) {
+    return { byParent, paths, simple: false, unsafe: true, reasons: [`command substitution nested beyond ${SUBST_MAX_DEPTH} levels`], credential };
+  }
+  const work: Array<{ seg: BashSegment; base: CwdBase }> = [];
+  for (let i = 0; i < segments.length; i++) {
+    const bodies = segments[i].subshellTexts;
+    if (!bodies || bodies.length === 0) continue;
+    const parentBase = effectiveCwds[i] ?? null;
+    const root = parentBase ?? UNKNOWN_BASE_CWD;
+    for (const body of bodies) {
+      const trimmed = body.trim();
+      if (!trimmed) continue;
+      // The credential bar is a TEXT check over the command (it resolves each
+      // candidate operand on disk), so it runs on the whole command text —
+      // where a secret name inside a quoted substitution (`echo "$(cat .env)"`)
+      // is one quoted word and never looks like an operand. A body is a real
+      // command, so it gets its own pass with the body's base.
+      const bodyCred = checkCommandForCredentialPaths(trimmed, root);
+      if (bodyCred && !credential) credential = bodyCred;
+      let parsed;
+      try {
+        parsed = await parseCommand(trimmed, root);
+      } catch {
+        parsed = null;
+      }
+      if (!parsed || parsed.hasParseError || parsed.segments.length === 0) {
+        return { byParent, paths, simple: false, unsafe: true, reasons: [`unreadable command substitution body: ${trimmed.slice(0, 60)}`], credential };
+      }
+      // The body's own cd/pushd re-base only the body; it never persists to
+      // the parent (the substitution runs in a subshell — trackEffectiveCwd
+      // already treats the parent side that way).
+      const bodyCwds = trackEffectiveCwd(parsed.segments, root, parsed.assignments);
+      threadCwdPaths(parsed.segments, bodyCwds, normBase, parsed.paths, parsed.assignments);
+      paths.push(...parsed.paths);
+      parsed.segments.forEach((bs, k) => {
+        const base = bodyCwds[k] ?? null;
+        const list = byParent.get(i);
+        const entry = { seg: bs, base };
+        if (list) list.push(entry); else byParent.set(i, [entry]);
+        work.push(entry);
+      });
+      const inner = await analyzeSubstBodies(parsed.segments, bodyCwds, normBase, depth + 1);
+      // A nested body belongs to the same parent SEGMENT chain — the inner
+      // call's keys index ITS segments, which mean nothing out here.
+      for (const list of inner.byParent.values()) {
+        const dest = byParent.get(i);
+        if (dest) dest.push(...list); else byParent.set(i, [...list]);
+      }
+      paths.push(...inner.paths);
+      if (inner.reasons.length) reasons.push(...inner.reasons);
+      if (inner.unsafe) return { byParent, paths, simple: false, unsafe: true, reasons, credential };
+    }
+  }
+  const analyses = await Promise.all(
+    work.map(({ seg, base }) => analyzeSegment(seg, base ?? UNKNOWN_BASE_CWD, base !== null)),
+  );
+  let simple = true;
+  let unsafe = false;
+  for (const a of analyses) {
+    simple &&= a.isSimple;
+    unsafe ||= a.isUnsafe;
+    for (const r of a.risk.reasons) if (!reasons.includes(r)) reasons.push(r);
+  }
+  return { byParent, paths, simple, unsafe, reasons, credential };
+}
+
 /**
  * Normalize a raw send-keys key string into a parseable command payload:
  * strip the trailing Enter keystroke and an outer quote pair (key sequences
@@ -317,6 +433,26 @@ export async function analyzeCommand(
   const normBase = path.resolve(expandTilde(cwd));
   threadCwdPaths(segments, effectiveCwds, normBase, paths, assignments);
 
+  // G5: substitution bodies are analyzed as programs (see analyzeSubstBodies).
+  // Their operands join the path set, their danger folds into the command's
+  // safety, and their signatures extend the parent segment's STAGE list — the
+  // grant unit — so `Always` can cover a body the user runs on purpose, and a
+  // body nothing is granted for can never auto-allow.
+  const subst = await analyzeSubstBodies(segments, effectiveCwds, normBase, 1);
+  paths.push(...subst.paths);
+  const substSimple = subst.simple;
+  const substUnsafe = subst.unsafe;
+  const substCredential = subst.credential;
+  const substReasons = subst.reasons.map((r) => `[Subst] ${r}`);
+  for (const [segIdx, bodies] of subst.byParent) {
+    for (const { seg: bodySeg, base } of bodies) {
+      for (const st of segmentStages(bodySeg)) {
+        stageTexts[segIdx].push(st);
+        stageSignatures[segIdx].push(getCommandSignature(st, base ?? undefined));
+      }
+    }
+  }
+
   // Opaque references (an expansion in path position the parser could not
   // resolve on its own): bind them with the command's own dataflow — the
   // visible local assignments (scoped: subshell-local and backgrounded
@@ -366,10 +502,7 @@ export async function analyzeCommand(
   // Unknown-base segments are analyzed against "/": relative tokens then
   // resolve to /x — outside every allowed dir and the trusted skills dir — so
   // script trust fails and path checks force approval, while absolute-path
-  // tokens (base-independent) keep their normal verdict. cwdKnown flags the
-  // marker as non-real, so evaluators (rm mass-deletion) skip relative-token
-  // resolution instead of resolving against "/".
-  const UNKNOWN_BASE_CWD = "/";
+  // tokens (base-independent) keep their normal verdict.
   const segmentAnalyses = await Promise.all(
     segments.map((seg, i) => {
       const base = effectiveCwds[i];
@@ -480,12 +613,17 @@ export async function analyzeCommand(
   // Credential path check — the sole credential verdict for the command: a
   // match never auto-allows (SafetyRule) and stops every auto mode (dspa
   // gate), so it always reaches a human prompt with the very-high-risk note.
-  const credentialCheck = checkCommandForCredentialPaths(cmd, cwd);
+  // The command-text pass cannot see an operand inside a QUOTED substitution
+  // (`echo "$(cat .env)"` — the whole span is one quoted word), so a body's
+  // own pass (analyzeSubstBodies) is folded in here rather than trusted to it.
+  const credentialCheck = checkCommandForCredentialPaths(cmd, cwd) ?? substCredential;
 
-  // Fold the [TmuxPayload] reasons into the whole-command risk (order-stable,
-  // deduped) so PromptFallbackRule surfaces them in the prompt and log.
-  const riskReasons = tmuxPayloadReasons.length
-    ? [...new Set([...wholeRisk.reasons, ...tmuxPayloadReasons])]
+  // Fold the [TmuxPayload] and [Subst] reasons into the whole-command risk
+  // (order-stable, deduped) so PromptFallbackRule surfaces them in the prompt
+  // and log.
+  const extraReasons = [...tmuxPayloadReasons, ...substReasons];
+  const riskReasons = extraReasons.length
+    ? [...new Set([...wholeRisk.reasons, ...extraReasons])]
     : wholeRisk.reasons;
 
   const analysis = {
@@ -503,11 +641,11 @@ export async function analyzeCommand(
       // simple) must not carry the payload through SafetyRule's signature
       // branch. Non-tmux commands are unaffected (flags stay at their
       // direct-command values).
-      canBeAutoAllowed: !hasUnsafe && !tmuxPayloadUnsafe && tmuxPayloadSimple && obscuredArgv0.length === 0,
-      isSimple: allSimple && tmuxPayloadSimple,
+      canBeAutoAllowed: !hasUnsafe && !tmuxPayloadUnsafe && !substUnsafe && tmuxPayloadSimple && obscuredArgv0.length === 0,
+      isSimple: allSimple && substSimple && tmuxPayloadSimple,
       // An unresolved opaque argv0 is an obscured command position the analysis
       // cannot verify: the packet's obfuscation flag must say yes (T2).
-      hasUnsafePattern: hasUnsafe || tmuxPayloadUnsafe || obscuredArgv0.length > 0,
+      hasUnsafePattern: hasUnsafe || tmuxPayloadUnsafe || substUnsafe || obscuredArgv0.length > 0,
     },
     risk: { ...wholeRisk, reasons: riskReasons },
     relativePathSegmentIndices,

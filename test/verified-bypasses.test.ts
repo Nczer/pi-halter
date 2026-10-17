@@ -11,6 +11,7 @@ import path from "node:path";
 import os from "node:os";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import {decide} from "../decide/engine";
+import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../gate/store";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
@@ -1138,6 +1139,69 @@ describe("P11: pipeline stages are approval units and operand scopes", () => {
       cwd,
     }, createStore());
     expect(d.kind).not.toBe("auto-allow");
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// P12 (3.38.0, G5): a substitution BODY used to be classified by NAME over the
+// body text (READONLY_SUBSHELL_CMDS), and the extractor took the substitution
+// node's FIRST child — so everything after a `;`/`&` was invisible, and flags
+// (`fd -x rm`), relative operands (`cat .env`) or a `cd` inside the body were
+// invisible however the body was split. These are the 2026-10-17 round-6 rows
+// plus the separator holes.
+// ──────────────────────────────────────────────────────────────────────
+describe("P12: a substitution body is a program, not a name-list payload", () => {
+  it("the round-6 substitution rows never auto-allow", async () => {
+    for (const cmd of [
+      "echo $(cat /etc/passwd)",
+      'echo "$(cat /etc/passwd)"',
+      'printf "%s" $(cat /etc/passwd)',
+      "echo $(cd /etc && cat passwd)",
+      'echo "$(cat .env)"',
+      'echo "$(cat ~/.netrc)"',
+      "echo $(fd -x rm)",
+      "echo $(cat /etc/shadow | head -3)",
+      "echo $(grep root /etc/passwd)",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("the statements after a `;` or `&` inside a body are analyzed too", async () => {
+    // `&&`/`||`/`|` bodies arrived as one `list`/`pipeline` child (so they
+    // were whole); `;`/`&` bodies arrived as SEPARATE children and the
+    // extractor kept only the first: `$(ls & rm -rf /)` read as `ls`.
+    for (const cmd of [
+      "echo $(ls & rm -rf /)",
+      "echo $(grep x file.txt; cat /etc/shadow)",
+      "echo $(true && cat /etc/shadow)",
+      "echo $(cat file.txt || rm -rf /)",
+      "echo $(echo hi > /tmp/halter-p12-out)",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("the credential bar reaches a secret name inside a quoted substitution", async () => {
+    // The credential scan is a TEXT pass over the command, and `"$(cat .env)"`
+    // is one quoted word there — so the operand never looked like an operand.
+    const quoted = await analyzeCommand('echo "$(cat .env)"', cwd);
+    expect(quoted.hasCredentialPath, 'echo "$(cat .env)"').toBe(true);
+    expect(quoted.credentialRule).toBeTruthy();
+    const d = await decide({ type: "bash", command: 'echo "$(cat .env)"', cwd }, createStore());
+    expect(d.kind).not.toBe("auto-allow");
+  });
+
+  it("an escaped separator is data: no phantom stage to grant for", async () => {
+    // `grep a\|b f` runs ONE command (the argument is the literal `a|b`). A
+    // stage splitter blind to backslash escapes minted a second stage named
+    // `b`, which no grant could cover — a false prompt on every such command.
+    for (const cmd of ["echo a\\|b", "grep a\\|b file.txt", "echo a\\;b", "echo a\\&b"]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).toBe("auto-allow");
+    }
   });
 });
 

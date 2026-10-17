@@ -9,7 +9,7 @@ import {
   isWrapperRunningWrite,
   hasTerminalEscape,
   echoInterpretsEscapes,
-  isReadOnlySubshellText,
+
   stripQuotedStrings,
 } from "../segment-helpers";
 
@@ -35,22 +35,23 @@ export const ShellEvaluator: RiskEvaluator = {
     const effectiveFirst = getEffectiveCommand(segment);
     const b = new EvaluationBuilder();
 
-    // Command substitution: a body of read-only commands (|, &&, ||, ;), no
-    // write redirect, no backgrounded/multi-line list is pure data production
-    // — it cannot escalate a read-only outer command, and its paths are
-    // checked separately (the path extractor walks into substitution nodes;
-    // nested substitutions are classified individually). Any other body
-    // executes arbitrary code → HIGH (principle 3/5).
+    // Command substitution: the body is a program the shell runs before the
+    // outer command starts, so it is analyzed as one — analyzeSubstBodies
+    // parses each body and runs it through the full segment pipeline under the
+    // parent's effective base (operands, flags, its own cd, nested bodies).
+    // The name-list-over-text check that used to live here ("is every body
+    // command read-only?") was a second allow table: it missed flags
+    // (`fd -x rm`), relative operands (`cat .env`) and a `cd` inside the body.
+    // What stays here is the case the parser cannot hand over: a substitution
+    // node with no extractable body fails closed.
     if (seg.hasSubshell) {
       const innerTexts = seg.subshellTexts;
-      const allReadOnly = !!innerTexts && innerTexts.length > 0 &&
-        innerTexts.every(inner => isReadOnlySubshellText(inner));
-      if (!allReadOnly) {
+      if (!innerTexts || innerTexts.length === 0) {
         b.high("command substitution (subshell)");
-        // Surface RCE reason for curl/wget piped to shell inside the subshell
-        if (innerTexts?.some(inner => RCE_IN_SUBSHELL_RE.test(inner))) {
-          b.note("curl/wget | interpreter (download & execute remote code)");
-        }
+      }
+      // Surface RCE reason for curl/wget piped to shell inside the subshell
+      if (innerTexts?.some(inner => RCE_IN_SUBSHELL_RE.test(inner))) {
+        b.note("curl/wget | interpreter (download & execute remote code)");
       }
     }
 
