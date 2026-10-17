@@ -183,6 +183,42 @@ delegation) covers it, and that vetting runs on the enclosing segment, never on
 the payload: `find . -exec git push \;` used to be approved by `find`'s entry and
 again by `git`'s, and vetted by neither.
 
+### argv0 location semantics
+
+`ls` and `~/Downloads/ls` are the same word to a basename lookup, which is how
+`bin/ls`, `scripts/cat README.md`, `/tmp/evil/git status` and
+`node_modules/.bin/tsc` auto-allowed: the table matched the BASENAME, and the
+parser minted no path for the program itself, so the read bar never saw the
+binary the shell execs (2026-10-17 round-6 corpus). `analysis/argv0-path.ts`
+answers one question per argv0 — `bare` (no path form), `system` (under a dir
+the distro's package manager owns: `/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`) or
+`qualified` (every other path-qualified invocation) — against the base the shell
+would resolve it from. An unresolvable base classifies `qualified`: a relative
+program whose base is unknown cannot be shown to be a system program.
+
+`qualified` means the program is a path operand OF ITS OWN COMMAND, and the same
+class answers every consumer (the per-consumer patching lesson again):
+
+- the parser mints its location, right after the delegation branch resolves the
+  wrapper chain, so it is the delegated word that gets minted — and the word is
+  read case-true, because a path resolves by case where a table key does not;
+- the signature names that path instead of collapsing it: `nice bin/ls` is
+  `nice bin/ls`, not `nice ls`, and an env-assignment prefix that hides argv0
+  (`FOO=/tmp/x /tmp/y`) gets the program appended to the identity. A grant that
+  names a program the command did not run is not a grant;
+- the fast path (`FastAllow`) refuses to cover it, the stage is grant-bound like
+  a `./` token (exact, base-bound signature grant only — never a basename), it
+  is excluded from the safe-sub auto-allow, it is never `isSimple`, and the
+  prompt offers the base-bound identity rather than the bare name.
+
+`command -v /tmp/x` keeps bare-name semantics: a lookup executes nothing, so
+nothing's location is touched. `/usr/local/bin` and `/opt/homebrew/bin` are
+deliberately NOT system dirs — admin/homebrew-writable is the class this rule
+targets — so the first such call prompts once and the exact base-bound grant
+covers it after that (`test/argv0-path.test.ts`). Cost, measured on the frozen
+ledger (875 unique real commands): zero verdict changes, because the only
+absolute argv0 rows in real usage are `/usr/bin/bwrap`.
+
 ### Argument roles (the data/location rule)
 
 A location token is minted only at a FILE-operand position of a path-aware
@@ -637,6 +673,8 @@ analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           operands through path-analysis),
                           segment-analysis, segment-helpers, wrapper-unwrap
                           (the one fixpoint unwrapper for the command position),
+                          argv0-path (where a program comes from: bare / system
+                          dir / path-qualified, per stage and base),
                           command-analysis,
                           risk-analyzer, obfuscation,
                           tmux (command model: the one shared parse —

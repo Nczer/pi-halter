@@ -10,6 +10,7 @@ import {
 } from "../config";
 import type { BashSegment } from "./bash-parser";
 import { isFirstTokenRelativePath } from "./path-analysis";
+import { classifyStageArgv0 } from "./argv0-path";
 import {
   containsCommandSubstitution,
   getFirstWord,
@@ -381,7 +382,10 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
     //   • a write redirect writes the output to a file (`q.sh > ./pwned`)
     //   • command substitution in args runs before the script (`script.py "$(rm …)"`)
     isSimple = allStagesSimple && !writeRedirect && !seg.hasSubshell;
-  } else if (isFirstTokenRelativePath(segment)) {
+  } else if (isFirstTokenRelativePath(segment) || classifyStageArgv0(segment, cwd) === "qualified") {
+    // A path-qualified program (`./tool`, `bin/tool`, `~/Downloads/tool`) is
+    // never simple: its own location has to face the read bar and its grant has
+    // to name the exact form at this base (G4).
     isSimple = false;
   } else {
     isSimple = (isAllowedCommand(firstWord) || isVersionOnlyInvocation) && !hasDanger

@@ -2,6 +2,7 @@ import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallyS
 import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes, segmentFetchPackage } from "../analysis/segment-helpers";
 import { CREDENTIAL_SCAN_RE, checkBareRelativeTokens } from "../analysis/credentials";
 import { hasRelativePath } from "../analysis/path-analysis";
+import { classifyStageArgv0 } from "../analysis/argv0-path";
 import { tokenizeSegment, tokenizeSegmentQuoted } from "../analysis/tokenizer";
 import type {Store, BashRequest, Decision} from "./types";
 import type { CommandAnalysis } from "../analysis/command-analysis";
@@ -57,6 +58,11 @@ export const FastAllowRule: BashRule = (req) => {
   if (/\\/.test(stripped)) return null;
 
   const bare = getFirstWord(req.command);
+  // A path-qualified program is not the bare name the table knows. The fast path
+  // never looks at the location, so `bin/ls` used to reach the table as `ls`
+  // (G4): hand it to the analysis, which mints the program's own path and binds
+  // its grant to the base.
+  if (classifyStageArgv0(req.command, req.cwd) === "qualified") return null;
   if (!unconditionallySafeCommands.has(bare)) return null;
 
   // Terminal escape sequences in echo/printf can spoof the TUI or write the
@@ -129,7 +135,7 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   // commands — excludes wrappers like timeout). G2: stages, because a pipe's
   // first word used to vouch for every stage in it.
   const allStagesSafeSub = analysis.stageTexts
-    .every((st) => st.every((s) => isSafeSubcommand(s)));
+    .every((st, i) => st.every((s, j) => !analysis.stageArgv0Qualified[i][j] && isSafeSubcommand(s)));
   if (allStagesSafeSub && canAutoAllow) {
     return { kind: "auto-allow", analysis }; // D11: carried for the dspa content review
   }
@@ -152,6 +158,12 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   // binding and the delegation: `./tool | cat` binds the GRANT for the `./tool`
   // stage to the segment's effective base, and `cat` is approved on its own.
   const stageRelPath = analysis.stageTexts.map((st) => st.map((s) => hasRelativePath(s)));
+  // G4: a path-qualified argv0 is bound to the base the same way a `./` token
+  // is — the grant must name the exact form at the base it resolves from. The
+  // analysis computed the class (it knows each segment's effective base); this
+  // is the same early-return branch, widened.
+  const stageGrantBound = analysis.stageTexts.map((st, i) =>
+    st.map((_s, j) => stageRelPath[i][j] || analysis.stageArgv0Qualified[i][j]));
   const stageDelegated = analysis.stageTexts.map((st) => st.map(getDelegatedCommand));
   const stageFetchPkg = analysis.stageTexts.map((st) => st.map((s) => segmentFetchPackage(s)));
   // Wrapper transparency for grants: a stage that delegates to another
@@ -191,7 +203,7 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
     // session cwd — is what keeps a grant for ./x from covering
     // `cd /elsewhere && ./x` (a different binary of the same name). Prefix
     // grants, unbound grants, and grants bound to other bases are all refused.
-    if (stageRelPath[segIdx][stageIdx]) {
+    if (stageGrantBound[segIdx][stageIdx]) {
       const base = analysis.effectiveCwds[segIdx];
       return base !== null && store.hasAllowedBashCwd(sig, base);
     }
@@ -273,9 +285,9 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
       // them when their basename is allowlisted — the grant needs them).
       relativeToolIds: [...new Map(
         analysis.stageTexts.flatMap((st, i) =>
-          st.map((s, j) => ({ sig: analysis.stageSignatures[i][j], base: analysis.effectiveCwds[i], rel: hasRelativePath(s) })))
-          .filter((r): r is { sig: string; base: string; rel: boolean } =>
-            r.rel && r.base !== null && /(^|\s)(\.\/|\.\.\/)/.test(r.sig))
+          st.map((s, j) => ({ sig: analysis.stageSignatures[i][j], base: analysis.effectiveCwds[i], bound: hasRelativePath(s) || analysis.stageArgv0Qualified[i][j] })))
+          .filter((r): r is { sig: string; base: string; bound: boolean } =>
+            r.bound && r.base !== null && /\//.test(r.sig))
           .map(r => ({ sig: r.sig, base: r.base }))
           .map(r => [`${r.sig}\u0000${r.base}`, r] as const),
       ).values()],

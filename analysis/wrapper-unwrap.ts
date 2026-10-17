@@ -77,6 +77,25 @@ export interface DelegatedResolution {
 export const MAX_UNWRAP_HOPS = 4;
 
 /**
+ * The raw WORD at the command position — inline env assignments skipped first
+ * (bash runs the command that follows `FOO=bar …`), then the prefix/wrapper
+ * fixpoint. Unlike `getEffectiveCommand` this keeps the token TEXT, so a caller
+ * can see whether the program is path-qualified (`bin/ls`, `/tmp/evil/git`).
+ */
+export function commandPositionWord(words: string[]): {
+  word: string;
+  index: number;
+  lookup: boolean;
+  capped: boolean;
+} {
+  let skip = 0;
+  while (skip < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[skip])) skip++;
+  const res = resolveDelegatedTokens(words.slice(skip));
+  if (res) return { word: words[skip + res.index] ?? "", index: skip + res.index, lookup: res.lookup, capped: res.capped };
+  return { word: words[skip] ?? "", index: skip, lookup: false, capped: false };
+}
+
+/**
  * One hop: the index of the word `words[from]` delegates to, or null when that
  * word is not a prefix/wrapper. Skips the prefix/wrapper flags, option values,
  * and env assignments to find the actual command token.

@@ -1284,3 +1284,74 @@ describe("P13: a wrapper chain does not hide the program or its operands", () =>
   });
 });
 
+// ──────────────────────────────────────────────────────────────────────
+// P14 (3.39.0, G4): the program being executed was invisible. argv0 was a NAME
+// for every consumer, so `bin/ls`, `scripts/cat README.md`, `~/Downloads/ls`,
+// `/tmp/evil/git status` and `node_modules/.bin/tsc` matched the allow table by
+// BASENAME (`ls`, `cat`, `git`, `tsc`) while the parser minted no path for the
+// program itself — the read bar never saw the binary the shell execs, and an
+// "Always" grant on the basename covered every copy of it anywhere
+// (2026-10-17 round-6 corpus). `RELATIVE_PATH_RE` (`./`, `../` only) is why the
+// existing base-bound grant rule never saw `bin/ls` either. The rule now:
+// argv0 under a package-manager-owned dir keeps bare-name semantics;
+// everything else that names a path is a path operand and matches only an
+// exact, base-bound grant (analysis/argv0-path.ts).
+// ──────────────────────────────────────────────────────────────────────
+describe("P14: a path-qualified program is not its basename", () => {
+  it("the round-6 path-qualified rows never auto-allow", async () => {
+    for (const cmd of [
+      "bin/ls",
+      "scripts/cat README.md",
+      "~/Downloads/ls",
+      "/tmp/evil/git status",
+      "node_modules/.bin/tsc",
+      "./ls",
+      // A wrapper in front does not move the answer (the G6 unwrapper and the
+      // G4 class are the same command position).
+      "nice bin/ls",
+      "command ~/Downloads/ls",
+      "env FOO=bar ./ls",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("the programs the table already owns are untouched", async () => {
+    // The cost side of the rule — the exemption has to be wide enough that the
+    // everyday commands do not start paying for it.
+    for (const cmd of ["ls", "/usr/bin/ls", "/bin/ls", "nice /usr/bin/ls", "command -v /tmp/evil/x"]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).toBe("auto-allow");
+    }
+  });
+
+  it("a basename grant does not cover the qualified form, at any base", async () => {
+    // The grant half of the hole: `ls` is table-allowed, so covering `bin/ls`
+    // needed no approval at all — and a base-bound `ls` grant must not do it
+    // either, because `bin/ls` names a different file than `ls` resolves to.
+    const store = createStore();
+    store.addAllowed({ bashSigs: ["ls"] });
+    for (const cmd of ["bin/ls", "./ls", "node_modules/.bin/tsc"]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, store);
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+    const store2 = createStore();
+    store2.addAllowed({ bashSigCwds: [{ sig: "ls", cwd }] });
+    expect((await decide({ type: "bash", command: "bin/ls", cwd }, store2)).kind).not.toBe("auto-allow");
+  });
+
+  it("the binary itself is what the path bar is asked about", async () => {
+    const cmd = "~/Downloads/ls";
+    const a = await analyzeCommand(cmd, cwd);
+    const home = process.env.HOME ?? "";
+    const prog = a.paths.find((p) => p.startsWith(path.join(home, "Downloads")));
+    expect(prog, cmd).toBeDefined();
+    const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+    if (d.kind === "prompt" && d.promptData.type === "bash") {
+      expect(d.promptData.outsideDirs).toContain(path.join(home, "Downloads"));
+    }
+  });
+});
+
