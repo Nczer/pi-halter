@@ -1510,3 +1510,51 @@ describe("parseCommand: an opaque argv0 never silences the operand model (2026-1
     expect(r.obscuredArgv0).toEqual([]);
   });
 });
+
+// ── G1: pipeline stages are parser-built (3.38.0 stage model) ──────────────
+describe("parseCommand: pipeline stages on the segment (G1)", () => {
+  it("records every stage of a pipe, in AST order", async () => {
+    const r = await parseCommand("ls -la | grep foo | wc -l", cwd);
+    expect(r.segments).toHaveLength(1);
+    expect(r.segments[0].stages).toEqual(["ls -la", "grep foo", "wc -l"]);
+  });
+
+  it("records |& stages the same way (the text reconstructs it as |)", async () => {
+    const r = await parseCommand("make 2>&1 |& tail -20", cwd);
+    expect(r.segments[0].stages).toEqual(["make 2>&1", "tail -20"]);
+    expect(r.segments[0].ops).toContain("|&");
+  });
+
+  it("leaves stages unset for a single command and for a quoted pipe", async () => {
+    const single = await parseCommand("ls -la", cwd);
+    expect(single.segments[0].stages).toBeUndefined();
+    const quoted = await parseCommand(`echo "a | b"`, cwd);
+    expect(quoted.segments[0].stages).toBeUndefined();
+    expect(quoted.segments[0].text).toBe(`echo "a | b"`);
+  });
+
+  it("keeps a pipe inside a command substitution inside one stage", async () => {
+    const r = await parseCommand("echo $(ls /etc | wc -l) | sort", cwd);
+    expect(r.segments[0].stages).toEqual(["echo $(ls /etc | wc -l)", "sort"]);
+  });
+
+  it("drops empty stages — an empty subshell runs no command", async () => {
+    const r = await parseCommand("() | cat", cwd);
+    expect(r.segments[0].stages).toBeUndefined();
+  });
+
+  it("a compound stage folds only its LAST inner segment; the rest stay segments", async () => {
+    // `(cd /x && y) | grep` — the cd is a command of its own at runtime, so it
+    // must not hide behind the pipeline stage's identity.
+    const r = await parseCommand("(cd /etc && cat passwd) | wc -l", cwd);
+    const texts = r.segments.map((s) => s.text);
+    expect(texts).toContain("cd /etc");
+    const pipe = r.segments.find((s) => s.stages && s.stages.length > 1)!;
+    expect(pipe.stages).toEqual(["cat passwd", "wc -l"]);
+  });
+
+  it("stages of a subshell-fed pipeline are still the direct stages", async () => {
+    const r = await parseCommand("cat <(ls /etc) | grep root", cwd);
+    expect(r.segments[0].stages).toEqual(["cat <(ls /etc)", "grep root"]);
+  });
+});

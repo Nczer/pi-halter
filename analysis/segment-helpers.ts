@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
+import type { BashSegment } from "./bash-parser";
 import { isWriteOperation, isAllowedCommand, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, fetchFormPackage, uvRunFlags, resolveDepSource, type UvRunDep, type UvRunFlags } from "../config";
 import { splitIntoSegments, splitOnPipe, tokenizeSegment, tokenizeSegmentQuoted } from "./tokenizer";
 
@@ -80,6 +81,26 @@ const READONLY_SUBSHELL_CMDS = new Set([
   ...unconditionallySafeCommands,
   "grep", "rg", "fd", "ag",
 ]);
+
+/**
+ * The pipeline stages of a segment (G1): the parser-built list when the AST
+ * saw a pipeline, else a quote-aware split of the segment text.
+ *
+ * This is the unit every "what does this segment run" rule answers for — the
+ * signature, the allow table, base access, egress. A stage is NOT a segment:
+ * stages share a cwd and a stdin chain, so segment-indexed state (effective
+ * base, relative-tool binding, run-dep sets) stays keyed by segment and the
+ * stage list hangs off that index.
+ *
+ * The fallback exists for hand-built segments (delegation tails, tmux payload
+ * chunks, `subshellTexts` bodies), not for parser output — a consumer that
+ * splits parser output itself is how the per-stage rules drifted apart.
+ */
+export function segmentStages(seg: BashSegment): string[] {
+  if (seg.stages && seg.stages.length > 0) return seg.stages;
+  const parts = splitOnPipe(seg.text);
+  return parts.length > 0 ? parts : [seg.text];
+}
 
 /**
  * True when a command-substitution body (`$(…)` / backticks) is pure data
