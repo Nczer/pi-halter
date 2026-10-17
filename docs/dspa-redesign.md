@@ -1359,8 +1359,8 @@ class"). Suite 3229.
 
 ## 6. Round-6 audit grill — resolved decisions (2026-10-17)
 
-**Status: DECIDED.** G1, G2, G5 and G6 are BUILT (3.38.0, `85beef0`/`a0f7a2d` +
-the G5 and G6 commits); G3/G4 and G7–G11 are not built. Resolved by grilling the 2026-10-17
+**Status: DECIDED.** G1, G2, G5 and G6 are BUILT (3.38.0 — `85beef0`, `181e7eb`,
+`a0f7a2d`, `2b6494b`, `6fb30b1`); G3/G4 and G7–G11 are not built. Resolved by grilling the 2026-10-17
 handoff
 audit (Joplin note `67dc875e13594e61b8083dd275924487`) against `3.37.1`
 (`8e57693`). Its own baseline was `3.32.0` — a stale, gitless Mac copy — so its
@@ -1450,14 +1450,22 @@ the rest were closed by 3.33–3.37. Each release below carries its rows as
    coarse signature, and installed under the trusted-script umbrella; the known
    identity flags are now alias-normalized (`-i/--index-url`, `-f/--find-links`,
    `-P/--upgrade-package` are G7's table work). Measurements: round-6 manual
-   corpus 21 → 13 open rows of 62, the eight closed being the wrapper and
-   exec-payload rows; the dspa floor gained 6 stops (`nice cat /etc/hosts`,
-   `command cat /etc/hosts`, `env cat /etc/hosts`, `echo $(cat /etc/passwd)`,
-   `echo $(rm -rf /)`, `nice command ssh …`) and lost none; the 719-command
-   ledger replay shows exactly ONE flip, prompt → auto-allow, attributed by
-   re-running that row in a pre-G6 worktree — the old analysis read the PATTERN
-   of `xargs grep -l -e '/mnt/Ndr'` as a file operand and stopped on a phantom
-   `/mnt/Ndr` outside path. The audit's uv-delegation finding needed no change:
+   corpus 21 → 12 open rows of 62, the nine closed being the wrapper,
+   exec-payload and uv-alias rows; the dspa floor gained 4 stops of its own
+   (`nice cat /etc/hosts`, `command cat /etc/hosts`, `env cat /etc/hosts`,
+   `nice command ssh …`) and lost none — the release as a whole gained 6 (the
+   two `echo $(…)` rows came with G5) and lost none; a same-corpus replay of the
+   719 logged commands at the previous revision vs HEAD shows exactly ONE flip
+   for this commit, prompt → auto-allow, attributed by re-running that row in a
+   pre-G6 worktree — the old analysis read the PATTERN of
+   `xargs grep -l -e '/mnt/Ndr'` as a file operand and stopped on a phantom
+   `/mnt/Ndr` outside path. Across the whole release a FROZEN replay of 830
+   logged commands shows zero net verdict changes (that row auto-allowed at
+   3.37.1 too — the phantom reading arrived with the stage work and left with
+   G6). Caveat for future replays: the ledger corpus is not reproducible across
+   days, because hundreds of its rows contain scratch paths whose existence the
+   path layer consults — freeze the ledger AND compare revisions close in time,
+   or the diff is noise. The audit's uv-delegation finding needed no change:
    measured, deps are visible through `timeout`/`command`/`nice`, `runDep` fires,
    and coarse grants (`uv`, `timeout uv`, `uv run`) are refused for the wrapped
    form.

