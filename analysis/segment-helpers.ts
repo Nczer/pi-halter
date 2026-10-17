@@ -3,6 +3,7 @@ import { isFirstTokenRelativePath } from "./path-analysis";
 import type { BashSegment } from "./bash-parser";
 import { isWriteOperation, isAllowedCommand, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, fetchFormPackage, uvRunFlags, resolveDepSource, type UvRunDep, type UvRunFlags } from "../config";
 import { splitIntoSegments, splitOnPipe, tokenizeSegment, tokenizeSegmentQuoted } from "./tokenizer";
+import { resolveDelegatedTokens, skipWrapperArg } from "./wrapper-unwrap";
 
 // splitPipeline is splitOnPipe — same semantics (split on | not ||)
 export { splitOnPipe as splitPipeline };
@@ -27,24 +28,6 @@ const NULL_REDIRECT_RE2 = /[0-9]*>&[0-9]+/g;
 /** Signature extraction. */
 const SIG_REDIRECT_RE = /&?[0-9]*>>?\s*\S+/g;
 const SIG_INPUT_RE = /<\s*\S+/g;
-/** Wrapper arg skip. */
-const WRAPPER_ENV_ASSIGN_RE = /=/;
-// GNU timeout durations: plain (5), suffixed (5s, 1.5m), suffixed chains
-// (1h30m, 1h30m5s), or clock form (00:05, 1:30:00).
-const WRAPPER_TIMEOUT_RE = /^(?:(?:\d+(\.\d+)?[smhd])+\d*|\d+(\.\d+)?|\d{1,2}(?::\d{1,2}){1,2})$/;
-const WRAPPER_NICE_RE = /^\d+$/;
-
-/**
- * Wrapper flags that consume the NEXT token as their value (space form).
- * Without this, `watch -n 1 curl` would resolve "1" as the delegated command.
- */
-const WRAPPER_VALUE_FLAGS: Record<string, Set<string>> = {
-  watch: new Set(["-n", "--interval"]),
-  xargs: new Set(["-n", "--max-args", "-L", "--max-lines", "-P", "--max-procs", "-s", "--arg-size", "-I", "--replace", "-d", "--delimiter", "-a", "--arg-file", "-E", "--eof"]),
-  parallel: new Set(["-j", "--jobs", "-i", "--input-file", "--block-size", "--group-size", "--jobserver", "--jobserver-batch-size", "--tmpdir", "--basefile", "--results"]),
-  timeout: new Set(["-s", "--signal"]),
-  stdbuf: new Set(["-i", "-o", "-e"]),
-};
 /** Find/fd/rg exec detection.
  * -ok/-okdir execute the same command as -exec/-execdir, but prompt y/n per
  * match — and read that answer from stdin when there is no tty, so
@@ -211,71 +194,6 @@ export function getFirstWord(segment: string): string {
   return path.basename(word);
 }
 
-/** Result of resolving the command a prefix/wrapper delegates to. */
-interface DelegatedResolution {
-  /** Lowercased basename of the delegated command. */
-  cmd: string;
-  /** Index of the delegated command token in `words`. */
-  index: number;
-  /** True for `command -v/-V` lookups (no command is executed). */
-  lookup: boolean;
-}
-
-/**
- * Resolve the command a shell prefix (command/builtin/exec/env) or wrapper
- * (timeout/xargs/watch/parallel/nice/ionice/stdbuf) delegates to. Skips the
- * prefix/wrapper flags, option values, and env assignments to find the actual
- * command token. Returns null when the segment doesn't delegate to another
- * command (or the delegated token isn't a command name).
- */
-function resolveDelegatedTokens(words: string[]): DelegatedResolution | null {
-  if (words.length < 2) return null;
-  const first = (words[0] ?? "").replace(/^\\+/, "");
-  const f = first.toLowerCase();
-  let i = 1;
-  let lookup = false;
-  if (f === "command" || f === "builtin" || f === "exec") {
-    // `command [-p] [-v|-V] name` / `exec [-cl] [-a name] [command]` — skip
-    // lookup/exec flags so the real command name is found.
-    while (i < words.length && /^-[pVvlc]+$/.test(words[i])) {
-      if (f === "command" && /[vV]/.test(words[i])) lookup = true;
-      i++;
-    }
-    if (words[i] === "-a" && i + 1 < words.length) i += 2;
-  } else if (f === "env") {
-    // env [-i] [-u NAME] [--unset=NAME] [-C DIR] [FOO=bar …] cmd
-    while (i < words.length) {
-      const a = words[i];
-      if (a === "-i" || a === "--ignore-environment" || a === "-S" || a === "--split-string") { i++; continue; }
-      if ((a === "-u" || a === "--unset" || a === "-C" || a === "--chdir") && i + 1 < words.length) { i += 2; continue; }
-      if (a.startsWith("--unset=") || a.startsWith("--chdir=")) { i++; continue; }
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { i++; continue; }
-      break;
-    }
-  } else if (wrapperCommands.has(f)) {
-    // wrapper [FLAGS/VALUES] cmd — skip flags, their values, and wrapper
-    // option arguments (timeout durations, nice/ionice numbers, env assigns).
-    const valueFlags = WRAPPER_VALUE_FLAGS[f];
-    let skipNext = false;
-    while (i < words.length) {
-      const a = words[i];
-      if (skipNext) { skipNext = false; i++; continue; }
-      if (a.startsWith("-")) {
-        if (valueFlags?.has(a)) skipNext = true;
-        i++;
-        continue;
-      }
-      if (skipWrapperArg(f, a)) { i++; continue; }
-      break;
-    }
-  } else {
-    return null;
-  }
-  const word = words[i] ?? "";
-  if (!word || word.startsWith("-") || word === "__STR__" || word === "__CMD_SUBST__") return null;
-  return { cmd: path.basename(word.toLowerCase()), index: i, lookup };
-}
-
 /**
  * The package a segment's fetchable run form names, with inline env-assignment
  * prefixes (`FOO=bar npx evil`) and prefix/wrapper delegation (`env npx evil`,
@@ -312,7 +230,7 @@ export function segmentFetchPackage(segment: string): { first: string; pkg: stri
 export function getEffectiveCommand(segment: string): string {
   const words = tokenizeSegment(segment);
   const res = resolveDelegatedTokens(words);
-  if (res) return res.cmd;
+  if (res && !res.capped) return res.cmd;
   // Non-delegating segment: effective command is the first word itself
   // (same as pre-wrapper-resolution behavior, incl. leading-backslash forms).
   const word = words[0] ?? "";
@@ -329,7 +247,7 @@ export function getEffectiveCommand(segment: string): string {
 export function getDelegatedCommand(segment: string): { cmd: string; tail: string } | null {
   const words = tokenizeSegment(segment);
   const res = resolveDelegatedTokens(words);
-  if (!res || res.lookup) return null;
+  if (!res || res.lookup || res.capped) return null;
   return { cmd: res.cmd, tail: words.slice(res.index).join(" ") };
 }
 
@@ -355,18 +273,6 @@ export function hasWriteRedirect(cmd: string): boolean {
   }
   const stripped = stripNullRedirects(noQuotes).replace(DOUBLE_BRACKET_COND_RE, "");
   return WRITE_REDIRECT_RE.test(stripped);
-}
-
-/**
- * Determine if a wrapper argument should be skipped (is a flag or wrapper-specific option).
- */
-function skipWrapperArg(wrapper: string, arg: string): boolean {
-  if (arg.startsWith("-")) return true;
-  if (wrapper === "env" && WRAPPER_ENV_ASSIGN_RE.test(arg) && !arg.startsWith("/")) return true;
-  if (wrapper === "timeout" && WRAPPER_TIMEOUT_RE.test(arg)) return true;
-  if (wrapper === "nice" && WRAPPER_NICE_RE.test(arg)) return true;
-  if (wrapper === "ionice" && WRAPPER_NICE_RE.test(arg)) return true;
-  return false;
 }
 
 /**
@@ -501,6 +407,13 @@ export function getCommandSignature(segment: string, base?: string | null): stri
   // delegated command, so an "Always" grant on `timeout curl` can't cover
   // `timeout ssh`, and a bare `timeout` grant covers nothing wrapped at all.
   const deleg = resolveDelegatedTokens(tokens);
+  if (deleg?.capped) {
+    // Past the unwrap cap the chain names no program. The signature is the
+    // wrapper alone — never a program name a grant could not see — and the
+    // parser has already marked the command position obscured, so this segment
+    // is not auto-allowable regardless of what is granted.
+    return cmdBase;
+  }
   if (deleg && !deleg.lookup) {
     // A wrapped `uv run` keeps its dependency set in the signature: the wrapper
     // is transparent to the grant, the install set it carries is not (a coarse
@@ -546,6 +459,14 @@ export function getCommandSignature(segment: string, base?: string | null): stri
 /**
  * Check if a tool's exec/pre flag triggers a write operation.
  * Generic helper for find -exec, fd -x, rg --pre, etc.
+ *
+ * The payload is trusted only against the UNCONDITIONALLY-safe subset, not the
+ * auto-allow table: a table entry with an exclusion reason (`git`, `grep`,
+ * `sort`, `find`, `timeout`, …) is allowed because the SEGMENT-level checks —
+ * egress, git-clean, dangerous-flag, delegation — vet it. None of those run on
+ * an exec payload, which sits inside a `find` segment, so table membership
+ * there vouches for nothing: `find . -exec git push \;` used to be approved by
+ * `git`'s own entry while nothing ever asked whether `git push` was safe.
  */
 function checkExecWrite(segment: string, regex: RegExp): boolean {
   for (const match of segment.matchAll(regex)) {
@@ -557,11 +478,11 @@ function checkExecWrite(segment: string, regex: RegExp): boolean {
     const cmd = path.basename(rawCmd).toLowerCase();
     const deleg = getDelegatedCommand(`${rawCmd} ${after}`);
     if (deleg) {
-      if (isFirstTokenRelativePath(deleg.tail) || isWriteOperation(deleg.cmd, deleg.tail) || !isAllowedCommand(deleg.cmd)) {
+      if (isFirstTokenRelativePath(deleg.tail) || isWriteOperation(deleg.cmd, deleg.tail) || !unconditionallySafeCommands.has(deleg.cmd)) {
         return true;
       }
     }
-    if (isWriteOperation(cmd, after) || !isAllowedCommand(cmd)) return true;
+    if (isWriteOperation(cmd, after) || !unconditionallySafeCommands.has(cmd)) return true;
   }
   return false;
 }

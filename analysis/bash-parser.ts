@@ -6,6 +6,7 @@ import { allowedReadPaths, allowedWritePaths, pathAwareCommands, SHELL_INTERPRET
 import { expandTilde, resolvePathReal } from "./path-analysis";
 import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandHomeToken, expandHomeLiterals } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
+import { resolveDelegatedTokens } from "./wrapper-unwrap";
 import { homeReassigned } from "./cwd-tracking";
 import { inlineCodeArgIndices } from "../config/script-operand";
 import type { ShellAssignment } from "./var-resolution";
@@ -2114,6 +2115,7 @@ export async function parseCommand(
       //    verb states no identity to reason about, which is exactly how a rule
       //    keyed on the verb gets dodged.
       let prog = cmdName;
+      let chainCapped = false;
       const nameNode = prog && !pathAwareCommands.has(prog) ? commandNameNode(cmdNode) : null;
       const argv0Opaque = nameNode !== null && nodeHasRuntimeExpansion(nameNode);
       let argvList = args;
@@ -2142,6 +2144,33 @@ export async function parseCommand(
         }
       }
 
+      // A wrapper in front of a command hides it from the operand model:
+      // `nice cat /etc/hosts` names `cat` at a FILE-operand position, but keyed
+      // on the first word (`nice`, not path-aware) the model below never ran at
+      // all — paths=[], no location bar (2026-10-17 round-6 audit: same for
+      // `command cat /etc/hosts`, `env nice cat /etc/hosts`). Unwrap the
+      // prefix/wrapper chain to a FIXPOINT and run the model as the program that
+      // actually runs, over ITS argv. Past the cap the chain names no program:
+      // the command position is obscured, so operands go worst-case, exactly as
+      // for an unresolvable argv0.
+      const wrapped = prog === null
+        ? null
+        : resolveDelegatedTokens([prog, ...argvList.map((a) => a.text)]);
+      if (wrapped && !wrapped.lookup) {
+        if (wrapped.capped) {
+          prog = null;
+          chainCapped = true;
+          // Fail closed the way an unresolvable argv0 does: the position under
+          // the chain names no program, so the command position counts as an
+          // unsafe pattern (never auto-allow) and the judge packet sees that.
+          const tok = (rawName ?? "").trim();
+          if (tok && !obscuredArgv0.includes(tok)) obscuredArgv0.push(tok);
+        } else {
+          prog = wrapped.cmd;
+          argvList = argvList.slice(wrapped.index - 1);
+        }
+      }
+
       // Code bodies for every runner, path-aware or not: `sh -c` is not in
       // pathAwareCommands, but its program string is still the thing that
       // would write the base, and the write decision is made from that text.
@@ -2153,7 +2182,7 @@ export async function parseCommand(
         }
       }
 
-      if ((prog && pathAwareCommands.has(prog)) || (argv0Opaque && prog === null)) {
+      if ((prog && pathAwareCommands.has(prog)) || ((argv0Opaque || chainCapped) && prog === null)) {
         const argTexts = argvList.map(a => a.text);
         const inlinePrograms = prog ? inlineCodeArgIndices(prog, argTexts) : new Set<number>();
         const skipArgs = prog ? nonFileArgIndices(prog, argTexts) : new Set<number>();

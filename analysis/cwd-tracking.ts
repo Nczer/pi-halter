@@ -6,6 +6,7 @@ import { resolvePathReal } from "./path-analysis";
 import { tokenizeSegment, tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS, codeBodiesWrite } from "../config";
 import { hasRuntimeExpansionText, nonFileArgIndices, type BashSegment } from "./bash-parser";
+import { resolveDelegatedTokens } from "./wrapper-unwrap";
 import type { ShellAssignment } from "./var-resolution";
 
 // ── cwd tracking across `cd` ───────────────────────────────────────────────
@@ -495,6 +496,26 @@ function subshellBaseAccess(tokens: string[], base: CwdBase, homeFixed = false):
  * a grep pattern) false-flags — accepted: the prompt only fires when the
  * base is outside the manual bar, and the user typed the cd.
  */
+/**
+ * The program a stage runs, past env-assignment prefixes and any
+ * prefix/wrapper chain (G6's fixpoint unwrapper). Keying on the head word
+ * instead reads the WRAPPER as the program: `cd /etc && nice ls` looks like a
+ * segment running `nice`, which is neither path-aware nor a cwd-defaulting
+ * command nor a write verb nor an interpreter — so the stage looked inert and
+ * the base it operated on was never flagged. `index` is where that program's
+ * argv starts, so the caller skips exactly the prefixes and the program.
+ */
+function stageCommand(words: string[]): { cmd: string; index: number; capped: boolean } {
+  let k = 0;
+  while (k < words.length && ENV_ASSIGN_RE.test(words[k])) k++;
+  const head = k < words.length ? path.basename(words[k]).toLowerCase() : "";
+  const wrapped = resolveDelegatedTokens(words.slice(k));
+  if (wrapped?.capped) return { cmd: head, index: k, capped: true };
+  // `command -v ls` runs no command: keep the head word, as before.
+  if (!wrapped || wrapped.lookup) return { cmd: head, index: k, capped: false };
+  return { cmd: wrapped.cmd, index: k + wrapped.index, capped: false };
+}
+
 export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = false): string | null {
   const quotedTokens = tokenizeSegmentQuoted(seg.text);
   const tokens = quotedTokens.map((t) => t.text);
@@ -530,8 +551,12 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
     while (k < stage.length && ENV_ASSIGN_RE.test(stage[k].text)) k++;
     const head = stage[k];
     if (!head) continue;
-    const cmd = path.basename(head.text).toLowerCase();
-    const rest = stage.slice(k + 1);
+    const st = stageCommand(stage.map((t) => t.text));
+    // A chain too deep to name a program says nothing about what it touches —
+    // assume it touches the base (fail closed).
+    if (st.capped) return base === null ? UNKNOWN_CWD_MARKER : base;
+    const cmd = st.cmd;
+    const rest = stage.slice(st.index + 1);
     const pathAware = cmd !== "" && pathAwareCommands.has(cmd);
     if (pathAware) sawPathAware = true;
     if (CWD_DEFAULT_COMMANDS.has(cmd)) sawCwdDefault = true;
@@ -691,15 +716,15 @@ export function baseWriteAccess(seg: BashSegment): boolean {
   // targets; resolvable targets enter the path set themselves.
   {
     let sawVerb = false;
-    for (const st of stages) {
-      let k = 0;
-      while (k < st.length && ENV_ASSIGN_RE.test(st[k])) k++;
-      const cmd = k < st.length ? path.basename(st[k]).toLowerCase() : "";
+    for (const st0 of stages) {
+      const st = stageCommand(st0);
+      if (st.capped) return true; // no program identity: assume it writes the base
+      const cmd = st.cmd;
       const sedInPlace = cmd === "sed" &&
-        st.slice(k + 1).some((t) => /^-[a-bd-gj-zA-Z]*i[^\s/]*$/.test(t) || t.startsWith("--in-place"));
+        st0.slice(st.index + 1).some((t) => /^-[a-bd-gj-zA-Z]*i[^\s/]*$/.test(t) || t.startsWith("--in-place"));
       if (!WRITE_VERB_BASE.has(cmd) && !sedInPlace) continue;
       sawVerb = true;
-      const stageArgs = st.slice(k + 1);
+      const stageArgs = st0.slice(st.index + 1);
       const skipVerbArgs = nonFileArgIndices(cmd, stageArgs);
       for (let ai = 0; ai < stageArgs.length; ai++) {
         if (skipVerbArgs.has(ai)) continue;
@@ -719,13 +744,13 @@ export function baseWriteAccess(seg: BashSegment): boolean {
   // Always-Allow tier would have stored a session WRITE grant for a read.
   // A body we cannot read (a program from a variable, a heredoc the shell
   // expands, a body the parser never saw) stays write-capable.
-  for (const stage of stages) {
-    let k = 0;
-    while (k < stage.length && ENV_ASSIGN_RE.test(stage[k])) k++;
-    const cmd = k < stage.length ? path.basename(stage[k]).toLowerCase() : "";
+  for (const stage0 of stages) {
+    const st = stageCommand(stage0);
+    if (st.capped) return true; // no program identity: assume it writes the base
+    const cmd = st.cmd;
     const shell = SHELL_INTERPRETERS.has(cmd);
     if (!SCRIPT_INTERPRETERS.has(cmd) && !shell) continue;
-    const rest = stage.slice(k + 1);
+    const rest = stage0.slice(st.index + 1);
     const hasHeredoc = seg.ops.includes("<<") || rest.some((t) => t.startsWith("<<"));
     const hasInlineFlag = rest.includes("-c") || rest.includes("-e");
     if (!hasHeredoc && !hasInlineFlag) continue;
@@ -734,8 +759,7 @@ export function baseWriteAccess(seg: BashSegment): boolean {
   return false;
 }
 
-/** Quote-aware pipeline-stage split over tokenized segment text. */
-function splitQuotedStages(tokens: QuotedToken[]): QuotedToken[][] {
+/** Quote-aware pipeline-stage split over tokenized segment text. */function splitQuotedStages(tokens: QuotedToken[]): QuotedToken[][] {
   const stages: QuotedToken[][] = [];
   let cur: QuotedToken[] = [];
   for (const qt of tokens) {

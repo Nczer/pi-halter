@@ -57,6 +57,19 @@ export type UvDepFlag = (typeof UV_DEP_FLAGS)[number];
 /** The interpreter-selection flags: their value names an artifact uv downloads. */
 const UV_PYTHON_FLAGS = new Set(["-p", "--python"]);
 
+/**
+ * clap's short spellings for the identity flags above. `-w` IS `--with` —
+ * verified against `uv run --help` — and an option the scan does not know is
+ * assumed to TAKE a value, so `uv run -w evil-pkg python3 s.py` read `-w`
+ * unknown, skipped `evil-pkg` as its value, recorded NO dependency, and kept
+ * the coarse `uv run` signature: an unnamed registry install under the
+ * trusted-script umbrella. Aliased rather than added: same dependency, same
+ * grant, canonical rendering. (The remaining value-taking short flags —
+ * `-i/--index-url`, `-f/--find-links`, `-P/--upgrade-package` — name a SOURCE
+ * the tables do not model yet; that belongs with the closed-world flag work.)
+ */
+const UV_FLAG_ALIASES: Readonly<Record<string, string>> = { "-w": "--with" };
+
 /** One dependency a `uv run` form names (see uvRunFlags). */
 export interface UvRunDep {
   /** Which flag named it. */
@@ -120,7 +133,8 @@ export function uvRunFlags(tokens: QuotedToken[]): UvRunFlags | null {
     if (lower === "--") break;
     if (!lower.startsWith("-")) break; // the runner/script ends uv's option region
     const eq = lower.indexOf("=");
-    const name = eq === -1 ? lower : lower.slice(0, eq);
+    const rawName = eq === -1 ? lower : lower.slice(0, eq);
+    const name = UV_FLAG_ALIASES[rawName] ?? rawName;
     const inline = eq === -1 ? undefined : tok.text.slice(eq + 1);
 
     const depFlag = UV_DEP_FLAGS.find((f) => name === f);

