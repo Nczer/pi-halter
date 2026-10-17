@@ -67,9 +67,17 @@ export class RuleGenerator {
   static generatePathsOnlyRules(data: PromptData): AllowRules | undefined {
     if (data.type !== "bash") return undefined;
     const bash = data as BashPromptData;
-    const readDirs = withoutRoot(bash.outsideDirs);
-    if (readDirs.length === 0) return undefined;
-    return { readDirs };
+    const readDirs = withoutRoot(bash.outsideDirs).filter((d) => !(bash.outsideWriteDirs ?? []).includes(d));
+    const writeDirs = withoutRoot(bash.outsideWriteDirs ?? []);
+    if (readDirs.length === 0 && writeDirs.length === 0) return undefined;
+    const rules: AllowRules = {};
+    if (readDirs.length > 0) rules.readDirs = readDirs;
+    // G3: a prompt forced by a write target must record a WRITE grant — a
+    // readDirs grant for the same dir is exactly the click that let
+    // `mkdir ~/.pi/agent/pwned-dir` through the first time. A write grant
+    // implies read (store.isInsideAllowedDir), so it covers both bars.
+    if (writeDirs.length > 0) rules.writeDirs = writeDirs;
+    return rules;
   }
 
   /**
@@ -89,9 +97,16 @@ export class RuleGenerator {
 
   private static generateBashPrimaryRules(data: BashPromptData): AllowRules {
     const rules: AllowRules = {};
-    const readDirs = withoutRoot(data.outsideDirs);
+    const readDirs = withoutRoot(data.outsideDirs).filter((d) => !(data.outsideWriteDirs ?? []).includes(d));
     if (readDirs.length > 0) {
       rules.readDirs = readDirs;
+    }
+    // G3: the write dirs of the same prompt go to the WRITE tier — the
+    // primary "Always" has to actually cover the next run of
+    // `mkdir ~/.pi/agent/extensions/x`, which a readDirs grant does not.
+    const writeDirs = withoutRoot(data.outsideWriteDirs ?? []);
+    if (writeDirs.length > 0) {
+      rules.writeDirs = writeDirs;
     }
     // Relative-path tools: store the exact signature bound to this cwd —
     // "Always" must actually work for ../node_modules/.bin/*, and the cwd

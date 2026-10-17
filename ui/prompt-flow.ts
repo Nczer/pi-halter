@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {Decision, PermissionRequest} from "../decide/types";
-import type { Store } from "../gate/store";
+import type { Store, AllowRules } from "../gate/store";
 import { buildPrompt, pdTargetLabel } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
 import { updateStatus } from "./widget";
@@ -310,11 +310,17 @@ export async function showPrompt(
     updateStatus(ctx);
   }, () => {
     // Always (paths): the concrete outside-cwd dirs plus the resolver dirs
-    // — exactly the union the option label named (pathGrantDirs).
-    const concrete = RuleGenerator.generatePathsOnlyRules(decision.promptData)?.readDirs ?? [];
-    const dirs = [...new Set([...concrete, ...(prompt.resolverDirs ?? [])])];
-    if (dirs.length > 0) {
-      store.addAllowed({ readDirs: dirs });
+    // — exactly the union the option label named (pathGrantDirs). G3: the
+    // generator splits that union into the read tier and the WRITE tier — a
+    // dirs-only grant for a write prompt must store writeDirs, or the same
+    // command prompts again next time.
+    const gen = RuleGenerator.generatePathsOnlyRules(decision.promptData);
+    const read = [...new Set([...(gen?.readDirs ?? []), ...(prompt.resolverDirs ?? [])])];
+    const rules: AllowRules = {};
+    if (read.length > 0) rules.readDirs = read;
+    if (gen?.writeDirs?.length) rules.writeDirs = gen.writeDirs;
+    if (Object.keys(rules).length > 0) {
+      store.addAllowed(rules);
       updateStatus(ctx);
     }
     persistResolutions(true);

@@ -100,6 +100,10 @@ export const pathAwareCommands = new Set([
   "xxd", "hexdump", "od", "strings",
   // File/dir ops
   "mkdir", "rm", "cp", "mv", "chmod", "chown", "mktemp",
+  // Dir/file ops the write bar (G3) must be able to name: without them the
+  // operands are never minted, so a signature grant covered a write the user
+  // never saw (`truncate -s 0 ~/Downloads/x`, `ln -s /etc/passwd ~/l`).
+  "rmdir", "unlink", "truncate", "ln", "install",
   "find", "grep", "diff", "patch",
   // `cd` is NOT path-aware: a cd performs no file access — it is navigation,
   // modeled by the effective-cwd state machine (analysis/cwd-tracking.ts).

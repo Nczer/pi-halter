@@ -119,6 +119,15 @@ export interface BashPromptData {
   needsCommandApproval: boolean;
   needsPathApproval: boolean;
   /**
+   * Write-role operands (analysis/write-roles) outside cwd ∪ the config write
+   * dirs ∪ the session's WRITE grants (G3), as directories, for display and
+   * for the Always tier. A READ grant never covers one of these. Set by every
+   * real decision (PromptFallbackRule); absent on hand-constructed PromptData.
+   */
+  outsideWriteDirs?: string[];
+  /** The prompt is (partly) forced by such a write target. */
+  needsWriteApproval?: boolean;
+  /**
    * Opaque references the analysis could not statically bind (the prompt
    * lists them; they force path approval via their markers but are never
    * part of an Always grant). Absent on hand-constructed PromptData.

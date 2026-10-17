@@ -1078,3 +1078,40 @@ describe("file prompt: covered scopes are suppressed", () => {
     ]);
   });
 });
+
+// ── Bash: write-role dirs (G3) ────────────────────────────────────────────
+// The read bar already allowed these dirs, so the prompt is the only place
+// the write is visible — it must say WRITE, and grant it as a write.
+
+describe("bash write dirs", () => {
+  const W = { outsideWriteDirs: ["/home/user/.pi/agent"], needsWriteApproval: true, needsPathApproval: true };
+
+  it("a write-only trigger titles the prompt Write", () => {
+    const prompt = buildPrompt(bashDecision({ ...W, outsideDirs: [] }));
+    expect(prompt.title).toBe("Write");
+    expect(prompt.body).toContain("writes outside cwd: /home/user/.pi/agent");
+    // The dir is named once, under writes — repeating it as a read dir would
+    // imply a grant that cannot satisfy the write.
+    expect(prompt.body).not.toContain("\u26a0\ufe0f outside cwd: /home/user/.pi/agent");
+    expect(prompt.pathGrantDirs).toContain("/home/user/.pi/agent");
+  });
+
+  it("read and write dirs each get their own line", () => {
+    const prompt = buildPrompt(bashDecision({
+      ...W,
+      outsideDirs: ["/mnt/Ndr/Download", "/home/user/.pi/agent"],
+      needsCommandApproval: true,
+    }));
+    expect(prompt.title).toBe("Bash + Path");
+    expect(prompt.body).toContain("outside cwd: /mnt/Ndr/Download");
+    expect(prompt.body).toContain("writes outside cwd: /home/user/.pi/agent");
+    // The Always tier marks which of its dirs is a write grant.
+    expect(prompt.tier2Everything.body).toContain("/home/user/.pi/agent/* (write)");
+  });
+
+  it("no write dirs → the prompt is byte-identical to before G3", () => {
+    const a = buildPrompt(bashDecision({ outsideDirs: ["/etc"], needsPathApproval: true }));
+    const b = buildPrompt(bashDecision({ outsideDirs: ["/etc"], needsPathApproval: true, outsideWriteDirs: [], needsWriteApproval: false }));
+    expect(b).toEqual(a);
+  });
+});

@@ -114,6 +114,28 @@ export function getOutsideCwdPaths(
   });
 }
 
+/**
+ * The WRITE bar (G3). A write target may sit only in the working directory,
+ * the config write dirs (temp dirs), or a location the user granted a WRITE
+ * for this session — and nothing else. The read exemptions are deliberately
+ * absent: `allowedReadPaths` (~/.pi — the agent's own skills and extensions)
+ * and trusted script paths say something about READING, so reusing the read
+ * predicate let `mkdir ~/.pi/agent/pwned-dir` auto-allow while the same verb
+ * into any other home directory prompted.
+ */
+export function getOutsideWritePaths(
+  paths: string[],
+  cwd: string,
+  isInsideAllowedWriteDir?: (p: string) => boolean,
+): string[] {
+  return paths.filter(p => {
+    if (isInsideCwd(p, cwd)) return false;
+    if (isInsideAllowedWriteDir?.(p)) return false;
+    if (isAllowedWritePath(p)) return false;
+    return true;
+  });
+}
+
 // ── Policy checks ──
 
 /** Cached realpath of `~/.pi` — constant for the session. The input is absolute, so

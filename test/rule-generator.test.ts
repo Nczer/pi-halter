@@ -70,6 +70,30 @@ describe("root grants are never generated", () => {
     expect(mixed).toEqual({ readDirs: ["/etc"] });
   });
 
+  it("a write target's dir is granted as a write, root included in the drop", () => {
+    // `mkdir ~/.pi/agent/pwned-dir`'s Always must land in writeDirs: readDirs
+    // is the tier that let it through (analysis/write-roles).
+    const pd = bashPd({
+      command: "mkdir ~/.pi/agent/pwned-dir",
+      outsideDirs: ["/mnt/Ndr/Download", "/home/u/.pi/agent"],
+      outsideWriteDirs: ["/home/u/.pi/agent"],
+      needsWriteApproval: true,
+    });
+    expect(RuleGenerator.generatePathsOnlyRules(pd)).toEqual({
+      readDirs: ["/mnt/Ndr/Download"],
+      writeDirs: ["/home/u/.pi/agent"],
+    });
+    expect(RuleGenerator.generatePrimaryRules(pd)).toMatchObject({
+      readDirs: ["/mnt/Ndr/Download"],
+      writeDirs: ["/home/u/.pi/agent"],
+    });
+    // Root is dropped from the write tier as well — one click never hands out
+    // the whole disk.
+    const rooty = bashPd({ outsideDirs: [], outsideWriteDirs: ["/"], needsWriteApproval: true });
+    expect(RuleGenerator.generatePathsOnlyRules(rooty)).toBeUndefined();
+    expect(RuleGenerator.generatePrimaryRules(rooty).writeDirs).toBeUndefined();
+  });
+
   it("file primary: a file directly under / gets a file-level grant, not a dir grant", () => {
     const rules = RuleGenerator.generatePrimaryRules(filePd());
     expect(rules).toEqual({ writePaths: ["/hosts"], readPaths: ["/hosts"] });

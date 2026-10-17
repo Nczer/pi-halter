@@ -223,6 +223,14 @@ function buildBashPrompt(
           needsCommandApproval, needsPathApproval, nonAllowedSegmentIndices,
           credentialRule, relativeToolIds } = data;
   const unresolved = data.unresolved ?? [];
+  // G3: the write-role dirs (analysis/write-roles). They are shown and granted
+  // as WRITES — the read tier for the same dir is what let the write through.
+  const writeDirs = (data.outsideWriteDirs ?? []).filter((d) => d !== "/" && !d.startsWith("<"));
+  const needsWriteApproval = data.needsWriteApproval ?? false;
+  const needsAnyPathApproval = needsPathApproval || needsWriteApproval;
+  // A dir that is a write target is granted write (which implies read), so it
+  // is named once, under writes — not repeated as a plain read dir.
+  const readDirList = outsideDirs.filter((d) => !writeDirs.includes(d));
   // LLM/confirmed token dirs join the concrete outside dirs as grantable —
   // the "Always (paths)" option offers exactly this union (see
   // pathGrantDirs). Sanitized the same way: no root, no sentinels.
@@ -231,7 +239,7 @@ function buildBashPrompt(
     .sort();
   const nonAllowedSet = new Set(nonAllowedSegmentIndices);
 
-  const hasBoth = needsCommandApproval && needsPathApproval;
+  const hasBoth = needsCommandApproval && needsAnyPathApproval;
   const uniqueSigs = [...new Set(signatures)];
   // The root is never an Always grant (one click must not hand out the whole
   // disk): filter it from every dir tier. A root-only path prompt (find /)
@@ -239,7 +247,7 @@ function buildBashPrompt(
   // Marker dirs (<unresolved-…>) are never grantable either — a grant for a
   // sentinel can never match, and one for a token's static prefix would be
   // escapable (an unbound value could contain `..`).
-  const grantableDirs = outsideDirs.filter((d) => d !== "/" && !d.startsWith("<"));
+  const grantableDirs = [...new Set([...readDirList, ...writeDirs])].filter((d) => d !== "/" && !d.startsWith("<"));
   const pathGrantDirs = [...new Set([...grantableDirs, ...resolverDirs])].sort();
   // Relative-path tool identities (../node_modules/.bin/tsc …) with the base
   // they resolve against. Deduped against uniqueSigs — a relative tool whose
@@ -267,10 +275,12 @@ function buildBashPrompt(
   ].join("\n");
 
   // Title — reflect what triggered the prompt
-  const titlePrefix = needsCommandApproval && needsPathApproval
+  const titlePrefix = needsCommandApproval && needsAnyPathApproval
     ? "Bash + Path"
     : needsCommandApproval
     ? "Bash"
+    : needsWriteApproval
+    ? "Write"
     : needsPathApproval
     ? "Path"
     : credentialRule
@@ -290,9 +300,12 @@ function buildBashPrompt(
   // re-listing of unflagged segments — the command above carries them.
   let body = "";
 
-  if (needsPathApproval) {
-    if (outsideDirs.length > 0) {
-      body += `\u26a0\ufe0f outside cwd: ${dirListBody(outsideDirs)}\n`;
+  if (needsAnyPathApproval) {
+    if (readDirList.length > 0) {
+      body += `\u26a0\ufe0f outside cwd: ${dirListBody(readDirList)}\n`;
+    }
+    if (writeDirs.length > 0) {
+      body += `\u26a0\ufe0f writes outside cwd: ${dirListBody(writeDirs)}\n`;
     }
     // Symlink hops: a written token that resolves into an outside dir that
     // appears nowhere in the command text — render the chain so the dir
@@ -365,16 +378,16 @@ function buildBashPrompt(
   const dangerWarning = riskDangerous
     ? "\n" + riskReasonLines(riskReasons).join("")
     : "";
-  const pathBullets = pathGrantDirs.map(d => `  \u2022 ${d}/*`).join("\n");
+  const pathBullets = pathGrantDirs.map(d => `  \u2022 ${d}/*${writeDirs.includes(d) ? " (write)" : ""}`).join("\n");
   const tier2Everything = hasBoth
     ? {
         title: `Confirm Always Allow`,
         body: `"Always Yes" will auto-allow:\nCommands:\n${cmdBullets}${pathGrantDirs.length ? `\nPaths:\n${pathBullets}` : ""}${dangerWarning}`,
       }
-    : needsPathApproval
+    : needsAnyPathApproval
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow read for these directories this session:\n${pathBullets}`,
+        body: `"Always Yes" will auto-allow ${writeDirs.length > 0 ? "read + write" : "read"} for these directories this session:\n${pathBullets}`,
       }
     : {
         title: `Confirm Always Allow`,
@@ -385,7 +398,7 @@ function buildBashPrompt(
   const tier2Paths = hasBoth && pathGrantDirs.length > 0
     ? {
         title: `Confirm Always (paths only)`,
-        body: `"Always Yes" will auto-allow read for these directories this session:\n${pathBullets}\nThe command will still prompt next time`,
+        body: `"Always Yes" will auto-allow ${writeDirs.length > 0 ? "read + write" : "read"} for these directories this session:\n${pathBullets}\nThe command will still prompt next time`,
       }
     : undefined;
 
@@ -395,7 +408,7 @@ function buildBashPrompt(
   // pathGrantDirs still carries every dir, and tier-2 lists them all.
   const alwaysLabel = (needsCommandApproval && (commandSigs.length > 0 || relToolIds.length > 0))
     ? [...commandSigs.map(s => s + " *"), ...relToolIds.map(r => r.sig + " (this cwd)")].join(", ")
-    : (needsPathApproval ? dirGrantLabel(pathGrantDirs) : "");
+    : (needsAnyPathApproval ? dirGrantLabel(pathGrantDirs) : "");
   const alwaysPathsLabel = hasBoth && pathGrantDirs.length > 0
     ? dirGrantLabel(pathGrantDirs)
     : undefined;
