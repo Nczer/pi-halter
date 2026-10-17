@@ -441,12 +441,12 @@ describe("Bash: granular allow (subcommand vs broader)", () => {
     expect(rules.bashSigs).not.toContain("uv run");
   });
 
-  it("an ungrantable dependency form prompts, shows why, and mints no grant", async () => {
+  it("an ungrantable run form prompts, shows why, and mints no grant", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: 'uv run --with "$PKG" python3 b.py', cwd }, store);
     if (d.kind !== "prompt") throw new Error(`expected a prompt, got ${d.kind}`); // narrows for buildPrompt
     const pd = d.promptData as BashPromptData;
-    expect(pd.ungrantableRunDeps).toEqual(["uv run --with <unresolved>"]);
+    expect(pd.ungrantableRunForms).toEqual(["uv run --with <unresolved>"]);
     expect(RuleGenerator.generatePrimaryRules(pd).bashSigs ?? []).not.toContain("uv run --with <unresolved>");
     expect(buildPrompt(d).body).toContain("no grant for: uv run --with <unresolved>");
     // And it stays a prompt however often it is approved.

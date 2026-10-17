@@ -143,14 +143,14 @@ describe("`uv run` dependency flags are recognized in every spelling", () => {
   it("-w IS --with (verified against `uv run --help`)", async () => {
     const a = await analyzeCommand("uv run -w evil-pkg python3 x.py", cwd);
     expect(a.signatures).toEqual(["uv run --with evil-pkg"]);
-    expect(a.runDepSegmentIndices).toEqual([0]);
+    expect(a.runOptionSegmentIndices).toEqual([0]);
   });
 
   it("…also behind a wrapper, and no coarse grant names it", async () => {
     const cmd = "nice timeout 5 uv run -w evil-pkg python3 x.py";
     const a = await analyzeCommand(cmd, cwd);
-    expect(a.signatures).toEqual(["nice uv --with evil-pkg"]);
-    expect(a.runDepSegmentIndices).toEqual([0]);
+    expect(a.signatures).toEqual(["nice uv run --with evil-pkg"]);
+    expect(a.runOptionSegmentIndices).toEqual([0]);
     for (const bashSigs of [["uv"], ["nice"], ["timeout uv"], ["uv run"]]) {
       const store = createStore();
       store.addAllowed({ bashSigs });

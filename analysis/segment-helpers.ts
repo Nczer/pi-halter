@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
 import type { BashSegment } from "./bash-parser";
-import { isWriteOperation, isAllowedCommand, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, fetchFormPackage, uvRunFlags, resolveDepSource, type UvRunDep, type UvRunFlags } from "../config";
+import { isWriteOperation, isAllowedCommand, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, fetchFormScan, type FetchFormScan, uvRunFlags, uvFetchFormOk, resolveDepSource, type UvRunDep, type UvRunOption, type UvRunFlags } from "../config";
 import { splitIntoSegments, splitOnPipe, tokenizeSegment, tokenizeSegmentQuoted } from "./tokenizer";
 import { resolveDelegatedTokens, skipWrapperArg, commandPositionWord } from "./wrapper-unwrap";
 import { classifyArgv0 } from "./argv0-path";
@@ -196,7 +196,7 @@ export function getFirstWord(segment: string): string {
 }
 
 /**
- * The package a segment's fetchable run form names, with inline env-assignment
+ * What a segment's fetchable run form fetches, with inline env-assignment
  * prefixes (`FOO=bar npx evil`) and prefix/wrapper delegation (`env npx evil`,
  * `timeout npx evil`) resolved FIRST — the D10 trust gate must not be evadable
  * by prefixing, mirroring the manual policy's wrapper transparency. Null when
@@ -204,7 +204,7 @@ export function getFirstWord(segment: string): string {
  * The single definition for both consumers — the /dspa floor and SafetyRule's
  * trust check (the "ONE definition" invariant of FETCH_PKG_FORMS).
  */
-export function segmentFetchPackage(segment: string): { first: string; pkg: string } | null {
+export function segmentFetchPackage(segment: string): (FetchFormScan & { first: string }) | null {
   const words = tokenizeSegment(segment);
   let i = 0;
   while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
@@ -213,12 +213,12 @@ export function segmentFetchPackage(segment: string): { first: string; pkg: stri
   // wrapped run form names (`env npx evil` → npx evil).
   const deleg = getDelegatedCommand(rest.join(" "));
   if (deleg) {
-    const pkg = fetchFormPackage(deleg.cmd, deleg.tail.split(/\s+/));
-    return pkg ? { first: deleg.cmd, pkg } : null;
+    const scan = fetchFormScan(deleg.cmd, deleg.tail.split(/\s+/));
+    return scan ? { first: deleg.cmd, ...scan } : null;
   }
   const first = rest[0]?.toLowerCase() ?? "";
-  const pkg = fetchFormPackage(first, rest);
-  return pkg ? { first, pkg } : null;
+  const scan = fetchFormScan(first, rest);
+  return scan ? { first, ...scan } : null;
 }
 
 /**
@@ -310,8 +310,13 @@ export function isWrapperRunningRelativePath(segment: string): boolean {
   return checkWrapperArg(segment, (arg) => isFirstTokenRelativePath(arg), true);
 }
 
-/** Rendered in place of a dependency value no grant can name (see segmentRunDepsUngrantable). */
+/** Rendered in place of an option/dependency value no grant can name (see
+ *  segmentRunFormUngrantable). */
 const UNRESOLVED_DEP = "<unresolved>";
+
+/** A value written as a filesystem location (`/x`, `./x`, `../x`, `~x`) — the
+ *  ones whose identity depends on the directory they resolve against. */
+const PATH_VALUE_RE = /^(~|\.\.?\/|\/)/;
 
 /** Render one dependency as grant identity: exact value (case-folded) for a
  *  registry package, resolved absolute path for a local source. */
@@ -325,35 +330,52 @@ function renderRunDep(dep: UvRunDep, base: string | null | undefined): string {
   return `${dep.flag} ${resolveDepSource(dep.value, base)}`;
 }
 
+/** Render a non-dependency option value as grant identity. A location is
+ *  resolved (and kept case-sensitive — two cases are two files); a URL, a
+ *  version, a package name or an enum member is written as it stands. */
+function renderRunOption(opt: UvRunOption, base: string | null | undefined): string {
+  if (opt.opaque) return `${opt.flag} ${UNRESOLVED_DEP}`;
+  if (PATH_VALUE_RE.test(opt.value)) {
+    if (!base) return `${opt.flag} ${UNRESOLVED_DEP}`;
+    return `${opt.flag} ${resolveDepSource(opt.value, base)}`;
+  }
+  return `${opt.flag} ${opt.value.toLowerCase()}`;
+}
+
 /**
- * The grant-identity items of a `uv run` form's options — uv's own option NAMES
- * (sorted, deduped) plus the VALUES that decide what is downloaded: the
- * dependency flags and `-p`/`--python`. Every other flag value stays out of
+ * The grant-identity items of a uv run form's options — the benign option NAMES
+ * (sorted, deduped) plus the VALUES that decide what is downloaded or executed:
+ * the dependency flags, `-p`/`--python`, and every option the closed world does
+ * not vouch for (`--project /tmp/x`). Every other flag value stays out of
  * signatures, as everywhere else. Sorting and deduping is what makes a grant
  * match a reordered repeat of the same command.
  *
- * Null when `segment` is not a `uv run` form, is malformed (`--with-requirements`
+ * Null when `segment` is not a uv run form, is malformed (`--with-requirements`
  * with no value), or has nothing to name — a bare `uv run` keeps the coarse
  * signature (it syncs the project environment from pyproject.toml/uv.lock, which
  * names nothing in the command, so there is nothing to put in the grant;
  * documented in the README).
  */
-function runDepItems(segment: string, base?: string | null): string[] | null {
+function runFormItems(segment: string, base?: string | null): { runner: string; items: string[] } | null {
   const flags = uvRunFlags(tokenizeSegmentQuoted(segment));
   if (!flags) return null;
-  if (flags.danglingSource) return null; // malformed: uv exits on it, no grant to scope
-  if (flags.deps.length === 0 && flags.uvFlags.length === 0 && flags.pythonValues.length === 0) return null;
+  if (flags.danglingValue) return null; // malformed: uv exits on it, no grant to scope
+  if (flags.deps.length === 0 && flags.uvFlags.length === 0
+      && flags.pythonValues.length === 0 && flags.otherOptions.length === 0) return null;
   const items = new Set<string>(flags.uvFlags);
-  for (const v of flags.pythonValues) items.add(`--python ${v.toLowerCase()}`);
+  for (const v of flags.pythonValues) items.add(renderRunOption(v, base));
+  for (const o of flags.otherOptions) items.add(renderRunOption(o, base));
   for (const dep of flags.deps) items.add(renderRunDep(dep, base));
-  return [...items].sort();
+  return { runner: flags.runner, items: [...items].sort() };
 }
 
-/** The dependency-aware signature of a `uv run` form, or null to fall through
- *  to the coarse package-manager signature (see runDepItems). */
+/** The dependency-aware signature of a uv run form, or null to fall through
+ *  to the coarse package-manager signature (see runFormItems). The runner text
+ *  is the form's own (`uvx`, `uv tool run`) — a signature must not name a
+ *  command the command did not run. */
 export function uvRunSignature(segment: string, base?: string | null): string | null {
-  const items = runDepItems(segment, base);
-  return items === null ? null : `uv run ${items.join(" ")}`;
+  const res = runFormItems(segment, base);
+  return res === null ? null : `${res.runner} ${res.items.join(" ")}`;
 }
 
 /** uv's run options for a segment, looking THROUGH a pass-through wrapper:
@@ -366,23 +388,43 @@ function runFlagsOfSegment(segment: string): UvRunFlags | null {
   return deleg ? uvRunFlags(tokenizeSegmentQuoted(deleg.tail)) : null;
 }
 
-/** True when a segment (or a form wrapped around it) NAMES dependencies. Its
- *  signature is the dependency set, so a coarser grant ("uv run", "timeout uv")
- *  must not prefix-match it — the grant has to name the same set to apply. */
-export function segmentNamesRunDeps(segment: string): boolean {
-  return (runFlagsOfSegment(segment)?.deps.length ?? 0) > 0;
-}
-
-/** True when a `uv run` form cannot be granted at all: a dependency value the
- *  shell decides at run time (`--with "$PKG"`, an unquoted glob), a source path
- *  whose cwd is not knowable, or a dangling source flag. No Always can vouch
- *  for what the value becomes, so the form prompts every time — and minting a
- *  grant for it would only pollute the store (same reasoning as relative tools). */
-export function segmentRunDepsUngrantable(segment: string, base?: string | null): boolean {
+/** True when a segment (or a form wrapped around it) NAMES options whose value
+ *  decides what is installed or executed. Its signature is that option set, so
+ *  a coarser grant ("uv run", "timeout uv") must not prefix-match it — the
+ *  grant has to name the same set to apply. */
+export function segmentNamesRunOptions(segment: string): boolean {
   const flags = runFlagsOfSegment(segment);
   if (!flags) return false;
-  if (flags.danglingSource) return true;
-  return flags.deps.some((d) => d.opaque || (d.flag !== "--with" && !base));
+  return flags.deps.length > 0 || flags.otherOptions.length > 0 || flags.pythonValues.length > 0;
+}
+
+/** True when a uv run form cannot be granted at all: an option or dependency
+ *  value the shell decides at run time (`--with "$PKG"`, `--project "$D"`, an
+ *  unquoted glob), a path value whose cwd is not knowable, or a dangling value.
+ *  No Always can vouch for what the value becomes, so the form prompts every
+ *  time — and minting a grant for it would only pollute the store (same
+ *  reasoning as relative tools). */
+export function segmentRunFormUngrantable(segment: string, base?: string | null): boolean {
+  // A fetch form whose selected package is decided at run time
+  // (`npx -p "$PKG" tsc`) has no package to grant trust for, and a signature
+  // keyed on the token text (`npx $PKG`) is a grant keyed on whatever `PKG`
+  // happens to be — the same pollution the dependency rule prevents.
+  if (segmentFetchPackage(segment)?.opaque === true) return true;
+  const flags = runFlagsOfSegment(segment);
+  if (!flags) return false;
+  if (flags.danglingValue) return true;
+  if (flags.deps.some((d) => d.opaque || (d.flag !== "--with" && !base))) return true;
+  return [...flags.pythonValues, ...flags.otherOptions].some(
+    (o) => o.opaque || (PATH_VALUE_RE.test(o.value) && !base));
+}
+
+/** True when a FETCH form's uv options stay inside what package trust covers —
+ *  trusting `tsc` must not cover `uvx -p /tmp/evil/python tsc` (an interpreter,
+ *  not the package's code) or `uvx --with evil tsc` (an install set). See
+ *  config/trusted-scripts uvFetchFormOk. Null-scan (npx/… forms) is true here:
+ *  their fetch set is the whole decision. */
+export function segmentFetchOptionsOk(segment: string, base: string | null): boolean {
+  return uvFetchFormOk(runFlagsOfSegment(segment), base);
 }
 
 /**
@@ -435,24 +477,33 @@ export function getCommandSignature(segment: string, base?: string | null): stri
     // The inner form is read from the RAW text, not from these stripped tokens:
     // stripQuotedStrings collapses quoted values to `__STR__`, and a quoted pin
     // (`--with "pandas>=2.0"`) has to keep its exact value to be grant identity.
-    const wrapped = deleg.cmd === "uv" ? getDelegatedCommand(cleaned) : null;
-    const inner = wrapped ? runDepItems(wrapped.tail, base) : null;
+    const wrapped = (deleg.cmd === "uv" || deleg.cmd === "uvx") ? getDelegatedCommand(cleaned) : null;
+    const inner = wrapped ? runFormItems(wrapped.tail, base) : null;
     const name = qualWord ?? deleg.cmd;
-    return inner === null ? `${cmdBase} ${name}` : `${cmdBase} ${name} ${inner.join(" ")}`;
+    // A uv form with a multi-word runner (`timeout uv tool run …`) keeps the
+    // runner's tail in the signature: the grant has to name the command that
+    // actually runs. Its first word is the delegated name already rendered.
+    const runnerTail = inner ? inner.runner.split(/\s+/).slice(1) : [];
+    if (inner === null) return `${cmdBase} ${name}`;
+    return [cmdBase, name, ...runnerTail, ...inner.items].join(" ");
+  }
+
+  // uv's run forms name their ENTIRE install set (registry deps, local
+  // sources, the interpreter it may download), so the coarse "uv run"
+  // signature let one Always vouch for every later dependency — and the
+  // generic flag-name rule did the same for uv's FETCH forms: `uvx -p
+  // /tmp/evil/python tsc` had the identity `uvx -p`, so an "Always" stored a
+  // grant for an interpreter that is a filesystem location and never named it.
+  // The option-aware signature is the grant's identity; see uvRunSignature.
+  if (cmdBase === "uv" || cmdBase === "uvx") {
+    const runSig = uvRunSignature(firstCmd, base);
+    if (runSig !== null) return runSig;
   }
 
   // Package managers: include subcommand for granular control
   // npm test → "npm test", npm install → "npm install"
   // npm -v → "npm" (flag only, no subcommand)
   if (PACKAGE_MANAGERS.has(cmdBase)) {
-    // `uv run` names its ENTIRE install set (registry deps, local sources, the
-    // interpreter it may download), so the coarse "uv run" signature let one
-    // Always vouch for every later dependency. The dep-aware signature is the
-    // grant's identity; see uvRunSignature.
-    if (cmdBase === "uv") {
-      const runSig = uvRunSignature(firstCmd, base);
-      if (runSig !== null) return runSig;
-    }
     // Find the subcommand: first non-flag token, skipping values of flags that
     // consume the next token (--prefix /x). Inline values (--prefix=/x) are
     // part of the flag token and skipped with it.

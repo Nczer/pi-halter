@@ -279,6 +279,52 @@ and `bash` are not table-allowed, so it prompts) and, under dspa, the judge
 packet's full command text (`test/write-roles.test.ts`,
 `test/verified-bypasses.test.ts` P15).
 
+### Runner options (the closed world a grant vouches for)
+
+A package-run auto-allow answers "which package does this FETCH?", and a
+trusted-script auto-allow answers "does the runner's option set change what
+runs?". Both used their own hand-written flag lists, which had drifted, and the
+fetch question was answered by the first word after the flags — so `npx
+--package=evil-pkg tsc` (fetches evil-pkg, runs `tsc` from inside it) was
+vouched for by Trust for `tsc` (`config/bash-patterns.ts`, `fetchFormScan`).
+Two tables now answer both, and one scan feeds every consumer — the floor's stop,
+the D10 trust gate, the grant signature, the trusted-script umbrella and the
+judge prompt (the G4/G6 lesson again: two parsers of one command form is where
+the holes come from):
+
+- **The fetch set.** `FETCH_PKG_FORMS` names the run forms that may fetch on
+  cache miss; `FETCH_PKG_SELECT` names, per family, the flag that selects the
+  package (npm `{-p,--package}`, uv `{--from}`, bun `{--package}`). A family's
+  own flag names matter more than the shape: uv's `-p` is `--python`, so `uvx
+  -p …` fetches nothing and the option instead decides the interpreter. With a
+  select flag the trailing word is the command run from inside the selected
+  package(s), not a second fetch. An unresolvable value (`-p "$PKG"`) names no
+  package: the form stops as `<not a name yet>` and is marked ungrantable, so no
+  useless Always is offered.
+- **uv's option classes** (`config/trusted-scripts.ts`) over the four run forms
+  (`uvx`, `uv x`, `uv tool run`, `uv run`): `UV_VALUE_FLAGS` is the arity table
+  (every option uv's own `--help` lists with a `<VALUE>`) and has three
+  consumers — the fetch scan, `findScriptOperand` and uv's walk — so a flag's
+  value cannot be read as the payload by one of them; `UV_BENIGN_FLAGS` /
+  `UV_BENIGN_VALUE_FLAGS` are the curated set that cannot change what runs;
+  the dep flags (`--with`/`-w`/`-E`/`--with-editable`/`--with-requirements`) face
+  dep trust; everything else — including anything the table does not know, which
+  is ASSUMED to take a value — is not benign and voids the umbrella. Unknown is
+  never benign. Short names match case-sensitively (`-P` is `--upgrade-package`,
+  `-p` is `--python`).
+- **Option values that decide what runs join the grant identity** (`uvx --python
+  /tmp/evil/python`, `uv run --with pymupdf`, `timeout uv run --with pandas`),
+  and a value that cannot be named at all makes the form ungrantable rather than
+  silently coarse.
+
+Cost, measured on the round-6 corpus and the 31-row floor: one corpus row closes
+(`uv run --project …`) and one floor stop is gained (`npx --package=evil-pkg
+tsc`) — the hole itself. Accepted limits (docs/dspa-redesign.md §6 item 7): npm-
+family options beyond the select flags are not vetted by name (their values land
+in the fetch set, so the command names a package no Trust can hold and prompts),
+and a coarse fetch-form signature grant still covers the npm family's variants —
+G13 (`test/runner-flags.test.ts`, `test/verified-bypasses.test.ts` P16).
+
 ### Sed grammar
 
 `sed [flags] script [files…]`: the first non-flag arg (and `-e` values) is
@@ -724,8 +770,11 @@ analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           script-payload (the local script a command
                           executes, read in full),
                           evaluators/ (6 domain evaluators + builder + types)
-config/                   (unchanged) bash-patterns, path-rules,
-                          dangerous-patterns, trusted-scripts, script-operand,
+config/                   (unchanged) bash-patterns (the fetch set a run form
+                          selects, per family, + the one uv arity table),
+                          path-rules, dangerous-patterns,
+                          trusted-scripts (uv's option classes: benign, dep,
+                          not vouchable), script-operand,
                           logging, index
 handlers/                 (unchanged) bash, file, tool adapters
 plugins/                  (unchanged) loader + types (tool plugin contract)

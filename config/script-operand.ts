@@ -25,7 +25,7 @@
  * fence bytes as prose), `first` is the first operand of any kind (trust
  * covers an extension-less executable in the skills dir).
  */
-import { FETCH_PKG_FORMS, skipEnvPrefixes, stripPkgVersion, wrapperCommands } from "./bash-patterns";
+import { FETCH_PKG_FORMS, skipEnvPrefixes, stripPkgVersion, UV_VALUE_FLAGS, wrapperCommands } from "./bash-patterns";
 
 /** Extensions whose content is worth reviewing (text scripts). */
 const SCRIPT_EXT_RE = /\.(sh|bash|zsh|py|pyi|js|mjs|cjs|mts|cts|ts|rb|pl|php|lua|exs?)$/i;
@@ -56,12 +56,9 @@ const INLINE_CODE_FLAGS = new Set([
   "-c", "--command", "-m", "--module", "-e", "--eval", "-p", "--print", "-r", "-",
 ]);
 
-/** `uv run` flags that take a value — skipping the value keeps the operand
- *  findable (`uv run --python 3.12 python job.py`). */
-const UV_RUN_VALUE_FLAGS = new Set([
-  "--with", "--with-editable", "--with-requirements", "--python", "--project",
-  "--directory", "--env-file", "--script-dir", "-w", "-E", "--package",
-]);
+/** uv run-form options that take a value — ONE arity table, in bash-patterns
+ *  (skipping an option's own value is what keeps the operand findable in
+ *  `uv run --color never python3 job.py`). */
 
 /** Assignment prefix (`FOO=1 cmd`) — not a command name. */
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -194,7 +191,7 @@ export function findScriptOperand(tokens: string[]): ScriptOperand | null {
         // A module run has no file operand at all — abort rather than name
         // the module as one.
         if (t === "-m" || t === "--module") return null;
-        if (UV_RUN_VALUE_FLAGS.has(t)) {
+        if (UV_VALUE_FLAGS.has(t)) {
           if (isComputed(tokens[j + 1] ?? "")) return null;
           j += 2;
           continue;

@@ -78,7 +78,7 @@ import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { UNKNOWN_CWD_MARKER, cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
 import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
-import { getDelegatedCommand, segmentFetchPackage } from "../analysis/segment-helpers";
+import { getDelegatedCommand, segmentFetchPackage, segmentFetchOptionsOk } from "../analysis/segment-helpers";
 import { tokenizeSegment, splitOnPipe } from "../analysis/tokenizer";
 import {
   NETWORK_COMMANDS,
@@ -604,9 +604,26 @@ export async function checkDspaGate(
   // (`FOO=bar npx evil`, `env npx evil` are npx evil) — the gate must not
   // be evadable by prefixing.
   const untrusted: string[] = [];
-  for (const seg of analysis.segments) {
+  const unvettedOptions: string[] = [];
+  for (let i = 0; i < analysis.segments.length; i++) {
+    const seg = analysis.segments[i] ?? "";
     const ff = segmentFetchPackage(seg);
-    if (ff && !store.hasTrustedPackage(ff.pkg)) untrusted.push(`${ff.first} ${ff.pkg}`);
+    if (!ff) continue;
+    // G7: a select flag (`npx --package=pkg cmd`, `uvx --from pkg cmd`) moves
+    // the fetch: the trailing word is a command INSIDE the selected package(s),
+    // so every one of them needs trust — `npx --package=evil-pkg tsc` used to
+    // pass on a grant for a package the command never fetched. A selected value
+    // the shell decides at run time names no package at all: nothing covers it.
+    if (ff.opaque) { untrusted.push(`${ff.first} <not a name yet>`); continue; }
+    const bad = ff.pkgs.filter((p) => !store.hasTrustedPackage(p));
+    if (bad.length > 0) { untrusted.push(`${ff.first} ${bad.join(" ")}`); continue; }
+    // Trusted package, but uv's own options decide something else: an
+    // interpreter from outside the project (`uvx -p /tmp/evil/python tsc`) or an
+    // install set (`uvx --with evil tsc`) is not the package the Trust click was
+    // about.
+    if (!segmentFetchOptionsOk(seg, analysis.effectiveCwds[i] ?? null)) {
+      unvettedOptions.push(ff.first);
+    }
   }
   if (untrusted.length > 0) {
     const uniq = [...new Set(untrusted)];
@@ -615,6 +632,13 @@ export async function checkDspaGate(
       reason: `untrusted package (${uniq.slice(0, 3).join(", ")})`,
       // The prompt offers "Trust: <pkg> (session)" — computed from the
       // same analysis (BashPromptData.fetchableForms), not carried here.
+      advisory: true,
+    };
+  }
+  if (unvettedOptions.length > 0) {
+    return {
+      ok: false,
+      reason: `unvetted run-form option (${[...new Set(unvettedOptions)].slice(0, 3).join(", ")})`,
       advisory: true,
     };
   }

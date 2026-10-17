@@ -142,24 +142,27 @@ export interface BashPromptData {
    */
   symlinkHops?: PathHop[];
   /**
-   * Fetchable run-form segments (npx tsc, uvx tsc, bunx …) whose package is
-   * NOT yet session-trusted, with the segment signature and bare package
-   * name. Package trust is the grant for these forms: their signatures are
-   * excluded from the command tier and its rules, and the prompt offers
-   * "Trust: <pkg> (session)" (deduped by package across run forms).
-   * Absent on hand-constructed PromptData.
+   * Fetchable run-form segments (npx tsc, uvx tsc, bunx …) whose packages are
+   * NOT yet session-trusted, with the segment signature and bare package name
+   * — ONE entry per untrusted package (`npx -p a -p b cmd` yields two, both
+   * have to be trusted for the form to auto-allow). Package trust is the grant
+   * for these forms: their signatures are excluded from the command tier and
+   * its rules, and the prompt offers "Trust: <pkg> (session)" (deduped by
+   * package across run forms). A form whose selected package is not a name yet
+   * (`npx -p "$PKG"`) has no entry — see ungrantableRunForms. Absent on
+   * hand-constructed PromptData.
    */
   fetchableForms?: Array<{ sig: string; pkg: string }>;
   /**
-   * Signatures of `uv run` segments NO command-tier grant can cover — a
-   * dependency value the shell decides at run time (`--with "$PKG"`, an
-   * unquoted glob) or a source path whose working directory is not statically
-   * known. Such sigs are excluded from the command tier and its rules (a grant
-   * keyed on `$PKG` is a grant keyed on whatever `PKG` becomes), and the prompt
-   * says so instead of offering an Always that does nothing. Absent on
-   * hand-constructed PromptData.
+   * Signatures of run-form segments NO command-tier grant can cover — a value
+   * the shell decides at run time (`--with "$PKG"`, `--project "$D"`,
+   * `npx -p "$PKG"`, an unquoted glob) or a path value whose working directory
+   * is not statically known. Such sigs are excluded from the command tier and
+   * its rules (a grant keyed on `$PKG` is a grant keyed on whatever `PKG`
+   * becomes), and the prompt says so instead of offering an Always that does
+   * nothing. Absent on hand-constructed PromptData.
    */
-  ungrantableRunDeps?: string[];
+  ungrantableRunForms?: string[];
   /**
    * The single analysis this decision was made from. Downstream consumers
    * (the /dspa hard gate, the judge packet) use it instead of re-parsing,

