@@ -3,7 +3,8 @@ import { isFirstTokenRelativePath } from "./path-analysis";
 import type { BashSegment } from "./bash-parser";
 import { isWriteOperation, isAllowedCommand, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, fetchFormPackage, uvRunFlags, resolveDepSource, type UvRunDep, type UvRunFlags } from "../config";
 import { splitIntoSegments, splitOnPipe, tokenizeSegment, tokenizeSegmentQuoted } from "./tokenizer";
-import { resolveDelegatedTokens, skipWrapperArg } from "./wrapper-unwrap";
+import { resolveDelegatedTokens, skipWrapperArg, commandPositionWord } from "./wrapper-unwrap";
+import { classifyArgv0 } from "./argv0-path";
 
 // splitPipeline is splitOnPipe — same semantics (split on | not ||)
 export { splitOnPipe as splitPipeline };
@@ -390,8 +391,9 @@ export function segmentRunDepsUngrantable(segment: string, base?: string | null)
  * For package managers, includes the subcommand for granular allow control.
  *
  * `base` is the segment's EFFECTIVE cwd (null = the runtime cwd is not
- * knowable). Only `uv run` uses it: its dependency sources are named by path,
- * and a path identity means nothing without the directory it resolves against.
+ * knowable). It resolves the two path-named parts of the identity: `uv run`
+ * dependency sources, and a PATH-qualified argv0 (G4) — whether `bin/ls` is a
+ * system program or a program in the base depends on where the base is.
  */
 export function getCommandSignature(segment: string, base?: string | null): string {
   const firstCmd = splitOnPipe(segment)[0] ?? segment;
@@ -403,6 +405,18 @@ export function getCommandSignature(segment: string, base?: string | null): stri
   const cmd = tokens[0].toLowerCase();
 
   const cmdBase = path.basename(cmd);
+  // G4: when the command position names a program BY PATH (`bin/ls`,
+  // `./node_modules/.bin/npm`, `nice bin/ls`), that location is part of the
+  // identity. The wrapper branch below collapses the delegate to a basename and
+  // an env-assignment prefix (`FOO=/tmp/x /tmp/y`) hides argv0 entirely — either
+  // way the grant that comes back names a program this command did not run.
+  const pos = commandPositionWord(tokens);
+  const qualWord = pos.word.includes("/") && !pos.lookup && !pos.capped
+    && classifyArgv0(pos.word, base ?? null) === "qualified" ? pos.word : null;
+  // The head of the identity. A qualified program is named by its path AS
+  // WRITTEN — case-folding a path folds two different files into one grant —
+  // while everything else keeps the folded name the closed sets are keyed on.
+  const head = qualWord !== null && pos.index === 0 ? qualWord : cmd;
   // Wrapper/prefix transparency: a wrapped command's signature must name the
   // delegated command, so an "Always" grant on `timeout curl` can't cover
   // `timeout ssh`, and a bare `timeout` grant covers nothing wrapped at all.
@@ -423,7 +437,8 @@ export function getCommandSignature(segment: string, base?: string | null): stri
     // (`--with "pandas>=2.0"`) has to keep its exact value to be grant identity.
     const wrapped = deleg.cmd === "uv" ? getDelegatedCommand(cleaned) : null;
     const inner = wrapped ? runDepItems(wrapped.tail, base) : null;
-    return inner === null ? `${cmdBase} ${deleg.cmd}` : `${cmdBase} ${deleg.cmd} ${inner.join(" ")}`;
+    const name = qualWord ?? deleg.cmd;
+    return inner === null ? `${cmdBase} ${name}` : `${cmdBase} ${name} ${inner.join(" ")}`;
   }
 
   // Package managers: include subcommand for granular control
@@ -447,13 +462,16 @@ export function getCommandSignature(segment: string, base?: string | null): stri
         if (PM_VALUE_FLAGS.has(t) && !t.includes("=")) i++; // skip the flag's value
         continue;
       }
-      return `${cmdBase} ${t}`;
+      return `${qualWord ?? cmdBase} ${t}`;
     }
-    return cmdBase; // e.g. "npm" with only flags
+    return qualWord ?? cmdBase; // e.g. "npm" with only flags
   }
 
   const flags = tokens.slice(1).filter(t => t.startsWith("-")).sort();
-  return flags.length === 0 ? cmd : `${cmd} ${flags.join(" ")}`;
+  // An env-assignment prefix hides argv0 (`FOO=/tmp/x /tmp/y`): name the
+  // program next to the assignment so the grant says what it approves.
+  const named = qualWord !== null && pos.index > 0 ? `${head} ${qualWord}` : head;
+  return flags.length === 0 ? named : `${named} ${flags.join(" ")}`;
 }
 
 /**

@@ -1389,14 +1389,37 @@ the rest were closed by 3.33–3.37. Each release below carries its rows as
    `mkdir ~/.pi/agent/…` and `touch ~/.pi/agent/…` auto-allow because `~/.pi` is
    an `allowedReadPath`. The `mkdir`/`touch`/`mktemp` carve-out stays, but is
    location-scoped.
-4. **G4 — path-qualified `argv0`: system dirs or path operand.** An `argv0`
-   whose dir realpaths into a fixed system set keeps bare-name semantics; any
-   other `/`-containing `argv0` (relative *or* absolute) is extracted as a path
-   operand — its directory faces the read bar — and matches only an exact,
-   base-bound grant, never a basename against the allow table. Closes
-   `bin/ls`, `~/Downloads/ls`, `/tmp/evil/git status`, `node_modules/.bin/tsc`;
-   `RELATIVE_PATH_RE` (`./`, `../` only) is why the existing relative-tool
-   base-binding never saw `bin/ls`.
+4. **G4 — path-qualified `argv0`: system dirs or path operand.** *(Built,
+   3.39.0.)* Landed as a leaf module, `analysis/argv0-path.ts`
+   (`classifyArgv0(word, base)`, `classifyStageArgv0(stageText, base)`), and the
+   class is computed ONCE per stage against that segment's effective base
+   (`command-analysis.stageArgv0Qualified`) so parser, grants, prompt and floor
+   agree — the G6 lesson again, per-consumer patching is the bug class. Three
+   deliberate deviations from the wording above: the system set is exactly the
+   four dirs the distro's package manager owns (`/bin`, `/sbin`, `/usr/bin`,
+   `/usr/sbin`) — `/usr/local/bin` and `/opt/homebrew/bin` are
+   admin/homebrew-writable, i.e. the class this rule targets, so the first such
+   call prompts once and the exact base-bound grant covers it after that;
+   `command -v`/`-V`/`type` keep bare-name semantics (a lookup executes
+   nothing); and a stage under an unresolvable base classifies qualified rather
+   than getting the system-dir exemption it cannot demonstrate. Two more holes
+   found while building it, both pinned by tests: the parser's mint read argv0
+   from `getCommandName`, which case-folds because it is a table key, so
+   `/tmp/Evil/git` minted `/tmp/evil/git` (a path resolves by case), and the
+   signature collapsed a qualified delegate to a basename (`nice bin/ls` →
+   `nice ls`) while an env-assignment prefix hid argv0 outright
+   (`FOO=/tmp/x /tmp/y` → `foo=/tmp/x`) — the base-bound grant that prompt
+   offered named a program the command did not run. Cost, measured: the frozen
+   ledger replay (875 unique real commands, 3.38.0 → G4, same harness minutes
+   apart) flips ZERO verdicts — real usage has exactly one path-qualified argv0
+   class, `/usr/bin/bwrap`, and it classifies system. Round-6 manual corpus: all
+   six argv0 rows (`bin/ls`, `scripts/cat README.md`, `~/Downloads/ls`,
+   `/tmp/evil/git status`, `node_modules/.bin/tsc`, `./ls`) stop, open rows
+   12 → 6 (the remainder are G3/G8/G7); the dspa floor gained nothing new
+   because its rows are all bare argv0. Tests:
+   `test/argv0-path.test.ts` (the class table incl. `base === null` and the
+   `/usr/local/bin` deviation, the signature rows, the base-bound grant round
+   trip and its non-leaks) + P14 in `test/verified-bypasses.test.ts`.
 5. **G5 — substitution bodies are analyzed as stages.** *(Built, 3.38.0.)* The
    chosen route was narrower than what landed: instead of making
    `READONLY_SUBSHELL_CMDS` flag-aware and dropping `cd`, the body is PARSED and

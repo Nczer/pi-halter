@@ -7,6 +7,7 @@ import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./v
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs } from "./path-analysis";
+import { classifyStageArgv0 } from "./argv0-path";
 import { checkCommandForCredentialPaths } from "./credentials";
 import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE, segmentNamesRunDeps, segmentRunDepsUngrantable, segmentStages } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
@@ -67,6 +68,14 @@ export interface CommandAnalysis {
    *  index-keyed sets (`relativePathSegmentIndices`, run-dep sets) stay keyed
    *  by SEGMENT — renumbering them is the bug G1 exists to avoid. */
   stageSignatures: string[][];
+  /** Per stage: does its command position name a PATH-qualified program the
+   *  system does not own (`bin/ls`, `~/Downloads/ls`, `/tmp/evil/git`,
+   *  `node_modules/.bin/tsc`)? Computed once against each segment's effective
+   *  base, because the answer is the same question every consumer asks: the
+   *  grant binding refuses basename inheritance, the prompt offers the
+   *  base-bound grant, and the parser minted the program's own location as a
+   *  path operand (analysis/argv0-path). */
+  stageArgv0Qualified: boolean[][];
   /** Indices of segments that are `uv run` forms NAMING dependencies: their
    * signature IS the dependency set, so a coarse grant must not prefix-match
    * them (an Always for one dependency set never covers another). */
@@ -550,6 +559,13 @@ export async function analyzeCommand(
     .map((seg, i) => hasRelativePath(seg) ? i : -1)
     .filter(i => i >= 0);
 
+  // G4: the argv0 location class, per stage, under the base the shell would
+  // resolve it from. A stage under an unresolvable base classifies as
+  // qualified (fail closed — a relative program whose base is unknown cannot be
+  // shown to be a system program).
+  const stageArgv0Qualified = stageTexts.map((st, i) =>
+    st.map((s) => classifyStageArgv0(s, effectiveCwds[i] ?? null) === "qualified"));
+
   // Pre-compute prompt hints: non-allowlisted segment indices and signatures.
   // G2: the display unit is the STAGE — the prompt must name the stage the
   // user is being asked about, and an "Always" click must record the grant
@@ -631,6 +647,7 @@ export async function analyzeCommand(
     signatures,
     stageTexts,
     stageSignatures,
+    stageArgv0Qualified,
     runDepSegmentIndices,
     ungrantableRunDepSegmentIndices,
     paths,

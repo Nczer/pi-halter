@@ -7,6 +7,7 @@ import { expandTilde, resolvePathReal } from "./path-analysis";
 import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandHomeToken, expandHomeLiterals } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
 import { resolveDelegatedTokens } from "./wrapper-unwrap";
+import { classifyArgv0 } from "./argv0-path";
 import { homeReassigned } from "./cwd-tracking";
 import { inlineCodeArgIndices } from "../config/script-operand";
 import type { ShellAssignment } from "./var-resolution";
@@ -871,6 +872,15 @@ function commandNameNode(node: TSNode): TSNode | null {
     if (WORD_TYPES.has(child.type)) return child;
   }
   return null;
+}
+
+/** The same word, NOT case-folded: getCommandName's result is a lookup key for a
+ *  closed set, but G4's mint treats argv0 as a FILESYSTEM PATH, and a path
+ *  resolves by case (`/tmp/Evil/git` is not `/tmp/evil/git`). */
+function getCommandNameWord(node: TSNode): string | null {
+  const n = commandNameNode(node);
+  if (!n) return null;
+  return n.parent?.type === "command_name" ? n.text : resolveNodeText(n);
 }
 
 /** Get the command name from a command AST node. */
@@ -2118,6 +2128,11 @@ export async function parseCommand(
       let chainCapped = false;
       const nameNode = prog && !pathAwareCommands.has(prog) ? commandNameNode(cmdNode) : null;
       const argv0Opaque = nameNode !== null && nodeHasRuntimeExpansion(nameNode);
+      // The word the shell actually execs, and the node holding it: the raw
+      // argv0, replaced by the delegated token when a prefix/wrapper runs it.
+      // Case matters here — this string is a path, not a table key.
+      let argv0Word = getCommandNameWord(cmdNode);
+      let argv0Node: TSNode | null = commandNameNode(cmdNode);
       let argvList = args;
       if (argv0Opaque && nameNode) {
         const value = provableArgv0Name(nameNode, segments, assignments, segMap.get(cmdNode.id) ?? -1);
@@ -2166,8 +2181,30 @@ export async function parseCommand(
           const tok = (rawName ?? "").trim();
           if (tok && !obscuredArgv0.includes(tok)) obscuredArgv0.push(tok);
         } else {
+          const at = wrapped.index - 1;
+          if (argvList[at]) {
+            argv0Word = argvList[at].text;
+            argv0Node = argvList[at].node;
+          }
           prog = wrapped.cmd;
-          argvList = argvList.slice(wrapped.index - 1);
+          argvList = argvList.slice(at + 1);
+        }
+      }
+
+      // A path-qualified program is a path operand OF ITS OWN COMMAND (G4).
+      // `bin/ls`, `~/Downloads/ls`, `/tmp/evil/git status` and
+      // `node_modules/.bin/tsc` all exec a binary the user never granted: the
+      // analysis matched the BASENAME against the allow table and the program
+      // itself added nothing to the path set, so the read bar was blind to the
+      // thing being executed. Minting its location is what makes the bar see it;
+      // the matching half (never approve a path-qualified argv0 by basename) is
+      // in decide/bash-rules. Bare names and system-owned dirs keep bare-name
+      // semantics — see analysis/argv0-path.
+      if (argv0Word && argv0Node && !nodeHasRuntimeExpansion(argv0Node)) {
+        if (classifyArgv0(argv0Word, cwd) === "qualified") {
+          const resolved = resolvePathReal(expandTilde(argv0Word), cwd);
+          recordHop(argv0Word, resolved);
+          allPaths.push(resolved);
         }
       }
 
