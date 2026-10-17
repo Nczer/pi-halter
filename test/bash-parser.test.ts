@@ -1543,6 +1543,24 @@ describe("parseCommand: pipeline stages on the segment (G1)", () => {
     expect(r.segments[0].stages).toBeUndefined();
   });
 
+  it("an ESCAPED separator is data: no stage split", async () => {
+    // `grep a\|b f` is ONE command whose argument is the literal `a|b` (the
+    // grammar agrees — no pipeline node). The stage fallback re-splits the
+    // segment TEXT, and a splitter blind to backslash escapes minted a stage
+    // named `b` — a stage no grant could ever cover (2026-10-19).
+    for (const cmd of ["echo a\\|b", "grep a\\|b file.txt", "echo a\\;b", "echo a\\&b"]) {
+      const r = await parseCommand(cmd, cwd);
+      expect(r.segments.length, cmd).toBe(1);
+      expect(r.segments[0].stages, cmd).toBeUndefined();
+      expect(r.segments[0].text, cmd).toBe(cmd);
+    }
+  });
+
+  it("an escaped backslash does not swallow the real separator", async () => {
+    const r = await parseCommand("echo a\\\\|b", cwd);
+    expect(r.segments[0].stages).toEqual(["echo a\\\\", "b"]);
+  });
+
   it("a compound stage folds only its LAST inner segment; the rest stay segments", async () => {
     // `(cd /x && y) | grep` — the cd is a command of its own at runtime, so it
     // must not hide behind the pipeline stage's identity.

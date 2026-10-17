@@ -257,6 +257,18 @@ function tokenizeWithSplit(
 
     // Check split predicate
     if (split) {
+      // An unquoted backslash escapes the next char: `echo a\|b` runs ONE
+      // command whose argument is the literal `a|b`, so a splitter must never
+      // see that `|` (same for `\;` and `\&`). Both chars stay in the output
+      // verbatim — the signature and operand consumers read this text, so
+      // decoding the escape here would misreport what the command says.
+      // `handleEscapes` (used by other callers) decodes, which is why the
+      // guard lives here rather than in the caller's flag.
+      if (s[i] === "\\" && i + 1 < s.length) {
+        current += s[i] + s[i + 1];
+        i += 2;
+        continue;
+      }
       const result = split(append, s.slice(i + 1), false, false);
       if (result) {
         if (result.push) {
