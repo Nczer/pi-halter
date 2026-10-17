@@ -9,7 +9,7 @@ import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, getOutsideWritePaths, resolvePathsToDirs } from "./path-analysis";
 import { classifyStageArgv0 } from "./argv0-path";
 import { checkCommandForCredentialPaths } from "./credentials";
-import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE, segmentNamesRunDeps, segmentRunDepsUngrantable, segmentStages } from "./segment-helpers";
+import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE, segmentNamesRunOptions, segmentRunFormUngrantable, segmentStages } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
 
 /** Safety verdict for a shell command. */
@@ -88,13 +88,16 @@ export interface CommandAnalysis {
    *  base-bound grant, and the parser minted the program's own location as a
    *  path operand (analysis/argv0-path). */
   stageArgv0Qualified: boolean[][];
-  /** Indices of segments that are `uv run` forms NAMING dependencies: their
-   * signature IS the dependency set, so a coarse grant must not prefix-match
-   * them (an Always for one dependency set never covers another). */
-  runDepSegmentIndices: number[];
-  /** Indices of `uv run` segments no grant can cover — a dependency value the
-   * shell decides at run time, or a source path whose cwd is not knowable. */
-  ungrantableRunDepSegmentIndices: number[];
+  /** Indices of segments that are run forms NAMING an option value that
+   *  decides what is installed or executed (uv's dep flags, `--python`,
+   *  anything outside uv's closed option world): their signature IS that
+   *  option set, so a coarse grant must not prefix-match them (an Always for
+   *  one set never covers another). */
+  runOptionSegmentIndices: number[];
+  /** Indices of run-form segments no grant can cover — an option or selected
+   *  package the shell decides at run time, or a path value whose cwd is not
+   *  knowable. */
+  ungrantableRunFormSegmentIndices: number[];
   /** All extracted file/dir paths, resolved to absolute. */
   paths: string[];
   /** The subset of `paths` the command WRITES (see analysis/write-roles): the
@@ -452,11 +455,11 @@ export async function analyzeCommand(
   const stageSignatures = stageTexts.map((st, i) =>
     st.map((stext) => getCommandSignature(stext, effectiveCwds[i])));
   const signatures = stageSignatures.map((st) => st[0] ?? "");
-  const runDepSegmentIndices = segmentTexts
-    .map((s, i) => (segmentNamesRunDeps(s) ? i : -1))
+  const runOptionSegmentIndices = segmentTexts
+    .map((s, i) => (segmentNamesRunOptions(s) ? i : -1))
     .filter(i => i >= 0);
-  const ungrantableRunDepSegmentIndices = segmentTexts
-    .map((s, i) => (segmentRunDepsUngrantable(s, effectiveCwds[i]) ? i : -1))
+  const ungrantableRunFormSegmentIndices = segmentTexts
+    .map((s, i) => (segmentRunFormUngrantable(s, effectiveCwds[i]) ? i : -1))
     .filter(i => i >= 0);
 
   // Cwd-dependent tokens (./x, ../x, $PWD/x) in post-cd segments were resolved
@@ -715,8 +718,8 @@ export async function analyzeCommand(
     stageTexts,
     stageSignatures,
     stageArgv0Qualified,
-    runDepSegmentIndices,
-    ungrantableRunDepSegmentIndices,
+    runOptionSegmentIndices,
+    ungrantableRunFormSegmentIndices,
     paths,
     writePaths: [...new Set(writePaths)],
     hasParseError,

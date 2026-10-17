@@ -170,25 +170,29 @@ describe("isTrustedScriptCommand", () => {
   it("an unknown uv option is assumed to take a value", () => {
     // Skipped as a flag, `pymupdf` would become the runner and the scan would
     // stop before --with; assumed to take a value, the scan stays narrow but
-    // sees the dependency set (fail closed either way for trust).
-    expect(uvRunFlags(tokenizeSegmentQuoted("uv run --some-new-uv-flag pymupdf --with evil-package python x.py"))!.deps)
-      .toEqual([{ flag: "--with", value: "evil-package", opaque: false }]);
+    // sees the dependency set (and the unknown option lands in otherOptions —
+    // unknown is never benign, see the closed-world table).
+    expect(uvRunFlags(tokenizeSegmentQuoted("uv run --some-new-uv-flag pymupdf --with evil-package python x.py")))
+      .toMatchObject({
+        deps: [{ flag: "--with", value: "evil-package", opaque: false }],
+        otherOptions: [{ flag: "--some-new-uv-flag", value: "pymupdf", opaque: false }],
+      });
   });
 
   it("uv options after the dependency flags are still walked", () => {
     expect(uvRunFlags(tokenizeSegmentQuoted("uv run --with pandas --frozen -p 3.12 python x.py")))
-      .toMatchObject({ uvFlags: ["--frozen"], pythonValues: ["3.12"] }); // -p is a value flag, not a bare option
+      .toMatchObject({ uvFlags: ["--frozen"], pythonValues: [{ flag: "--python", value: "3.12", opaque: false }] }); // -p is a value flag, not a bare option
   });
 
   it("inline values, -p shorthand and the equals form are walked", () => {
     expect(uvRunFlags(tokenizeSegmentQuoted("uv run -p3.11 --with=pandas python x.py")))
-      .toMatchObject({ deps: [{ flag: "--with", value: "pandas" }], pythonValues: ["3.11"] });
+      .toMatchObject({ deps: [{ flag: "--with", value: "pandas" }], pythonValues: [{ flag: "--python", value: "3.11", opaque: false }] });
     expect(isTrustedScriptCommand("uv run --frozen -p3.11 --with pymupdf python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
     expect(isTrustedScriptCommand("uv run --frozen --with=evil-package python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
   });
 
   it("a dangling dependency flag names nothing at all", () => {
-    expect(uvRunFlags(tokenizeSegmentQuoted("uv run --with-requirements"))!.danglingSource).toBe(true);
+    expect(uvRunFlags(tokenizeSegmentQuoted("uv run --with-requirements"))!.danglingValue).toBe(true);
     expect(isTrustedScriptCommand("uv run --with-requirements python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
   });
 

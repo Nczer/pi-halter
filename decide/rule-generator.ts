@@ -121,9 +121,10 @@ export class RuleGenerator {
     // Fetchable run forms are granted by package trust, not sig rules —
     // a primary "Always" must not silently grant the form signature too.
     const fetchableSigs = new Set((data.fetchableForms ?? []).map((f) => f.sig));
-    // Run forms whose dependency the shell decides at run time: storing their
-    // sig would look like a grant and never act as one (matching refuses them).
-    const ungrantableSigs = new Set(data.ungrantableRunDeps ?? []);
+    // Run forms whose package or option value the shell decides at run time:
+    // storing their sig would look like a grant and never act as one (matching
+    // refuses them).
+    const ungrantableSigs = new Set(data.ungrantableRunForms ?? []);
     const unboundSigs = data.signatures.filter((sig) =>
       !relativeSigs.has(sig) && !fetchableSigs.has(sig) && !ungrantableSigs.has(sig));
     if (unboundSigs.length > 0) {

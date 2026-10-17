@@ -264,8 +264,8 @@ function buildBashPrompt(
   const fetchableSigSet = new Set(fetchableForms.map(f => f.sig));
   // Run forms no grant can cover: out of the command tier (the Always must not
   // promise a rule that will never match) and named in the body instead.
-  const ungrantableRunDeps = data.ungrantableRunDeps ?? [];
-  const ungrantableSigSet = new Set(ungrantableRunDeps);
+  const ungrantableRunForms = data.ungrantableRunForms ?? [];
+  const ungrantableSigSet = new Set(ungrantableRunForms);
   const commandSigs = uniqueSigs.filter(s => !fetchableSigSet.has(s) && !ungrantableSigSet.has(s));
   const trustPackages = [...new Set(fetchableForms.map(f => f.pkg))].sort();
   const includeAlwaysOption = !hasUnsafePattern && !credentialRule && (commandSigs.length > 0 || pathGrantDirs.length > 0 || relToolIds.length > 0);
@@ -334,14 +334,15 @@ function buildBashPrompt(
   if (riskDangerous) {
     for (const line of riskReasonLines(riskReasons)) body += line;
   }
-  // Why a command keeps coming back: its dependency is not a name yet, so no
-  // Always can cover it (the sig itself shows `--with <unresolved>`).
+  // Why a command keeps coming back: a value it needs (a selected package, a
+  // dependency, an install source) is not a name yet, so no Always can cover
+  // it (the sig itself shows `--with <unresolved>`).
   const UNGRANTABLE_MAX = 3;
-  for (const sig of ungrantableRunDeps.slice(0, UNGRANTABLE_MAX)) {
-    body += `\u26a0\ufe0f no grant for: ${sig} \u2014 a dependency is not a name yet; this form prompts every time\n`;
+  for (const sig of ungrantableRunForms.slice(0, UNGRANTABLE_MAX)) {
+    body += `\u26a0\ufe0f no grant for: ${sig} \u2014 a value it needs is not a name yet; this form prompts every time\n`;
   }
-  if (ungrantableRunDeps.length > UNGRANTABLE_MAX) {
-    body += `\u26a0\ufe0f \u2026 ${ungrantableRunDeps.length - UNGRANTABLE_MAX} more ungrantable forms\n`;
+  if (ungrantableRunForms.length > UNGRANTABLE_MAX) {
+    body += `\u26a0\ufe0f \u2026 ${ungrantableRunForms.length - UNGRANTABLE_MAX} more ungrantable forms\n`;
   }
 
   // Segment breakdown — tmux chains keep the full formatted view (their

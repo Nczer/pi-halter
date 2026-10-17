@@ -243,10 +243,148 @@ export const FETCH_PKG_FORMS: Record<string, ReadonlySet<string> | "all"> = {
   bun: new Set(["x"]),
 };
 
+/**
+ * Flags whose VALUE is the package the run form fetches and executes
+ * (`npx -p pkg cmd`, `npx --package=pkg cmd`, `uvx --from pkg cmd`,
+ * `npm exec -p pkg -- cmd`). Per family, because one short flag means two
+ * things: for the uv family `-p` is `--python` (an interpreter, answered by
+ * UV_VALUE_FLAGS below and vetted in config/trusted-scripts), so it selects
+ * no package there. Skipping these flags was the G7 hole: `npx --package=evil-pkg tsc`
+ * installed evil-pkg while package trust vouched for `tsc` — a grant for a
+ * package the command never fetched.
+ */
+const FETCH_PKG_SELECT: Record<string, ReadonlySet<string>> = {
+  npx: new Set(["-p", "--package"]),
+  npm: new Set(["-p", "--package"]),
+  pnpm: new Set(["-p", "--package"]),
+  yarn: new Set(["-p", "--package"]),
+  bunx: new Set(["--package"]),
+  bun: new Set(["--package"]),
+  uvx: new Set(["--from"]),
+  uv: new Set(["--from"]),
+};
+
+/**
+ * uv's run-form options that TAKE A VALUE — arity only, not a verdict on what
+ * they allow. Every option of `uv run`/`uvx` whose help line carries a value
+ * placeholder (uv 0.13.x, all 83 options; `--from` is absent here because it
+ * belongs to `uv tool run` and is a package-select flag above).
+ *
+ * ONE table, three consumers: the fetch-form package scan (`uvx --python 3.12
+ * tsc` named `3.12` as the fetched package when the value was read as the
+ * command word), the script-operand scan (`uv run --color never python3 s.py`
+ * named `never` as the payload, so the trusted-script umbrella vanished), and
+ * uv's own option walk in config/trusted-scripts. Guessing arity per site is
+ * how those two prompts came to be wrong.
+ */
+export const UV_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-C", "-P", "-f", "-i", "-p", "-w",
+  "--with", "--color", "--extra", "--group", "--index", "--python", "--package",
+  "--project", "--env-file", "--no-extra", "--no-group", "--cache-dir",
+  "--directory", "--index-url", "--link-mode", "--find-links", "--only-group",
+  "--prerelease", "--resolution", "--config-file", "--default-index",
+  "--exclude-newer", "--fork-strategy", "--upgrade-group", "--with-editable",
+  "--config-setting", "--index-strategy", "--extra-index-url", "--python-platform",
+  "--refresh-package", "--upgrade-package", "--keyring-provider",
+  "--no-build-package", "--no-binary-package", "--reinstall-package",
+  "--with-requirements", "--no-sources-package", "--prerelease-package",
+  "--allow-insecure-host", "--no-editable-package", "--exclude-newer-package",
+  "--config-settings-package", "--no-build-isolation-package",
+]);
+
+/** A select-flag value no grant can name: an expansion or a glob char. */
+const OPAQUE_PKG_VALUE_RE = /[$`*?{]/;
+
+/** What a fetchable run form fetches (see fetchFormScan). */
+export interface FetchFormScan {
+  /**
+   * Every package the form fetches, verbatim (case-sensitive trust keys),
+   * command order. With a select flag the trailing word is a command run from
+   * INSIDE those packages, not a package of its own
+   * (`npx -p typescript tsc` fetches typescript and runs its tsc).
+   */
+  pkgs: string[];
+  /**
+   * A select flag whose value the shell decides at run time (`-p "$PKG"`, an
+   * unquoted glob), or a select flag with no value token. Nothing can be
+   * vouched for it, so the form fails closed: no package trust covers it.
+   */
+  opaque: boolean;
+}
+
 /** Strip a `@version` pin (`tsc@5.0.0` → `tsc`); keeps scoped `@scope/name`. */
 export function stripPkgVersion(pkg: string): string {
   const at = pkg.lastIndexOf("@");
   return at > 0 ? pkg.slice(0, at) : pkg;
+}
+
+/**
+ * The packages a fetchable run form fetches, or null: not a fetch form, a
+ * local form (`npm run …`), or no package token at all. Flags are skipped
+ * EXCEPT the package-select flags, whose values ARE the fetch set; `K=V` env
+ * prefixes are skipped and version pins stripped so trust keys are bare
+ * package names. Only TOP-LEVEL segments are checked (indirection like
+ * `out=$(npx foo)` stays judge-only by design).
+ *
+ * The package token is kept VERBATIM as the trust key: npm scoped names are
+ * case-sensitive (`@org/tool` and `@Org/Tool` are different packages), so a
+ * trust grant for one must not cover the other. Lowercasing is used only to
+ * match the SUBCOMMAND of set forms (`npm run` vs `npm RUN` — git/npm treat
+ * subcommands case-insensitively in practice, and the set is lowercase).
+ */
+export function fetchFormScan(first: string, words: string[]): FetchFormScan | null {
+  const forms = FETCH_PKG_FORMS[first];
+  if (!forms) return null;
+  const select = FETCH_PKG_SELECT[first];
+  // For the uv family the option arity is known, so an option's VALUE is
+  // never the command word; other families' options are not modelled and fail
+  // closed by being named as the package (`npx --cache /tmp/c tsc`).
+  const arity = first === "uv" || first === "uvx" ? UV_VALUE_FLAGS : undefined;
+  const setForms = forms === "all" ? null : forms;
+  const pkgs: string[] = [];
+  let opaque = false;
+  // Set forms (`npm exec`) name their subcommand before the package; "all"
+  // forms (`npx`) put the package first.
+  let subSeen = forms === "all";
+  let cmdWord: string | undefined;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+    if (w.startsWith("-")) {
+      const eq = w.indexOf("=");
+      // Short flags are case-sensitive (`uvx -P` is not `-p`); long ones fold.
+      const flag = eq === -1 ? w : w.slice(0, eq);
+      const name = flag.startsWith("--") ? flag.toLowerCase() : flag;
+      if (!select?.has(name)) {
+        // A value-taking option's operand belongs to the option; an attached
+        // value (`--python=3.12`) has no operand token to skip.
+        if (arity?.has(name) && eq === -1) i++;
+        continue;
+      }
+      const v = eq === -1 ? words[++i] : w.slice(eq + 1);
+      // No value at all (end of command, or the next token is another flag):
+      // nothing is selected, and nothing can be vouched for it.
+      if (v === undefined || v.startsWith("-") || OPAQUE_PKG_VALUE_RE.test(v)) opaque = true;
+      else pkgs.push(stripPkgVersion(v));
+      continue;
+    }
+    if (!subSeen) {
+      // `uv tool run` is uvx's two-word spelling — the set is per word, so the
+      // pair is matched here (unmatched, the form named no package at all).
+      if (first === "uv" && w === "tool" && words[i + 1]?.toLowerCase() === "run") {
+        i++;
+        subSeen = true;
+        continue;
+      }
+      if (setForms && !setForms.has(w.toLowerCase())) return null; // a local form, never gated
+      subSeen = true;
+      continue;
+    }
+    if (cmdWord === undefined) cmdWord = w;
+  }
+  if (cmdWord !== undefined && pkgs.length === 0) pkgs.push(stripPkgVersion(cmdWord));
+  if (pkgs.length === 0 && !opaque) return null;
+  return { pkgs, opaque };
 }
 
 /**

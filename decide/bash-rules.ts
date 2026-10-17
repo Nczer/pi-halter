@@ -1,5 +1,5 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
-import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes, segmentFetchPackage } from "../analysis/segment-helpers";
+import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes, segmentFetchPackage, segmentFetchOptionsOk } from "../analysis/segment-helpers";
 import { CREDENTIAL_SCAN_RE, checkBareRelativeTokens } from "../analysis/credentials";
 import { hasRelativePath } from "../analysis/path-analysis";
 import { classifyStageArgv0 } from "../analysis/argv0-path";
@@ -149,17 +149,18 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
     return { kind: "auto-allow", analysis }; // D11: carried for the dspa content review
   }
 
-  // Dependency-bearing `uv run` forms: the signature IS the dependency set, so
-  // only an EXACT grant may apply — `hasAllowedBashPrefix` would let a coarse
+  // Option-bearing uv run forms: the signature IS that option set, so only an
+  // EXACT grant may apply — `hasAllowedBashPrefix` would let a coarse
   // "uv run" grant (an older click, a hand-written pattern rule, or a bare
-  // nameless run) swallow every dependency set that starts with it, which is
-  // the exact umbrella the dep-aware signature exists to remove. Same reasoning
-  // that keeps fetchable run forms out of the coarse signature tier.
-  const runDepIdxSet = new Set(analysis.runDepSegmentIndices);
-  // A run form naming a dependency no grant can name (`--with "$PKG"`, an
-  // unquoted glob, a source path whose cwd is not knowable): no command-tier
-  // grant can vouch for what the value becomes, so it prompts every time.
-  const ungrantableRunDepSet = new Set(analysis.ungrantableRunDepSegmentIndices);
+  // nameless run) swallow every option set that starts with it, which is
+  // the exact umbrella the option-aware signature exists to remove. Same
+  // reasoning that keeps fetchable run forms out of the coarse signature tier.
+  const runDepIdxSet = new Set(analysis.runOptionSegmentIndices);
+  // A run form naming a value no grant can name (`--with "$PKG"`, `--project
+  // "$D"`, an unquoted glob, a source path whose cwd is not knowable): no
+  // command-tier grant can vouch for what the value becomes, so it prompts
+  // every time.
+  const ungrantableRunDepSet = new Set(analysis.ungrantableRunFormSegmentIndices);
   // G2: stage-scoped views of the segment's identity. The run-dep sets stay
   // SEGMENT-keyed on purpose — a run-dep refusal or an ungrantable marker
   // describes the command the segment runs, and refusing for the whole pipe is
@@ -199,8 +200,17 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
       // segmentFetchPackage resolves inline env prefixes and wrapper
       // delegation first, so `FOO=bar npx tsc` and `env npx tsc` approve
       // exactly like `npx tsc` (the floor's D10 stop uses the same helper).
+      // G7: EVERY package the form fetches has to be trusted — with a select
+      // flag (`npx -p pkg cmd`, `uvx --from pkg cmd`) the trailing word is a
+      // command run from inside the fetched package, not a second fetch, so
+      // `npx --package=evil-pkg tsc` used to be approved by a grant for a
+      // package it never fetched. A selected value the shell decides at run
+      // time covers nothing, and uv's own options are only covered where they
+      // cannot change which code runs (`uvx -p /tmp/evil/python tsc`).
       const ff = stageFetchPkg[segIdx][stageIdx];
-      if (ff && store.hasTrustedPackage(ff.pkg)) return true;
+      if (ff && !ff.opaque && ff.pkgs.length > 0
+          && ff.pkgs.every((p) => store.hasTrustedPackage(p))
+          && segmentFetchOptionsOk(stageText, analysis.effectiveCwds[segIdx] ?? null)) return true;
     }
     if (ungrantableRunDepSet.has(segIdx)) return false;
     // Relative-path stages (./node_modules/.bin/npm test) must never inherit
@@ -259,7 +269,8 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
   const prompt = analysis.prompt;
   // Fetchable run forms (npx tsc, uvx tsc, …) are granted by per-package
   // trust, not signature rules — offer Trust and exclude the form from the
-  // command tier (deduped by signature; one sig = one run form).
+  // command tier (one entry per UNTRUSTED package of a form; one sig can name
+  // several fetches: `npx -p a -p b cmd`).
   const fetchableForms: Array<{ sig: string; pkg: string }> = [];
   const seenSigs = new Set<string>();
   // G2: per STAGE — a run form is one stage of a pipe (`npx tsc | tee log`),
@@ -268,17 +279,21 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
     for (let j = 0; j < analysis.stageTexts[i].length; j++) {
       const ff = segmentFetchPackage(analysis.stageTexts[i][j] ?? "");
       const sig = analysis.stageSignatures[i][j];
-      if (ff && !seenSigs.has(sig) && !store.hasTrustedPackage(ff.pkg)) {
-        seenSigs.add(sig);
-        fetchableForms.push({ sig, pkg: ff.pkg });
+      if (!ff) continue;
+      // A selected package the shell decides at run time has no name to offer
+      // trust for — the ungrantable line below says why it keeps coming back.
+      for (const pkg of ff.opaque ? [] : ff.pkgs) {
+        if (seenSigs.has(`${sig}\u0000${pkg}`) || store.hasTrustedPackage(pkg)) continue;
+        seenSigs.add(`${sig}\u0000${pkg}`);
+        fetchableForms.push({ sig, pkg });
       }
     }
   }
-  // Run forms no command-tier grant can cover (dependency decided at run time):
+  // Run forms no command-tier grant can cover (a value decided at run time):
   // the prompt must not offer a grant that would do nothing — and must say why
   // the command keeps coming back.
-  const ungrantableRunDeps = [...new Set(
-    analysis.ungrantableRunDepSegmentIndices.map(i => analysis.signatures[i]),
+  const ungrantableRunForms = [...new Set(
+    analysis.ungrantableRunFormSegmentIndices.map(i => analysis.signatures[i]),
   )];
   return {
     kind: "prompt",
@@ -312,7 +327,7 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
       needsPathApproval: prompt.needsPathApproval ?? false,
       unresolved: prompt.unresolved,
       fetchableForms: fetchableForms.length > 0 ? fetchableForms : undefined,
-      ungrantableRunDeps: ungrantableRunDeps.length > 0 ? ungrantableRunDeps : undefined,
+      ungrantableRunForms: ungrantableRunForms.length > 0 ? ungrantableRunForms : undefined,
       // Single analysis per decision: the /dspa gate and the judge packet
       // consume this instance instead of re-parsing (see BashPromptData).
       analysis,

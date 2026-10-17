@@ -71,14 +71,14 @@ describe("Signatures: uv run dependency identity", () => {
   it("bare uv run keeps the coarse signature (a project sync names nothing)", async () => {
     const a = await analyzeCommand("uv run python3 b.py", cwd);
     expect(a.signatures).toEqual(["uv run"]);
-    expect(a.runDepSegmentIndices).toEqual([]);
+    expect(a.runOptionSegmentIndices).toEqual([]);
   });
 
   it("the dependency set is the signature", async () => {
     const a = await analyzeCommand("uv run --with pandas python3 b.py", cwd);
     expect(a.signatures).toEqual(["uv run --with pandas"]);
-    expect(a.runDepSegmentIndices).toEqual([0]);
-    expect(a.ungrantableRunDepSegmentIndices).toEqual([]);
+    expect(a.runOptionSegmentIndices).toEqual([0]);
+    expect(a.ungrantableRunFormSegmentIndices).toEqual([]);
   });
 
   it("order and repeats are canonicalized", async () => {
@@ -118,29 +118,29 @@ describe("Signatures: uv run dependency identity", () => {
     const a = await analyzeCommand("cd $(dirname x) && uv run --with-requirements req.txt python3 b.py", cwd);
     expect(a.effectiveCwds[1]).toBeNull();
     expect(a.signatures[1]).toEqual("uv run --with-requirements <unresolved>");
-    expect(a.ungrantableRunDepSegmentIndices).toEqual([1]);
+    expect(a.ungrantableRunFormSegmentIndices).toEqual([1]);
   });
 
   it("a value the shell decides at run time cannot be granted", async () => {
     const expansion = await analyzeCommand('uv run --with "$PKG" python3 b.py', cwd);
     expect(expansion.signatures).toEqual(["uv run --with <unresolved>"]);
-    expect(expansion.ungrantableRunDepSegmentIndices).toEqual([0]);
+    expect(expansion.ungrantableRunFormSegmentIndices).toEqual([0]);
     const glob = await analyzeCommand("uv run --with pkg*.txt python3 b.py", cwd);
-    expect(glob.ungrantableRunDepSegmentIndices).toEqual([0]);
+    expect(glob.ungrantableRunFormSegmentIndices).toEqual([0]);
   });
 
   it("a wrapper is transparent to the grant, its dependency set is not", async () => {
     const timeout = await analyzeCommand("timeout 60 uv run --with pandas python3 b.py", cwd);
-    expect(timeout.signatures).toEqual(["timeout uv --with pandas"]);
-    expect(timeout.runDepSegmentIndices).toEqual([0]);
+    expect(timeout.signatures).toEqual(["timeout uv run --with pandas"]);
+    expect(timeout.runOptionSegmentIndices).toEqual([0]);
     const env = await analyzeCommand("env FOO=1 uv run --frozen --with pandas python3 b.py", cwd);
-    expect(env.signatures).toEqual(["env uv --frozen --with pandas"]);
+    expect(env.signatures).toEqual(["env uv run --frozen --with pandas"]);
   });
 
   it("a wrapper of a non-fetch command is unaffected", async () => {
     const a = await analyzeCommand("timeout 60 curl -s example.com", cwd);
     expect(a.signatures).toEqual(["timeout curl"]);
-    expect(a.runDepSegmentIndices).toEqual([]);
+    expect(a.runOptionSegmentIndices).toEqual([]);
   });
 
   it("a pipeline signs the fetching stage", async () => {
