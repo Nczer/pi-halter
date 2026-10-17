@@ -240,6 +240,45 @@ nonexistent cwd child counted as INSIDE — the wrong direction). A multi-line
 arg at a FILE position keeps its sentinel (`cat "a\n$X/b"`): the role decides,
 not the shape.
 
+### Write-role operands
+
+The manual path asked ONE location question — may this path be READ? — and every
+write verb answered it with the same predicate, so `mkdir ~/.pi/agent/pwned-dir`
+and `touch ~/.pi/agent/pwned-file` auto-allowed (`~/.pi` is an
+`allowedReadPath`: skills, extensions). `analysis/write-roles.ts` answers the
+other question, "which operands does this command WRITE?", as a closed table of
+operand ROLES — `WRITE_ALL` (`rm`, `mkdir`, `touch`, `chmod`, gzip/xz: the verb
+mutates what it names), `WRITE_LAST` (`mv cp install split ln`: the last operand
+is the destination — `ln` deliberately LAST, not ALL, because its first operand
+is a name the link points at and is never written), `WRITE_FIRST` (`zip patch`),
+`WRITE_IN_PLACE` (`sed perl`, decided by the in-place flag) — plus per-command
+flag tables for the destinations that hide in flags (`tar -f`/`--file`,
+`cp -t`, `sort -o`, `dd of=`, `find -fprint`), the flag-that-switches-the-verb
+form (`find -delete` ⇒ every walked directory), and `tarWrites()` for tar's
+extract/create asymmetry.
+
+The operands are minted into `analysis.writePaths` at the SAME sites as `paths`
+and with the same hop/skip/dedup filters, so `writePaths ⊆ paths` by
+construction — one resolution path, not a parallel one (the G4/G6 lesson).
+Same for provenance: a write inside a code body (`python3 -c 'open(p,"w")'`,
+`sed -i` in a `$(…)` body) is recorded per segment and folded into the parent
+BEFORE the SAFE_SYSTEM_PATHS dedup, or the write is silently dropped. The
+decision layer then bars write operands against cwd ∪ `allowedWritePaths` ∪ the
+session's WRITE grants — a READ grant never satisfies one — and the prompt
+names them as writes (`⚠️ writes outside cwd`, title `Write`) so the Always tier
+stores `writeDirs`, which is the click that actually covers the next run.
+
+Closed world: no table entry ⇒ no write operand claimed. That adds no looseness
+(the location was never scopable anyway); it stays outside both bars until the
+verb is added. Cost, measured on the frozen ledger (875 unique real commands):
+zero verdict changes. Known boundary, documented not fixed: a
+`SHELL_INTERPRETERS` body (`sh -c 'echo > ~/.pi/agent/x'`) mints no paths at
+all — measured `paths=[]`, `writePaths=[]` — so neither bar can see it, and the
+/dspa floor passes it; what gates such a call is its command-level grant (`sh`
+and `bash` are not table-allowed, so it prompts) and, under dspa, the judge
+packet's full command text (`test/write-roles.test.ts`,
+`test/verified-bypasses.test.ts` P15).
+
 ### Sed grammar
 
 `sed [flags] script [files…]`: the first non-flag arg (and `-e` values) is
@@ -675,6 +714,8 @@ analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           (the one fixpoint unwrapper for the command position),
                           argv0-path (where a program comes from: bare / system
                           dir / path-qualified, per stage and base),
+                          write-roles (which operands of a path-aware command
+                          it WRITES: the closed role + flag table),
                           command-analysis,
                           risk-analyzer, obfuscation,
                           tmux (command model: the one shared parse —

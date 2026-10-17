@@ -13,6 +13,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import {decide} from "../decide/engine";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../gate/store";
+import { RuleGenerator } from "../decide/rule-generator";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 let cwd: string;
@@ -1355,3 +1356,113 @@ describe("P14: a path-qualified program is not its basename", () => {
   });
 });
 
+// ──────────────────────────────────────────────────────────────────────
+// P15: write-role operands get their own location bar (analysis/write-roles).
+// `~/.pi/agent` is READ-allowed (skills, extensions), so every write verb
+// there used to answer the read question and pass. These rows pin that the
+// operand a command writes is asked about separately — and that the read
+// grant never satisfies it.
+// ──────────────────────────────────────────────────────────────────────
+describe("P15: the write bar is not the read bar", () => {
+  const agentDir = path.join(os.homedir(), ".pi", "agent");
+
+  it("the round-6 write rows prompt, naming the dir as a WRITE target", async () => {
+    for (const cmd of ["mkdir ~/.pi/agent/pwned-dir", "touch ~/.pi/agent/pwned-file"]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, createStore());
+      expect(d.kind, cmd).toBe("prompt");
+      if (d.kind !== "prompt" || d.promptData.type !== "bash") continue;
+      expect(d.promptData.outsideWriteDirs, cmd).toContain(agentDir);
+      expect(d.promptData.needsWriteApproval, cmd).toBe(true);
+      // Separated on purpose: the read bar already allows this dir, so the
+      // read-side list stays clean and the prompt can say which kind of
+      // access is at stake (the tier offers differ).
+      expect(d.promptData.outsideDirs, cmd).not.toContain(agentDir);
+    }
+  });
+
+  it("a WRITE grant satisfies it, a READ grant for the same dir does not", async () => {
+    const cmd = "touch ~/.pi/agent/pwned-file";
+    const readGranted = createStore();
+    readGranted.addAllowed({ readDirs: [agentDir] });
+    expect((await decide({ type: "bash", command: cmd, cwd }, readGranted)).kind).not.toBe("auto-allow");
+
+    const writeGranted = createStore();
+    writeGranted.addAllowed({ writeDirs: [agentDir] });
+    expect((await decide({ type: "bash", command: cmd, cwd }, writeGranted)).kind).toBe("auto-allow");
+  });
+
+  it("Always on the prompt stores writeDirs, not readDirs", async () => {
+    const cmd = "mkdir ~/.pi/agent/pwned-dir";
+    const store = createStore();
+    const d1 = await decide({ type: "bash", command: cmd, cwd }, store);
+    expect(d1.kind).toBe("prompt");
+    if (d1.kind !== "prompt" || d1.promptData.type !== "bash") throw new Error("expected prompt");
+    const rules = RuleGenerator.generatePathsOnlyRules(d1.promptData);
+    if (!rules) throw new Error("expected path rules");
+    expect(rules.writeDirs).toContain(agentDir);
+    expect(rules.readDirs ?? []).not.toContain(agentDir);
+    store.addAllowed(rules);
+    expect((await decide({ type: "bash", command: cmd, cwd }, store)).kind).toBe("auto-allow");
+  });
+
+  it("the relative operand re-bases through the cd (threadCwdPaths covers writes)", async () => {
+    const d = await decide({ type: "bash", command: "cd ~/.pi/agent && mkdir ./pwned-dir", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+    if (d.kind === "prompt" && d.promptData.type === "bash") {
+      expect(d.promptData.outsideWriteDirs).toContain(agentDir);
+    }
+  });
+
+  it("a write inside a code body is a write target", async () => {
+    const d = await decide({ type: "bash", command: `python3 -c 'open("${agentDir}/x", "w")'`, cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+    if (d.kind === "prompt" && d.promptData.type === "bash") {
+      expect(d.promptData.outsideWriteDirs).toContain(agentDir);
+    }
+    // The same path, opened read-only, states no write claim (the mode is the
+    // difference — the read bar sees both, the write bar only the first).
+    const plain = await analyzeCommand(`python3 -c 'open("${agentDir}/x")'`, cwd);
+    expect(plain.paths, "read-only body still mints the path").toContain(path.join(agentDir, "x"));
+    expect(plain.writePaths, "read-only body claims no write").toEqual([]);
+    const d2 = await decide({ type: "bash", command: `python3 -c 'open("${agentDir}/x")'`, cwd }, createStore());
+    if (d2.kind === "prompt" && d2.promptData.type === "bash") {
+      expect(d2.promptData.outsideWriteDirs ?? []).not.toContain(agentDir);
+    }
+  });
+
+  it("a write in a substituted body reaches the parent's bar", async () => {
+    const d = await decide({ type: "bash", command: "echo x $(touch ~/.pi/agent/z)", cwd }, createStore());
+    expect(d.kind).toBe("prompt");
+    if (d.kind === "prompt" && d.promptData.type === "bash") {
+      expect(d.promptData.outsideWriteDirs).toContain(agentDir);
+    }
+  });
+
+  it("`sed -i` is a write there, plain `sed` is not", async () => {
+    const target = "~/.pi/agent/skills/pdf/SKILL.md";
+    const inPlace = await decide({ type: "bash", command: `sed -i 's/a/b/' ${target}`, cwd }, createStore());
+    expect(inPlace.kind).toBe("prompt");
+    if (inPlace.kind === "prompt" && inPlace.promptData.type === "bash") {
+      expect(inPlace.promptData.outsideWriteDirs).toContain(path.join(agentDir, "skills", "pdf"));
+      expect(inPlace.promptData.needsWriteApproval).toBe(true);
+    }
+    // Without the in-place flag the same operand is read-only: nothing on the
+    // write side is claimed (the command itself still needs its own grant).
+    const a = await analyzeCommand(`sed 's/a/b/' ${target}`, cwd);
+    expect(a.writePaths).toEqual([]);
+  });
+
+  it("the cost side: writes inside cwd or a config write dir stay auto-allow", async () => {
+    const store = createStore();
+    for (const cmd of ["touch ./new-file", "mkdir ./new-dir", "cd /tmp && mkdir ./pwned-dir"]) {
+      const d = await decide({ type: "bash", command: cmd, cwd }, store);
+      expect(d.kind, cmd).toBe("auto-allow");
+    }
+  });
+
+  it("a read-only verb in the same dir is untouched by the write bar", async () => {
+    const store = createStore();
+    store.addAllowed({ bashSigs: ["ls"] });
+    expect((await decide({ type: "bash", command: "ls ~/.pi/agent", cwd }, store)).kind).toBe("auto-allow");
+  });
+});

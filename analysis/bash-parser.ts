@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { allowedReadPaths, allowedWritePaths, pathAwareCommands, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, type CodeBody } from "../config";
+import { allowedReadPaths, allowedWritePaths, pathAwareCommands, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, codeBodiesWrite, type CodeBody } from "../config";
 import { expandTilde, resolvePathReal } from "./path-analysis";
 import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandHomeToken, expandHomeLiterals } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
@@ -10,6 +10,7 @@ import { resolveDelegatedTokens } from "./wrapper-unwrap";
 import { classifyArgv0 } from "./argv0-path";
 import { homeReassigned } from "./cwd-tracking";
 import { inlineCodeArgIndices } from "../config/script-operand";
+import { writeOperandIndices } from "./write-roles";
 import type { ShellAssignment } from "./var-resolution";
 import { decodeAnsiCEscapes } from "./tokenizer";
 
@@ -252,6 +253,12 @@ const SAFE_SYSTEM_PATHS = new Set([
   "/dev/stdin",
   "/dev/stdout",
   "/dev/stderr",
+  // Character devices with no user data behind them — `dd if=/dev/zero` names
+  // one as an operand, and minting it would put /dev on the prompt for nothing.
+  "/dev/zero",
+  "/dev/urandom",
+  "/dev/random",
+  "/dev/full",
 ]);
 
 const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -2026,6 +2033,9 @@ export async function parseCommand(
 ): Promise<{
   segments: BashSegment[];
   paths: string[];
+  /** The subset of `paths` the command WRITES (G3) — see analysis/write-roles.
+   *  Checked against the write allow set alone; a read grant never covers it. */
+  writePaths: string[];
   opaque: OpaqueRef[];
   assignments: ShellAssignment[];
   hasParseError: boolean;
@@ -2040,7 +2050,7 @@ export async function parseCommand(
 }> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], paths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [], obscuredArgv0: [] };
+  if (!tree) return { segments: [], paths: [], writePaths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [], obscuredArgv0: [] };
 
   try {
     // Check for ERROR nodes in the AST (malformed bash)
@@ -2070,6 +2080,10 @@ export async function parseCommand(
     // Extract paths and opaque refs from command nodes
     const commandNodes = collectCommandNodes(tree.rootNode);
     const allPaths: string[] = [];
+    // Write-target operands (G3). Every entry is also in allPaths — the write
+    // bar is a stricter question about the SAME locations, never a second
+    // resolution path that could drift from the read bar.
+    const allWrites: string[] = [];
     const obscuredArgv0: string[] = [];
     const opaque: OpaqueRef[] = [];
     // Symlink hops (written ≠ resolved) for prompt display. Dot-prefixed
@@ -2096,6 +2110,24 @@ export async function parseCommand(
       const list = bodiesBySegment.get(si);
       if (list) list.push(body);
       else bodiesBySegment.set(si, [body]);
+    };
+
+    // Body-path provenance (G3): which resolved paths a code body named, and
+    // for which segment. The paths themselves go to `allPaths` (the read bar)
+    // exactly as before; whether they are also WRITES depends on the whole
+    // body set of the segment, which is only known after the walk.
+    const bodyPathsBySegment = new Map<number, string[]>();
+    const shellBodyBySegment = new Set<number>();
+    const scanBody = (text: string, cmdNode: TSNode | null, verb: string | null, hop = true): void => {
+      const si = cmdNode ? segMap.get(cmdNode.id) ?? -1 : -1;
+      if (si >= 0 && verb && SHELL_INTERPRETERS.has(verb)) shellBodyBySegment.add(si);
+      const sink: string[] = [];
+      bodyPaths(text, cwd, sink, hop ? recordHop : undefined);
+      allPaths.push(...sink);
+      if (si < 0 || sink.length === 0) return;
+      const list = bodyPathsBySegment.get(si);
+      if (list) list.push(...sink);
+      else bodyPathsBySegment.set(si, sink);
     };
 
     for (const cmdNode of commandNodes) {
@@ -2223,6 +2255,7 @@ export async function parseCommand(
         const argTexts = argvList.map(a => a.text);
         const inlinePrograms = prog ? inlineCodeArgIndices(prog, argTexts) : new Set<number>();
         const skipArgs = prog ? nonFileArgIndices(prog, argTexts) : new Set<number>();
+        const writeIdx = prog ? writeOperandIndices(prog, argTexts, skipArgs) : new Set<number>();
         for (let ai = 0; ai < argvList.length; ai++) {
           const { text: arg, node: argNode } = argvList[ai];
           // A multi-line LITERAL argument is a script/data body (`node -e '…'`),
@@ -2231,7 +2264,7 @@ export async function parseCommand(
           // The shell never touches body paths — but the script does: scan
           // them into the path set (fail-closed, like every other path).
           if (isMultiLineLiteralArg(argNode)) {
-            bodyPaths(arg, cwd, allPaths, recordHop);
+            scanBody(arg, cmdNode, prog);
             addCodeBody(cmdNode, { text: arg, opaque: nodeHasRuntimeExpansion(argNode) });
             continue;
           }
@@ -2248,7 +2281,7 @@ export async function parseCommand(
           // child proves it) and only while HOME holds the closed-set value.
           if (inlinePrograms.has(ai)) {
             const shellExpands = !homeFixed && nodeHasRuntimeExpansion(argNode);
-            bodyPaths(shellExpands ? expandHomeLiterals(arg) : arg, cwd, allPaths, recordHop);
+            scanBody(shellExpands ? expandHomeLiterals(arg) : arg, cmdNode, prog);
             continue;
           }
           if (skipArgs.has(ai)) continue;
@@ -2275,7 +2308,7 @@ export async function parseCommand(
           // `cat /tmp/cmd1.txt` inside "$(cat /tmp/cmd1.txt)"). Same rule as a
           // script body above — the floor sees what the operation touches.
           if (hasExpansion && SUBST_IN_TEXT_RE.test(arg)) {
-            bodyPaths(arg, cwd, allPaths, recordHop);
+            scanBody(arg, cmdNode, prog);
           }
 
           if (isPathCandidate(arg, hasExpansion)) {
@@ -2288,6 +2321,7 @@ export async function parseCommand(
             const resolvedArg = resolvePathReal(expanded, cwd);
             recordHop(resolveArg, resolvedArg);
             allPaths.push(resolvedArg);
+            if (writeIdx.has(ai)) allWrites.push(resolvedArg);
           }
         }
       }
@@ -2329,8 +2363,28 @@ export async function parseCommand(
               const resolvedTarget = resolvePathReal(expanded, cwd);
               recordHop(target, resolvedTarget);
               allPaths.push(resolvedTarget);
+              allWrites.push(resolvedTarget); // -o/--output is a write by definition
             }
           }
+        }
+      }
+
+      // `dd if=FILE of=FILE`: both operands name a file, and neither looks like
+      // one to the operand model (the `=` makes `if=/etc/x` an env-assignment
+      // shape, so isPathCandidate rejects it). Nothing was minted, so a `dd`
+      // signature grant covered a write the user never saw (G3 survey row).
+      // `of=` is the write; `if=` is the read.
+      if (cmdName === "dd") {
+        for (let i = 0; i < args.length; i++) {
+          const m = args[i].text.match(/^(if|of|observe|converse)=(.*)$/);
+          if (!m || m[2] === "" || m[2] === "-") continue;
+          const targetNode = args[i].node;
+          const hasExpansion = nodeHasRuntimeExpansion(targetNode);
+          const expanded = hasExpansion ? expandHomeToken(expandTilde(m[2])) : expandTilde(m[2]);
+          const resolvedTarget = resolvePathReal(expanded, cwd);
+          recordHop(m[2], resolvedTarget);
+          allPaths.push(resolvedTarget);
+          if (m[1] === "of" || m[1] === "converse") allWrites.push(resolvedTarget);
         }
       }
     }
@@ -2382,7 +2436,7 @@ export async function parseCommand(
           // DATA: the paths inside are the file's content, nothing more.
         } else {
           if (owner) addCodeBody(owner, { text: node.text, opaque: opaqueVerb || nodeHasRuntimeExpansion(node) });
-          bodyPaths(node.text, cwd, allPaths);
+          scanBody(node.text, owner, verb || null, false);
         }
         return;
       }
@@ -2395,9 +2449,21 @@ export async function parseCommand(
 
     // Extract redirect paths
     const redirectPaths: string[] = [];
+    // `>`/`>>`/`<>`/`&>`/`>|` write the destination; `<` reads it. `>|` is the
+    // noclobber-forcing form — same effect on the file. fd duplication
+    // (`2>&1`) names no file — its target is not a path candidate anyway.
+    const REDIRECT_WRITE_RE = /^(?:&|\d*)?(?:>{1,2}\|?|<>|>&|&>)$/;
+    const isWriteRedirect = (node: TSNode): boolean => {
+      for (let i = 0; i < node.childCount; i++) {
+        const c = node.child(i);
+        if (c && REDIRECT_WRITE_RE.test(c.text)) return true;
+      }
+      return false;
+    };
     const extractRedirects = (node: TSNode): void => {
       if (SKIP_TYPES.has(node.type)) return;
       if (node.type === "file_redirect") {
+        const writesHere = isWriteRedirect(node);
         for (const { text: p, node: pNode } of extractRedirectPairs(node)) {
           if (isMultiLineLiteralText(p)) continue; // script/data body, not a path
           const hasExpansion = nodeHasRuntimeExpansion(pNode);
@@ -2406,6 +2472,7 @@ export async function parseCommand(
             const resolvedP = resolvePathReal(expanded, cwd);
             recordHop(p, resolvedP);
             redirectPaths.push(resolvedP);
+            if (writesHere) allWrites.push(resolvedP);
           } else if (hasExpansion) {
             // `> $X` — write destination only knowable at runtime → opaque ref.
             const ref = opaqueRef(node, p, cwd, segMap.get(node.id) ?? -1, segments);
@@ -2421,6 +2488,20 @@ export async function parseCommand(
     extractRedirects(tree.rootNode);
     allPaths.push(...redirectPaths);
 
+    // A write-capable code body writes what its text names: the interpreter,
+    // not the shell, touches those files, so the write bar has to see them too
+    // (`python3 -c 'open("~/.pi/agent/x","w")'` reads nothing outside the cwd
+    // yet rewrites a file inside the read-allowed ~/.pi). A body the parser
+    // never saw stays invisible here, as before G3 — the floor's own write
+    // check (seg.codeBodies, config.codeBodiesWrite) still covers that.
+    // Runs BEFORE the dedup filter below, so a folded write survives the same
+    // seen/SAFE_SYSTEM_PATHS screen as every other operand.
+    for (const [si, bodies] of bodiesBySegment) {
+      const fromBodies = bodyPathsBySegment.get(si);
+      if (!fromBodies?.length) continue;
+      if (codeBodiesWrite(bodies, shellBodyBySegment.has(si))) allWrites.push(...fromBodies);
+    }
+
     // Deduplicate, filter safe system paths
     const seen = new Set<string>();
     const paths = allPaths.filter(p => {
@@ -2429,12 +2510,16 @@ export async function parseCommand(
       seen.add(p);
       return true;
     });
+    // Same filter, so writePaths ⊆ paths by construction. Set first: a target
+    // can reach allWrites twice (the generic operand mint and a command's own
+    // flag-value block, e.g. `sort -o FILE`).
+    const writePaths = [...new Set(allWrites)].filter(p => seen.has(p));
 
     for (const [si, bodies] of bodiesBySegment) {
       const seg = segments[si];
       if (seg) seg.codeBodies = bodies;
     }
-    return { segments, paths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0 };
+    return { segments, paths, writePaths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0 };
   } finally {
     subshellCache = null;
     tree.delete();

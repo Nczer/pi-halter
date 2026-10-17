@@ -5,6 +5,7 @@ import { expandTilde, expandHomeToken } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
 import { tokenizeSegment, tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS, codeBodiesWrite } from "../config";
+import { writeOperandIndices } from "./write-roles";
 import { hasRuntimeExpansionText, nonFileArgIndices, type BashSegment } from "./bash-parser";
 import { resolveDelegatedTokens } from "./wrapper-unwrap";
 import type { ShellAssignment } from "./var-resolution";
@@ -800,6 +801,10 @@ function splitPlainStages(tokens: string[]): string[][] {
 interface CwdDependentToken {
   readonly isPwd: boolean;
   readonly rel: string;
+  /** The token sits at a WRITE-operand position of its command (G3) — the
+   *  post-cd re-resolution of a `cd ~/.pi/agent && mkdir ./x` has to carry the
+   *  role, or the write bar never sees the re-based location. */
+  readonly isWrite: boolean;
 }
 
 function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
@@ -816,6 +821,9 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
     const skip = cmd && pathAwareCommands.has(cmd)
       ? nonFileArgIndices(cmd, rest.map((r) => r.text))
       : new Set<number>();
+    const writeIdx = cmd && pathAwareCommands.has(cmd)
+      ? writeOperandIndices(cmd, rest.map((r) => r.text), skip)
+      : new Set<number>();
     for (let i = 0; i < rest.length; i++) {
       if (skip.has(i)) continue;
       const qt = rest[i];
@@ -828,15 +836,15 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
       // Only cwd-dependent tokens need re-resolving: ./x, ../x, $PWD/x.
       // Absolute and ~/ paths resolve identically under any cwd.
       if ((qt.hasExpansion ?? true) && (t === "$PWD" || t === "${PWD}")) {
-        out.push({ isPwd: true, rel: "" });
+        out.push({ isPwd: true, rel: "", isWrite: writeIdx.has(i) });
         continue;
       }
       if ((qt.hasExpansion ?? true) && (t.startsWith("$PWD/") || t.startsWith("${PWD}/"))) {
-        out.push({ isPwd: true, rel: t.slice(t.indexOf("/") + 1) });
+        out.push({ isPwd: true, rel: t.slice(t.indexOf("/") + 1), isWrite: writeIdx.has(i) });
         continue;
       }
       if (t.startsWith("./") || t.startsWith("../") || (t.includes("..") && t.includes("/"))) {
-        out.push({ isPwd: false, rel: t });
+        out.push({ isPwd: false, rel: t, isWrite: writeIdx.has(i) });
       }
     }
   }
@@ -858,11 +866,12 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
 export function reResolveCwdDependentPaths(
   seg: BashSegment,
   base: CwdBase,
-  opts?: { skipDotPaths?: boolean },
+  opts?: { skipDotPaths?: boolean; writesOnly?: boolean },
 ): string[] {
   const out: string[] = [];
-  for (const { isPwd, rel } of cwdDependentTokens(seg)) {
+  for (const { isPwd, rel, isWrite } of cwdDependentTokens(seg)) {
     if (opts?.skipDotPaths && !isPwd) continue;
+    if (opts?.writesOnly && !isWrite) continue;
     // String join, NOT path.join: join normalizes `..` so the marker escapes
     // (`<unresolved-cwd>/../x` → `../x`) and a bare relative token lands in
     // the outside set — displayed as its dirname (`.`, `node_modules/.bin`).

@@ -15,6 +15,9 @@ export async function decideBash(req: BashRequest, store: Store): Promise<Decisi
 
   const analysis = await analyzeCommand(req.command, req.cwd, {
     isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+    // G3: the write bar sees only WRITE grants (writeDirs + exact write-path
+    // grants), never the read side — that separation is the whole point.
+    isInsideAllowedWriteDir: (p) => store.isInsideAllowedDir(p, "write") || store.hasAllowedWritePath(p),
     getConfirmedResolution: (t) => store.getConfirmedResolution(t),
   });
 

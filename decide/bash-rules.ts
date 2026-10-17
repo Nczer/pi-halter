@@ -125,7 +125,16 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
   if (analysis.hasParseError) return null;
 
   const outsidePaths = analysis.prompt.outsidePaths ?? [];
-  const canAutoAllow = analysis.safety.canBeAutoAllowed && outsidePaths.length === 0 && !analysis.hasCredentialPath;
+  // G3: a write target outside cwd ∪ temp dirs ∪ write grants blocks every
+  // auto-allow path below — table membership, an exact signature grant and
+  // package trust all vouch for the COMMAND, none of them for the location
+  // the command writes. The read bar's set cannot carry this: `~/.pi` is
+  // read-allowed, and that is exactly where the planted file went.
+  const outsideWrites = analysis.prompt.outsideWritePaths ?? [];
+  const canAutoAllow = analysis.safety.canBeAutoAllowed
+    && outsidePaths.length === 0
+    && outsideWrites.length === 0
+    && !analysis.hasCredentialPath;
 
   if (analysis.safety.isSimple && canAutoAllow) {
     return { kind: "auto-allow", analysis }; // D11: carried for the dspa content review
@@ -278,6 +287,8 @@ export const PromptFallbackRule: BashRule = (req, store, analysis?: CommandAnaly
       command: req.command,
       cwd: req.cwd,
       outsideDirs: prompt.outsideDirs ?? [],
+      outsideWriteDirs: prompt.outsideWriteDirs ?? [],
+      needsWriteApproval: prompt.needsWriteApproval ?? false,
       symlinkHops: prompt.symlinkHops,
       segments: analysis.segments,
       signatures: prompt.promptSignatures,

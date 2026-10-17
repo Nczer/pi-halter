@@ -6,7 +6,7 @@ import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
 import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
-import { hasRelativePath, getOutsideCwdPaths, resolvePathsToDirs } from "./path-analysis";
+import { hasRelativePath, getOutsideCwdPaths, getOutsideWritePaths, resolvePathsToDirs } from "./path-analysis";
 import { classifyStageArgv0 } from "./argv0-path";
 import { checkCommandForCredentialPaths } from "./credentials";
 import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE, segmentNamesRunDeps, segmentRunDepsUngrantable, segmentStages } from "./segment-helpers";
@@ -34,6 +34,18 @@ export interface PromptHints {
   outsideDirs: string[] | undefined;
   /** Whether path approval is needed (outside paths exist). Undefined if allowed dirs not provided. */
   needsPathApproval: boolean | undefined;
+  /**
+   * The write-role subset of the path set that sits outside cwd, the config
+   * write dirs and the session's WRITE grants (G3, analysis/write-roles).
+   * A read grant never appears here: `~/.pi` is read-allowed (the agent reads
+   * its skills) and must not accept `mkdir ~/.pi/agent/pwned-dir`. Undefined
+   * if the write predicate was not provided.
+   */
+  outsideWritePaths: string[] | undefined;
+  /** Directories containing those write targets (prompt display + Always tier). */
+  outsideWriteDirs: string[] | undefined;
+  /** Whether write approval is needed (outside write targets exist). */
+  needsWriteApproval: boolean | undefined;
   /**
    * Literal tokens whose realpath differs from the written form (symlink
    * hop) and whose resolved location is in the outside set — the prompt
@@ -85,6 +97,13 @@ export interface CommandAnalysis {
   ungrantableRunDepSegmentIndices: number[];
   /** All extracted file/dir paths, resolved to absolute. */
   paths: string[];
+  /** The subset of `paths` the command WRITES (see analysis/write-roles): the
+   *  operand a `mv`/`cp`/`mkdir`/`rm` lands in, a `>` destination, `sort -o`'s
+   *  value, a write-capable code body's operand. Always a subset of `paths`
+   *  by construction — the same mint sites, the same dedup filter — so the
+   *  decision layer checks it against the WRITE allow set alone (a READ grant
+   *  never satisfies a write). */
+  writePaths: string[];
   /** Detailed safety verdict. */
   safety: SafetyVerdict;
   /** Detailed risk assessment from token-based and regex-based analysis. */
@@ -127,6 +146,10 @@ export interface CommandAnalysis {
 export interface AnalyzeCommandOptions {
   /** Predicate: is this resolved path inside a session-auto-allowed dir (read or write)? */
   isInsideAllowedDir?: (path: string) => boolean;
+  /** Predicate: is this resolved path inside a session WRITE-allowed dir (G3)?
+   *  Deliberately separate from the read predicate — a read grant must never
+   *  satisfy a write target. Absent = the write bar is not computed. */
+  isInsideAllowedWriteDir?: (path: string) => boolean;
   /**
    * Confirmed resolution for an unresolved-var token (store.getConfirmedResolution
    * — the user-accepted dirs from the LLM path resolver, D12). When present the
@@ -181,6 +204,8 @@ async function analyzeSubstBodies(
 ): Promise<{
   byParent: Map<number, Array<{ seg: BashSegment; base: CwdBase }>>;
   paths: string[];
+  /** Write-role operands of the bodies, same subset rule as `paths`. */
+  writePaths: string[];
   simple: boolean;
   unsafe: boolean;
   reasons: string[];
@@ -189,10 +214,11 @@ async function analyzeSubstBodies(
 }> {
   const byParent = new Map<number, Array<{ seg: BashSegment; base: CwdBase }>>();
   const paths: string[] = [];
+  const writePaths: string[] = [];
   const reasons: string[] = [];
   let credential: string | null = null;
   if (depth > SUBST_MAX_DEPTH) {
-    return { byParent, paths, simple: false, unsafe: true, reasons: [`command substitution nested beyond ${SUBST_MAX_DEPTH} levels`], credential };
+    return { byParent, paths, writePaths, simple: false, unsafe: true, reasons: [`command substitution nested beyond ${SUBST_MAX_DEPTH} levels`], credential };
   }
   const work: Array<{ seg: BashSegment; base: CwdBase }> = [];
   for (let i = 0; i < segments.length; i++) {
@@ -217,14 +243,15 @@ async function analyzeSubstBodies(
         parsed = null;
       }
       if (!parsed || parsed.hasParseError || parsed.segments.length === 0) {
-        return { byParent, paths, simple: false, unsafe: true, reasons: [`unreadable command substitution body: ${trimmed.slice(0, 60)}`], credential };
+        return { byParent, paths, writePaths, simple: false, unsafe: true, reasons: [`unreadable command substitution body: ${trimmed.slice(0, 60)}`], credential };
       }
       // The body's own cd/pushd re-base only the body; it never persists to
       // the parent (the substitution runs in a subshell — trackEffectiveCwd
       // already treats the parent side that way).
       const bodyCwds = trackEffectiveCwd(parsed.segments, root, parsed.assignments);
-      threadCwdPaths(parsed.segments, bodyCwds, normBase, parsed.paths, parsed.assignments);
+      threadCwdPaths(parsed.segments, bodyCwds, normBase, parsed.paths, parsed.assignments, parsed.writePaths);
       paths.push(...parsed.paths);
+      writePaths.push(...parsed.writePaths);
       parsed.segments.forEach((bs, k) => {
         const base = bodyCwds[k] ?? null;
         const list = byParent.get(i);
@@ -240,8 +267,9 @@ async function analyzeSubstBodies(
         if (dest) dest.push(...list); else byParent.set(i, [...list]);
       }
       paths.push(...inner.paths);
+      writePaths.push(...inner.writePaths);
       if (inner.reasons.length) reasons.push(...inner.reasons);
-      if (inner.unsafe) return { byParent, paths, simple: false, unsafe: true, reasons, credential };
+      if (inner.unsafe) return { byParent, paths, writePaths, simple: false, unsafe: true, reasons, credential };
     }
   }
   const analyses = await Promise.all(
@@ -254,7 +282,7 @@ async function analyzeSubstBodies(
     unsafe ||= a.isUnsafe;
     for (const r of a.risk.reasons) if (!reasons.includes(r)) reasons.push(r);
   }
-  return { byParent, paths, simple, unsafe, reasons, credential };
+  return { byParent, paths, writePaths, simple, unsafe, reasons, credential };
 }
 
 /**
@@ -300,6 +328,7 @@ function threadCwdPaths(
   normBase: string,
   paths: string[],
   assignments?: ShellAssignment[],
+  writePaths?: string[],
 ): void {
   const keepStale = new Set<string>();
   const dropStale = new Set<string>();
@@ -314,17 +343,24 @@ function threadCwdPaths(
     if (keepStale.has(s)) continue;
     const idx = paths.indexOf(s);
     if (idx !== -1) paths.splice(idx, 1);
+    const wi = writePaths?.indexOf(s) ?? -1;
+    if (writePaths && wi !== -1) writePaths.splice(wi, 1);
   }
   for (let i = 0; i < segments.length; i++) {
     const base = effectiveCwds[i];
     if (base !== normBase) {
       paths.push(...reResolveCwdDependentPaths(segments[i], base));
+      // G3: the same re-basing for the write set, restricted to the tokens the
+      // write-role table calls a destination — otherwise a cd chain hides the
+      // write (`cd ~/.pi/agent && mkdir ./x`) while the read bar sees it.
+      if (writePaths) writePaths.push(...reResolveCwdDependentPaths(segments[i], base, { writesOnly: true }));
       const basePath = baseAccessPath(segments[i], base, homeFixed);
       if (basePath) paths.push(basePath);
     } else {
       // Base === session cwd: parseCommand already resolved ./../ tokens
       // against it — collect only the $PWD tokens it never saw.
       paths.push(...reResolveCwdDependentPaths(segments[i], base, { skipDotPaths: true }));
+      if (writePaths) writePaths.push(...reResolveCwdDependentPaths(segments[i], base, { skipDotPaths: true, writesOnly: true }));
     }
   }
 }
@@ -394,6 +430,9 @@ export async function analyzeCommand(
   // Single AST parse: segments, paths, opaque refs, and assignments in one pass
   const parseResult = await parseCommand(cmd, cwd);
   const { segments, paths, opaque, assignments, hasParseError, unsets, obscuredArgv0 } = parseResult;
+  // G3: the write-role subset (analysis/write-roles). Threading mutates it in
+  // step with `paths` so both sets name the same runtime locations.
+  const writePaths = [...parseResult.writePaths];
   const segmentTexts = segments.map(s => s.text);
 
   // Effective cwd per segment: a resolvable `cd` in an earlier top-level
@@ -440,7 +479,7 @@ export async function analyzeCommand(
   // base access. Under an unknown base the tokens resolve to a marker path
   // outside every allowed dir, forcing path approval.
   const normBase = path.resolve(expandTilde(cwd));
-  threadCwdPaths(segments, effectiveCwds, normBase, paths, assignments);
+  threadCwdPaths(segments, effectiveCwds, normBase, paths, assignments, writePaths);
 
   // G5: substitution bodies are analyzed as programs (see analyzeSubstBodies).
   // Their operands join the path set, their danger folds into the command's
@@ -449,6 +488,7 @@ export async function analyzeCommand(
   // body nothing is granted for can never auto-allow.
   const subst = await analyzeSubstBodies(segments, effectiveCwds, normBase, 1);
   paths.push(...subst.paths);
+  writePaths.push(...subst.writePaths);
   const substSimple = subst.simple;
   const substUnsafe = subst.unsafe;
   const substCredential = subst.credential;
@@ -593,6 +633,9 @@ export async function analyzeCommand(
   let outsidePaths: string[] | undefined;
   let outsideDirs: string[] | undefined;
   let needsPathApproval: boolean | undefined;
+  let outsideWritePaths: string[] | undefined;
+  let outsideWriteDirs: string[] | undefined;
+  let needsWriteApproval: boolean | undefined;
   let symlinkHops: PathHop[] | undefined;
   if (options?.isInsideAllowedDir) {
     const op = getOutsideCwdPaths(
@@ -626,6 +669,30 @@ export async function analyzeCommand(
     needsPathApproval = op.length > 0;
   }
 
+  // G3: the WRITE bar. Deliberately NOT the read predicate: allowedReadPaths
+  // (~/.pi, the agent's own skills and extensions) and trusted script paths
+  // say nothing about writing. What a write target may sit in is exactly what
+  // the file path already allows a write in: cwd, the config write dirs (temp
+  // dirs), or a dir/file the user granted a WRITE for this session.
+  if (options?.isInsideAllowedWriteDir) {
+    const ow = getOutsideWritePaths(
+      [...new Set(writePaths)].filter((p) => !unresolvedRawTokens.has(p)),
+      cwd,
+      options.isInsideAllowedWriteDir,
+    );
+    outsideWritePaths = ow;
+    outsideWriteDirs = (await resolvePathsToDirs(ow)).filter((d) => {
+      if (d === OPAQUE_VAR_DIR) return false;
+      if (d === UNKNOWN_CWD_MARKER) return true;
+      return ow.some((p) =>
+        !p.startsWith(OPAQUE_VAR_DIR + "/") &&
+        !p.includes(UNKNOWN_CWD_MARKER) &&
+        (p === d || p.startsWith(d + "/")),
+      );
+    });
+    needsWriteApproval = ow.length > 0;
+  }
+
   // Credential path check — the sole credential verdict for the command: a
   // match never auto-allows (SafetyRule) and stops every auto mode (dspa
   // gate), so it always reaches a human prompt with the very-high-risk note.
@@ -651,6 +718,7 @@ export async function analyzeCommand(
     runDepSegmentIndices,
     ungrantableRunDepSegmentIndices,
     paths,
+    writePaths: [...new Set(writePaths)],
     hasParseError,
     safety: {
       // canBeAutoAllowed requires the payload's TOP-LEVEL bar too: a session
@@ -678,6 +746,9 @@ export async function analyzeCommand(
       nonAllowlistedSegmentIndices,
       promptSignatures,
       outsidePaths,
+      outsideWritePaths,
+      outsideWriteDirs,
+      needsWriteApproval,
       outsideDirs,
       needsPathApproval,
       symlinkHops,
