@@ -1361,7 +1361,7 @@ class"). Suite 3229.
 
 **Status: DECIDED.** G1, G2, G5 and G6 are BUILT (3.38.0 — `85beef0`, `181e7eb`,
 `a0f7a2d`, `2b6494b`, `6fb30b1`); G3 and G4 are BUILT (3.39.0 — `81975bb`,
-`38b8a2d`), G7 too (same release, this revision); G8–G11 and G13 are not built. Resolved by grilling the 2026-10-17
+`38b8a2d`), G7 too (`7a36c07`, same release); G8–G11 and G13 are not built. Resolved by grilling the 2026-10-17
 handoff
 audit (Joplin note `67dc875e13594e61b8083dd275924487`) against `3.37.1`
 (`8e57693`). Its own baseline was `3.32.0` — a stale, gitless Mac copy — so its
