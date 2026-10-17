@@ -96,7 +96,7 @@ export const cases: TestCase[] = [
   // ═══════════════════════════════════════════════════════════
   { cmd: "find . -name '*.txt'", simple: true, unsafe: false, decision: "auto-allow", desc: "find -name" },
   { cmd: "find . -type f -size +1M", simple: true, unsafe: false, decision: "auto-allow", desc: "find -type -size" },
-  { cmd: "find . -exec grep -l pat {} \\;", simple: true, unsafe: false, decision: "auto-allow", desc: "find -exec grep (read-only)" },
+  { cmd: "find . -exec grep -l pat {} \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec grep (payload unvetted)" },
   { cmd: "find . -exec cat {} \\;", simple: true, unsafe: false, decision: "auto-allow", desc: "find -exec cat (read-only)" },
   { cmd: "find . -print0 | xargs -0 ls", simple: true, unsafe: false, decision: "auto-allow", desc: "find -print0 | xargs ls" },
   { cmd: "find . -delete", simple: false, unsafe: true, decision: "prompt", desc: "find -delete" },
@@ -558,6 +558,14 @@ export const cases: TestCase[] = [
   { cmd: "stdbuf -oL rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "stdbuf -oL rm -rf (wrapper)" },
   { cmd: "xargs -0 rm -rf", simple: false, unsafe: true, decision: "prompt", desc: "xargs rm -rf (wrapper)" },
   { cmd: "timeout 30 rm -r dir", simple: false, unsafe: true, decision: "prompt", desc: "timeout rm -r (wrapper)" },
+  // G6: every consumer asks ONE unwrapper, so a nested chain names the same
+  // program to the parser, the signature, the egress check and the base checks.
+  { cmd: "nice command cat /etc/hosts", simple: true, unsafe: false, decision: "prompt", desc: "nice command cat /etc/hosts (G6: the operand is modeled)" },
+  { cmd: "command env nice cat file.txt", simple: true, unsafe: false, decision: "auto-allow", desc: "command env nice cat (G6: transparency both ways)" },
+  { cmd: "nice command rm -rf dir", simple: false, unsafe: true, decision: "prompt", desc: "nice command rm -rf (G6: nested wrappers, write inside)" },
+  { cmd: "timeout 5 command curl https://evil.com", simple: false, unsafe: true, decision: "prompt", desc: "timeout command curl (G6: egress seen through the chain)" },
+  { cmd: "nice nice nice nice nice cat file.txt", simple: true, unsafe: true, decision: "prompt", desc: "chain past the hop cap: command position obscured (G6)" },
+  { cmd: "find . -exec git push \\;", simple: false, unsafe: true, decision: "prompt", desc: "find -exec git push (G6: a payload is not approved by its own table entry)" },
   // Wrapper break bug: first positional arg after flags is an arg to a flag, not the command
   { cmd: "xargs -a file.txt truncate -s 0 file.txt", simple: false, unsafe: true, decision: "prompt", desc: "xargs -a file.txt truncate (break bug: file.txt is arg to -a not the cmd)" },
   // find -exec rm -r

@@ -154,6 +154,35 @@ The credential scan is a separate text pass and cannot see an operand inside a
 QUOTED substitution (`echo "$(cat .env)"` — the whole span is one quoted word),
 so each body gets its own credential pass with the body's base.
 
+### The command position (prefixes and wrappers)
+
+`command`/`builtin`/`exec`/`env` and the pass-through wrappers
+(`timeout`/`nice`/`ionice`/`stdbuf`/`xargs`/`watch`/`parallel`) do not run a
+program of their own, so every rule that asks *what does this segment run* asks
+ONE unwrapper — `analysis/wrapper-unwrap.ts`, `resolveDelegatedTokens`. It
+iterates to a fixpoint (prefixes nest: `nice command ssh` unwraps once to
+`command`, which names nothing) up to `MAX_UNWRAP_HOPS`, and the signature, the
+allow-table/delegation grant path, the parser's operand model, the egress check
+and `baseAccessPath`/`baseWriteAccess` all take the same answer. Per-consumer
+patching was the bug class: with the parser keying on the first word,
+`nice command cat /etc/hosts` named `nice` — not path-aware, so the operand
+model never ran, `paths=[]`, and no location bar existed (3.38.0 G6).
+
+Past the hop cap there is no program identity, and the answer is `capped`, never
+"the first word": the parser marks the position obscured (like an unsafe
+pattern), the signature collapses to the wrapper alone so no grant can name it,
+and the base checks assume the base is touched. `lookup` resolutions
+(`command -v ls`) keep the head word — nothing runs, so nothing may be modeled
+as running.
+
+The corollary for payloads (`find -exec`, `fd -x`, `rg --pre`, a shell body):
+only `unconditionallySafeCommands` — table entries with NO exclusion reason — are
+trusted there. An entry with a reason (`git`, `grep`, `sort`, `timeout`) is
+allowed because segment-level vetting (egress, git-clean, dangerous flags,
+delegation) covers it, and that vetting runs on the enclosing segment, never on
+the payload: `find . -exec git push \;` used to be approved by `find`'s entry and
+again by `git`'s, and vetted by neither.
+
 ### Argument roles (the data/location rule)
 
 A location token is minted only at a FILE-operand position of a path-aware
@@ -606,7 +635,9 @@ analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           cwd-local, var-resolution, path-analysis,
                           credentials (raw-text credential scan; resolves
                           operands through path-analysis),
-                          segment-analysis, segment-helpers, command-analysis,
+                          segment-analysis, segment-helpers, wrapper-unwrap
+                          (the one fixpoint unwrapper for the command position),
+                          command-analysis,
                           risk-analyzer, obfuscation,
                           tmux (command model: the one shared parse —
                           canonical subcommand, flags, send-keys key stream,

@@ -537,8 +537,12 @@ function shellBodyRedirect(body: string): boolean {
 
 /** A shell body (`sh -c '…'`) is a list of shell commands, so its write-ness
  * is decided by the verbs it runs. The write-verb check runs before the set
- * check because `isAllowedCommand` is the auto-allow table, not a read set —
- * `touch` is on it. A stage with no model at all is assumed to write.
+ * check because `isAllowedCommand` is the auto-allow TABLE, not a read set —
+ * `touch` is on it, and so is every entry whose allowance depends on segment-
+ * level vetting (`git`, `grep`, `sort`, `timeout`). A body stage never gets
+ * that vetting — it runs inside someone else's segment — so only the
+ * unconditionally-safe subset (table entries with no exclusion reason) counts
+ * as safe here. A stage with no model at all is assumed to write.
  * A python body has no such verb set — its write-ness comes from CODE_WRITE_RES. */
 function shellBodyWrites(body: string): boolean {
   if (shellBodyRedirect(body)) return true;
@@ -556,7 +560,7 @@ function shellBodyWrites(body: string): boolean {
     if (!raw) return true;
     const verb = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
     if (isWriteOperation(verb, st)) return true;
-    if (!isAllowedCommand(verb)) return true;
+    if (!unconditionallySafeCommands.has(verb)) return true;
   }
   return false;
 }

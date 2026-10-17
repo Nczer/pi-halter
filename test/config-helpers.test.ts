@@ -16,7 +16,11 @@ describe("codeBodiesWrite — a shell body's redirects (2026-10-16)", () => {
     // Not writes: fd dups, and absolute targets — those enter the path set.
     expect(codeBodiesWrite([{ text: "echo x >&2", opaque: false }], true)).toBe(false);
     expect(codeBodiesWrite([{ text: "ls 2>&1 | wc -l", opaque: false }], true)).toBe(false);
-    expect(codeBodiesWrite([{ text: "grep a f 2>/dev/null | wc -l", opaque: false }], true)).toBe(false);
+    expect(codeBodiesWrite([{ text: "cat a f 2>/dev/null | wc -l", opaque: false }], true)).toBe(false);
+    // A body verb is trusted only if it is UNCONDITIONALLY safe (no exclusion
+    // reason): the segment-level vetting that makes `grep`/`git`/`sort`
+    // grantable never runs on a stage inside someone else's payload.
+    expect(codeBodiesWrite([{ text: "grep a f | wc -l", opaque: false }], true)).toBe(true);
   });
 });
 
