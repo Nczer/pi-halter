@@ -1359,7 +1359,9 @@ class"). Suite 3229.
 
 ## 6. Round-6 audit grill — resolved decisions (2026-10-17)
 
-**Status: DECIDED, NOT BUILT.** Resolved by grilling the 2026-10-17 handoff
+**Status: DECIDED.** G1, G2 and G5 are BUILT (3.38.0, `85beef0`/`a0f7a2d` + the
+G5 commit); G3/G4/G6–G11 are not built. Resolved by grilling the 2026-10-17
+handoff
 audit (Joplin note `67dc875e13594e61b8083dd275924487`) against `3.37.1`
 (`8e57693`). Its own baseline was `3.32.0` — a stale, gitless Mac copy — so its
 reproducers were re-run at HEAD first: 37 of 60 manual rows still auto-allow,
@@ -1395,13 +1397,27 @@ the rest were closed by 3.33–3.37. Each release below carries its rows as
    `bin/ls`, `~/Downloads/ls`, `/tmp/evil/git status`, `node_modules/.bin/tsc`;
    `RELATIVE_PATH_RE` (`./`, `../` only) is why the existing relative-tool
    base-binding never saw `bin/ls`.
-5. **G5 — substitution bodies are analyzed as stages.** The parser already
-   extracts them into `BashSegment.subshellTexts`; feed those through the same
-   per-stage analysis with the parent's effective base, and make
-   `READONLY_SUBSHELL_CMDS` flag-aware (`fd -x`, `rg --pre`) and drop `cd`.
-   `architecture.md`'s Command-substitution section already promises "the body's
-   own paths still get path checks" — the parser never delivered it
-   (`collectCommandNodes` returns at the outer `command`). Verified live:
+5. **G5 — substitution bodies are analyzed as stages.** *(Built, 3.38.0.)* The
+   chosen route was narrower than what landed: instead of making
+   `READONLY_SUBSHELL_CMDS` flag-aware and dropping `cd`, the body is PARSED and
+   its segments run through the full segment pipeline under the parent's
+   effective base — one model, no second allow table, so the table is deleted
+   with its unit tests. Body paths join the command's path set; body programs
+   extend the parent segment's STAGE list (the grant unit), so `Always` on the
+   outer program never vouches for a body and a body program can be granted; a
+   body's own `cd` re-bases only the body; nesting is depth-capped and fails
+   closed; each body gets its own credential pass (the command-text scan cannot
+   see an operand inside a quoted substitution). Two holes found on the way,
+   both pinned by tests: `extractSubshellInnerTexts` took the substitution's
+   FIRST child, so `;`/`&` bodies were truncated (`$(ls & rm -rf /)` → `ls`),
+   and the stage-split fallback was blind to backslash escapes, so `grep a\|b f`
+   gained a phantom stage no grant could cover. Round-6 rows closed (manual
+   corpus: 28 auto-allow → 21 of 62); the dspa floor gained two stops
+   (`echo $(cat /etc/passwd)`, `echo $(rm -rf /)`) and lost none; the replay of
+   the ledger corpus (719 unique real bash commands, each with its logged cwd)
+   shows one flip, prompt → auto-allow, on a read-only
+   grep/echo/`for` over an auto-allowed location — an FP this decision exists to
+   remove. Verified live:
    `echo $(cat /etc/passwd)`, `"$(cat ~/.netrc)"`, `"$(cat .env)"`.
 6. **G6 — one shared fixpoint unwrapper, fail-closed at the cap.** Every
    first-word consumer adopts it (signature, allow table, `baseAccessPath`,

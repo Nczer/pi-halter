@@ -131,12 +131,28 @@ scan is raw-text, independent of the path set).
 
 ### Command substitution
 
-A `$(…)`/backtick/`<(...)` body made of read-only commands (the
-unconditionally-safe set plus `grep`/`rg`/`fd`/`ag`) with no write redirect,
-backgrounding, or multi-line list is data production, not code execution.
-The body's own paths still get path checks; nested substitutions classify
-individually; any other body keeps the always-prompt flag. `find` and
-wrappers are excluded from the body set.
+A `$(…)`, backtick, `<(…)` or `>(…)` body is a PROGRAM the shell runs before the
+outer command starts, so it is analyzed as one: the body text is re-parsed and
+its segments go through the same pipeline a top-level segment goes through —
+operands minted, flags checked, its own `cd` re-basing only the body (a
+substitution runs in a subshell), and its nested bodies analyzed in turn (depth
+-capped; beyond the cap fails closed). The body's paths join the command's path
+set, and its programs extend the parent segment's STAGE list, so a body program
+needs its own grant and a grant for the outer program never vouches for it.
+
+Two holes this replaced. (1) A name table (`READONLY_SUBSHELL_CMDS`) classified
+the body TEXT by word — blind to flags (`fd -x rm`), to relative operands
+(`cat .env`) and to a `cd` inside the body. (2) The body extractor took the
+substitution node's FIRST child: `&&`/`||`/`|` bodies arrive as one `list`/
+`pipeline` child, but `;`- and `&`-separated bodies arrive as SEPARATE children,
+so `$(ls & rm -rf /)` yielded the body `ls`. Bodies now come from the node's
+source span verbatim; an unrecognized node shape hands over the node text, which
+parses as a substitution in command position and is refused. A substitution node
+with no body to hand over (`$()`) keeps the always-prompt flag.
+
+The credential scan is a separate text pass and cannot see an operand inside a
+QUOTED substitution (`echo "$(cat .env)"` — the whole span is one quoted word),
+so each body gets its own credential pass with the body's base.
 
 ### Argument roles (the data/location rule)
 
@@ -207,8 +223,9 @@ Refs the command itself pins resolve instead of flagging:
 Scripts resolving into `~/.pi/agent/skills/` auto-allow in three forms
 (interpreter + script; shell interpreter + script, first non-flag token only;
 direct exec). `-c`/`--command` is never trusted. Trust covers the invocation
-only: unsafe pipe stages, write redirects, and command substitution around a
-trusted script still prompt. `uv run --with <pkg>` trusts the invocation only
+only: unsafe pipe stages and write redirects around a trusted script still
+prompt (a substitution argument is judged by what its body does — see
+Command substitution). `uv run --with <pkg>` trusts the invocation only
 when every `--with` package is in `TRUSTED_PACKAGES` and the script is in a
 trusted dir (`--with-requirements`/`--with-editable` sources must be trusted
 too; they bypass the package allowlist). Matching is exact after extras and

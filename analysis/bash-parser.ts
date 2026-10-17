@@ -1426,27 +1426,39 @@ function nodeHasSubshell(node: TSNode): boolean {
 }
 
 /**
+ * The verbatim body between a substitution's delimiters — $(…), `…`, <(…),
+ * >(). Taken from the node's own source span, because the body's grammar
+ * shape varies with its operators: `&&`/`||`/`|` bodies arrive as one `list`/
+ * `pipeline` child, while `;`- and `&`-separated bodies arrive as SEPARATE
+ * children of the substitution node (no wrapper). Child-walking therefore
+ * truncated `$(ls & rm -rf /)` to `ls` — everything after the separator was
+ * invisible to every consumer of this list. An unrecognized node shape hands
+ * over the node text itself, so the body parses as a substitution in command
+ * position and is refused (fail closed).
+ */
+function substitutionBodyText(n: TSNode): string {
+  const t = n.text.trim();
+  for (const open of ["$(", "<(", ">("]) {
+    if (t.startsWith(open) && t.endsWith(")")) return t.slice(open.length, -1);
+  }
+  if (t.startsWith("`") && t.endsWith("`")) return t.slice(1, -1);
+  return t;
+}
+
+/**
  * Extract inner command texts from all $() and `cmd` command substitutions,
  * and >()/ <() process substitutions in the subtree. Returns an empty array
- * if none are found.
+ * if none are found. Nested substitutions also appear as their own entries —
+ * a body is reported whole AND its inner substitutions are reported
+ * individually, so a consumer that classifies bodies one level at a time
+ * still sees every program the shell will run.
  */
 function extractSubshellInnerTexts(node: TSNode): string[] {
   const texts: string[] = [];
   function walk(n: TSNode): void {
     if (n.type === "command_substitution" || n.type === "process_substitution") {
-      // The inner content could be a command, pipeline, list, or a
-      // redirected_statement (tree-sitter wraps bodies containing redirects:
-      // `$(wc -c < file)` → redirected_statement > command + file_redirect).
-      // Without this the body is invisible → fail-closed HIGH on every
-      // read-only substitution that feeds its command from a file.
-      for (let i = 0; i < n.childCount; i++) {
-        const child = n.child(i);
-        if (child && (child.type === "command" || child.type === "pipeline" || child.type === "list" || child.type === "redirected_statement")) {
-          const inner = child.text.trim();
-          if (inner) texts.push(inner);
-          break;
-        }
-      }
+      const inner = substitutionBodyText(n).trim();
+      if (inner) texts.push(inner);
     }
     for (let i = 0; i < n.childCount; i++) {
       const child = n.child(i);

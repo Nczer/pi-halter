@@ -71,18 +71,6 @@ export function containsCommandSubstitution(s: string): boolean {
 }
 
 /**
- * Commands allowed in a command-substitution body: the unconditionally-safe
- * set plus the pure readers (grep/rg/fd/ag — read files, write only to the
- * output stream). `find` is deliberately excluded (-exec/-delete can execute
- * or delete); wrappers (xargs/timeout/env/…) are excluded too — the delegated
- * command is not visible at this level.
- */
-const READONLY_SUBSHELL_CMDS = new Set([
-  ...unconditionallySafeCommands,
-  "grep", "rg", "fd", "ag",
-]);
-
-/**
  * The pipeline stages of a segment (G1): the parser-built list when the AST
  * saw a pipeline, else a quote-aware split of the segment text.
  *
@@ -102,38 +90,6 @@ export function segmentStages(seg: BashSegment): string[] {
   return parts.length > 0 ? parts : [seg.text];
 }
 
-/**
- * True when a command-substitution body (`$(…)` / backticks) is pure data
- * production: a chain of read-only commands (|, |&, &&, ||, ;), no write
- * redirect, no backgrounded list, no multi-line list. Quote-aware — operators
- * and & inside quotes do not count. Such a body cannot escalate a read-only
- * outer command: it runs only the same trust class as top-level auto-allowed
- * reads, all of its paths/redirects are checked separately (the path
- * extractor walks into substitution nodes), and nested substitutions are
- * extracted and classified individually. Fails closed on anything unrecognized.
- */
-export function isReadOnlySubshellText(text: string): boolean {
-  const stripped = stripQuotedStrings(text);
-  if (hasWriteRedirect(text)) return false; // > / >> (null-redirects exempt)
-  // Background list separator: a bare & not part of && (lookbehind) or
-  // |& tee-pipe / &> (lookahead). Quoted & already stripped.
-  if (/(?<![&|])&(?![&>])/.test(stripped)) return false;
-  if (/\n/.test(stripped)) return false;        // multi-line list
-  for (const seg of splitIntoSegments(text)) {
-    for (const part of splitOnPipe(seg)) {
-      const tokens = tokenizeSegment(part);
-      let cmd: string | null = null;
-      for (const t of tokens) {
-        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) continue; // env-assign prefix
-        cmd = t;
-        break;
-      }
-      if (cmd === null) continue; // empty part (trailing operator)
-      if (!READONLY_SUBSHELL_CMDS.has(cmd.toLowerCase())) return false;
-    }
-  }
-  return true;
-}
 
 /**
  * Replace quoted spans (`'…'`, `$'…'`, `"…"`, `$"…"`) with `__STR__` (or
