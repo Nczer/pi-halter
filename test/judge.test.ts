@@ -382,7 +382,23 @@ describe("judge call", () => {
     expect(calls[0].context.messages).toHaveLength(1);
     expect(calls[0].context.messages[0].content).toBe(buildJudgmentPacket(baseInput));
     expect(typeof calls[0].context.systemPrompt).toBe("string");
-    expect(calls[0].options?.toolChoice).toBe("auto");
+    expect(calls[0].options?.toolChoice).toBe("required");
+  });
+
+  it("forces the call in the adapter's own word; an unknown wire stays auto", async () => {
+    const seen: (string | undefined)[] = [];
+    for (const api of ["openai-completions", "openai-responses", "mistral-conversations", "anthropic-messages", "bedrock-converse-stream", "google-generative-ai", "radius-custom-wire"]) {
+      const calls: CapturedCall[] = [];
+      await judge(baseInput, {
+        ...baseOpts,
+        model: { ...fakeModel(`m-${api}`), api } as Model<any>,
+        stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      });
+      seen.push(calls[0].options?.toolChoice);
+    }
+    // A value the wire does not know is worse than none: the Anthropic
+    // adapter would send {type:"required"} and reject every call.
+    expect(seen).toEqual(["required", "required", "required", "any", "any", "any", "auto"]);
   });
 
   it("forwards the thinking level as reasoning, and omits it for off", async () => {

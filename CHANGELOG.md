@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+**The judge tells the wire the verdict call is mandatory — in that wire's own
+vocabulary.**
+
+- **What was wrong.** The six 2026-10-17 `no-tool-call` stage-2 lines were replies
+  that opened no call at all: the verdict schema written out as prose-ish JSON
+  (`{"explanation": …`) with the arguments and no `name`, each one a lost
+  explanation and a fail-safe defer. `judge()` and the path resolver both sent
+  `toolChoice: "auto"`, on the theory that it was the only portable value.
+- **Why one value could not work.** pi types `ToolChoice` as `auto | none`, so what
+  reaches an adapter is unvalidated, and each adapter reads the string differently:
+  `openai-completions` forwards `tool_choice` verbatim and `mistral-conversations`
+  accepts `required`, but `anthropic-messages` wraps the string as `{type: "required"}`
+  (not an Anthropic value — a 400, i.e. a judge that defers forever), and
+  `google-shared` / `bedrock-converse-stream` map only `auto`/`any`/`tool` and would
+  silently drop `required`. So the request is now spelled per wire:
+  `TOOL_CHOICE_BY_API` + `judgeToolChoice()` → `required` for the five OpenAI-shaped
+  wires and Mistral, `any` for Anthropic, Bedrock, Google Generative AI and Vertex,
+  `auto` for an api the map does not name. Both judge stages and the path resolver
+  use it; the stale portability comment is gone.
+- **What it buys, and what it does not.** Requiring the call removes the
+  prose-reply class at the source — a wire that writes the call opener cannot emit
+  that shape. It does not touch the class still live at temperature 1: a call that
+  opens and immediately closes with empty arguments (`bad-args`), which the retry
+  covers.
+- **No before/after improvement was measurable.** `test/live-judge-wire.test.ts`
+  (env-gated, skipped by default — `HALTER_LIVE_WIRE=1 HALTER_LIVE_WIRE_N=7
+  ../node_modules/.bin/vitest run test/live-judge-wire.test.ts`) replays a real
+  2026-10-17 stage-2 packet through the real `judge()` and pi's real `stream` seam
+  on the live engine: 7 samples at `auto` and 7 at `required` produced a tool call
+  7/7 in both arms, so the collapse did not reproduce on today's engine. The same
+  empty-args flake appeared 1/7 in *both* arms (absorbed by the retry). The force
+  itself is proven structurally, not behaviourally: the forced arm pays +10 prompt
+  tokens for the same packet (in=17 cache=1899 vs in=7 cache=1899), and a direct
+  request to the same engine with the same prompt answers "Hello" in prose at
+  `auto` but returns a real `tool_call` at `required` and `any`. The Oct-17 state
+  cannot be pinned — the served quant file post-dates the failures — so this is
+  recorded as a structural guard, not a measured repair.
+
 ## 3.39.0 — 2026-10-17
 **The bar asks about the thing the command actually touches: the binary, the
 written operand, the fetched package.**

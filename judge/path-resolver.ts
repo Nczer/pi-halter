@@ -32,7 +32,7 @@ import { stream } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {BashPromptData} from "../decide/types";
-import {JUDGE_RESPONSE_CAP_MS, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeSettings} from "./judge";
+import {JUDGE_RESPONSE_CAP_MS, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeToolChoice, JudgeStreamFn, JudgeSettings} from "./judge";
 import { expandTilde } from "../analysis/path-util";
 
 // ── Model call ──
@@ -170,10 +170,9 @@ export async function resolveUnresolvedPaths(
       signal: controller.signal,
       apiKey: auth.apiKey,
       headers: auth.headers,
-      // "auto" (judge.ts pattern): "required" is not portable across
-      // providers; a reply without a tool call simply yields no
-      // resolutions (handled below).
-      toolChoice: "auto",
+      // Same forced call as judge(): the tool is the only channel, so a
+      // prose reply buys nothing (it yields no resolutions either way).
+      toolChoice: judgeToolChoice(model),
     };
     try {
       const s = (deps.stream ?? stream)(

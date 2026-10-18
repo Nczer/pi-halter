@@ -497,6 +497,12 @@ The failure class is carried, never re-guessed: a judge stage returns a
 and latency), and every no-verdict surface — the dspa stop-tag, the prompt note,
 the dspat warning, the retry note — renders it. That is what makes "stage 2 fails
 while the server is up" answerable: the ledger says which kind of failure it was.
+The verdict arrives only as the tool call, so the call is required on the wire —
+`judgeToolChoice()` picks the adapter's own word for it (`required` on the
+OpenAI-shaped wires and Mistral, `any` on Anthropic, Google and Bedrock, `auto`
+for an unmapped api, where an unknown value 400s or silently no-ops). Forcing the
+call removes the prose-reply class; it cannot repair a call that opens and closes
+with empty arguments, which stays `bad-args`.
 EVERY floor stop is advisory (D16): the judge runs both stages and renders
 the verdict in the prompt — the stop stands. Auto-allowed operations toast.
 
@@ -688,7 +694,8 @@ at halter load.
   failures (`infra`: `error` is judge()'s own typed class — model-unresolved
   / auth-failed / timeout / no-tool-call / bad-args / call-failed, with the
   message in `detail`; a question-shaped reply is `bad-args` with detail
-  `asked-user: …`), and D13 path mismatches (`paths`: `floorMisses` = paths
+  `asked-user: …`; `no-tool-call` needs a wire the tool-choice map leaves at
+  `auto`, since the call is otherwise required), and D13 path mismatches (`paths`: `floorMisses` = paths
   the floor never saw, `contextMisses` = stage-2 echoes of paths named only
   in the Session context section). Mine with `tools/log-inspect.mjs judge`.
 - **Glob-err ledger** (`.log/glob-err.jsonl`, on by default): credential-scan
