@@ -173,7 +173,7 @@ describe("getJudgeVerdict", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("valid verdict → explanation; widget shown then cleared; toolChoice auto", async () => {
+  it("valid verdict → explanation; widget shown then cleared; call forced", async () => {
     const calls: CapturedCall[] = [];
     const { ctx, widgets } = makeCtx(fakeModel());
     const r = await getJudgeVerdict(makePd("ls -la", tmp), ctx, createStore(), {
@@ -182,7 +182,7 @@ describe("getJudgeVerdict", () => {
     });
     expect(r?.explanation).toBe(VERDICT.explanation);
     expect(calls).toHaveLength(1);
-    expect(calls[0].options?.toolChoice).toBe("auto");
+    expect(calls[0].options?.toolChoice).toBe("required");
     expect(calls[0].options?.apiKey).toBe("k");
     const judgeWidgets = widgets.filter(w => w.id === "judge");
     expect(judgeWidgets).toHaveLength(2);

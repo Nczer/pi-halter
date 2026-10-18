@@ -169,11 +169,9 @@ export const JUDGE_STAGE2_SYSTEM_PROMPT = [
 ].join("\n")
 
 /**
- * The single tool the model must call. `toolChoice` stays "auto" — the only
- * value portable across providers: llama.cpp's OpenAI-compat server rejects
- * "any" (400) and silently ignores "required"; OpenAI/Anthropic adapters
- * each accept "auto". The final system-prompt line enforces the call; a
- * free-text reply is treated as a failed judgment (defer).
+ * The single tool the model must call. The call is forced by the wire, per
+ * adapter — see TOOL_CHOICE_BY_API; the final system-prompt line stays as the
+ * belt (a free-text reply is still treated as a failed judgment → defer).
  * Plain JSON-Schema object (the provider adapters read
  * `parameters.properties` / `parameters.required`); the `as unknown as Tool`
  * bridge satisfies the TSchema-typed field without a typebox dependency.
@@ -397,6 +395,44 @@ function sha256(text: string): string {
   return createHash("sha256").update(text, "utf-8").digest("hex");
 }
 
+/**
+ * "You must call a tool", spelled the way each adapter's wire spells it.
+ * pi forwards `toolChoice` verbatim (its own type only names "auto"/"none"),
+ * so the value must be the one THAT adapter accepts: the OpenAI-shaped wires
+ * take "required", the Anthropic/Google/Bedrock ones take "any" (their
+ * adapters map "required" to a rejected `{type:"required"}` or silently to
+ * AUTO). A value the wire does not know is therefore worse than no value:
+ * every judge call on that model would fail safe to a defer the operator
+ * never sees. An api that is not listed stays "auto" — an unfamiliar wire
+ * never costs the judgment.
+ *
+ * Why force at all: the 2026-10-17 judge ledger shows five stage replies
+ * written as prose (`{"explanation": …` with no call opened at all), each one
+ * a lost explanation and a fail-safe defer. A wire that writes the call
+ * opener itself cannot produce that class. It does not fix the class that
+ * still happens at temperature 1 — a call opened and immediately closed with
+ * empty arguments (`bad-args`) — which is what the retry covers.
+ * Verified on the live judge engine (2026-10-18 wire replay,
+ * test/live-judge-wire.test.ts): "required" and "any" both reach Strata's
+ * forced-call path; the same tiny prompt at "auto" answers in prose instead.
+ */
+const TOOL_CHOICE_BY_API: Record<string, string> = {
+  "openai-completions": "required",
+  "openai-responses": "required",
+  "azure-openai-responses": "required",
+  "openai-codex-responses": "required",
+  "mistral-conversations": "required",
+  "anthropic-messages": "any",
+  "bedrock-converse-stream": "any",
+  "google-generative-ai": "any",
+  "google-vertex": "any",
+};
+
+/** The forced-call value for one model's wire; "auto" for an unknown api. */
+export function judgeToolChoice(model: Model<any>): string {
+  return TOOL_CHOICE_BY_API[model.api] ?? "auto";
+}
+
 /** Whole-input hash: same operation bytes → same verdict, for all three
  * operation types (the script/args content is part of the JSON, so edited
  * scripts or changed args never reuse a stale verdict). */
@@ -541,7 +577,9 @@ async function judgeOnce(input: JudgmentInput, opts: JudgeOptions): Promise<Judg
       signal: controller.signal,
       apiKey: opts.apiKey,
       headers: opts.headers,
-      toolChoice: "auto",
+      // Forced per adapter (TOOL_CHOICE_BY_API): the verdict is the only
+      // channel, so a reply without a call is never worth a retry budget.
+      toolChoice: judgeToolChoice(opts.model),
     };
     if (opts.thinking && opts.thinking !== "off") {
       streamOptions.reasoning = opts.thinking;

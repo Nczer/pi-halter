@@ -201,6 +201,8 @@ describe("resolveUnresolvedPaths", () => {
     expect(calls).toHaveLength(1);
     expect(r).not.toBeNull();
     expect([...(r ?? new Map()).entries()]).toEqual([[TOKEN, ["/Users/u/ext/a", "/Users/u/ext/b"]]]);
+    // The resolver forces the call the same per-wire way the verdict does.
+    expect(calls[0].options?.toolChoice).toBe("required");
   });
 
   it("the packet names the command, cwd, and the numbered tokens", async () => {
