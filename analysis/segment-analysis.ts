@@ -156,11 +156,11 @@ function analyzeDelegated(
 
   // Dangerous command patterns against the delegated command name (a wrapper
   // running curl/ssh/rm … is as dangerous as the bare command).
-  for (const { pattern, label } of dangerousCommandPatterns) {
+  for (const { pattern, label, absolute } of dangerousCommandPatterns) {
     if (pattern.test(cmd)) {
       acc.hasDanger = true;
       if (!acc.severity) acc.severity = "medium";
-      addReason(acc, `[Pattern] ${label}`);
+      addReason(acc, `[${absolute ? "Absolute" : "Pattern"}] ${label}`);
     }
   }
 
@@ -341,12 +341,15 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
   let matchedDangerousContext = false;
   if (!isTrusted && !isVersionOnlyInvocation && (!isLookupOrEcho || isCommandExec || isEchoWithSubshell)) {
     // Check firstWord against dangerousCommandPatterns (normal path)
-    for (const { pattern, label } of dangerousCommandPatterns) {
+    for (const { pattern, label, absolute } of dangerousCommandPatterns) {
       if (pattern.test(firstWord)) {
         matchedDangerousCommand = true;
         if (!acc.severity) acc.severity = "medium";
         const key = label.split(/\s|[\/]/)[0].toLowerCase();
-        if (!coveredKeys.has(key)) addReason(acc, `[Pattern] ${label}`);
+        // An absolute bar's label is never deduped away: it is the stop reason
+        // downstream (gate/dspa-gate.ts, absoluteBarHits), not noise — the
+        // coveredKeys squeeze is only for the class labels the judge reads.
+        if (absolute || !coveredKeys.has(key)) addReason(acc, `[${absolute ? "Absolute" : "Pattern"}] ${label}`);
       }
     }
     // (The executed command of `command -p <cmd>` / `command <cmd>` is checked
@@ -356,12 +359,12 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
     // should not trigger the "curl/wget | interpreter" pattern). The existing
     // evaluators + pipeline analysis catch all real threats from $(…) content.
     const cleanedForContext = strippedSegment;
-    for (const { pattern, label } of dangerousContextPatterns) {
+    for (const { pattern, label, absolute } of dangerousContextPatterns) {
       if (pattern.test(cleanedForContext)) {
         matchedDangerousContext = true;
         if (!acc.severity) acc.severity = "medium";
         const key = label.split(/\s/)[0].toLowerCase();
-        if (!coveredKeys.has(key)) addReason(acc, `[Pattern] ${label}`);
+        if (absolute || !coveredKeys.has(key)) addReason(acc, `[${absolute ? "Absolute" : "Pattern"}] ${label}`);
       }
     }
   }

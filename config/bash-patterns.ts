@@ -182,9 +182,16 @@ export function isSafeSubcommand(segment: string): boolean {
   return false;
 }
 
-/** Wrapper commands that delegate to another command (xargs sed -i, timeout rm, etc.). */
+/** Wrapper commands that delegate to another command (xargs sed -i, timeout rm, etc.).
+ * `sudo` belongs here for the same reason `env` does: it sets credentials and
+ * execs the rest, so every consumer keyed on "what does this segment run" must
+ * see past it — without it the pattern tables never saw `sudo mkfs` and an
+ * absolute bar could be stepped over by prefixing it (found by the D-b probe
+ * 2026-10-19; the operator's caveat: in a non-interactive shell `sudo` usually
+ * dies on the missing password, so the shapes that matter are NOPASSWD rules
+ * and cached credentials). */
 export const wrapperCommands = new Set([
-  "xargs", "watch", "timeout", "parallel", "env", "nice", "ionice", "stdbuf",
+  "xargs", "watch", "timeout", "parallel", "env", "nice", "ionice", "stdbuf", "sudo",
 ]);
 
 /** Shell interpreters used by find -exec and similar constructs. */

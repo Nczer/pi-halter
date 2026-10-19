@@ -4,7 +4,7 @@ import { wrapperCommands } from "../config";
 /**
  * The command position of a word list: the ONE unwrapper for shell prefixes
  * (`command`/`builtin`/`exec`/`env`) and pass-through wrappers
- * (`timeout`/`nice`/`ionice`/`stdbuf`/`xargs`/`watch`/`parallel`).
+ * (`timeout`/`nice`/`ionice`/`stdbuf`/`xargs`/`watch`/`parallel`/`sudo`).
  *
  * Every rule that keys on "what does this segment run" — the signature a grant
  * is stored under, the allow table, the operand model that mints paths, the
@@ -34,6 +34,10 @@ const WRAPPER_VALUE_FLAGS: Record<string, Set<string>> = {
   parallel: new Set(["-j", "--jobs", "-i", "--input-file", "--block-size", "--group-size", "--jobserver", "--jobserver-batch-size", "--tmpdir", "--basefile", "--results"]),
   timeout: new Set(["-s", "--signal"]),
   stdbuf: new Set(["-i", "-o", "-e"]),
+  // sudo(8): the credential/host/role options take a value; the rest are
+  // switches and the generic flag skip covers them (`-n`, `-E`, `-H`, `-l`,
+  // `-s`, `-v`, …), as does `--opt=value` (one token).
+  sudo: new Set(["-u", "--user", "-g", "--group", "-p", "--prompt", "-h", "--host", "-r", "--role", "-t", "--type", "-c", "--auth-class", "-C", "--close-from", "-D", "--login-class", "--chdir", "-U", "--other-user"]),
 };
 
 /**
@@ -148,7 +152,7 @@ function unwrapOneHop(words: string[], from: number): { index: number; lookup: b
 
 /**
  * Resolve the command a shell prefix (command/builtin/exec/env) or wrapper
- * (timeout/xargs/watch/parallel/nice/ionice/stdbuf) delegates to — to a
+ * (timeout/xargs/watch/parallel/nice/ionice/stdbuf/sudo) delegates to — to a
  * FIXPOINT, because prefixes nest and a one-hop unwrap stops at the next
  * prefix: `nice command ssh`, `timeout 5 nice cat`, `command env nice cat`.
  * Returns null when the segment doesn't delegate to another command (or the
