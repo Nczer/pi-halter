@@ -822,7 +822,9 @@ describe("fall-through", () => {
     const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
     expect(fallthrough?.gate.ok).toBe(false);
     if (fallthrough?.gate && !fallthrough.gate.ok) {
-      expect(fallthrough.gate.reason).toContain("network egress");
+      // The command is download-and-execute, so the absolute bar names it
+      // before the egress policy does — the more precise reason (D-b).
+      expect(fallthrough.gate.reason).toContain("absolute bar (curl/wget | interpreter");
       expect(fallthrough.gate.advisory).toBe(true);
     }
     expect(fallthrough?.verdict).toBeNull();
@@ -832,10 +834,10 @@ describe("fall-through", () => {
   it("hard gate block (rm neighborhood) → judge runs advisory, stop stands (D16)", async () => {
     setDspaActive(true);
     // The mocks return no verdict, so the prompt is bare — the point is the
-    // D16 flow: both stages run on a formerly bare rm-class stop (the
-    // dev-loop cp … && rm … shape), and the floor's stop stays in the log.
-    // rm is never auto-allowed.
-    await runGate(bashDecision("cp /tmp/show-msg.test.ts f && rm f"));
+    // D16 flow: both stages run on a formerly bare rm-class stop (an
+    // interpreter running, then cleaning up after itself), and the floor's stop
+    // stays in the log. rm is never auto-allowed.
+    await runGate(bashDecision("python3 gen.py && rm -f gen.out"));
     expect(judgePrompt.getJudgeVerdict).toHaveBeenCalledTimes(1);
     expect(judgePrompt.getStage2Verdict).toHaveBeenCalledTimes(1);
     const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];

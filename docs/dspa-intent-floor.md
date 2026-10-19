@@ -132,7 +132,11 @@ the intent route (§3) is the one that trades determinism for friction.
   "the friction is mainly in heredoc" — and the routine `python`/`node`/`uv`/
   `tar`/`cp`/`kill`/`ssh` entries. Mechanism: an `absolute: true` flag on the
   entries in `config/dangerous-patterns.ts`; the gate returns the absolute
-  stop only on flagged entries.
+  stop only on flagged entries. (Built 2026-10-19: the flag makes the analysis
+  tag its hit `[Absolute] <label>` and the gate stops on that tag instead of
+  re-matching the table — that is what inherits the analysis's trusted-command,
+  version-only and quote-stripping exclusions. See §8 build notes for the
+  premise correction.)
   Basis for trusting the heredoc half: the stage-2 packet already carries the
   full command text including heredoc bodies (`judge/packet.ts:239`, D11),
   and D19 already faces the judge's `writes` report against the deterministic
@@ -221,6 +225,33 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
 `sed -i ~/.pi/agent/settings-ext.json` — plus regression in
 `test/dspa.test.ts`.
 
+### Step 2 build notes (2026-10-19)
+
+- **2a is built (flags + `[Absolute]` tag + the gate's absolute-bar stop + the
+  rm carve-out no longer stopping on a bare class label); 2b (the egress split)
+  is not.**
+- **Step 2's premise was measured wrong when I built it.** The plan read as if
+  the gate's `dangerous:` stop were the live guard for mkfs/shutdown/`git reset
+  --hard`/`eval`. It is not: that stop fires only in the rm branch, so at HEAD
+  those commands reached the judge UNPROMPTED (probe: `mkfs.ext4 /dev/sdb`,
+  `shutdown -h now`, `eval "$CMD"`, `git reset --hard HEAD~3`,
+  `sudo mkfs.ext4 /dev/sdc` all judgeable; `dd` stopped only incidentally on the
+  path bar with the sloppy reason `touches paths outside base (/dev/sda); writes
+  /dev`). So D-b ADDS stops instead of preserving them — which is what the
+  philosophy wanted, but it is not the friction-free no-op the decision text
+  implied.
+- **Defects found by the probe, fixed in the same commit.** `git clean`'s
+  `.*-[fdx]\b` never matched `-fdx` (word boundary after `-f`; no second dash to
+  retry) — the label was dead for the dominant form. `sudo` was neither a wrapper
+  nor a prefix in the analysis, so the entire pattern table was blind behind it
+  (now a pass-through wrapper; operator's caveat: non-interactive `sudo` usually
+  dies on the password, so the live shapes are NOPASSWD/cached credentials).
+- **FP closed on the live corpus.** The download-and-execute bar stopped two real
+  rows of `curl -s localhost:8080/v1/status | python3 -c 'json.load(…)'`; the bar
+  is about REMOTE code, so it defers to `isLoopbackEgress` (fail-closed: an
+  unprovable host like `"$API/…"` keeps the stop). Ledger replay after the
+  change: 0 allow→stop, 0 stop→allow over 520 rows.
+
 ## 9. Out of scope here
 
 The unbuilt grill items G8–G11/G13 from the ledger round (loop in-list taint
@@ -240,7 +271,16 @@ Still fail-open / invisible to the floor:
 - `cd <outside> && git/make` does not flag the base — `baseAccessPath` gates
   on `pathAwareCommands` (`analysis/cwd-tracking.ts`); re-verified
   2026-10-17 post-G1/G2: `cd /etc && git status` still ALLOWs;
-- `dd if=/of=` path-blind (it always stops on the dangerous pattern anyway).
+- `dd if=/of=` path-blind (it always stops on the dangerous pattern anyway —
+  since step 2a, on the absolute bar with a reason that says so).
+- A destructive verb inside an inline code BODY is not an rm SEGMENT: `sudo -u
+  root sh -c 'rm -rf /'` and `python3 -c 'import shutil; shutil.rmtree("/")'`
+  are judged on the text alone (the judge sees the body, D11). Step 3's
+  delete-scale shapes should decide whether a root-ish target inside a body
+  earns an absolute flag; nothing does today.
+- The download-and-execute bar cannot tell a payload from a data response: `curl
+  https://api.io/x | python3 -c 'json.load(sys.stdin)'` stops absolutely. Only
+  loopback locality is exempt (`isLoopbackEgress`); that boundary is deliberate.
 
 Not defects, by design: unknown-command args are not path-extracted
 (`pathAwareCommands` is a closed set, the judge is the backstop — such

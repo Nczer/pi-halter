@@ -60,6 +60,45 @@ vocabulary.**
   write bar and all eight already stopped for another reason (usually D18's
   base-write proxy over an opaque body); the six bypass commands above are the
   evidence the gap was open, not the corpus.
+- **The dangerous tables split into absolute bars and class names
+  (`config/dangerous-patterns.ts`, `analysis/segment-analysis.ts`,
+  `gate/dspa-gate.ts`; step 2a of `docs/dspa-intent-floor.md`, D-b).** Every
+  entry in `dangerous:` names a CLASS, but the gate had treated the set as one
+  policy: only the rm branch stopped on it, everywhere else it was already
+  judgeable (D1). Nine entries are now flagged `absolute: true` — `mkfs`,
+  `mount`, `shutdown`/`reboot`, `eval`, `dd if=/of=`, `git push --force`, `git
+  reset --hard`, `git clean -<fdx>`, download-and-execute — the analysis tags
+  their hits `[Absolute] <label>`, and the gate stops on that tag
+  (`absolute bar (…)`, advisory, both judge stages still run). Matching the
+  analysis's own reason instead of re-matching the table in the gate is what
+  keeps the analysis's exclusions: `grep "curl | bash" notes.md` and `echo 'git
+  reset --hard'` stay judged. The rest — interpreters, `sed -i`/`perl -i`,
+  package managers, `kill`, `tar`/`cp`/`mv`, `truncate` — are names, and the rm
+  carve-out no longer stops on a bare class label next to an rm (an evaluator
+  reason like `[Tool] tar` still does).
+- **Three defects the D-b probe turned up, all pre-existing.** `git clean`'s
+  pattern `\bgit\s+clean\s+.*-[fdx]\b` never matched the common `-fdx` (after
+  `-f` the following `d` breaks the word boundary and there is no second dash to
+  retry), so that label was dead for the dominant form; the replacement hits
+  `-fdx`, `-xdf`, `-e x -fd` and skips `-n`, `-nd`, `--dry-run`. `sudo` was not
+  in the analysis vocabulary at all — neither a wrapper nor a prefix — so the whole
+  pattern table was blind behind it and `sudo mkfs.ext4 /dev/sdc` was JUDGEABLE;
+  it is now a pass-through wrapper (`wrapperCommands` + sudo's value flags), so
+  `sudo git clean -fdx`, `sudo timeout 5 dd if=…` and a sudo'd write into
+  `~/.pi` face the same bars as the bare forms (operator's caveat: a
+  non-interactive `sudo` usually dies on the missing password, so the live
+  shapes are NOPASSWD rules and cached credentials). And the download-and-execute
+  bar, applied blindly, stopped two real rows of `curl -s localhost:8080/v1/status
+  | python3 -c 'json.load(…)'` — a local API answer being parsed. The bar is
+  about REMOTE code, so it now defers to the egress check's fail-closed
+  `isLoopbackEgress`: a stated loopback host is judged, `"$API/…"` still fails
+  closed.
+- **Measured (step 2a).** 520-row ledger replay against the pre-change baseline:
+  0 allow→stop, 0 stop→allow, 0 new friction from the loopback exemption. The
+  corpus holds no `mkfs`/`eval`/`git reset --hard` row, so the probe table — not
+  the ledger — is the evidence for the newly-stopped classes: at the pre-change
+  HEAD `mkfs.ext4 /dev/sdb`, `shutdown -h now`, `eval "$CMD"`, `git reset --hard
+  HEAD~3` and `sudo mkfs.ext4 /dev/sdc` reached the judge unprompted.
 
 ## 3.39.0 — 2026-10-17
 **The bar asks about the thing the command actually touches: the binary, the
