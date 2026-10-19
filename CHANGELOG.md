@@ -99,6 +99,48 @@ vocabulary.**
   the ledger — is the evidence for the newly-stopped classes: at the pre-change
   HEAD `mkfs.ext4 /dev/sdb`, `shutdown -h now`, `eval "$CMD"`, `git reset --hard
   HEAD~3` and `sudo mkfs.ext4 /dev/sdc` reached the judge unprompted.
+- **The egress bar now asks what the wire is used for, not where it goes
+  (`gate/dspa-gate.ts`, `config/bash-patterns.ts`, `analysis/write-roles.ts`;
+  step 2b of `docs/dspa-intent-floor.md`, D-a).** `network egress (…)` had
+  stopped every remote call, so `git fetch`, `curl localhost:8080/v1/status` and
+  an exfil POST shared one absolute bar, with provably-loopback as the single
+  judged escape hatch. Each segment is now classified: **fetch** (`git
+  fetch`/`pull`/`ls-remote`, curl/wget with no outbound body, form, upload file,
+  cookie or user and no mutating method) is JUDGEABLE — nothing local leaves the
+  machine, and a download's landing file is minted as a write operand (`curl -o`,
+  `wget -O`) so it faces the write bar (D-g/D-d). **Upload** (a curl body/form/
+  `-T`/`-b`/`-u`, `-X POST|PUT|DELETE`, `scp`/`sftp`/`ftp`/`rsync`, `git push`) and
+  **opaque** (`ssh`/`nc`, the container and cloud CLIs, package installs, `git
+  clone`, an unknown command taking a URL) stay ABSOLUTE: whether what goes out
+  is a secret is not verifiable from the command text, so intent cannot stand in
+  for the user's call. D-i keeps the fetch half honest — the premise needs a
+  destination the parse can READ, so a proxy value, a `socks5://`/`ftp://` form,
+  a `$HOST` URL, or no destination stated at all falls to opaque, which is what
+  preserves D14's fail-closed corpus (its loopback exemption is unchanged and
+  still applies to both kinds).
+- **The URL catch-all covers only commands outside the vocabulary.** Inside the
+  read-only and closed-subcommand sets a URL literal is data, so `grep -rn
+  'http://example.com' docs/`, `sed -i 's|http://a|http://b|'`, `git log
+  --grep='http://x'` and a heredoc writing docs that quote a curl example are
+  judged, while `my-tool --endpoint https://evil.example/x` still stops — naming
+  the offending non-loopback URL rather than the first one in the text. The other
+  false-stop class was tokenization: a whitespace split made `-H 'content-type:
+  application/json'` mint the bare target `application/json`, so the destination
+  parse is quote-aware now.
+- **Measured (step 2b).** 520-row ledger replay against the pre-change baseline:
+  egress stops 10 → 5, 1 stop→allow (`git fetch`), 0 allow→stop. The 5 removed
+  were 2 `git fetch` rows and 3 curl rows whose "destination" was a header value
+  (those 3 still stop on their own outside-base reason). Of the 5 left, 3 × `git
+  push` is correct; 1 is a false stop that the split does not clear (a
+  `python3 - <<'EOF'` fixture edit whose heredoc BODY contains
+  `http://remote:9999/` — filed as a known gap), and 1 is a replay artifact: the
+  ledger caps `target` at 1000 characters, which cuts a heredoc mid-body and
+  turns its body lines into segments, so the complete row judges clean (that cap,
+  not a defect, made the old `network egress (uv)` line). The catch-all
+  narrowing's own FP class (`grep -r 'http://'`, `sed -i 's|http://…|…|'`, `git
+  log --grep='http://'`, a doc heredoc quoting a curl example) is
+  probe-evidenced, not ledger-evidenced — no such row occurs in these 520. Suite:
+  4257 passed, 1 skipped.
 
 ## 3.39.0 — 2026-10-17
 **The bar asks about the thing the command actually touches: the binary, the

