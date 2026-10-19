@@ -160,8 +160,8 @@ async function runAnalyzedGate(
   command: string,
   v1: JudgeResult | null,
   v2: JudgeResult | null,
+  store = createStore(),
 ) {
-  const store = createStore();
   const decision = bashDecision(command) as { kind: "prompt"; promptData: BashPromptData };
   const pd = decision.promptData;
   pd.analysis = await analyzeCommand(command, pd.cwd, {
@@ -465,6 +465,46 @@ describe("D19: same-pass write bar on the stage-2 report", () => {
     expect(f?.verdict?.approve).toBe("deny");
     // The LLM's reject words still ride in the log (debug aid).
     expect(logLines()[0].judgeDeny).toBe("rewrites the source tree");
+  });
+});
+
+// D-d (docs/dspa-intent-floor.md §8 step 1): the floor's own write operands
+// face the write bar. End-to-end here — the gate-level proof is in
+// test/dspa-gate.test.ts; what this pins is that the fall-through prompt gets
+// the WRITE stop shape, so the `Allow writes` tier offers a session write
+// grant for exactly the operand's dir and one click reaches steady state.
+describe("D-d: a bash write operand outside the write bar (end to end)", () => {
+  const AGENT = path.join(os.homedir(), ".pi", "agent");
+  const CMD = `touch ${AGENT}/pwned-file`;
+
+  it("stops with the write stop and names the operand dir for the grant", async () => {
+    await runAnalyzedGate(CMD, verdict(), null);
+    expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+    const g = vi.mocked(promptFlow.showPrompt).mock.calls[0][3]?.gate;
+    expect(g?.ok).toBe(false);
+    if (g && !g.ok) {
+      expect(g.reason).toBe(`write outside base (${AGENT})`);
+      expect(g.writeOutside).toEqual([AGENT]);
+      expect(g.advisory).toBe(true);
+    }
+    expect(getDspaStats().autoAllowed).toBe(0);
+    expect(logLines()[0].dspa).toBe(`gate: write outside base (${AGENT})`);
+  });
+
+  it("after the write grant the identical command auto-allows", async () => {
+    const store = createStore();
+    store.addAllowed({ writeDirs: [AGENT] });
+    await runAnalyzedGate(CMD, verdict(), null, store);
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    expect(getDspaStats().autoAllowed).toBe(1);
+  });
+
+  it("a READ grant for that dir does not clear it", async () => {
+    const store = createStore();
+    store.addAllowed({ readDirs: [AGENT] });
+    await runAnalyzedGate(CMD, verdict(), null, store);
+    expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+    expect(getDspaStats().autoAllowed).toBe(0);
   });
 });
 

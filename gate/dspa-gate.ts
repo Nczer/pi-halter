@@ -755,7 +755,32 @@ export async function checkDspaGate(
     if (base === null || isInsideCwd(base, normBase)) continue;
     if (baseWriteAccess(analysis.parsedSegments[i])) writeBases.push(base);
   }
-  const writeOutside = [...new Set(writeBases)].filter((b) => !insideManualWriteBar(store, b, pd.cwd));
+  // D-d (docs/dspa-intent-floor.md §8 step 1): the WRITE bar also faces the
+  // floor's OWN write operands. `analysis.writePaths` — every write-role
+  // operand the parser minted (`sed -i f`, `cp a d`, `mkdir d`, `> f`) — was
+  // checked only against the READ bar, and the manual read bar admits dirs
+  // that carry no write grant (`~/.pi` is read-allowed so skills and
+  // extensions load). A bash write into pi's own config therefore stopped only
+  // if a dangerous pattern happened to match it; manual mode has asked this
+  // question since G3 (`outsideWriteDirs`/`needsWriteApproval`,
+  // decide/bash-rules.ts) and the floor never consulted it.
+  // In-cwd targets are the working set (as with the bases above); /dev/* never
+  // mint (SAFE_SYSTEM_PATHS); the rm carve-out's create-then-delete set (D8)
+  // stays exempt — the net effect of that pair is nothing; opaque/sentinel
+  // operands belong to the D7 resolution pass, which already stopped above.
+  const writeOpDirs: string[] = [];
+  for (const p of analysis.writePaths ?? []) {
+    if (outsideExempt.has(p) || p.includes("$") || p.includes("`")) continue;
+    if (p.startsWith(OPAQUE_VAR_DIR) || p.startsWith(UNKNOWN_CWD_MARKER)) continue;
+    if (isInsideCwd(p, normBase) || insideManualWriteBar(store, p, pd.cwd)) continue;
+    writeOpDirs.push(path.dirname(p));
+  }
+  const writeOutside = [
+    ...new Set([
+      ...[...new Set(writeBases)].filter((b) => !insideManualWriteBar(store, b, pd.cwd)),
+      ...writeOpDirs,
+    ]),
+  ];
   if (resolvedOutside.length > 0) {
     const shown = [...new Set(resolvedOutside)].slice(0, 2);
     // Compound reason (D21): when the command also writes a base, name it —
