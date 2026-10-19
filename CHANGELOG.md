@@ -187,6 +187,46 @@ vocabulary.**
   earlier instead showed a bogus flip and 5 bogus reason changes: the analysis
   reads the live filesystem, so a same-fs-state A/B is the only honest
   comparison — filed in the spec's replay gotchas.
+- **A stop that only says "I cannot name this location" is now typed, and goes
+  to the intent pass to be named (`gate/dspa-gate.ts`, `gate/fallthrough.ts`,
+  `gate/decision-log.ts`; step 4 of `docs/dspa-intent-floor.md`, D-g/D-h).**
+  Every stop the floor reaches because it cannot locate something — an unbound
+  var, an opaque script body's base, the D18 base-write proxy — used to be
+  indistinguishable from an absolute stop in `DspaGateResult`, so the judge was
+  consulted only to decorate the prompt. The stop variant now carries
+  `misses?: MissFact[]` (`kind: unresolved | outside-path | base-write`, the
+  `token`, the `prefix` a report must answer with, and whether the parse put it
+  in a WRITE position), and `tryIntentOverMiss` asks stage 2 the one question
+  the floor cannot answer. Stage 1 is skipped there — it is eval-locked out of
+  path reports, so it cannot name a location (D22's skip, inverted); the single
+  stage-2 call replaces the stage-1 call these rows used to spend. Three guards
+  decide whether a verdict may clear the stop (`intentGuardFaults`, §4): a
+  WRITE-role fact never rides a miss, the report must name the location itself
+  (an empty report clears nothing, which is what makes D-h's "not the `writes:
+  []` variant" fall out for free), and a credential class stays absolute —
+  `~/.ssh`, `~/.aws`, and the pseudo-fs secrets `/proc/<pid>/environ` the static
+  name rules cannot see. The judge's fresh `writes` report faces the manual
+  write bar before any of that, so an out-of-bar write still produces the same
+  `write outside base (…)` stop and the same `Allow writes` grant (D-g). The
+  write-bar block moved above the D7 sentinel pass so its stop carries the
+  grant offer too and the fact builders see one `writeOutside`.
+- **What stays a stop.** A miss is the WHOLE stop: one concrete out-of-bar write
+  operand or one location with no static anchor removes the `misses` field, so
+  `cd "$d" && …` (nothing to answer with) and `echo hi > ~/out/file.txt` never
+  reach intent. Absolute classes are untouched (D-a/D-b/D-c).
+- **The ledger grew the mining rows (§7).** `unresolved.jsonl` gains
+  `outcome: "intent-allowed" | "intent-declined"` plus `missKind` and `guard`
+  (what decided: the guard fault, the verdict, the write bar, or no verdict).
+  The judge ledger's `paths` line stays reserved for misses that actually ran
+  through the floor, so the parser-gap probe does not fill with stops.
+- **Measured (step 4).** 520-row ledger replay back-to-back against HEAD: **0
+  flips, 0 reason changes** — the floor decides exactly as before; `misses` is
+  metadata. Of its 310 stops, **273 are now miss stops** (256 outside-path
+  reads, 15 with a base-write proxy, 2 with an unresolved fact); of those, 269
+  would clear on a cooperative approve/low verdict and 4 cannot (the pseudo-fs
+  credential ceiling). The reduction itself is a live-rate question, not a
+  replay one: step 5's `judgePaths`/`confirmedPrior` fields are what measure it.
+  Suite: 4285 passed, 1 skipped (+21 in the new `test/intent-floor.test.ts`).
 
 ## 3.39.0 — 2026-10-17
 **The bar asks about the thing the command actually touches: the binary, the

@@ -78,7 +78,7 @@ import type { Store } from "./store";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { resolveOpaqueRefs } from "../analysis/var-resolution";
 import { expandTilde, shortenToken } from "../analysis/path-util";
-import { resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
+import { isPathWarnedResolved, resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
 import { scriptFilePathInSegment } from "../analysis/script-payload";
 import { sanitizeJudgePaths } from "../judge/paths";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
@@ -123,7 +123,38 @@ export type DspaGateResult =
        *  the fall-through prompt offers a session write grant for EXACTLY
        *  these dirs (deterministic; no LLM call needed). */
       writeOutside?: string[];
+      /** 3.40 (docs/dspa-intent-floor.md §3): this stop is MISS-class — every
+       *  location it stopped on is unknown or opaque, so the intent pass can
+       *  be asked to turn it into a location (`gate/fallthrough.ts`,
+       *  tryIntentOverMiss). Absent when any part of the stop is NOT a miss:
+       *  a concrete write operand outside the write bar, an unanchorable
+       *  location, or any absolute bar (those return before a miss is typed). */
+      misses?: MissFact[];
     };
+
+/**
+ * One location the floor could not name (docs/dspa-intent-floor.md §3/§4).
+ * D-g's shape rule: LOCATIONS are judged, BARS are absolute — an unknown
+ * location goes to the intent pass to BECOME a location, and the judge's
+ * reported paths are then checked against these facts (the §4 guards) and
+ * against the write bar. The gate builds them; the fall-through consumes them.
+ */
+export interface MissFact {
+  /** What kind of unknown location: an unbound/opaque reference the parse
+   *  could not resolve, a concrete path outside the read bar, or the
+   *  re-based dir a body (heredoc, `-c`) writes — the D18 proxy. */
+  kind: "unresolved" | "outside-path" | "base-write";
+  /** The location text as the parse saw it (`/proc/$EP/io`, the concrete
+   *  outside path, the base dir). */
+  token: string;
+  /** The statically knowable leading dirs of `token` (`/proc` for
+   *  `/proc/$EP/io`; the path itself for a concrete one). Guard §4.2 anchors
+   *  the judge's report here. */
+  prefix: string;
+  /** The operand role the parse gives it. A write effect at a location the
+   *  floor cannot name is never handed to intent (§4.1). */
+  role: "read" | "write";
+}
 
 /**
  * The manual WRITE bar — the predicate the file branch applies to a write
@@ -391,7 +422,7 @@ function networkHit(command: string, segments: string[]): { token: string; kind:
     const urls = command.match(NETWORK_URL_RE_GLOBAL) ?? [];
     if (urls.length > 0) {
       // Name a URL the floor actually stops on, not the first one in the text.
-      const offending = urls.find((u) => !isLoopbackHost(urlHost(u))) ?? urls[0];
+      const offending = urls.find((u) => !isLoopbackHost(urlHost(u))) ?? urls[0]!;
       return { token: offending.slice(0, 60), kind: "opaque" };
     }
   }
@@ -654,6 +685,76 @@ const CLASS_LABEL_REASON_RE = /^\[Pattern\]\s/;
  */
 const REMOTE_EXEC_LABEL_RE = /download & execute/;
 
+/**
+ * The statically knowable leading dirs of a location text — the place §4.2
+ * can anchor a judge report. Cuts at the first dynamic part (a variable, a
+ * substitution, a glob, an unresolved marker). A relative text has no anchor
+ * of its own and returns "": intent cannot vouch for a location whose base is
+ * itself unknown.
+ */
+const DYNAMIC_SEGMENT_RE = /[$`*[\]{}<>\\]/;
+export function staticPrefixOf(raw: string): string {
+  const text = expandTilde(raw);
+  const body = text.startsWith(`${OPAQUE_VAR_DIR}/`)
+    ? `/${text.slice(OPAQUE_VAR_DIR.length + 1)}`
+    : text;
+  if (!path.isAbsolute(body)) return "";
+  const comps = body.split("/").slice(1);
+  let i = 0;
+  while (i < comps.length && comps[i] !== "" && !DYNAMIC_SEGMENT_RE.test(comps[i])) i++;
+  if (i === 0) return ""; // nothing static before the first dynamic part
+  return path.normalize(`/${comps.slice(0, i).join("/")}`);
+}
+
+/** Pseudo-fs files that hold secrets — not in `warnPaths` (name-based) but the
+ *  same class §4.3 refuses to judge (the Oct-18 ledger has a real stop on
+ *  `/proc/<pid>/environ`, and the pseudo-fs read class is what this floor now
+ *  lets intent through). */
+const PROC_SECRET_RE = /\/proc\/[^/]+\/(environ|cmdline)\b/;
+
+/**
+ * The §4 guards on intent-over-miss (docs/dspa-intent-floor.md). Returns the
+ * faults that KEEP the stop; empty means the verdict may clear it. The
+ * verdict's own authority (approve, risk ≤ medium) is the caller's — the same
+ * policy every other auto-allow applies. Designed against the sampled path
+ * report (§4 evidence), which invented a `/usr/bin/ether-wake` for a text's
+ * `/usr/sbin/…`, concretized `/proc/0/smaps_rollup`, mangled a URL into a
+ * path, and reported 2 of 5 dirs: every guard here constrains what the report
+ * must CONTAIN, never what it claims.
+ */
+export function intentGuardFaults(misses: MissFact[], reported: string[]): string[] {
+  const faults: string[] = [];
+  for (const m of misses) {
+    // §4.1 destructive never rides on a miss: the parse puts this unnamed
+    // location in a WRITE operand position (`> $X/log`, `mv a $UNBOUND`), so
+    // an intent verdict cannot bound the damage. The rm/unlink/rmdir/
+    // truncate/`find -delete`/`xargs rm` shapes are already absolute stops
+    // from §6 D-c — this is the redirect/move half of the same rule. D-g
+    // generalizes it: a CONCRETE out-of-bar write operand is never relaxable
+    // either, so only the D-h base-write proxy (nothing written yet — the
+    // floor stops on the new base itself) may go to intent.
+    if (m.role === "write" && m.kind !== "base-write") {
+      faults.push(`write effect at an unnamed location (${m.token})`);
+      continue;
+    }
+    // §4.3 credential ceiling — the static parts of the location name a
+    // credential class: intent cannot unlock what the floor would warn on.
+    const cred = isPathWarnedResolved(m.token, m.token);
+    if (cred.warned || PROC_SECRET_RE.test(m.token)) {
+      faults.push(`credential class (${cred.matchedRule ?? "/proc secrets"})`);
+      continue;
+    }
+    // §4.2 answer-that-token: a judge that never acknowledged the location
+    // class cannot vouch for it — omission is the one way the substitution
+    // turns a stop into a silent wrong-location allow. This is also why an
+    // EMPTY report never clears a miss (D-h: not the `writes: []` variant).
+    if (!reported.some((p) => p === m.prefix || p.startsWith(`${m.prefix}/`))) {
+      faults.push(`no reported path under ${m.prefix || m.token}`);
+    }
+  }
+  return [...new Set(faults)];
+}
+
 export async function checkDspaGate(
   pd: PromptData,
   store: Store,
@@ -862,6 +963,49 @@ export async function checkDspaGate(
   // concrete paths (`cat > /tmp/x`) are judgeable, matching their
   // opaque-resolved counterparts under the same bar. Sentinels pass through
   // unchanged and keep the D7 resolution below.
+  // D18 (2026-09-12, extended D21 2026-09-13): write-mode base access.
+  // baseAccessPath flags the re-based base as an undifferentiated touch, and
+  // the read bar above admits read-allowed bases (~/.pi is read-allowed in
+  // config). A segment that WRITES its base — a bare output redirect, opaque
+  // inline code (heredoc / -c / -e) the floor does not interpret (D1), or a
+  // write verb with a base-resolving target (D21) — must face the WRITE bar,
+  // exactly like a file-op write (the file branch above). Bases inside the
+  // session cwd are the working set (the file branch never stops a write into
+  // cwd); unknown bases (cd $D) are already stopped by the D7 sentinel pass.
+  // D-d (docs/dspa-intent-floor.md §8 step 1): the WRITE bar also faces the
+  // floor's OWN write operands. `analysis.writePaths` — every write-role
+  // operand the parser minted (`sed -i f`, `cp a d`, `mkdir d`, `> f`) — was
+  // checked only against the READ bar, and the manual read bar admits dirs
+  // that carry no write grant (`~/.pi` is read-allowed so skills and
+  // extensions load). A bash write into pi's own config therefore stopped only
+  // if a dangerous pattern happened to match it; manual mode has asked this
+  // question since G3 (`outsideWriteDirs`/`needsWriteApproval`,
+  // decide/bash-rules.ts) and the floor never consulted it.
+  // In-cwd targets are the working set (as with the bases above); /dev/* never
+  // mint (SAFE_SYSTEM_PATHS); the rm carve-out's create-then-delete set (D8)
+  // stays exempt — the net effect of that pair is nothing; opaque/sentinel
+  // operands belong to the D7 resolution pass below.
+  // 3.40 step 4: this now runs BEFORE that pass, because a stop there must
+  // know whether the command ALSO has a concrete out-of-bar write operand —
+  // the one write shape D-g never hands to intent — and because the sentinel
+  // stop carries the same writeOutside, so its prompt offers `Allow writes`
+  // (D21's one-prompt rule, extended to that reason).
+  const normBase = path.resolve(expandTilde(pd.cwd));
+  const baseOut: string[] = [];
+  for (let i = 0; i < analysis.parsedSegments.length; i++) {
+    const base = analysis.effectiveCwds[i];
+    if (base === null || isInsideCwd(base, normBase)) continue;
+    if (!baseWriteAccess(analysis.parsedSegments[i])) continue;
+    if (!insideManualWriteBar(store, base, pd.cwd) && !baseOut.includes(base)) baseOut.push(base);
+  }
+  const writeOpDirs: string[] = [];
+  for (const p of analysis.writePaths ?? []) {
+    if (outsideExempt.has(p) || p.includes("$") || p.includes("`")) continue;
+    if (p.startsWith(OPAQUE_VAR_DIR) || p.startsWith(UNKNOWN_CWD_MARKER)) continue;
+    if (isInsideCwd(p, normBase) || insideManualWriteBar(store, p, pd.cwd)) continue;
+    writeOpDirs.push(path.dirname(p));
+  }
+  const writeOutside = [...new Set([...baseOut, ...writeOpDirs])];
   const outside = (analysis.prompt.outsidePaths ?? []).filter((p) => !outsideExempt.has(p));
   // D7: resolve the sentinels (see d7ResolveSentinel). Concrete outside
   // locations stop (naming the dir for a one-time grant); unprovable
@@ -886,6 +1030,67 @@ export async function checkDspaGate(
   const markersInOutside = new Set(
     outside.filter((p) => p.startsWith(OPAQUE_VAR_DIR)),
   );
+  // §3 (docs/dspa-intent-floor.md): the miss facts this stop can carry. They
+  // are built from the outside SET, not from the resolution loop below, so a
+  // stop in the middle of that loop still reports EVERY unknown location the
+  // command has — a guard that covers only some of the unknowns is the hole
+  // §4.2 exists to close.
+  const concreteOutside = outside.filter(
+    (p) =>
+      !p.startsWith(OPAQUE_VAR_DIR) &&
+      !p.startsWith(UNKNOWN_CWD_MARKER) &&
+      !markersInOutside.has(markerByToken.get(p) ?? ""),
+  );
+  const writeRoleAt = (p: string): boolean =>
+    (analysis.writePaths ?? []).some(
+      (w) => w === p || w.startsWith(`${p}/`) || p.startsWith(`${w}/`),
+    );
+  const outsideFacts = (paths: string[]): MissFact[] =>
+    [...new Set(paths)].map((p) => ({
+      kind: "outside-path",
+      token: p,
+      prefix: staticPrefixOf(p),
+      role: writeRoleAt(p) ? "write" : "read",
+    }));
+  // D-h: the D18 base-write PROXY is a miss (a body the floor does not
+  // interpret); a concrete write operand outside the write bar is not — D-g
+  // keeps every out-of-bar WRITE on the floor.
+  const baseFacts: MissFact[] = baseOut.map((b) => ({
+    kind: "base-write",
+    token: b,
+    prefix: staticPrefixOf(b),
+    role: "write",
+  }));
+  const unresolvedFact = (token: string | null, raw: string): MissFact => {
+    const t = token ?? raw;
+    const marker = token ? markerByToken.get(token) ?? null : null;
+    const isWrite = (analysis.writePaths ?? []).some(
+      (w) => (marker !== null && w.includes(marker)) || w.includes(t),
+    );
+    return {
+      kind: "unresolved",
+      token: t,
+      prefix: staticPrefixOf(t),
+      role: isWrite ? "write" : "read",
+    };
+  };
+  // A location with nothing static about it can never be answered by a report,
+  // so intent is not asked (no wasted call) — and a stop that still hides an
+  // unanchorable location behind it is never cleared.
+  const withMisses = (facts: MissFact[]) => {
+    // The same location can arrive twice (a concrete ref and its resolution);
+    // one fact per location keeps the guard report and the ledger honest.
+    const all: MissFact[] = [];
+    const seen = new Set<string>();
+    for (const f of [...facts, ...outsideFacts(concreteOutside), ...baseFacts]) {
+      const k = `${f.kind}|${f.token}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      all.push(f);
+    }
+    if (writeOpDirs.length > 0 || all.some((f) => f.prefix === "")) return {};
+    return { misses: all };
+  };
   for (const p of outside) {
     if (!p.startsWith(OPAQUE_VAR_DIR) && !p.startsWith(UNKNOWN_CWD_MARKER)) {
       // Its marker twin is in the outside set → the sentinel pass handles
@@ -902,7 +1107,15 @@ export async function checkDspaGate(
     if (r.kind === "outside") {
       resolvedOutside.push(...r.paths);
       if (r.confirmedToken) confirmedOutside.push({ token: r.confirmedToken, dirs: r.paths });
-    } else if (r.kind === "stop") return { ok: false, reason: r.reason, advisory: true };
+    } else if (r.kind === "stop") {
+      return {
+        ok: false,
+        reason: r.reason,
+        advisory: true,
+        ...withMisses([unresolvedFact(token, p)]),
+        ...(writeOutside.length > 0 ? { writeOutside } : {}),
+      };
+    }
     // inside → drop
   }
   // Opaque refs re-resolved under the floor's (manual) bar — defensive twin
@@ -932,52 +1145,8 @@ export async function checkDspaGate(
       confirmedOutside.push({ token: u.token, dirs: out });
     }
   }
-  // D18 (2026-09-12, extended D21 2026-09-13): write-mode base access.
-  // baseAccessPath flags the re-based base as an undifferentiated touch, and
-  // the read bar above admits read-allowed bases (~/.pi is read-allowed in
-  // config). A segment that WRITES its base — a bare output redirect, opaque
-  // inline code (heredoc / -c / -e) the floor does not interpret (D1), or a
-  // write verb with a base-resolving target (D21) — must face the WRITE bar,
-  // exactly like a file-op write (the file branch above).
-  // Bases inside the session cwd are the working set (the file branch never
-  // stops a write into cwd); unknown bases (cd $D) are already stopped by
-  // the D7 sentinel pass. Computed BEFORE the read-bar stop below so that
-  // stop can carry the same writeOutside (D21: the read and write options
-  // land in ONE prompt — `Allow writes` grants write+read, so one click
-  // reaches steady state).
-  const normBase = path.resolve(expandTilde(pd.cwd));
-  const writeBases: string[] = [];
-  for (let i = 0; i < analysis.parsedSegments.length; i++) {
-    const base = analysis.effectiveCwds[i];
-    if (base === null || isInsideCwd(base, normBase)) continue;
-    if (baseWriteAccess(analysis.parsedSegments[i])) writeBases.push(base);
-  }
-  // D-d (docs/dspa-intent-floor.md §8 step 1): the WRITE bar also faces the
-  // floor's OWN write operands. `analysis.writePaths` — every write-role
-  // operand the parser minted (`sed -i f`, `cp a d`, `mkdir d`, `> f`) — was
-  // checked only against the READ bar, and the manual read bar admits dirs
-  // that carry no write grant (`~/.pi` is read-allowed so skills and
-  // extensions load). A bash write into pi's own config therefore stopped only
-  // if a dangerous pattern happened to match it; manual mode has asked this
-  // question since G3 (`outsideWriteDirs`/`needsWriteApproval`,
-  // decide/bash-rules.ts) and the floor never consulted it.
-  // In-cwd targets are the working set (as with the bases above); /dev/* never
-  // mint (SAFE_SYSTEM_PATHS); the rm carve-out's create-then-delete set (D8)
-  // stays exempt — the net effect of that pair is nothing; opaque/sentinel
-  // operands belong to the D7 resolution pass, which already stopped above.
-  const writeOpDirs: string[] = [];
-  for (const p of analysis.writePaths ?? []) {
-    if (outsideExempt.has(p) || p.includes("$") || p.includes("`")) continue;
-    if (p.startsWith(OPAQUE_VAR_DIR) || p.startsWith(UNKNOWN_CWD_MARKER)) continue;
-    if (isInsideCwd(p, normBase) || insideManualWriteBar(store, p, pd.cwd)) continue;
-    writeOpDirs.push(path.dirname(p));
-  }
-  const writeOutside = [
-    ...new Set([
-      ...[...new Set(writeBases)].filter((b) => !insideManualWriteBar(store, b, pd.cwd)),
-      ...writeOpDirs,
-    ]),
-  ];
+  // writeOutside (the D18 base proxies and the D-d write operands) is computed
+  // above, before the D7 sentinel pass — the note there says why it moved.
   if (resolvedOutside.length > 0) {
     const shown = [...new Set(resolvedOutside)].slice(0, 2);
     // Compound reason (D21): when the command also writes a base, name it —
@@ -992,6 +1161,7 @@ export async function checkDspaGate(
       advisory: true,
       ...(confirmedOutside.length > 0 ? { confirmedOutside } : {}),
       ...(writeOutside.length > 0 ? { writeOutside } : {}),
+      ...withMisses(outsideFacts(resolvedOutside)),
     };
   }
   if (writeOutside.length > 0) {
@@ -1000,6 +1170,9 @@ export async function checkDspaGate(
       reason: `write outside base (${writeOutside.slice(0, 2).join(", ")})`,
       advisory: true,
       writeOutside,
+      ...(writeOpDirs.length === 0 && baseFacts.length > 0 && !baseFacts.some((f) => f.prefix === "")
+        ? { misses: baseFacts }
+        : {}),
     };
   }
   return { ok: true };

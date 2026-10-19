@@ -37,13 +37,18 @@ times about nothing they considered dangerous.
 
 ## 2. Floor stop inventory (gate/dspa-gate.ts, current line numbers)
 
+Line numbers are as of this spec's writing (2026-10-19); step 4 moved the
+write-bar block above the D7 sentinel pass, so everything below ~860 drifted
+by ~+55. "MISS" is now realized as the `misses?: MissFact[]` field — a stop
+carries it only when EVERY part of the stop is miss-class (§8 step-4 notes).
+
 | Stop reason | Line | Class under this proposal | Note |
 |---|---|---|---|
-| `runtime location unresolvable (token)` | 481 | **MISS → judged** | the D7 sentinel pass; the whole unresolved-ledger corpus |
-| `touches paths outside base (…)` | ~760 | **MISS → judged** | concrete outside path; already names a grantable dir |
-| `write outside base (…)` | 778 | **MISS → judged** | D18 base-write proxy: fires for ANY heredoc/`-c`/`-e` segment whose base is outside cwd (`baseWriteAccess`, analysis/cwd-tracking.ts:680) |
-| `outside base (session …)` | 534 | **MISS → judged?** | file-branch outside cwd; D-a |
-| `write-redirect outside base, not cleaned` | 972 | **MISS → judged?** | rm-branch carve-out companion |
+| `runtime location unresolvable (token)` | 481 | **MISS → judged** | the D7 sentinel pass; the whole unresolved-ledger corpus. Built (step 4): carries a miss only when the token has a STATIC prefix to answer with — `runtime working directory unresolvable (cd target not statically knowable)` (line ~1015) carries none, so it never reaches intent |
+| `touches paths outside base (…)` | ~760 | **MISS → judged** | concrete outside path; already names a grantable dir. Built: the read-shaped refs carry `outside-path` misses; a write-shaped one carries none (D-g) |
+| `write outside base (…)` | 778 | **MISS → judged** | D18 base-write proxy: fires for ANY heredoc/`-c`/`-e` segment whose base is outside cwd (`baseWriteAccess`, analysis/cwd-tracking.ts:680). Built: carries a `base-write` miss only when no concrete write operand sits outside the write bar (D-g) |
+| `outside base (session …)` | 534 | not judged (step 4) | file-branch outside cwd; D-a. The step-4 miss layer is bash-only |
+| `write-redirect outside base, not cleaned` | 972 | not judged (step 4) | rm-branch carve-out companion — a redirect IS an out-of-bar write operand (D-g) |
 | `full filesystem scan (… /)` | 650 | D-a (noise/leak, not destruction) | |
 | `credential pattern (…)` / `unverifiable glob (…)` | 591/593 | **ABSOLUTE** | credential class |
 | `dangerous: …` | 577 | **SPLIT — D-b** | one bucket today mixes destructive (`mkfs`, `dd if=`, `git clean -fdx`, `curl\|sh`) with routine (`python`, `node`, `uv`, `tar`, `cp`, `kill`) — config/dangerous-patterns.ts |
@@ -181,6 +186,14 @@ the intent route (§3) is the one that trades determinism for friction.
   WRITE → prompt, always, carrying the existing Allow-writes option.
   Out-of-bar READS may auto-allow on intent — that is where `/proc`,
   `/sys/fs/cgroup` and most of the measured friction lives.
+  Built 2026-10-20, two qualifications found in the build: (a) an unknown cd
+  base with nothing static about it (`cd "$d"`, `cd $D`) has no anchor for a
+  report to answer, so that stop never goes to intent — "unknown cd base goes
+  to intent" holds only for a base the parse can name statically; (b) the
+  bar's write half is enforced on the FACTS, not only on the union set: a miss
+  whose role is write faults the guard (§4.1), because a write reaching
+  through an unresolvable token (`> $X/log`) never appears in
+  `analysis.writePaths` and would otherwise slip past the write bar.
   Kept deliberately: the asymmetry whereby a bash command touching an outside
   path can be judged while a `Read`/`Write`/`Edit` on the same path still
   prompts (file-branch `outside base`, D-a).
@@ -188,6 +201,12 @@ the intent route (§3) is the one that trades determinism for friction.
   `writes` report is entirely inside the manual write bar. A body that writes
   out of bar still stops (D19 backstop). Not the `writes: []` variant — a
   heredoc that writes inside the bar should stop prompting.
+  Built 2026-10-20: the waiver rides the `base-write` miss fact, and the
+  `writes: []` case needs no special case — §4.2's answer-that-token guard
+  cannot be satisfied by an empty report. The judge's fresh `writes` report is
+  checked against the manual write bar BEFORE the guards (the same
+  `judgeWriteOutside` pass the gate-passed path uses), so an out-of-bar write
+  produces the identical `write outside base (…)` stop and grant offer.
 - **D-f — no escape hatch, no mode.** One behavior, one code path; the
   operator reverts with git if the philosophy turns out wrong ("keep the code
   clean and lean"). Every intent-over-miss allow is logged (§7), so a bad
@@ -202,6 +221,9 @@ the intent route (§3) is the one that trades determinism for friction.
   whether a prior confirmed resolution existed (`confirmedPrior`).
 - `outcome: "intent-declined"` — the guard set or the verdict kept the stop,
   and the operator was prompted.
+  Built (step 4): both outcomes exist with `missKind` (the class the floor
+  assigned) and `guard` (what decided — guard fault, verdict, write bar, or no
+  verdict). `judgePaths` and `confirmedPrior` are step 5.
 - The manual path's rows are unchanged, so the deterministic fix work keeps a
   live corpus. A floorMiss is never reclassified as a judge contextMiss when
   `floorPaths` is empty (§4.4).
@@ -368,6 +390,59 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
   filesystem, and directories that did not exist at capture time now resolve as
   writes. Same-fs-state A/B (`git stash` the change, replay, restore, replay)
   is the only honest comparison.
+
+### Step 4 build notes (2026-10-20)
+
+- **What was built.** `MissFact {kind: "unresolved"|"outside-path"|"base-write",
+  token, prefix, role}` and `misses?: MissFact[]` on the stop variant of
+  `DspaGateResult`; `staticPrefixOf` (cuts at `DYNAMIC_SEGMENT_RE`, a relative
+  path anchors to nothing); the exported `intentGuardFaults(misses, reported)`
+  (§4.1/§4.2/§4.3); `tryIntentOverMiss` in `gate/fallthrough.ts` (one stage-2
+  call, no stage 1); `unresolved.jsonl` gained `intent-allowed` /
+  `intent-declined` outcomes plus `missKind` / `guard` (§7, step 5 finishes the
+  fields). Tests: `test/intent-floor.test.ts`, 21 cases — the §2 classes, the
+  §4 guards on the sampled report shape, and the fall-through end to end.
+- **A stop's decision never moved.** 520-row replay back-to-back against HEAD:
+  **0 flips, 0 reason changes.** `misses` is metadata the prompt path ignores;
+  the only prompt-behavior change is behind `tryIntentOverMiss`.
+- **Miss = the WHOLE stop.** Facts are attached only when every part of the
+  stop is miss-class: a concrete write operand outside the write bar
+  (`writeOpDirs.length > 0`) blocks them (D-g), and so does one location with
+  no static anchor. Facts come from the outside SET, not from the resolution
+  loop, so a stop in the middle of the D7 pass still names every unknown
+  location the command has — the alternative leaves the §4.2 hole open.
+- **The write-bar block moved ABOVE the D7 sentinel pass** (gate/dspa-gate.ts,
+  now ~:864). Two reasons: the sentinel stop now carries `writeOutside` so the
+  grant offer works there too, and the fact builders need `writeOpDirs` /
+  `baseOut` before any branch decides. One computation, one `writeOutside`;
+  the D19 site keeps a pointer comment instead.
+- **Stage 1 is skipped for miss stops** — D22's skip inverted. Stage 1 is
+  eval-locked out of path reports (`judge/judge.ts`), so it cannot answer the
+  question this stop asks; the one stage-2 call replaces the stage-1 call these
+  rows used to spend (§3.4 cost accepted). A declined row now carries the
+  stage-2 verdict instead of stage-1's.
+- **Decline order = the order of blame.** Judge failure → the judge's own
+  `writes` report against the manual write bar (D-g, identical `write outside
+  base (…)` stop) → the verdict's authority → the §4 guards. The ledger's
+  `guard` field names what DECIDED, and a denial decides by itself. The
+  judge-ledger `paths` line is written only when the miss actually ran through
+  the floor (D17's probe stays clean).
+- **§4.1 widened by a probe finding.** `> /Users/u/out/$D/f` produces an
+  `outside-path` fact with role `write`, not an `unresolved` one (the parse
+  knows the static part), and static analysis has no `writePaths` entry for it
+  — so the write-role check now covers every miss kind except `base-write`.
+  Without that, intent could have cleared an out-of-bar WRITE, which is exactly
+  what D-g forbids.
+- **Measured (520-row corpus, 310 stops).** **273 stops carry misses**: 256
+  `outside-path:read` alone, 10 `base-write:write` alone, 5 both, 2 with an
+  `unresolved` fact. The 37 that do not: 22 `untrusted package`, 5 `network
+  egress`, 5 `touches paths outside base` with a write shape, 3 concrete
+  `write outside base`, 1 `full filesystem scan`, 1 unanchorable `$fi`. Of the
+  273, **269 are clearable** by a cooperative approve/low verdict (report
+  naming each prefix); the 4 that are not are all the pseudo-fs credential
+  ceiling (`/proc/<pid>/smaps_rollup`-class reads). Corpus shape for step 5:
+  the `base-write` class is entirely `cd DIR && sed -i …` / `… && python3 -
+  <<EOF` — the operator editing files in a repo outside the cwd.
 
 ## 9. Out of scope here
 

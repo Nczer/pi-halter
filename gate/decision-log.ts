@@ -338,11 +338,19 @@ export interface UnresolvedLogEntry {
    * the user's choice); `gate-stop` — the dspa gate stopped the
    * auto-allow on an unresolved/confirmed-outside sentinel, then the
    * prompt's `decision` followed; `auto-allowed` — no prompt: the gate
-   * passed because the token's resolution was already confirmed.
+   * passed because the token's resolution was already confirmed;
+   * `intent-allowed` / `intent-declined` (docs/dspa-intent-floor.md §7) —
+   * a miss stop whose unknown location went to the intent pass: cleared,
+   * or kept by a guard / verdict. These rows are the mining corpus for
+   * locations the parser still cannot name.
    */
-  outcome: "prompted" | "gate-stop" | "auto-allowed";
+  outcome: "prompted" | "gate-stop" | "auto-allowed" | "intent-allowed" | "intent-declined";
   /** The prompt outcome ("yes" | "no" | "always" | "alwaysPaths" | …); "auto-allow" for auto-allowed. */
   decision?: string;
+  /** Intent rows only: the miss class as the floor classified it. */
+  missKind?: "unresolved" | "outside-path" | "base-write";
+  /** Intent rows only: why a decline happened (guard fault / verdict / write bar). */
+  guard?: string;
 }
 
 /**
