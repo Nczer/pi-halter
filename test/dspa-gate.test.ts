@@ -242,7 +242,7 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
   it("rm with an opaque target stays on the floor", async () => {
     const r = await checkDspaGate(bashPd("rm -rf $X"), store);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain("rm target");
+    if (!r.ok) expect(r.reason).toContain("delete target not static");
   });
 });
 
@@ -746,10 +746,11 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
     }
   });
 
-  it("blocks non-explicit targets (glob, computed, stdin, bare rm)", async () => {
+  it("blocks non-static targets (computed, stdin, bare rm)", async () => {
+    // D-c: a GLOB is no longer a stop by itself — its reach is counted, and the
+    // ceiling is what stops it (see "delete scale"). What stays absolute is a
+    // target the floor cannot locate at all.
     for (const cmd of [
-      "rm -rf *",
-      "rm -rf ./*",
       "rm -f $(echo /tmp/x)",
       "rm -f \`pwd\`/x",
       "rm -f -",
@@ -770,14 +771,14 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
       const r2 = await checkDspaGate(bashPd("rm ~/Documents"), store);
       expect(r2.ok).toBe(false);
       if (!r2.ok) expect(r2.reason).toBe("rm target outside base (~/Documents)");
-      // tilde+glob: the glob survives expansion → still not explicit
+      // tilde+glob: the glob survives expansion; in-base and bounded → judged
       const r3 = await checkDspaGate(bashPd("rm -rf ~/project/*"), store);
-      expect(r3.ok).toBe(false);
-      if (!r3.ok) expect(r3.reason).toContain("not explicit");
-      // quoted tilde: a literal filename to the shell (no expansion)
+      expect(r3.ok).toBe(true);
+      // quoted tilde: a literal filename to the shell (no expansion) — the
+      // floor cannot locate it, so it is not static (D-c)
       const r4 = await checkDspaGate(bashPd("rm -f '~/project/scratch.log'"), store);
       expect(r4.ok).toBe(false);
-      if (!r4.ok) expect(r4.reason).toContain("not explicit");
+      if (!r4.ok) expect(r4.reason).toContain("delete target not static");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -805,10 +806,9 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
     }
   });
 
-  it("keeps computed and glob /tmp rm on the floor (non-explicit targets)", async () => {
+  it("keeps computed /tmp rm on the floor", async () => {
     for (const cmd of [
-      "rm -f /tmp/$x",
-      "rm -f /tmp/*",
+      "rm -f /tmp/$x", // not locatable — the bar has nothing to check
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
@@ -835,7 +835,9 @@ describe("rm carve-out (explicit, bounded targets only)", () => {
   });
 
   it("blocks --no-preserve-root", async () => {
-    const r = await checkDspaGate(bashPd("rm --no-preserve-root /") , store);
+    // A bounded target, so the stop is the flag itself; `rm -rf /` is already
+    // stopped as root-level by the scale rules (delete-scale).
+    const r = await checkDspaGate(bashPd("rm -rf --no-preserve-root sub") , store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("--no-preserve-root");
   });
@@ -1013,10 +1015,161 @@ describe("script-body and loop-list resolution (2026-08-31 log)", () => {
   });
 });
 
+describe("delete scale (D-c — the bar is provenance and reach, not syntax)", () => {
+  // Fixtures under $HOME, dot-prefixed: tmpdir is config-allowed, so a tmpdir
+  // fixture would sit INSIDE the informational zone and count nothing.
+  function makeScaleDir(): { cwd: string; cleanup: () => void } {
+    const cwd = fs.mkdtempSync(path.join(os.homedir(), ".halter-scale-"));
+    for (const d of ["sub", "a", "b"]) fs.mkdirSync(path.join(cwd, d));
+    for (let i = 1; i <= 55; i++) fs.writeFileSync(path.join(cwd, `f${i}.log`), "");
+    for (let i = 1; i <= 30; i++) {
+      fs.writeFileSync(path.join(cwd, "a", `x${i}.dat`), "");
+      fs.writeFileSync(path.join(cwd, "b", `y${i}.dat`), "");
+    }
+    for (let i = 1; i <= 10; i++) fs.writeFileSync(path.join(cwd, "sub", `s${i}.dat`), "");
+    return { cwd, cleanup: () => fs.rmSync(cwd, { recursive: true, force: true }) };
+  }
+
+  it("a bounded delete is judged, and the count rides the judge's risk line", async () => {
+    const { cwd, cleanup } = makeScaleDir();
+    try {
+      const a = await analyzeCommand("rm -rf sub", cwd);
+      expect(a.deleteScale.note).toBe("deletes 11 files, recursive"); // sub + its 10 files
+      expect(a.risk.reasons).toContain("deletes 11 files, recursive");
+      // A glob whose expansion is bounded judges too, and `cd` re-bases the
+      // count (`sub` holds 10 files, not the parent's 55).
+      for (const cmd of ["rm -f f1.log", "rm -rf sub/*", "cd sub && rm -rf *"]) {
+        const r = await checkDspaGate(bashPd(cmd, { cwd }), store);
+        expect(r.ok, cmd).toBe(true);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a glob passes the floor at the ceiling, with the reach in the reason", async () => {
+    const { cwd, cleanup } = makeScaleDir();
+    try {
+      for (const cmd of ["rm *.log", "rm -rf *"]) {
+        const r = await checkDspaGate(bashPd(cmd, { cwd }), store);
+        expect(r.ok, cmd).toBe(false);
+        if (!r.ok) expect(r.reason, cmd).toMatch(/delete scale \(\d+\+? files outside temp dirs/);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("the ceiling aggregates across segments — two bounded deletes are one big one", async () => {
+    const { cwd, cleanup } = makeScaleDir();
+    try {
+      const one = await checkDspaGate(bashPd("rm -rf a", { cwd }), store);
+      expect(one.ok).toBe(true); // 31 entries, under the ceiling
+      const r = await checkDspaGate(bashPd("rm -rf a && rm -rf b", { cwd }), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/delete scale \(6[0-9] files outside temp dirs/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("root-level, self and escaping targets stop whatever the count says", async () => {
+    const { cwd, cleanup } = makeScaleDir();
+    try {
+      for (const [cmd, what] of [
+        ["rm -rf /", "root-level"],
+        ["rm -rf /mnt", "root-level"],
+        ["rm /*", "root-level"], // a pattern rooted at `/` wipes the top level
+        ["rm -rf .", "working directory itself"],
+        ["rm -rf ..", "escapes above the working directory"],
+        [`rm -rf ../${path.basename(cwd)}`, "working directory itself"],
+        ["rm -rf ../..", "escapes above the working directory"],
+      ] as Array<[string, string]>) {
+        const r = await checkDspaGate(bashPd(cmd, { cwd }), store);
+        expect(r.ok, cmd).toBe(false);
+        if (!r.ok) expect(r.reason, cmd).toContain(what);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("targets the floor cannot locate stop: computed, quoted tilde, unresolvable base", async () => {
+    const { cwd, cleanup } = makeScaleDir();
+    try {
+      for (const [cmd, what] of [
+        ["rm -rf $D", "delete target not static"],
+        ["rm -rf \"$(echo sub)\"", "delete target not static"],
+        ["rm -rf '~/sub'", "delete target not static"], // a literal name, not $HOME
+        ["cd $D && rm -rf sub", "location unprovable"], // a non-literal cd leaves the base unknown
+      ] as Array<[string, string]>) {
+        const r = await checkDspaGate(bashPd(cmd, { cwd }), store);
+        expect(r.ok, cmd).toBe(false);
+        if (!r.ok) expect(r.reason, cmd).toContain(what);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("deletes whose targets the shell supplies stop: find, xargs, truncate", async () => {
+    const { cwd, cleanup } = makeScaleDir();
+    try {
+      for (const [cmd, what] of [
+        ["find . -name '*.log' -delete", "find -delete"],
+        ["find sub -name '*.dat' -exec rm {} +", "fed by find -exec"],
+        ["find sub -name '*.dat' -ok rm {} \\;", "fed by find -ok"],
+        ["printf 'f1.log\\n' | xargs rm", "fed by xargs"],
+        ["ls | xargs rm -f", "fed by xargs"],
+        ["truncate -s 0 *.log", "truncate with glob operand"],
+      ] as Array<[string, string]>) {
+        const r = await checkDspaGate(bashPd(cmd, { cwd }), store);
+        expect(r.ok, cmd).toBe(false);
+        if (!r.ok) expect(r.reason, cmd).toContain(what);
+      }
+      // Concrete operands of the same verbs stay judgeable — the stop is the
+      // unbounded target supply, not the command name.
+      for (const cmd of ["truncate -s 0 f1.log", "find . -name f1.log -print"]) {
+        const r = await checkDspaGate(bashPd(cmd, { cwd }), store);
+        expect(r.ok, cmd).toBe(true);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("temp-zone reach is informational: a big delete under tmpdir is judged", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "halter-scale-"));
+    try {
+      fs.mkdirSync(path.join(dir, "sub"));
+      for (let i = 1; i <= 60; i++) fs.writeFileSync(path.join(dir, "sub", `t${i}.tmp`), "");
+      const cmd = `rm -rf ${dir}/sub`;
+      const a = await analyzeCommand(cmd, dir);
+      expect(a.deleteScale.absolute).toEqual([]);
+      expect(a.deleteScale.note).toContain("deletes 61 files"); // still told to the judge
+      const r = await checkDspaGate(bashPd(cmd, { cwd: dir }), store);
+      expect(r.ok).toBe(true);
+      // The zone rule reaches the zone's own top level (D11 judged `rm -rf
+      // /tmp`), and a glob rooted at a temp dir deletes ENTRIES, not the dir —
+      // the corpus row this whole step was chasing (`cd /tmp && rm -f wp*_*.jpg`).
+      for (const [cmd, wd] of [
+        [`rm -rf ${os.tmpdir()}`, dir],
+        ["rm -f wp90023543_*.jpg", os.tmpdir()],
+        [`rm -f ${os.tmpdir()}/*`, dir],
+      ] as Array<[string, string]>) {
+        const r2 = await checkDspaGate(bashPd(cmd, { cwd: wd }), store);
+        expect(r2.ok, cmd).toBe(true);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("D16: every floor stop is advisory (2026-09-02)", () => {
   it("rm carve-out failures are advisory", async () => {
     const cases: Array<[string, string]> = [
-      ["rm -rf *", "not explicit"],
+      ["rm -rf $D", "not static"],
       ["rm", "without explicit targets"],
       ["rm -rf .", "working directory"],
       ["rm -f /etc/hosts", "outside base"],

@@ -8,6 +8,7 @@ import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, getOutsideWritePaths, resolvePathsToDirs } from "./path-analysis";
 import { classifyStageArgv0 } from "./argv0-path";
+import { assessDeletes, type DeleteScale } from "./delete-scale";
 import { checkCommandForCredentialPaths } from "./credentials";
 import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE, segmentNamesRunOptions, segmentRunFormUngrantable, segmentStages } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
@@ -111,6 +112,11 @@ export interface CommandAnalysis {
   safety: SafetyVerdict;
   /** Detailed risk assessment from token-based and regex-based analysis. */
   risk: CommandRisk;
+  /** Delete scale (docs/dspa-intent-floor.md §6 D-c): the shape flags and the
+   *  capped reach count of every delete operand in the command. The floor acts
+   *  on `absolute` and the count ceiling; `note` rides into the judge packet
+   *  and the prompt risk line (`deletes 312 files, recursive`). */
+  deleteScale: DeleteScale;
   /** Indices of segments that contain relative path tokens (./foo, ../foo). */
   relativePathSegmentIndices: number[];
   /** Effective working directory per segment (null = unresolvable base). */
@@ -562,6 +568,15 @@ export async function analyzeCommand(
     }),
   );
 
+  // D-c (docs/dspa-intent-floor.md): what this command's deletes reach — shape
+  // flags and a capped count. Scanned per STAGE (a pipeline's stages come from
+  // the AST, so `cat f | xargs rm` presents its xargs stage) under the base the
+  // stage runs in (`cd out && rm -rf *` counts `out`). A stage with no
+  // resolvable base carries no count: its reach is not provable.
+  const deleteScale = assessDeletes(
+    stageTexts.flatMap((stages, i) => stages.map((text) => ({ text, base: effectiveCwds[i] ?? null }))),
+  );
+
   const allSimple = segmentAnalyses.every(a => a.isSimple);
   const hasUnsafe = segmentAnalyses.some(a => a.isUnsafe);
 
@@ -707,7 +722,11 @@ export async function analyzeCommand(
   // Fold the [TmuxPayload] and [Subst] reasons into the whole-command risk
   // (order-stable, deduped) so PromptFallbackRule surfaces them in the prompt
   // and log.
-  const extraReasons = [...tmuxPayloadReasons, ...substReasons];
+  const extraReasons = [
+    ...tmuxPayloadReasons,
+    ...substReasons,
+    ...(deleteScale.note ? [deleteScale.note] : []),
+  ];
   const riskReasons = extraReasons.length
     ? [...new Set([...wholeRisk.reasons, ...extraReasons])]
     : wholeRisk.reasons;
@@ -736,6 +755,7 @@ export async function analyzeCommand(
       hasUnsafePattern: hasUnsafe || tmuxPayloadUnsafe || substUnsafe || obscuredArgv0.length > 0,
     },
     risk: { ...wholeRisk, reasons: riskReasons },
+    deleteScale,
     relativePathSegmentIndices,
     effectiveCwds,
     opaque,

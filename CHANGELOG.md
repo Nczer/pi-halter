@@ -142,6 +142,52 @@ vocabulary.**
   probe-evidenced, not ledger-evidenced — no such row occurs in these 520. Suite:
   4257 passed, 1 skipped.
 
+- **The rm bar stopped on syntax, so a bounded delete became a prompt
+  (`analysis/delete-scale.ts`, `analysis/command-analysis.ts`,
+  `gate/dspa-gate.ts`; step 3 of `docs/dspa-intent-floor.md`, D-c).** The
+  carve-out stopped any target the floor could not name as one concrete path —
+  `rm -rf *`, `rm -r build/*`, `rm -f wp90023543_*.jpg` — including patterns that
+  expand to a handful of files the agent just wrote. A glob is not a shape to
+  refuse, it is a reach to measure. The new module answers two questions per
+  STAGE, under the base that stage runs in (`cd out && rm -rf *` counts `out`):
+  **provenance** — a target the floor cannot locate (a variable, a substitution,
+  a quoted `~`, a relative operand under a base the parse lost) and a delete
+  whose targets the shell supplies (`find -delete`, `find -exec/-ok rm`,
+  `xargs rm`, `truncate *`) are absolute; **reach** — a capped glob/walk count
+  (`DELETE_WALK_CAP` = 4096, reported as `N+`) with the ceiling on aggregate
+  reach outside `allowedWritePaths` (`DELETE_SCALE_ABSOLUTE` = 50, the strict
+  temp zone). A bounded delete inside the bars is judged and its count rides the
+  judge's risk line (`deletes 124 files, recursive`) instead of stopping.
+- **The location rules apply outside the temp zone only.** Deleting the working
+  directory itself, a target escaping above it, and a top-level filesystem dir
+  (`/`, `/mnt`, `/home`) stay absolute there; inside the zone the strict-zone
+  decision makes the reach informational whatever the shape, so `rm -rf /tmp`
+  judges as D11 always ruled and `rm -f /tmp/*` judges with its count in the
+  packet (probe: `cd /tmp/x && rm -rf ..` judges, note `deletes 1607 files,
+  recursive`). Two bars had to learn that a glob's root is not its target: the
+  self-delete bar (the shell never expands `*` to `.`) and the root-level bar (a
+  pattern is root-level only when rooted at `/`). No double mass-bar either:
+  `system-evaluator`'s mass-deletion notes were already filtered in the rm
+  branch, so the count is the only mass bar on rm-shaped commands.
+- **Four shapes the first probe got wrong, fixed in the same commit.** A glob
+  rooted at the cwd read as "the working directory itself"; reach counted the
+  glob's static root instead of the absolute pattern, so `rm logs/*.log`
+  (60 matches) counted 1 and judged; pipeline stages were never scanned
+  (`segments` is not `|`-split — `stageTexts` is); and `xargs rm` stayed
+  invisible because wrapper delegation resolves it to a bare `rm`, so the mass
+  rule now keys on the typed first word plus the operative verb (`xargs -0 ls`
+  stays out). Self-delete is checked before escaping and root-level, so
+  `rm -rf ..` names the escape and `rm -rf ../work` names the self-delete; the
+  stop reason names the number that triggered it (outside-temp reach) while the
+  packet note names the total.
+- **Measured (step 3).** 520-row ledger replay back-to-back against HEAD: 1
+  stop→allow (`cd /tmp && rm -f wp90023543_*.jpg && magick …` — the corpus's
+  only rm-explicitness stop), 0 allow→stop, no other reason change. Suite: 4264
+  passed, 1 skipped (+7 D-c cases). Replaying against a baseline captured hours
+  earlier instead showed a bogus flip and 5 bogus reason changes: the analysis
+  reads the live filesystem, so a same-fs-state A/B is the only honest
+  comparison — filed in the spec's replay gotchas.
+
 ## 3.39.0 — 2026-10-17
 **The bar asks about the thing the command actually touches: the binary, the
 written operand, the fetched package.**

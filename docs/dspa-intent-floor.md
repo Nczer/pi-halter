@@ -142,20 +142,25 @@ the intent route (§3) is the one that trades determinism for friction.
   and D19 already faces the judge's `writes` report against the deterministic
   write bar.
 - **D-c — delete scale: static shape flags + a capped count.** Absolute when
-  the shape is unbounded or escapes the bars: root-ish targets (`/`, `~`,
-  top-level dirs, `/mnt`, `/home`), unbound or computed targets (`rm -rf $D`,
-  backticks; cf. `RM_FORBIDDEN_TARGET_RE` at 804), `find -delete`, `git clean
-  -fdx`, `xargs rm`, `truncate *`. Judged when the targets are statically
-  concrete, countable, and inside the bars (`rm -r build/*`,
-  `rm -r tmp/something/*`); the capped count rides into the judge packet and
-  the prompt (`deletes 312 files, recursive`).
+  the shape is unbounded or escapes the bars: targets the floor cannot locate
+  (`rm -rf $D`, backticks, a quoted `~`, a relative operand under a base the
+  parse lost) and deletes whose targets the shell supplies (`find -delete`,
+  `find -exec rm`, `xargs rm`, `truncate *`, `git clean -fdx`). Outside the
+  temp zone only, the LOCATION shapes are absolute too: deleting the working
+  directory itself, a target escaping above it, and a top-level filesystem dir
+  (`/`, `/mnt`, `/home`) — a glob only when it is rooted at `/`, because a
+  pattern deletes its matches, not its root. Everything else is judged when the
+  targets are statically concrete, countable, and inside the bars
+  (`rm -r build/*`, `rm -r tmp/something/*`); the capped count rides into the
+  judge packet and the prompt (`deletes 312 files, recursive`).
   **Count ceiling outside the temp dirs** (operator 2026-10-19: "the count
   should affect any dir outside of tmp"): more than `DELETE_SCALE_ABSOLUTE`
   (= 50, tunable config constant) matched files outside `allowedWritePaths`
   → absolute. Inside temp dirs the count is informational and the judge
   weighs it. Probe precedent: `fs.globSync` with a cap
   (`analysis/credentials.ts:354-357`, `analysis/bash-parser.ts:496`); a
-  recursive count needs a new capped walk.
+  recursive count needs a new capped walk. Built 2026-10-19 — the ordering
+  consequences (the zone rule beats the location rules) are in the step 3 notes.
 - **D-d — no permission-surface allowlist.** Decided at the architecture
   level instead (operator: "make bash take input from floor and judge, then
   present the same write/read for user"): the floor's own deterministic
@@ -227,9 +232,10 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
 
 ### Step 2 build notes (2026-10-19)
 
-- **2a and 2b are built** (2a: flags + `[Absolute]` tag + the gate's absolute-bar
-  stop + the rm carve-out no longer stopping on a bare class label; 2b: the
-  egress split). Step 3 (`analysis/delete-scale.ts`, D-c) is next.
+- **2a, 2b and step 3 are built** (2a: flags + `[Absolute]` tag + the gate's
+  absolute-bar stop + the rm carve-out no longer stopping on a bare class label;
+  2b: the egress split; 3: `analysis/delete-scale.ts`, D-c — see its own notes
+  below). Step 4 (typed `misses` + the intent-over-miss relaxation) is next.
 - **Step 2's premise was measured wrong when I built it.** The plan read as if
   the gate's `dangerous:` stop were the live guard for mkfs/shutdown/`git reset
   --hard`/`eval`. It is not: that stop fires only in the rm branch, so at HEAD
@@ -290,6 +296,79 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
   both judge clean when the complete command is fed. Complete the row (or drop
   it) before believing a replay stop.
 
+### Step 3 build notes (2026-10-19)
+
+- **What was built.** `analysis/delete-scale.ts`: `assessDeletes(segments)`
+  takes the command's stages, each with the effective base it runs in, and
+  returns `{operands, absolute, entries, outsideTemp, capped, recursive, note}`.
+  `CommandAnalysis.deleteScale` carries it; the gate's D-c pre-check (right
+  after the manual bar is built) returns the absolute reasons before any branch
+  logic, and `note` is folded into `risk.reasons` — so the count reaches the
+  judge packet (`riskReasons`) and the prompt's risk line with no new plumbing.
+  `operativeTokens` moved here and is shared with the gate's rm branch;
+  `RM_FORBIDDEN_TARGET_RE` split into `RM_COMPUTED_TARGET_RE` (absolute) and
+  `RM_GLOB_TARGET_RE` (judgeable, counted).
+- **Three kinds of rule, in this order per operand.** Provenance (never
+  location-dependent): computed target, quoted `~` (a literal filename to the
+  shell — the tokenizer already dropped the quotes), a relative operand under a
+  base the parse lost (`cd $D && rm -rf sub` → `effectiveCwds[i] === null`),
+  deleting the cwd itself, and deletes fed by the shell. Location (applies only
+  OUTSIDE the temp zone): escaping above the base, root-level. Then the count:
+  aggregate outside-temp reach over `DELETE_SCALE_ABSOLUTE` → absolute.
+- **The zone rule beats the location rules, and that is a visible
+  consequence.** `rm -rf /tmp` is judged (as D11 already ruled — the test that
+  says so is back), and so is `rm -f /tmp/*`, and `cd /tmp/x && rm -rf ..`
+  (probe: judged, note `deletes 1607 files, recursive` — the judge sees the
+  reach). Everything the strict-zone decision put in the informational half is
+  informational whatever its shape; the floor keeps its grip on `/`-rooted and
+  above-the-cwd targets inside temp only because those land outside the zone
+  (`cd /tmp/x && rm -rf ../..` → root-level stop).
+- **A glob's root is not its target.** Two places had to learn this: the gate's
+  self-delete bar (a pattern rooted at the cwd deletes its ENTRIES, and the
+  shell never expands `*` to `.`) and the root-level bar (a glob is root-level
+  only when rooted at `/`). Reach counts the absolute PATTERN; `operands[].resolved`
+  keeps the static root, which is what the bars and the zone test are checked
+  against.
+- **The reason names the number that triggered it.** `delete scale (63 files
+  outside temp dirs, recursive)` counts the outside-temp reach (the bar's own
+  quantity); the packet note counts the total. Probe with one temp and one
+  outside segment: reason `delete scale (63 files outside temp dirs,
+  recursive)`, note `deletes 124 files, recursive`.
+- **Defects the probe found, fixed in the same commit.** (1) `rm -f wp90023543_*.jpg`
+  in `/tmp` stopped as "the working directory itself" — a glob's static root
+  was being read as its target. (2) reach counted the static root instead of the
+  pattern, so `rm logs/*.log` (60 matches) counted 1 and judged. (3) pipeline
+  stages were never scanned — `CommandAnalysis.segments` is NOT `|`-split
+  (`stageTexts` is), so `cat f | xargs rm` was invisible until the scan moved to
+  stages. (4) `xargs rm` still judged after that: `getDelegatedCommand` resolves
+  the wrapper away, so the mass-form check saw `rm` with no operands — the rule
+  now keys on the TYPED first word (`xargs`) plus the OPERATIVE verb, which is
+  also what keeps `xargs -0 ls` out of it. (5) self-delete is checked before
+  escaping and root-level, so `rm -rf ..` names the escape and
+  `rm -rf ../dsprobe` names the self-delete instead of a bare `/tmp`.
+- **No double mass-bar for rm.** `system-evaluator`'s `glob matches N+ files
+  (mass deletion)` / `entire tree deleted` notes are already filtered in the rm
+  branch by `RM_RISK_REASON_RE` (they reach the judge as risk text, not as
+  stops), so D-c's count is the only mass bar on rm-shaped commands. Its
+  `LARGE_DIR_THRESHOLD` = 100 still feeds the non-rm risk path untouched.
+- **Tests retuned to the new cut** (`test/dspa-gate.test.ts`): "blocks
+  non-explicit targets" → "blocks non-static targets" (the two glob rows moved
+  to the count rules); tilde+glob in-base judged, quoted tilde → `delete target
+  not static`; `rm --no-preserve-root /` → `--no-preserve-root -rf sub` (a
+  bounded target, so the stop is the flag, not the root-level rule the scale
+  module now owns); D16's rm row `rm -rf *` → `rm -rf $D`. New `describe`
+  covers one case per D-c shape plus the note's arrival in `risk.reasons`.
+- **Measured.** 520-row ledger replay back-to-back against HEAD: **1 flip,
+  stop→allow** — `cd /tmp && rm -f wp90023543_*.jpg && magick …`, the only row
+  in the corpus that HEAD's rm explicitness bar stopped — **0 allow→stop**, 0
+  other reason changes. Suite: 4264 passed | 1 skipped (baseline 4257, +7).
+- **Replay gotcha, new: capture both sides back-to-back.** Comparing against a
+  baseline captured hours earlier showed a bogus flip (`network egress (git
+  fetch)` → allow) and 5 bogus reason changes: path resolution reads the live
+  filesystem, and directories that did not exist at capture time now resolve as
+  writes. Same-fs-state A/B (`git stash` the change, replay, restore, replay)
+  is the only honest comparison.
+
 ## 9. Out of scope here
 
 The unbuilt grill items G8–G11/G13 from the ledger round (loop in-list taint
@@ -313,9 +392,11 @@ Still fail-open / invisible to the floor:
   since step 2a, on the absolute bar with a reason that says so).
 - A destructive verb inside an inline code BODY is not an rm SEGMENT: `sudo -u
   root sh -c 'rm -rf /'` and `python3 -c 'import shutil; shutil.rmtree("/")'`
-  are judged on the text alone (the judge sees the body, D11). Step 3's
-  delete-scale shapes should decide whether a root-ish target inside a body
-  earns an absolute flag; nothing does today.
+  are judged on the text alone (the judge sees the body, D11). Step 3 did NOT
+  close this: `assessDeletes` scans the top-level parse's STAGES
+  (`stageTexts`), never a body, so a root-ish target inside a body earns no
+  flag. The scale module's shape rules are the natural place to extend when it
+  is built — the same `DeleteSegment` list, fed with body stages.
 - The download-and-execute bar cannot tell a payload from a data response: `curl
   https://api.io/x | python3 -c 'json.load(sys.stdin)'` stops absolutely. Only
   loopback locality is exempt (`isLoopbackEgress`); that boundary is deliberate.

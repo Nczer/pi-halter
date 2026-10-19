@@ -40,14 +40,22 @@
  *    stay absolute.
  *  - rm carve-out (dspa only): halter always flags rm as dangerous, and
  *    danger patterns always prompt even after Always grants. An rm command
- *    may reach the judge only when every rm target is explicit, not the
- *    working directory itself, and either inside the session base or part
- *    of a create-then-delete set (a path this same command writes via
+ *    may reach the judge only when every rm target has a statically known
+ *    location (a computed target never does), is not the working directory
+ *    itself, and is either inside the session base or part of a
+ *    create-then-delete set (a path this same command writes via
  *    redirect/tee/touch/mkdir in an earlier segment AND rms), or a
  *    non-recursive world-scratch target directly under /tmp (D8). With
- *    -r/-R the target (if it exists) must be a directory or self-written.
- *    Non-rm danger reasons still block the carve-out (rm's neighborhood is
- *    bounded by design). The judge still approves.
+ *    -r/-R an explicit target (if it exists) must be a directory or
+ *    self-written. Delete SHAPE and SCALE are checked before this carve-out
+ *    (D-c, docs/dspa-intent-floor.md §6): an unbounded shape (computed or
+ *    root-level target, a target above the working directory, `find -delete`,
+ *    `xargs`-fed rm, `truncate` with a glob) and a delete reaching more than
+ *    DELETE_SCALE_ABSOLUTE entries outside the temp dirs stop absolutely;
+ *    a statically rooted glob inside the bars is judgeable WITH ITS COUNT
+ *    (the count rides the packet and the prompt). Non-rm danger reasons still
+ *    block the carve-out (rm's neighborhood is bounded by design). The judge
+ *    still approves.
  *  - file: no credential-pattern warning. A write the manual mode
  *    auto-allows (session-granted dir/file, config-allowed, project-pi) is
  *    JUDGEABLE (D3, extended by D11) — the location is user-trusted, the
@@ -79,6 +87,7 @@ import { UNKNOWN_CWD_MARKER, cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_
 import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { getDelegatedCommand, segmentFetchPackage, segmentFetchOptionsOk } from "../analysis/segment-helpers";
+import { operativeTokens, staticRootOf } from "../analysis/delete-scale";
 import { tokenizeSegment, splitOnPipe } from "../analysis/tokenizer";
 import {
   NETWORK_COMMANDS,
@@ -709,6 +718,20 @@ export async function checkDspaGate(
   // manual would prompt for (outside base) stops here (Q1, re-confirmed).
   const isInsideManualBar = makeManualBar(store, pd.cwd);
 
+  // §6 D-c (docs/dspa-intent-floor.md): delete scale, computed in the analysis
+  // (one pass, so the judge packet and the prompt see the same number). The
+  // shapes with no countable reach — a computed or root-level target, a target
+  // sitting above the working directory, `find -delete`, `find -exec rm`,
+  // `xargs`-fed rm, `truncate` with a glob operand — never become judgeable,
+  // and neither does a delete reaching more than DELETE_SCALE_ABSOLUTE entries
+  // outside the temp dirs: the judge has no location to weigh and no way back
+  // at that scale. Inside the temp dirs the count is informational (the note
+  // rides the packet) and the judge weighs it.
+  const ds = analysis.deleteScale;
+  if (ds.absolute.length > 0) {
+    return { ok: false, reason: ds.absolute.slice(0, 2).join("; ").slice(0, 120), advisory: true };
+  }
+
   let outsideExempt = new Set<string>();
   const hasRm = analysis.segments.some(isRmSegment);
   if (hasRm) {
@@ -997,36 +1020,36 @@ export async function checkDspaGate(
  * — `git rm (…)` and `aws s3 rm (…)` are non-rm dangerous ops and must
  * block the carve-out. New reason strings fail safe (block → prompt). */
 const RM_RISK_REASON_RE =
-  /\brecursive delete\b|\bforced delete\b|mass deletion|entire (?:tree|home) deleted|\[Pattern\] rm \(|shell (?:input|output) redirection|pipe operator|tee \(file writing\)/i;
-/** Targets that can never be auto-allowed: globs, tildes, computed
- * (variable/substitution) paths. */
-const RM_FORBIDDEN_TARGET_RE = /[*?[~$`]/;
+  /\brecursive delete\b|\bforced delete\b|mass deletion|entire (?:tree|home) deleted|\[Pattern\] rm \(|shell (?:input|output) redirection|pipe operator|tee \(file writing\)|\bdeletes \d+\+? files\b/i;
+/** A location only the shell knows at run time: a variable, a substitution,
+ * a backtick. No location for the bar to check — absolute. */
+const RM_COMPUTED_TARGET_RE = /[$`]/;
+/** Glob metacharacters in a target: judgeable shape, counted by D-c. */
+const RM_GLOB_TARGET_RE = /[*?[{]/;
+/** A target that never denotes one concrete path — used for the self-write
+ *  bookkeeping only (a glob/var operand is not a create-then-delete pair).
+ *  D-c removed it as the rm TARGET bar: a rooted glob is judgeable there. */
+const RM_NOT_CONCRETE_RE = /[*?[~$`]/;
 
 /**
  * D8 (docs/dspa-redesign.md): an explicit, non-recursive rm of a
  * world-scratch target directly under /tmp is judgeable — the judge sees
  * the full text, and /tmp is the conventional scratch area (`rm -f
  * /tmp/probe.log` cleanup stopped 4 of 26 dspa prompts in the 2026-08-24
- * log). Recursive, glob, and variable targets never reach here (the
- * explicitness checks fail first); a pure tilde is expanded to its
- * concrete path before that check; /tmp itself is not a target.
+ * log). Recursive and variable targets never reach it (the shape checks fail
+ * first); a glob reaches it on its STATIC ROOT (D-c); a pure tilde is expanded
+ * to its concrete path before that check; /tmp itself is not a target.
  */
 function isTmpScratchTarget(resolved: string, recursive: boolean): boolean {
   return !recursive && resolved.startsWith("/tmp/");
 }
 
 /**
- * The tokens a segment OPERATES with: quote-aware (tokenizeSegment), inline
- * env-assignment prefixes stripped (`FOO=bar rm …` is an rm), and
- * prefix/wrapper delegation resolved (`env rm …` is an rm) — the carve-out's
- * target checks must see the same command the policy sees.
+ * The tokens a segment OPERATES with live in analysis/delete-scale.ts
+ * (`operativeTokens`) — the carve-out's target checks and the delete-scale
+ * scan read the same tokenization: quote-aware, env prefixes stripped,
+ * wrapper delegation resolved (`env rm …` is an rm).
  */
-function operativeTokens(seg: string): string[] {
-  const tokens = tokenizeSegment(seg);
-  const rest = tokens.slice(skipEnvPrefixes(tokens));
-  const deleg = getDelegatedCommand(rest.join(" "));
-  return deleg ? deleg.tail.split(/\s+/) : rest;
-}
 
 function isRmSegment(seg: string): boolean {
   const first = operativeTokens(seg)[0]?.split("/").pop()?.toLowerCase();
@@ -1096,13 +1119,29 @@ function checkRmTargets(
         let target = cleanToken(a);
         const quotedTilde = target.startsWith("~") && (seg.includes(`'${target}`) || seg.includes(`"${target}`));
         if (!quotedTilde && (target === "~" || target.startsWith("~/"))) target = expandTilde(target);
-        if (RM_FORBIDDEN_TARGET_RE.test(target)) {
-          return { reason: `rm target not explicit (${target.slice(0, 40)})`, exempt: new Set() };
+        // D-c: a glob is no longer a stop by SYNTAX. Its shape and reach were
+        // checked before this branch runs (analysis/delete-scale.ts): the count
+        // ceiling outside the temp dirs already stopped the large case, so an
+        // in-bar glob arrives here countable, and the judge sees the number.
+        // What has no location at all stays on the floor — a value the shell
+        // supplies, and a quoted tilde (the tokenizer stripped the quotes, so
+        // whether this is $HOME/x or a file literally named `~x` is unknown).
+        const glob = RM_GLOB_TARGET_RE.test(target);
+        if (RM_COMPUTED_TARGET_RE.test(target) || quotedTilde) {
+          return { reason: `delete target not static (${target.slice(0, 40)})`, exempt: new Set() };
         }
         if (target === "-") return { reason: "rm reading from stdin", exempt: new Set() };
-        const resolved = resolvePathReal(expandTilde(target), cwd);
-        if (resolved === cwd) return { reason: "rm target is the working directory itself", exempt: new Set() };
-        if (recursive) {
+        // For a glob the bar check runs on the operand's STATIC ROOT — the
+        // deepest metachar-free dir, which is what the pattern can reach.
+        const resolved = resolvePathReal(glob ? staticRootOf(target, cwd) : target, cwd);
+        // A glob rooted at the cwd deletes its ENTRIES, not the directory
+        // itself (the shell never expands `*` to `.`) — only an operand that
+        // names the cwd is the self-delete case.
+        if (resolved === cwd && !glob) return { reason: "rm target is the working directory itself", exempt: new Set() };
+        if (recursive && !glob) {
+          // An explicit recursive target that exists must be a dir or
+          // self-written; a glob's entries are counted by the delete-scale
+          // walk, which does not care whether each one is a dir.
           try {
             const st = fs.statSync(resolved);
             const selfWritten = writtenBefore.has(resolved);
@@ -1137,7 +1176,7 @@ function checkRmTargets(
         if (m) target = m[2] !== "" ? m[2] : (tokens[ti + 1] ?? null);
         else if (BARE_REDIRECT_RE.test(tok)) target = tokens[ti + 1] ?? null;
         if (target === null || target.startsWith("&")) continue; // fd duplication (2>&1, > &1)
-        if (RM_FORBIDDEN_TARGET_RE.test(target)) continue; // glob/var/computed — never a concrete self-write
+        if (RM_NOT_CONCRETE_RE.test(target)) continue; // glob/var/computed — never a concrete self-write
         const resolved = resolvePathReal(expandTilde(target), cwd);
         if (isDevNullish(resolved)) continue;
         writtenBefore.add(resolved);
@@ -1151,7 +1190,7 @@ function checkRmTargets(
         if (!SELF_WRITE_CMDS.has(scmd)) continue;
         for (const t of sw.slice(1)) {
           const target = cleanToken(t);
-          if (t.startsWith("-") || /^[\d<>]/.test(t) || RM_FORBIDDEN_TARGET_RE.test(target)) continue;
+          if (t.startsWith("-") || /^[\d<>]/.test(t) || RM_NOT_CONCRETE_RE.test(target)) continue;
           const resolved = resolvePathReal(expandTilde(target), cwd);
           if (isDevNullish(resolved)) continue;
           writtenBefore.add(resolved);
