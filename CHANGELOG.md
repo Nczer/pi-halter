@@ -39,6 +39,28 @@ vocabulary.**
   cannot be pinned — the served quant file post-dates the failures — so this is
   recorded as a structural guard, not a measured repair.
 
+- **The floor never asked the write question of its own operands
+  (`gate/dspa-gate.ts`; step 1 of `docs/dspa-intent-floor.md`, D-d).**
+  `analysis.writePaths` — every write-role operand the parser mints — was checked
+  only against the READ bar, and the manual read bar admits dirs that carry no
+  write grant (`~/.pi` is read-allowed so skills and extensions load). Six verbs
+  into pi's own config dir auto-allowed under /dspa at HEAD: `touch
+  ~/.pi/agent/pwned-file`, `mkdir …/pwned-dir`, `cp notes.md …/notes.md`, `mv`,
+  `tee … <<<x`, `truncate -s 0 …`; each now stops, naming the dir on
+  `writeOutside` so the prompt's `Allow writes` tier clears it in one click, and
+  a READ grant for that dir no longer satisfies the write. Manual mode has asked
+  this question since G3 (`outsideWriteDirs` / `needsWriteApproval`,
+  decide/bash-rules.ts); the floor was the half that never did, which left pi's
+  settings file guarded only by the accidental `sed -i` dangerous pattern.
+- **Measured on the live ledger: no verdict changes.** All 520 bash rows of
+  `.log/decisions.jsonl` (2026-10-18) replayed through `checkDspaGate` at HEAD and
+  at this commit: 0 stop→allow, 0 allow→stop; 2 stopped rows gained the compound
+  `…; writes <dir>` reason (D21 merged options — the write grant is now offered on
+  stops that used to be read-shaped). Eight rows carry an operand outside the
+  write bar and all eight already stopped for another reason (usually D18's
+  base-write proxy over an opaque body); the six bypass commands above are the
+  evidence the gap was open, not the corpus.
+
 ## 3.39.0 — 2026-10-17
 **The bar asks about the thing the command actually touches: the binary, the
 written operand, the fetched package.**

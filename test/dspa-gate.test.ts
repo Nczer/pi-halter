@@ -1304,6 +1304,71 @@ describe("D18: write-mode base access (2026-09-12 incident)", () => {
   });
 });
 
+// ── D-d: the floor's OWN write operands face the WRITE bar ─────────────────
+//
+// docs/dspa-intent-floor.md §8 step 1. The floor asked one location question
+// of every minted operand — the READ bar — so a write verb in a read-allowed
+// dir answered it and passed. `~/.pi` is read-allowed (skills, extensions
+// load), which made `touch ~/.pi/agent/pwned-file` auto-allow; pi's own
+// settings file was guarded only by the accidental `sed -i` dangerous
+// pattern. Manual mode has split the bars since G3 (`outsideWriteDirs` /
+// `needsWriteApproval`, decide/bash-rules.ts); the floor now asks the same
+// question of its own `analysis.writePaths`.
+
+describe("D-d: write operands face the write bar, not the read bar", () => {
+  const AGENT = path.join(os.homedir(), ".pi", "agent");
+
+  it("a write verb into a read-allowed dir stops, naming the dir for the grant", async () => {
+    for (const c of [
+      `touch ${AGENT}/pwned-file`,
+      `mkdir ${AGENT}/pwned-dir`,
+      `cp notes.md ${AGENT}/notes.md`,
+      `mv ${AGENT}/a.md ${AGENT}/b.md`,
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) {
+        expect(r.reason, c).toBe(`write outside base (${AGENT})`);
+        expect(r.writeOutside, c).toEqual([AGENT]);
+        expect(r.advisory, c).toBe(true);
+      }
+    }
+  });
+
+  it("a session WRITE grant clears it; a READ grant for the same dir does not", async () => {
+    const readGranted = createStore();
+    readGranted.addAllowed({ readDirs: [AGENT] });
+    expect((await checkDspaGate(bashPd(`touch ${AGENT}/pwned-file`), readGranted)).ok).toBe(false);
+
+    store.addAllowed({ writeDirs: [AGENT] });
+    expect((await checkDspaGate(bashPd(`touch ${AGENT}/pwned-file`), store)).ok).toBe(true);
+  });
+
+  it("the same verbs inside the cwd or a write-allowed dir stay judgeable", async () => {
+    for (const c of [
+      "touch notes.md",
+      "mkdir build",
+      "cp a.md b.md",
+      `touch /tmp/halter-d-da-probe`,
+      `cp /tmp/halter-d-da-src.md /tmp/halter-d-da-dst.md`,
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(true);
+    }
+  });
+
+  it("the rm carve-out's create-then-delete pair stays exempt (D8)", async () => {
+    const r = await checkDspaGate(bashPd(`echo x > ${AGENT}/tmp-note && rm ${AGENT}/tmp-note`), store);
+    expect(r.ok).toBe(true);
+  });
+
+  it("an unbound operand keeps its D7 sentinel stop — no fabricated write dir", async () => {
+    const r = await checkDspaGate(bashPd(`touch "$F"`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("unresolvable");
+  });
+});
+
 // ── D19: the write bar on the stage-2 judge's FRESH write report ──
 //
 // judgeWriteOutside is the deterministic bar applied to the report in the
