@@ -154,6 +154,12 @@ export interface MissFact {
   /** The operand role the parse gives it. A write effect at a location the
    *  floor cannot name is never handed to intent (§4.1). */
   role: "read" | "write";
+  /** Ledger data only (§7) — no guard reads it: a confirmed resolution (an
+   *  earlier user grant, this session) already covered this location, i.e.
+   *  the operator had vouched for this place before intent was asked. It is
+   *  the difference between a fresh unknown and a known place the parser
+   *  lost track of, which is what the rows are mined for. */
+  confirmedPrior: boolean;
 }
 
 /**
@@ -722,6 +728,16 @@ const PROC_SECRET_RE = /\/proc\/[^/]+\/(environ|cmdline)\b/;
  * path, and reported 2 of 5 dirs: every guard here constrains what the report
  * must CONTAIN, never what it claims.
  */
+/**
+ * §4.2's match set: the reported paths that ANSWER this miss. Exported so the
+ * ledger records exactly the evidence the guard accepted (§7 `judgePaths`),
+ * not a separate guess about the same report.
+ */
+export function answeredMissPaths(miss: MissFact, reported: string[]): string[] {
+  if (!miss.prefix) return []; // no anchor → nothing can answer it (§3)
+  return reported.filter((p) => p === miss.prefix || p.startsWith(`${miss.prefix}/`));
+}
+
 export function intentGuardFaults(misses: MissFact[], reported: string[]): string[] {
   const faults: string[] = [];
   for (const m of misses) {
@@ -748,7 +764,7 @@ export function intentGuardFaults(misses: MissFact[], reported: string[]): strin
     // class cannot vouch for it — omission is the one way the substitution
     // turns a stop into a silent wrong-location allow. This is also why an
     // EMPTY report never clears a miss (D-h: not the `writes: []` variant).
-    if (!reported.some((p) => p === m.prefix || p.startsWith(`${m.prefix}/`))) {
+    if (answeredMissPaths(m, reported).length === 0) {
       faults.push(`no reported path under ${m.prefix || m.token}`);
     }
   }
@@ -1045,12 +1061,20 @@ export async function checkDspaGate(
     (analysis.writePaths ?? []).some(
       (w) => w === p || w.startsWith(`${p}/`) || p.startsWith(`${w}/`),
     );
+  // §7: the confirmed resolutions in effect for this command (the same set
+  // `judge/paths.ts` treats as the floor's own knowledge).
+  const confirmedDirs = analysis.prompt.unresolved.flatMap(
+    (u) => store.getConfirmedResolution(u.token) ?? [],
+  );
+  const confirmedPriorAt = (p: string): boolean =>
+    confirmedDirs.some((d) => p === d || p.startsWith(`${d}/`) || d.startsWith(`${p}/`));
   const outsideFacts = (paths: string[]): MissFact[] =>
     [...new Set(paths)].map((p) => ({
       kind: "outside-path",
       token: p,
       prefix: staticPrefixOf(p),
       role: writeRoleAt(p) ? "write" : "read",
+      confirmedPrior: confirmedPriorAt(p),
     }));
   // D-h: the D18 base-write PROXY is a miss (a body the floor does not
   // interpret); a concrete write operand outside the write bar is not — D-g
@@ -1059,7 +1083,8 @@ export async function checkDspaGate(
     kind: "base-write",
     token: b,
     prefix: staticPrefixOf(b),
-    role: "write",
+    role: "write" as const,
+    confirmedPrior: confirmedPriorAt(b),
   }));
   const unresolvedFact = (token: string | null, raw: string): MissFact => {
     const t = token ?? raw;
@@ -1072,6 +1097,7 @@ export async function checkDspaGate(
       token: t,
       prefix: staticPrefixOf(t),
       role: isWrite ? "write" : "read",
+      confirmedPrior: token ? store.getConfirmedResolution(token) !== null : false,
     };
   };
   // A location with nothing static about it can never be answered by a report,

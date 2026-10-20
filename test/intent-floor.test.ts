@@ -156,7 +156,7 @@ describe("miss facts (gate)", () => {
     const { reason, m } = await miss("cat /Users/u/Strata/design.dxf");
     expect(reason).toContain("touches paths outside base");
     expect(m).toEqual([
-      { kind: "outside-path", token: canon("/Users/u/Strata/design.dxf"), prefix: canon("/Users/u/Strata/design.dxf"), role: "read" },
+      { kind: "outside-path", token: canon("/Users/u/Strata/design.dxf"), prefix: canon("/Users/u/Strata/design.dxf"), role: "read", confirmedPrior: false },
     ]);
   });
 
@@ -182,6 +182,17 @@ describe("miss facts (gate)", () => {
     expect(reason).toContain("outside base");
     expect(m.map((f) => f.kind)).toEqual(["outside-path", "base-write"]);
     expect(m.map((f) => f.role)).toEqual(["read", "write"]);
+  });
+
+  it("a location the operator already confirmed still stops — the fact says so (§7 confirmedPrior)", async () => {
+    const store = createStore();
+    store.confirmResolution("$D/design.dxf", [canon("/Users/u/Strata")]);
+    const r = await checkDspaGate(bashPd("cat $D/design.dxf"), store);
+    const m = r.ok ? [] : (r.misses ?? []);
+    expect(r.ok).toBe(false);
+    expect(m).toEqual([
+      { kind: "outside-path", token: canon("/Users/u/Strata"), prefix: canon("/Users/u/Strata"), role: "read", confirmedPrior: true },
+    ]);
   });
 
   it("absolute-class stops carry no misses — intent is not asked (§6 D-a/D-b)", async () => {
@@ -245,10 +256,16 @@ describe("intent over a miss stop", () => {
         decision: "auto-allow",
         missKind: "outside-path",
         persisted: false,
+        confirmedPrior: false,
+        // §7: the row names the report paths that ANSWERED this token — the
+        // other reported path is not evidence for it and stays out.
+        judgePaths: [canon("/Users/u/Strata/design.dxf")],
       }),
     ]);
-    // The judge report reached an execution: the parser-gap line is written.
-    expect(lines(judgeLog).some((l) => l.kind === "paths")).toBe(true);
+    // The judge report reached an execution: the parser-gap line is written —
+    // exactly ONE (dspaAutoAllowed writes it; a second call would double-count
+    // the row in `log-inspect dspa --paths`).
+    expect(lines(judgeLog).filter((l) => l.kind === "paths")).toHaveLength(1);
   });
 
   it("stage 1 is skipped on a miss stop — the stateless pass cannot answer (§3.4)", async () => {
@@ -306,6 +323,22 @@ describe("intent over a miss stop", () => {
     expect(unres().map((r) => r.outcome)).toEqual(["intent-allowed", "intent-allowed"]);
   });
 
+  it("§7: a confirmed-location stop records confirmedPrior on the row", async () => {
+    const store = createStore();
+    store.confirmResolution("$D/design.dxf", [canon("/Users/u/Strata")]);
+    await run("cat $D/design.dxf", null,
+      verdict({ paths: [canon("/Users/u/Strata/design.dxf")] }), store);
+    expect(unres()).toEqual([
+      expect.objectContaining({
+        outcome: "intent-allowed",
+        missKind: "outside-path",
+        token: canon("/Users/u/Strata"),
+        confirmedPrior: true,
+        judgePaths: [canon("/Users/u/Strata/design.dxf")],
+      }),
+    ]);
+  });
+
   it("an absolute-class stop never reaches the intent pass at all", async () => {
     await run("pip install cowsay", verdict({ risk: "low" }), null);
     expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
@@ -323,8 +356,22 @@ describe("intent over a miss stop", () => {
         token: canon("/Users/u/Strata") + "/$SUB/f.txt",
         outcome: "intent-allowed",
         missKind: "unresolved",
+        judgePaths: [canon("/Users/u/Strata/sub")],
       }),
     ]);
+  });
+
+  it("§4.5: a mangled URL cannot answer a miss — cwd-resolved garbage is not a location", async () => {
+    // The sampled report sent `http://127.0.0.1:8080`; resolved against the
+    // cwd it becomes `<cwd>/http:/127.0.0.1:8080`, which sits under this
+    // miss's static prefix (`/Users/u`) and would satisfy §4.2 — a report
+    // defect clearing a stop.
+    await run("cat /Users/u/$V/data", null, verdict({ paths: ["http://127.0.0.1:8080"] }));
+    expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+    const row = unres()[0];
+    expect(row.outcome).toBe("intent-declined");
+    expect(String(row.guard)).toContain("no reported path under");
+    expect(row.judgePaths).toBeUndefined();
   });
 
   it("a non-miss stop adds no intent rows — the intent ledger is miss-only", async () => {

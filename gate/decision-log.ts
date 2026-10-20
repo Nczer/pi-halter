@@ -351,6 +351,15 @@ export interface UnresolvedLogEntry {
   missKind?: "unresolved" | "outside-path" | "base-write";
   /** Intent rows only: why a decline happened (guard fault / verdict / write bar). */
   guard?: string;
+  /** Intent rows only: the report paths that ANSWERED this token — exactly
+   *  the §4.2 match set the guard accepted, so a row shows what the judge
+   *  claimed the unknown location IS. Omitted when nothing answered it (that
+   *  is a decline, and `guard` names it). */
+  judgePaths?: string[];
+  /** Intent rows only: a confirmed resolution (an earlier user grant, this
+   *  session) already covered this location. `persisted` is the OTHER half —
+   *  a confirmation stored by THIS run, which an intent row never has. */
+  confirmedPrior?: boolean;
 }
 
 /**

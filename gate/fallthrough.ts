@@ -17,7 +17,7 @@ import type {PermissionRequest, Decision, PromptData} from "../decide/types";
 import type { Store } from "./store";
 import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decision-log";
 import { findExecutedScript } from "../analysis/script-payload";
-import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, intentGuardFaults, type DspaGateResult, type MissFact } from "./dspa-gate";
+import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, answeredMissPaths, intentGuardFaults, type DspaGateResult, type MissFact } from "./dspa-gate";
 import { sanitizeJudgePaths } from "../judge/paths";
 import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
@@ -89,6 +89,9 @@ export function dspaAutoAllowed(
   verdict: JudgeResult,
   stage: 1 | 2,
   misses?: MissFact[],
+  /** Intent path only (§7): the sanitized stage-2 report, so the intent rows
+   *  can record the paths that answered each unknown location. */
+  reported?: string[],
 ): void {
   // D13: a stage-2 auto-allow logs the judge's path report (and any path
   // the floor never saw) — the parser-gap probe. Stage 1 never reports.
@@ -115,7 +118,7 @@ export function dspaAutoAllowed(
     // The intent path logs its own line per unknown location (§7) — the more
     // specific outcome tag replaces the generic one, and D-f's no-toggle
     // promise depends on these rows being in the ledger.
-    logIntentMisses(pd, misses, "intent-allowed");
+    logIntentMisses(pd, misses, "intent-allowed", undefined, reported ?? []);
   } else if (pd.type === "bash" && pd.unresolved?.length) {
     for (const u of pd.unresolved) {
       const confirmed = store.getConfirmedResolution(u.token);
@@ -150,10 +153,15 @@ function logIntentMisses(
   pd: PromptData,
   misses: MissFact[],
   outcome: "intent-allowed" | "intent-declined",
-  guard?: string,
+  guard: string | undefined,
+  reported: string[],
 ): void {
   if (pd.type !== "bash") return;
   for (const m of misses) {
+    // The row carries the evidence the decision turned on: which reported
+    // paths answered THIS token (§4.2's match set, §7 `judgePaths`) and
+    // whether the operator had already confirmed this location.
+    const answered = answeredMissPaths(m, reported);
     logUnresolved({
       cmd: pd.command,
       cwd: pd.cwd,
@@ -163,6 +171,8 @@ function logIntentMisses(
       decision: outcome === "intent-allowed" ? "auto-allow" : undefined,
       missKind: m.kind,
       guard,
+      ...(answered.length > 0 ? { judgePaths: answered } : {}),
+      confirmedPrior: m.confirmedPrior,
     });
   }
 }
@@ -212,6 +222,9 @@ async function tryIntentOverMiss(
   const o2 = await getStage2Outcome(pd, ctx, store);
   const v2 = o2.verdict;
   logJudgeDiff(pd, "dspa", null, v2);
+  // One sanitized report serves both the §4.2 guard and the ledger rows, so a
+  // row cannot disagree with the decision it records (§7 `judgePaths`).
+  const reported = sanitizeJudgePaths(v2?.paths, pd.cwd);
   // A decline is the FLOOR's stop standing — same counters and same prompt
   // shape as the D16 advisory path, plus the stage-2 verdict when it ran.
   const stop = (
@@ -220,7 +233,7 @@ async function tryIntentOverMiss(
     verdict: JudgeResult | null,
     bucket: DspaStopKind,
   ): { autoAllowed: false; fallthrough: DspaFallthrough } => {
-    logIntentMisses(pd, misses, "intent-declined", why);
+    logIntentMisses(pd, misses, "intent-declined", why, reported);
     recordDspaStop(bucket, verdict?.model ?? o2.model ?? null);
     updateDspaWidget(ctx);
     return { autoAllowed: false, fallthrough: { gate, verdict, stage: verdict ? 2 : null } };
@@ -241,13 +254,12 @@ async function tryIntentOverMiss(
       v2.approve === "deny" ? "deny" : v2.approve === "defer" ? "defer" : "declined",
     );
   }
-  const faults = intentGuardFaults(misses, sanitizeJudgePaths(v2.paths, pd.cwd));
+  const faults = intentGuardFaults(misses, reported);
   if (faults.length > 0) return stop(faults.join("; "), gateResult, v2, "gate");
-  // The judge-ledger paths line stays reserved for what RAN THROUGH the
-  // floor (D17): a declined attempt never executed, so its report rides the
-  // prompt's decision line only — the parser-gap probe must not fill with stops.
-  logJudgePaths(pd, store, v2, "dspa", ctx);
-  dspaAutoAllowed(request, pd, ctx, store, v2, 2, misses);
+  // The judge-ledger paths line is written by dspaAutoAllowed's stage-2 pass
+  // (D17) — a declined attempt never executed, so its report rides the
+  // prompt's decision line only and the parser-gap probe stays clean of stops.
+  dspaAutoAllowed(request, pd, ctx, store, v2, 2, misses, reported);
   return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v2, stage: 2 } };
 }
 

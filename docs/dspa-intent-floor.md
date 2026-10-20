@@ -97,11 +97,21 @@ a miss stop from the same verdict):
    judged. Note `/proc/<pid>/environ` appears in the Oct-18 decisions ledger
    as a real stop, and pseudo-fs widening makes it reachable.
 4. **Ledger honesty**: a floor miss is never reclassified as a judge
-   contextMiss when `floorPaths` is empty (observed 2026-10-18T03:02:28
-   sweep.sh row — the ledger masked the parser gap).
+   contextMiss when `floorPaths` is empty (observed 2026-10-19T03:02:28
+   sweep.sh row — the ledger masked the parser gap; this note originally said
+   10-18, re-checked against `.log/judge.jsonl` on 2026-10-20).
 5. **Sanitizer hardening first**: `sanitizeJudgePaths` must drop URL-shaped
    tokens (observed: `http://127.0.0.1:8080` →
    `/mnt/Ndr/Projects/http:/127.0.0.1:8080`, absorbed by cwd coverage).
+
+**Built (2026-10-20).** Guards 1–3 live in `intentGuardFaults`
+(`gate/dspa-gate.ts`) — step 4. 4 and 5 are the ledger's own honesty rules, in
+`judgePathReport` / `sanitizeJudgePaths` (`judge/paths.ts`) — step 5. **§4.5 was
+load-bearing for enforcement, not only for the ledger, and step 4 shipped without
+it**: while the sanitizer resolved a URL-shaped token against the cwd, that
+cwd-child text satisfied §4.2 for any miss whose static prefix is an ANCESTOR of
+the cwd — `cat /Users/u/$V/data` (prefix `/Users/u`) with a report of
+`http://127.0.0.1:8080` auto-allowed before the drop, and prompts now.
 
 Evidence for why the guards are not optional — the sampled judge path report
 (7 `paths` rows, model local-2/Qwen3.8-Flash-Next) contained: an invented
@@ -221,12 +231,19 @@ the intent route (§3) is the one that trades determinism for friction.
   whether a prior confirmed resolution existed (`confirmedPrior`).
 - `outcome: "intent-declined"` — the guard set or the verdict kept the stop,
   and the operator was prompted.
-  Built (step 4): both outcomes exist with `missKind` (the class the floor
-  assigned) and `guard` (what decided — guard fault, verdict, write bar, or no
-  verdict). `judgePaths` and `confirmedPrior` are step 5.
+  Built (steps 4–5): both outcomes exist with `missKind` (the class the floor
+  assigned), `guard` (what decided — guard fault, verdict, write bar, or no
+  verdict), `judgePaths` (the §4.2 match set for THAT token — what the judge
+  claimed the location IS; omitted when nothing answered it, which is itself a
+  decline whose `guard` names the reason), and `confirmedPrior` (a confirmed
+  resolution already covered the location — the operator had vouched for this
+  place before intent was asked; `persisted` is the other half, a confirmation
+  stored by THIS run, which an intent row never has). One sanitized report per
+  attempt feeds the guard and the rows, so a row cannot disagree with the
+  decision it records.
 - The manual path's rows are unchanged, so the deterministic fix work keeps a
   live corpus. A floorMiss is never reclassified as a judge contextMiss when
-  `floorPaths` is empty (§4.4).
+  `floorPaths` is empty (§4.4, built step 5).
 
 ## 8. Build order
 
@@ -444,6 +461,46 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
   the `base-write` class is entirely `cd DIR && sed -i …` / `… && python3 -
   <<EOF` — the operator editing files in a repo outside the cwd.
 
+### Step 5 build notes (2026-10-20)
+
+- **Step 5 is built; step 6 (docs: `docs/dspa-redesign.md` point 4,
+  `docs/architecture.md:471`, the CHANGELOG 3.40.0 heading) is next.**
+- **What was built.** `URL_SHAPED_RE` (`^[a-z][a-z0-9+.-]*://`) dropped in
+  `sanitizeJudgePaths`; the §4.4 cause rule in `judgePathReport` (no concrete
+  floor path → the miss stays a `floorMiss`, `contextMisses` empty);
+  `MissFact.confirmedPrior` (filled where the confirmed state is known — at the
+  stop, in the gate's fact builders); `answeredMissPaths(miss, reported)` as the
+  §4.2 match set, shared by the guard and the ledger; `UnresolvedLogEntry.judgePaths`
+  / `.confirmedPrior`.
+- **Why `confirmedPrior` lives on the fact, not on the log call.** The gate is the
+  only place holding `store.getConfirmedResolution` at the moment of the stop;
+  threading the store through the logging path would let the row and the decision
+  read different states. `confirmedPrior` is also honest per CLASS: for an
+  `unresolved` fact it asks the token itself, for a location fact whether any
+  confirmed dir covers it — and a confirmed dir that IS outside the bar arrives
+  as an `outside-path` fact, which is exactly the case worth separating when
+  mining (the operator already vouched for the place; the parser lost it).
+- **A step-4 defect, found by writing the ledger assertions.** `tryIntentOverMiss`
+  called `logJudgePaths` and `dspaAutoAllowed`'s stage-2 pass called it too, so an
+  intent ALLOW wrote the SAME `paths` line twice into `judge.jsonl` — double-count
+  in `log-inspect dspa --paths`. Step 4's test asserted
+  `.some(l => l.kind === "paths")`, which is true at one line and at two, so it
+  passed; the redundant call is gone and the test now asserts the count is 1.
+- **Measured (live ledgers, not replay).** `judge.jsonl`: 51 `paths` rows, 1
+  carrying the mangled URL (`/mnt/Ndr/Projects/http:/127.0.0.1:8080`,
+  2026-10-18T14:17:23) — the §4.5 evidence, live in the corpus rather than
+  hypothetical. 8 rows have no concrete floor path and **6 of those carried
+  `contextMisses`** → §4.4 reclassifies 6/51 rows from context bleed to floorMiss;
+  5 of the 6 are `npx vitest` / `tsc` runs where the judge named the project dir
+  while the floor named nothing, i.e. the parser gap the mis-classification hid.
+  `unresolved.jsonl`: 7 of 37 `gate-stop` rows had a confirmed resolution in
+  effect — the population `confirmedPrior` will separate. The first live intent
+  rows already exist (2 rows, 2026-10-20T01:21/01:26: an `outside-path` READ of
+  the global `tsc` binary, cleared) — step 4 working in the real session.
+- **520-row replay back-to-back against HEAD: 0 flips, 0 reason changes** — as
+  expected: nothing here touches the gate's decision, only what is recorded
+  behind it. Suite: 4290 passed, 1 skipped (+5).
+
 ## 9. Out of scope here
 
 The unbuilt grill items G8–G11/G13 from the ledger round (loop in-list taint
@@ -495,6 +552,22 @@ Still fail-open / invisible to the floor:
   than grow a second heredoc scan in the gate.
 - `git clone` is absolute although inbound — it lays down a tree the floor never
   named (deliberate, D-a).
+
+### Known gaps opened by the intent floor (filed 2026-10-20, steps 4–5)
+
+- **A confirmed token does not vouch for a longer form of itself.**
+  `store.confirmResolution` and `d7ResolveSentinel` key on the token exactly as
+  written, so confirming `$D` leaves `cat $D/design.dxf` unresolvable: the stop
+  is `runtime location unresolvable ($D/design.dxf)`, it carries NO miss (the
+  token has no static anchor), so intent is never asked and `confirmedPrior`
+  reads false for that form (probe: `cat $D` with `$D` confirmed stops as
+  `outside-path` with `confirmedPrior: true`; `cat $D/design.dxf` does not).
+  Friction, not a hole — the operator confirms per token form.
+- **A `cd` base that does not exist on disk yields no outside fact at all**
+  (`cd /nonexistent && cat x` passes the floor with no stop): the read bar only
+  sees a base the analysis can resolve, so a typo'd or deleted base is invisible
+  rather than outside it. Pre-existing read-bar reality, not introduced here —
+  but the intent pass cannot help either, because no miss is typed.
 
 Not defects, by design: unknown-command args are not path-extracted
 (`pathAwareCommands` is a closed set, the judge is the backstop — such
