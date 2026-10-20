@@ -228,6 +228,48 @@ vocabulary.**
   replay one: step 5's `judgePaths`/`confirmedPrior` fields are what measure it.
   Suite: 4285 passed, 1 skipped (+21 in the new `test/intent-floor.test.ts`).
 
+**The ledger reports what decided, and the judge's report stops lying about it.**
+
+- **A URL is not a location (§4.5).** `sanitizeJudgePaths` resolved the model's
+  `http://127.0.0.1:8080` against the operation's cwd into
+  `<cwd>/http:/127.0.0.1:8080` (realpath collapses the `//`) — a fake path under
+  the operation's own base, which cwd coverage then swallowed in the D13
+  diagnostic. Since step 4 that garbage is worse than a bogus line: it also
+  satisfies §4.2 for any miss whose static prefix is an ancestor of the cwd, so
+  `cat /Users/u/$V/data` (prefix `/Users/u`) with that report auto-allowed — a
+  report defect clearing a stop. Scheme-shaped tokens are now dropped at the one
+  choke point every consumer shares: ledger, write bar, §4.2.
+- **The mismatch's cause is honest (§4.4).** With no concrete path of its own the
+  floor cannot have been out-of-date about a location it never derived, so
+  `judgePathReport` no longer splits such a miss into `contextMisses`; it stays a
+  `floorMiss`, which is where a parser gap is found.
+- **An intent row carries the evidence the decision turned on (§7).**
+  `judgePaths` — the §4.2 match set for THAT token, i.e. what the judge claimed
+  the unknown location IS (omitted when nothing answered it: that is a decline,
+  and `guard` says so); `confirmedPrior` — a confirmed resolution already covered
+  the location, the operator having vouched for this place before intent was
+  asked (`persisted` is the other half: a confirmation stored by THIS run, which
+  an intent row never has). `MissFact` gained `confirmedPrior` because the gate is
+  the only place that holds the confirmed state at the moment of the stop, and one
+  sanitized report per attempt feeds guard and rows alike, so a row cannot
+  disagree with the decision it records.
+- **A step-4 defect: the judge ledger wrote the same `paths` line twice** for an
+  intent allow — `tryIntentOverMiss` called `logJudgePaths` and `dspaAutoAllowed`'s
+  stage-2 pass called it too, double-counting every intent allow in
+  `log-inspect dspa --paths`. Step 4's assertion was
+  `.some(l => l.kind === "paths")`, which holds at one line and at two, so it
+  passed; the redundant call is gone and the test asserts the count is 1.
+- **Measured (step 5).** 520-row replay back-to-back against HEAD: **0 flips, 0
+  reason changes** — nothing here moves the gate's decision, only what is
+  recorded behind it. The ledgers carry the effect: of 51 `judge.jsonl` `paths`
+  rows, 1 holds the mangled URL (2026-10-18T14:17:23) and 6 carry
+  `contextMisses` on a row with no concrete floor path — 6/51 rows §4.4 moves from
+  context bleed to floorMiss, 5 of them `npx vitest`/`tsc` runs where the judge
+  named the project dir and the floor named nothing (the gap that was hidden).
+  7 of 37 `unresolved.jsonl` `gate-stop` rows had a confirmed resolution in
+  effect: the population `confirmedPrior` separates. Suite: 4290 passed,
+  1 skipped (+5).
+
 ## 3.39.0 — 2026-10-17
 **The bar asks about the thing the command actually touches: the binary, the
 written operand, the fetched package.**

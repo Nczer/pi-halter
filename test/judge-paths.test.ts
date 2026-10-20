@@ -41,6 +41,14 @@ describe("sanitizeJudgePaths", () => {
     expect(s).toEqual(["/real"]);
   });
 
+  it("§4.5: URL-shaped tokens are dropped, never resolved against the cwd", () => {
+    // The sampled report sent `http://127.0.0.1:8080`; resolving it made
+    // `<cwd>/http:/127.0.0.1:8080`, a fake path under the operation's base.
+    expect(
+      sanitizeJudgePaths(["http://127.0.0.1:8080", "s3://bucket/key", "real/file"], cwd),
+    ).toEqual([`${cwd}/real/file`]);
+  });
+
   it("caps at 8 and returns [] for nothing usable", () => {
     const many = Array.from({ length: 20 }, (_, i) => `/p${i}`);
     expect(sanitizeJudgePaths(many, cwd)).toHaveLength(8);
@@ -98,6 +106,19 @@ describe("judgePathReport", () => {
     });
     expect(r.floorMisses).toEqual(["/never/seen"]);
     expect(r.contextMisses).toEqual(["/seen/in/context"]);
+  });
+
+  it("§4.4: with no concrete floor path the row stays a floorMiss, never context bleed", () => {
+    // The floor named nothing of its own, so it cannot have been out-of-date
+    // about a path it never derived — calling this context bleed hid a parser
+    // gap (2026-10-18T03:02:28, the sweep.sh row).
+    const r = judgePathReport(["/seen/in/context"], {
+      cwd: "/x",
+      floorPaths: [`${OPAQUE_VAR_DIR}/base`],
+      contextPaths: ["/seen/in"],
+    });
+    expect(r.floorMisses).toEqual(["/seen/in/context"]);
+    expect(r.contextMisses).toBeUndefined();
   });
 
   it("sentinels in the floor set are not knowledge", () => {

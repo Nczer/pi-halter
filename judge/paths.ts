@@ -64,6 +64,18 @@ function isSentinel(p: string): boolean {
   return p.startsWith(OPAQUE_VAR_DIR) || p.startsWith(UNKNOWN_CWD_MARKER);
 }
 
+/**
+ * §4.5 (docs/dspa-intent-floor.md): a scheme-shaped token is not a location.
+ * The sampled report sent `http://127.0.0.1:8080`, and `toAbs` resolved it
+ * against the cwd into `<cwd>/http:/127.0.0.1:8080` (realpath collapses the
+ * `//`) — a fake path under the operation's own base, absorbed by cwd
+ * coverage in the diagnostic. Since 3.40.0 the damage is worse than a bogus
+ * ledger line: that text also SATISFIES §4.2's answer-that-token guard for a
+ * cwd-rooted miss, so a report defect could clear a stop. Dropped here, at
+ * the single choke point every consumer shares (ledger, write bar, §4.2).
+ */
+const URL_SHAPED_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 /** One path to absolute form: ~ expanded, relatives resolved against `cwd`,
  * `..` collapsed, THEN realpath'd (the floor's own paths are already
  * resolved — comparing lexically-normalized text against them would invent
@@ -89,7 +101,7 @@ export function sanitizeJudgePaths(
   for (const raw of reported) {
     if (typeof raw !== "string") continue;
     const p = raw.trim();
-    if (!p || isSentinel(p)) continue;
+    if (!p || isSentinel(p) || URL_SHAPED_RE.test(p)) continue;
     const abs = toAbs(p, cwd);
     if (!out.includes(abs)) out.push(abs);
     if (out.length >= JUDGE_PATHS_MAX) break;
@@ -154,11 +166,8 @@ export function judgePathReport(
 ): JudgePathReport {
   const paths = sanitizeJudgePaths(reported, floor.cwd);
   if (paths.length === 0) return {};
-  const known = [
-    floor.cwd,
-    ...(floor.confirmedDirs ?? []),
-    ...floor.floorPaths.filter((p) => p.startsWith("/") && !isSentinel(p)),
-  ];
+  const floorConcrete = floor.floorPaths.filter((p) => p.startsWith("/") && !isSentinel(p));
+  const known = [floor.cwd, ...(floor.confirmedDirs ?? []), ...floorConcrete];
   const misses = paths.filter((p) => !isCovered(p, known));
   // Context paths arrive as written in the session (relative, ~, `..`); they
   // must be compared in the same absolute form the report was sanitized to.
@@ -166,9 +175,17 @@ export function judgePathReport(
     .map((c) => c.trim())
     .filter((c) => c !== "" && !isSentinel(c))
     .map((c) => toAbs(c, floor.cwd));
-  const contextMisses = misses
-    .filter((p) => inContext.some((c) => p === c || p.startsWith(c + "/") || c.startsWith(p + "/")))
-    .slice(0, JUDGE_MISSES_MAX);
+  // §4.4: with NO concrete location of its own, the floor cannot have been
+  // out-of-date about a path it never derived — the cause is its own blindness,
+  // so the row stays a floorMiss even when the path is named in the Session
+  // context section. Re-classifying it as context bleed hid a parser gap
+  // (observed 2026-10-18T03:02:28, the sweep.sh row).
+  const contextMisses =
+    floorConcrete.length === 0
+      ? []
+      : misses
+          .filter((p) => inContext.some((c) => p === c || p.startsWith(c + "/") || c.startsWith(p + "/")))
+          .slice(0, JUDGE_MISSES_MAX);
   const floorMisses = misses.filter((p) => !contextMisses.includes(p)).slice(0, JUDGE_MISSES_MAX);
   const r: JudgePathReport = { paths };
   if (floorMisses.length > 0) r.floorMisses = floorMisses;
