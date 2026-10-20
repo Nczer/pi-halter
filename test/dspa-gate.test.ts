@@ -138,7 +138,7 @@ describe("D7: resolve-then-gate for unbound paths (2026-08-24 log)", () => {
     expect(r).toEqual({ ok: true });
   });
 
-  it("unassigned var is a floor stop, never judgeable (Q1 — 2026-08-25 audit)", async () => {
+  it("unassigned var is a gate stop (Q1 — 2026-08-25 audit); judged only as a typed miss, see test/intent-floor.test.ts", async () => {
     const r = await checkDspaGate(bashPd('mkdir -p "$FOO"'), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("runtime location unresolvable");
