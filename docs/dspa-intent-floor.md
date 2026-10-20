@@ -1,12 +1,12 @@
 # dspa intent floor — two-tier floor
 
-Status: **grilled and decided 2026-10-19** (D-a…D-h in §6). Target 3.40.0.
-Build order §8. This document
-proposes re-cutting the dspa hard gate (`gate/dspa-gate.ts`) along a new
-axis. It **reverses part of Q1** (`docs/dspa-redesign.md` §278-292 point 4,
-re-confirmed D11/2026-08-26; `docs/architecture.md:471` "the judge never
-grants over the floor") — that reversal is the point of the document, not a
-side effect, and each reversal needs its own recorded decision.
+Status: **BUILT — released as 3.40.0 (2026-10-20)**; all six steps of §8 are
+in (D-a…D-h decided 2026-10-19, §6). This document proposes re-cutting the
+dspa hard gate (`gate/dspa-gate.ts`) along a new axis. It **reverses part of
+Q1** (the D7 point-4 paragraph and D11 in `docs/dspa-redesign.md`; the "the
+judge never grants over the floor" line in `docs/architecture.md`'s dspa
+regime) — that reversal is the point of the document, not a side effect, and
+each reversal needs its own recorded decision.
 
 ## 1. Philosophy (operator, 2026-10-19)
 
@@ -274,7 +274,8 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
 - **2a, 2b and step 3 are built** (2a: flags + `[Absolute]` tag + the gate's
   absolute-bar stop + the rm carve-out no longer stopping on a bare class label;
   2b: the egress split; 3: `analysis/delete-scale.ts`, D-c — see its own notes
-  below). Step 4 (typed `misses` + the intent-over-miss relaxation) is next.
+  below). Steps 4-6 (typed `misses` + the intent-over-miss relaxation, the
+  ledger fields, the docs) are built — their notes follow.
 - **Step 2's premise was measured wrong when I built it.** The plan read as if
   the gate's `dangerous:` stop were the live guard for mkfs/shutdown/`git reset
   --hard`/`eval`. It is not: that stop fires only in the rm branch, so at HEAD
@@ -463,8 +464,8 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
 
 ### Step 5 build notes (2026-10-20)
 
-- **Step 5 is built; step 6 (docs: `docs/dspa-redesign.md` point 4,
-  `docs/architecture.md:471`, the CHANGELOG 3.40.0 heading) is next.**
+- **Built; step 6 (the docs above + the 3.40.0 release heading) closes the
+  program and changes no decision.**
 - **What was built.** `URL_SHAPED_RE` (`^[a-z][a-z0-9+.-]*://`) dropped in
   `sanitizeJudgePaths`; the §4.4 cause rule in `judgePathReport` (no concrete
   floor path → the miss stays a `floorMiss`, `contextMisses` empty);
@@ -500,6 +501,21 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
 - **520-row replay back-to-back against HEAD: 0 flips, 0 reason changes** — as
   expected: nothing here touches the gate's decision, only what is recorded
   behind it. Suite: 4290 passed, 1 skipped (+5).
+
+### Step 6 build notes (2026-10-20): the docs that still said Q1
+
+Docs and release only, as planned — no behavior change, no test change.
+`docs/dspa-redesign.md` carries the reversal at every site that stated the
+old rule: the status line, the D1 hard-floor table row, the D7 point-4
+paragraph ("floor stop, never judgeable" — flipped back, with the write bar
+named as what stays absolute), D8's "what did NOT change" line, D11.4 (the
+scope class is no longer merely advisory) and D11.6, the tier-1 path-resolver
+paragraph, and Q1 itself in §5. `docs/architecture.md` gained the live-state
+contract: the floor's stop list splits **bars vs misses**, `misses[]` and
+`tryIntentOverMiss` are described where stages 1-2 are, the D16 advisory rule
+is scoped to stops that reach the prompt, and the `unresolved.jsonl` entry
+lists the five outcomes. The historical line numbers in this document's header
+became section names so they stop drifting.
 
 ## 9. Out of scope here
 

@@ -16,13 +16,18 @@
  *    MANUAL bar (cwd + session grants + config-allowed + trusted scripts —
  *    exactly what manual mode auto-allows, getOutsideCwdPaths) — INCLUDING
  *    paths whose location is statically unprovable (unbound variable,
- *    unresolvable cd target): Q1 is absolute, scope grants are the user's
- *    call, never the judge's. A path manual mode auto-allows (e.g. /tmp via
- *    config) is not a scope violation — the judge reviews it (D11, 2026-08-26
- *    re-alignment). EVERY floor stop is advisory (D16): the fall-through
- *    prompt renders the judge's verdict as input to the user's
+ *    unresolvable cd target): the WRITE bar is absolute — scope grants are
+ *    the user's call, never the judge's. A path manual mode auto-allows
+ *    (e.g. /tmp via config) is not a scope violation — the judge reviews it
+ *    (D11, 2026-08-26 re-alignment). Since 3.40.0 the floor is two-tier
+ *    (docs/dspa-intent-floor.md): a location the parse cannot NAME stops as
+ *    a typed miss (`misses[]`), which the fall-through's guarded intent pass
+ *    may clear; a BAR — an out-of-bar write, credentials, egress, delete
+ *    reach, an `[Absolute]` pattern — is never cleared by a verdict.
+ *    Every stop that reaches the prompt is advisory (D16): the prompt
+ *    renders the judge's verdict as input to the user's
  *    allow/deny/grant decision (D22: stage 2 is skipped when stage 1
- *    approved) — the stop stands, the judge never grants over the floor. First-word checks are
+ *    approved) — the stop stands, no verdict grants over a bar. First-word checks are
  *    wrapper/env-prefix transparent (`FOO=bar npx evil` is npx evil; `env
  *    $f` is obscured) — the policy's delegation transparency, mirrored.
  *    Unsafe patterns (inline scripts, redirects, pipes, subshells) and risk
@@ -108,10 +113,12 @@ export type DspaGateResult =
   | {
       ok: false;
       reason: string;
-      /** D16: EVERY floor stop is advisory — the judge still runs both
-       *  stages and its verdict renders in the fall-through prompt as
-       *  input to the user's allow/deny/grant decision. The stop stands
-       *  (the judge never grants over the floor). The field stays so a
+      /** D16: a floor stop that reaches the prompt is advisory — the judge
+       *  ran both stages and its verdict renders in the fall-through prompt
+       *  as input to the user's allow/deny/grant decision. The stop stands:
+       *  no verdict grants over a bar. (Since 3.40.0 a MISS stop can be
+       *  cleared BEFORE the prompt, but only by `tryIntentOverMiss`'s
+       *  guarded pass, which does not read this field.) The field stays so a
        *  future bare stop can opt out; the gate currently sets it on
        *  every stop. */
       advisory?: boolean;
@@ -1025,7 +1032,8 @@ export async function checkDspaGate(
   const outside = (analysis.prompt.outsidePaths ?? []).filter((p) => !outsideExempt.has(p));
   // D7: resolve the sentinels (see d7ResolveSentinel). Concrete outside
   // locations stop (naming the dir for a one-time grant); unprovable
-  // locations stop outright (Q1 — never judgeable).
+  // locations stop too — as typed MISS facts, which the fall-through's
+  // intent pass may clear (3.40.0, docs/dspa-intent-floor.md §3).
   const bounds = cdBaseBounds(analysis.parsedSegments, pd.cwd, analysis.assignments);
   const resolvedOutside: string[] = [];
   const confirmedOutside: Array<{ token: string; dirs: string[] }> = [];

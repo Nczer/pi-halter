@@ -1,7 +1,11 @@
 # dspa redesign — "auto mode" for halter
 
 Status: **resolved via grill** (2026-08-23). All decisions Q1–Q10 are final;
-phase 2 is ready to build.
+phase 2 is ready to build. **Superseded in part 2026-10-20 (3.40.0):** Q1's
+*location* half was reversed for dspa by `docs/dspa-intent-floor.md` — a
+location the parse cannot name is now judgeable, while the bars (writes
+outside the write bar, credentials, egress, delete reach) stayed absolute.
+Each site that moved is marked in place.
 
 ## 1. Problem
 
@@ -71,7 +75,7 @@ the full command + analysis + content and decides.
 | parse errors | unverifiable |
 | obscured command position (`$f`, `$( )` as the command) | cannot verify what runs (advisory since D16; since D23 the operand model still runs there) |
 | network egress (command or URL) | exfiltration surface (Q2, resolved: hard for phase 1; a trusted-domains setting is the future opening) |
-| paths outside the **manual** bar (bash `outsidePaths`, file `outsideDir`; the bar is what manual mode auto-allows — D11) | **scope grants are the user's call, never the judge's** (Q1, re-confirmed D11) |
+| paths outside the **manual** bar (bash `outsidePaths`, file `outsideDir`; the bar is what manual mode auto-allows — D11) | **scope grants are the user's call, never the judge's** (Q1, re-confirmed D11) — the bar still holds for every WRITE outside it; since 3.40.0 a location the parse cannot *name* is a **miss** stop, not a bar, and intent may clear it (`docs/dspa-intent-floor.md` §4) |
 | rm carve-out violations (non-explicit/outside/self-writes not cleaned up) | unchanged; the carve-out stays |
 | rm mass-deletion class (home/system dirs, ≥100 entries, bare glob) | unchanged, via the non-rm-dangerous filter |
 | non-rm dangerous reasons in rm commands | (fixed 2026-08-23, `4957afc`) |
@@ -291,9 +295,22 @@ concrete dir or the judge.
    the static parser lacks" is empirically false for locations the
    parser cannot even enumerate.
 
-Unchanged: resolved outside-base paths still stop; the rm carve-out keeps
-non-explicit rm targets on the floor (`rm -rf $X`); obscured positions,
-credentials, network egress. Manual/dspat modes are unchanged (no floor
+   **Flipped back 2026-10-20 (3.40.0, `docs/dspa-intent-floor.md` D-g).**
+   "Never judgeable" conflated two things: an unnameable location is not a
+   *scope grant*, it is an unknown **location**, and the question asked of
+   the judge is "what does this command touch" (stage-2 path report), not
+   "may this scope be reached". The stop is now typed (`misses[]`) and goes
+   to stage 2; clearing it needs the report to answer the token's
+   statically knowable prefix plus the §4 guards — never for a write effect
+   (§4.1), never for the bars. The D7 premise stands for the *static* pass;
+   what clears a miss is the model's own report of the operation, anchored
+   to what the parse did know.
+
+Unchanged: resolved outside-base paths still stop for a WRITE (since 3.40.0
+an out-of-bar **read** may auto-allow when the stage-2 report answers the
+miss token under the §4 guards — measured: zero flips on the 520-row live
+replay); the rm carve-out keeps non-explicit rm targets on the floor
+(`rm -rf $X`); obscured positions, credentials, network egress. Manual/dspat modes are unchanged (no floor
 there — the prompt path was already the outcome).
 
 ### D8. Shrink the floor: package-manager run forms + /tmp scratch rm are judgeable (2026-08-24 log)
@@ -344,8 +361,10 @@ concrete recursive/bare `/tmp` rm moved with the bar — /tmp is
 config-allowed, i.e. in the manual bar — so it is judgeable like in-cwd
 recursive rm; the judge's deny rule gates mass deletion.)
 
-What did NOT change: outside-base reads stay user-only (Q1); the single
-`rm target not explicit ($d)` stop is by design.
+What did NOT change: outside-base writes stay user-only (Q1 — 3.40.0 moved
+only *unknown* locations and, through them, out-of-bar reads: Q1's location
+half, see D7 point 4); the single `rm target not explicit ($d)` stop is by
+design.
 
 ### D9. Root scans get a dedicated stop; the root is never an Always grant (2026-08-24)
 
@@ -500,6 +519,10 @@ from. Six decisions (implemented the same day; reverts fix (a) of
    stops (D10) run BOTH judge stages; the final verdict renders in the
    prompt as advisory input — the floor's stop stands (never an
    auto-allow). Danger-class stops stay bare (see D10).
+   *Superseded in part (3.40.0):* the unresolvable-location and
+   outside-path members of that class became **miss** stops whose stage-2
+   verdict is binding under the §4 guards; every remaining floor stop —
+   including a miss a guard refused — is still advisory.
 5. **The Trust option stays.** Grilled as possibly redundant vs Always —
    it is not: Trust is per bare package across ALL fetchable forms
    (npx/uvx/bun x/npm exec/pnpm dlx/yarn dlx/uv x) with version pins
@@ -507,7 +530,8 @@ from. Six decisions (implemented the same day; reverts fix (a) of
    exact-form and manager-prefix Always options). Deterministic
    post-grant; covers no unsafe shapes.
 6. **The floor keeps**: unresolvable-location stops (now with advisory
-   verdict), full-filesystem scans, and rm targets outside the bar.
+   verdict; since 3.40.0 typed as miss stops that intent may clear under
+   the §4 guards), full-filesystem scans, and rm targets outside the bar.
 
 ### D12. Converge: unresolved tokens resolve to determinism (2026-08-27)
 
@@ -540,7 +564,10 @@ use, not a new one) reports the runtime dirs for each token, grounded only
 in the command text (assignments, loop in-lists, tool semantics). Display:
 `→ LLM: dir1, dir2` under the token in the prompt. The gate never
 auto-allows on it (Q1 stands) — it becomes binding only when the user
-accepts a grant.
+accepts a grant. (3.40.0: it still never auto-allows on a *resolution*
+alone. An intent clear needs the stage-2 report to answer the token itself
+(§4.2); a prior confirmed resolution is logged (`confirmedPrior`) but
+vouches for nothing.)
 
 **Steady state — confirmed resolutions.** `store.confirmResolution(
 token, dirs)` (session-scoped) records a user-accepted token → dirs:
@@ -1332,6 +1359,12 @@ class"). Suite 3229.
    granted scope — including manual-bar locations — and can never grant
    scope itself. An outside-base stop still prompts with the manual
    Always options, so the user can grant the scope.
+   **REVERSED IN PART 2026-10-20 (3.40.0, `docs/dspa-intent-floor.md`
+   D-g):** the judge still cannot grant scope — no verdict clears a write
+   outside the write bar, and the Always tiers are unchanged. What moved is
+   that "outside the bar" was read as covering *locations the parse cannot
+   name*: those are miss stops now, judged for what they touch, and an
+   out-of-bar READ can auto-allow on a guarded intent clear.
 2. **Q2 — RESOLVED: network egress stays on the hard floor for phase 1.**
    Intent doesn't de-risk a URL; the future opening is a trusted-domains
    setting (halter's `autoMode.environment`), revisit with stop-tag data.

@@ -456,19 +456,38 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
    - full-filesystem scans (`find /`, `grep -rn x /`) get a dedicated stop (D9);
    - paths outside the manual bar (D11). Unbound locations are first resolved
      from the command itself (local assignments, every candidate base of an
-     `||`-ambiguous cd); a location it cannot resolve is a stop, never an
-     auto-allow (D7).
+     `||`-ambiguous cd). What stays unknown is a **miss** stop, not a bar: a
+     miss goes to the intent pass below (3.40.0); a concrete path outside the
+     WRITE bar is a bar and never clears (D7's "never an auto-allow" now
+     covers the bars).
    - the rm carve-out: explicit `/tmp` scratch targets are judgeable (D8/D11);
      computed/glob rm and `rm /etc/hosts` still stop.
    Detection-limited stops are judgeable (content-classes T2): an obscured
    command position and an unparseable command pass to the judge — the packet
    carries the full raw text plus both flags, so the judge has strictly more
-   information than the static pass. Everything above is a POLICY stop and
-   stays absolute.
+   information than the static pass. Everything above is a POLICY stop.
 
-   Every floor stop is **advisory** (D16): the judge runs both stages and the
-   verdict renders in the prompt ("— advisory (floor stop stands)") — the stop
-   stands, the judge never grants over the floor.
+   **Two tiers (3.40.0, `docs/dspa-intent-floor.md`): bars vs misses.** A
+   **bar** is absolute — no verdict clears it: credential paths, non-loopback
+   egress, full-filesystem scans, untrusted fetchable run forms, `[Absolute]`
+   dangerous-pattern entries, delete reach past the temp zone, and any WRITE
+   at a location outside the write bar. A **miss** is a location the parse
+   cannot name: `checkDspaGate` returns typed `misses[]` (`kind: unresolved |
+   outside-path | base-write`, the `token`, its statically knowable `prefix`,
+   its operand `role`, `confirmedPrior` for the ledger), and
+   `tryIntentOverMiss` in `gate/fallthrough.ts` runs stage 2 over them. If
+   the report answers the token's prefix (§4.2), the §4 guards pass, and the
+   verdict is `approve` at `risk ≤ medium`, the stop clears: auto-allow with
+   the toast `dspa: intent over miss stop (<kinds>, <model>)` and one
+   `unresolved.jsonl` row per token (`outcome: intent-allowed`, carrying
+   `judgePaths` and `confirmedPrior`). Any guard or verdict fails → the
+   prompt as before, carrying the verdict (`outcome: intent-declined`, with
+   the failing guard). A destructive effect never rides on a miss (§4.1); one
+   concrete out-of-bar write makes the whole stop a bar.
+
+   Every floor stop that reaches the prompt is **advisory** (D16): the judge
+   runs both stages and the verdict renders in the prompt ("— advisory (floor
+   stop stands)") — the stop stands, the judge never grants over a bar.
 2. **Stage 1** (stateless, LRU-cached on the operation): the packet's static
    analysis is the whole input. `approve` + `low` auto-allows. Script
    payloads (C2, content-classes T3) skip stage 1 — the class always
@@ -503,8 +522,10 @@ OpenAI-shaped wires and Mistral, `any` on Anthropic, Google and Bedrock, `auto`
 for an unmapped api, where an unknown value 400s or silently no-ops). Forcing the
 call removes the prose-reply class; it cannot repair a call that opens and closes
 with empty arguments, which stays `bad-args`.
-EVERY floor stop is advisory (D16): the judge runs both stages and renders
-the verdict in the prompt — the stop stands. Auto-allowed operations toast.
+A floor stop that reaches the prompt is advisory (D16): the judge runs both
+stages and renders the verdict in the prompt — the stop stands (a miss stop
+may already have been cleared by the guarded intent pass, never a bar).
+Auto-allowed operations toast.
 
 **Content-bearing manual auto-allows are judged too (D3/D11).** In dspa, a
 file WRITE that manual mode would auto-allow (grants, config-allowed,
@@ -614,7 +635,9 @@ gate then persists the confirmed resolution (D12 convergence) and resolves the
 same token deterministically thereafter: no LLM call, the token flips from
 `prompted` to `auto-allowed` in `.log/unresolved.jsonl`. The gate never
 auto-allows on the resolver's output; any failure resolves to null and the
-prompt is unchanged.
+prompt is unchanged. (3.40.0 leaves that intact: an intent clear needs the
+stage-2 report to answer the token itself, and a confirmed resolution is
+ledger data — `confirmedPrior` vouches for nothing in a guard.)
 
 ## Path resolution layer
 
@@ -685,7 +708,10 @@ at halter load.
   (`/halter-ledger-log`; same arg handling; D17 split). `tools/log-inspect.mjs`
   does the recurring extractions (summary, audit, dspa, dspa --paths, stats).
 - **Unresolved log** (`.log/unresolved.jsonl`, on by default): the fate of
-  each unbound token (outcome, LLM suggestion, user decision, whether it
+  each unbound token (outcome — `prompted` / `gate-stop` / `auto-allowed` /
+  `intent-allowed` / `intent-declined`; intent rows also carry the miss kind,
+  the failing guard, the judge's reported paths and `confirmedPrior`;
+  LLM suggestion, user decision, whether it
   became a confirmed resolution). Convergence is the token flipping from
   `prompted` to `auto-allowed`.
 - **Judge ledger** (`.log/judge.jsonl`, on by default, D17): signal-only
