@@ -1,10 +1,13 @@
 # Changelog
 
-## Unreleased
-**The judge tells the wire the verdict call is mandatory — in that wire's own
-vocabulary.**
+## 3.40.0 — 2026-10-20
+**A floor stop is either a BAR or an unknown. The bars stay absolute — the
+irreversible patterns, egress, credential paths, delete reach, any write
+outside the write bar; what goes to judgment is a location the parse could
+not name.**
 
-- **What was wrong.** The six 2026-10-17 `no-tool-call` stage-2 lines were replies
+- **The judge tells the wire the verdict call is mandatory — in that wire's own
+  vocabulary.** The six 2026-10-17 `no-tool-call` stage-2 lines were replies
   that opened no call at all: the verdict schema written out as prose-ish JSON
   (`{"explanation": …`) with the arguments and no `name`, each one a lost
   explanation and a fail-safe defer. `judge()` and the path resolver both sent
@@ -228,7 +231,8 @@ vocabulary.**
   replay one: step 5's `judgePaths`/`confirmedPrior` fields are what measure it.
   Suite: 4285 passed, 1 skipped (+21 in the new `test/intent-floor.test.ts`).
 
-**The ledger reports what decided, and the judge's report stops lying about it.**
+- **The ledger reports what decided, and the judge's report stops lying about
+  it.**
 
 - **A URL is not a location (§4.5).** `sanitizeJudgePaths` resolved the model's
   `http://127.0.0.1:8080` against the operation's cwd into
