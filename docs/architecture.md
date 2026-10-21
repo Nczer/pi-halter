@@ -473,10 +473,13 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
    dangerous-pattern entries, delete reach past the temp zone, and any WRITE
    at a location outside the write bar. A **miss** is a location the parse
    cannot name: `checkDspaGate` returns typed `misses[]` (`kind: unresolved |
-   outside-path | base-write`, the `token`, its statically knowable `prefix`,
-   its operand `role`, `confirmedPrior` for the ledger), and
+   outside-path | base-write`, the `token`, its statically knowable `prefix`
+   — 3.41.0: `""` when nothing about the location is static — its operand
+   `role`, `confirmedPrior` for the ledger), and
    `tryIntentOverMiss` in `gate/fallthrough.ts` runs stage 2 over them. If
-   the report answers the token's prefix (§4.2), the §4 guards pass, and the
+   the report answers the token's prefix, OR — for a prefix-less miss — the
+   path resolver binds that token to dirs that are ALL inside the manual read
+   bar (§4.2 amendment, 3.41.0), the §4 guards pass, and the
    verdict is `approve` at `risk ≤ medium`, the stop clears: auto-allow with
    the toast `dspa: intent over miss stop (<kinds>, <model>)` and one
    `unresolved.jsonl` row per token (`outcome: intent-allowed`, carrying

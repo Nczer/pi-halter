@@ -32,7 +32,10 @@ import { stream } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {BashPromptData} from "../decide/types";
-import {JUDGE_RESPONSE_CAP_MS, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeToolChoice, JudgeStreamFn, JudgeSettings} from "./judge";
+import {JUDGE_RESPONSE_CAP_MS, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeRequestModel, judgeSessionId, judgeToolChoice, replyDiag, JudgeStreamFn, JudgeSettings} from "./judge";
+import {logResolverInfra} from "../gate/decision-log";
+import {isDspaActive} from "../modes/dspa-mode";
+import {isDspatActive} from "../modes/dspat-mode";
 import { expandTilde } from "../analysis/path-util";
 
 // ── Model call ──
@@ -134,15 +137,23 @@ export async function resolveUnresolvedPaths(
   if (!unresolved || unresolved.length === 0) return null;
 
   let widgetShown = false;
+  // Regime tag for the judge ledger, same rule as the verdict stages
+  // (runJudgeStage) — a resolver line without it is unattributable.
+  const logMode = isDspaActive() ? "dspa" : isDspatActive() ? "dspat" : "manual";
   try {
     const settings = deps.settings ?? readJudgeSettings();
-    if (!settings.enabled) return null;
+    if (!settings.enabled) return null; // off = the user's choice, stays silent
     const model = resolveJudgeModel(settings, ctx.modelRegistry, ctx.model);
-    if (!model) return null;
-    const auth = await resolveJudgeAuth(model, ctx.modelRegistry);
-    if (!auth) return null;
-
+    if (!model) {
+      logResolverInfra(pd, logMode, "model-unresolved");
+      return null;
+    }
     const modelId = `${model.provider}/${model.id}`;
+    const auth = await resolveJudgeAuth(model, ctx.modelRegistry);
+    if (!auth) {
+      logResolverInfra(pd, logMode, "auth-failed", modelId);
+      return null;
+    }
     const tokens = unresolved.map((u) => u.token);
     const key = cacheKey(modelId, pd, tokens);
     const hit = cacheGet(key);
@@ -170,13 +181,20 @@ export async function resolveUnresolvedPaths(
       signal: controller.signal,
       apiKey: auth.apiKey,
       headers: auth.headers,
+      env: auth.env,
+      // OpenCode requires x-opencode-session; pi-ai derives it from this id
+      // (see judgeSessionId).
+      sessionId: judgeSessionId(ctx),
       // Same forced call as judge(): the tool is the only channel, so a
       // prose reply buys nothing (it yields no resolutions either way).
       toolChoice: judgeToolChoice(model),
     };
     try {
       const s = (deps.stream ?? stream)(
-        model,
+        // The auth resolution's endpoint override goes on the model (see
+        // judgeRequestModel) — the resolver and the verdict stages must hit the
+        // same endpoint, or one fails while the other works.
+        judgeRequestModel(model, auth),
         {
           systemPrompt: RESOLVE_SYSTEM_PROMPT,
           tools: [RESOLVE_TOOL],
@@ -198,16 +216,32 @@ export async function resolveUnresolvedPaths(
         }
       }
       const reply: AssistantMessage = await s.result();
-      if (reply.stopReason === "aborted" || reply.stopReason === "error") return null;
+      // Every no-map path that is a CALL fault gets a ledger line (stage 0);
+      // until 3.40.2 all of these returned null in silence, so the resolver's
+      // share of a provider outage was invisible (D17).
+      if (reply.stopReason === "aborted") {
+        logResolverInfra(pd, logMode, "timeout", modelId, replyDiag(reply));
+        return null;
+      }
+      if (reply.stopReason === "error") {
+        logResolverInfra(pd, logMode, "call-failed", modelId, (reply.errorMessage ?? replyDiag(reply)).slice(0, 400));
+        return null;
+      }
 
       // Read the tool call by position (the first one), not by name — under
       // OAuth the provider rewrites the registered name (judge.ts pattern).
       const call = reply.content.find(
         (part): part is ToolCall => part.type === "toolCall",
       );
-      if (!call) return null;
+      if (!call) {
+        logResolverInfra(pd, logMode, "no-tool-call", modelId, replyDiag(reply));
+        return null;
+      }
       const results = (call.arguments ?? {}).results;
-      if (!Array.isArray(results)) return null;
+      if (!Array.isArray(results)) {
+        logResolverInfra(pd, logMode, "bad-args", modelId, JSON.stringify(call.arguments ?? {}).slice(0, 400));
+        return null;
+      }
 
       const map: ResolutionMap = new Map();
       for (const r of results) {
@@ -218,16 +252,30 @@ export async function resolveUnresolvedPaths(
         if (dirs.length > 0) map.set(token, dirs);
         // known:false or empty dirs → the token stays unresolved (no entry).
       }
+      // A clean reply that knew nothing is an ANSWER, not a fault: no line.
       if (map.size === 0) return null;
       cacheSet(key, new Map(map));
       return map;
-    } catch {
+    } catch (err) {
+      // The stream threw (transport fault, an adapter rejecting the options…).
+      // A first-token or cap abort lands here on some adapters, so the abort
+      // flag picks the class — the same distinction the verdict stages make.
+      logResolverInfra(
+        pd,
+        logMode,
+        controller.signal.aborted ? "timeout" : "call-failed",
+        modelId,
+        String((err as Error)?.message ?? err).slice(0, 400),
+      );
       return null;
     } finally {
       clearTimeout(firstTokenTimer);
       clearTimeout(capTimer);
     }
-  } catch {
+  } catch (err) {
+    // An unexpected internal throw (settings read, packet build, cache) — the
+    // resolver's catch-all stays, but never silent (D17).
+    logResolverInfra(pd, logMode, "call-failed", undefined, String((err as Error)?.message ?? err).slice(0, 400));
     return null;
   } finally {
     if (widgetShown) {

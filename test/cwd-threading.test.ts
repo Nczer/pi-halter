@@ -804,6 +804,44 @@ describe("stale session-cwd resolutions drop out of post-cd segments (phantom pr
   }, 15000);
 });
 
+describe("relative PROGRAM words re-base with the cd (argv0 is an executed path)", () => {
+  // parseCommand models a `./x` / `../x` command word as a path (the file it
+  // executes). cwdDependentTokens used to scan operands only, so a post-cd
+  // program stayed pinned to the session cwd: the prompt displayed a location
+  // the command never touches, the "Always (paths)" grant pointed at a dir that
+  // does not exist (a dead grant, so the prompt could not be won), and the
+  // judge was shown the phantom path as evidence.
+  const pathsOf = async (cmd: string): Promise<string[]> => {
+    const dec = await decide({ type: "bash", command: cmd, cwd: CWD }, createStore());
+    expect(dec.kind).toBe("prompt");
+    if (dec.kind !== "prompt") return [];
+    return ((dec.promptData as BashPromptData).analysis?.paths) ?? [];
+  };
+
+  it("cd <dir> && ../bin/tool names the runtime program, not <cwd>/../bin/tool", async () => {
+    const paths = await pathsOf("cd /var/tmp && ../bin/tool --noEmit 2>&1 | head -20");
+    expect(paths).toContain("/var/bin/tool");
+    expect(paths).not.toContain(path.resolve(CWD, "../bin/tool"));
+  }, 15000);
+
+  it("cd <dir> && ./tool names the program under the cd target, not under the session cwd", async () => {
+    const paths = await pathsOf("cd /var/tmp && ./tool");
+    expect(paths).toContain("/var/tmp/tool");
+    expect(paths).not.toContain(path.join(CWD, "tool"));
+  }, 15000);
+
+  it("a later pipeline stage's relative program re-bases too", async () => {
+    const paths = await pathsOf("cd /var/tmp && ls | ../bin/grep x");
+    expect(paths).toContain("/var/bin/grep");
+    expect(paths).not.toContain(path.resolve(CWD, "../bin/grep"));
+  }, 15000);
+
+  it("without a cd the program stays under the session cwd (no threading to apply)", async () => {
+    const a = await analyzeCommand("../bin/tool", CWD);
+    expect(a.paths).toContain(path.resolve(CWD, "../bin/tool"));
+  }, 15000);
+});
+
 describe("$HOME expansion integration (P2)", () => {
   it("cat $HOME/<outside> prompts (resolves to the real home path)", async () => {
     const a = await analyzeCommand("cat $HOME/.halt-secret-probe.txt", CWD);

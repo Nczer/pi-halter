@@ -56,7 +56,7 @@ const VERDICT = {
 
 interface CapturedCall {
   context: Context;
-  options: { signal?: AbortSignal; apiKey?: string; toolChoice?: string } | undefined;
+  options: { signal?: AbortSignal; apiKey?: string; toolChoice?: string; sessionId?: string } | undefined;
 }
 
 /** Fake stream: pushes start → toolcall_start → done (or error, matching
@@ -90,6 +90,7 @@ function makeCtx(model: Model<any> | undefined, authOk = true): FakeCtx {
   const ctx = {
     hasUI: true,
     model,
+    sessionManager: { getSessionId: () => "sess-42" },
     modelRegistry: {
       find: () => undefined,
       getApiKeyAndHeaders: async () =>
@@ -586,6 +587,44 @@ describe("JudgeStageOutcome: the failure identity the prompt line needs", () => 
     expect(judgeFailPhrase({ verdict: null, failReason: "timeout", latencyMs: 8020 })).toBe("timeout 8.0s");
     expect(judgeFailPhrase({ verdict: null, failReason: "no-tool-call" })).toBe("no-tool-call");
     expect(judgeFailPhrase({ verdict: null })).toBe(""); // judge not run (off) — not a failure
+  });
+});
+
+describe("the session id on the model call", () => {
+  // OpenCode/OpenCode Go answers 400 MissingSessionID to a request with no
+  // x-opencode-session; pi-ai derives that header from options.sessionId, so
+  // every judge call has to carry pi's session id (2026-10-21 ledger: 10/10
+  // opencode-go judge calls failed while local models were fine).
+  it("stage 1 and stage 2 both forward it", async () => {
+    const calls: CapturedCall[] = [];
+    const { ctx } = makeCtx(fakeModel());
+    await getStage1Outcome(makePd("sessid-stage1", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    await getStage2Outcome(makePd("sessid-stage2", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.options?.sessionId)).toEqual(["sess-42", "sess-42"]);
+  });
+
+  it("a context with no session id still calls (the id is best-effort)", async () => {
+    const calls: CapturedCall[] = [];
+    const ctx = {
+      hasUI: true,
+      model: fakeModel(),
+      modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) },
+      ui: { setWidget: () => {} },
+    } as unknown as ExtensionContext;
+    const o = await getStage1Outcome(makePd("sessid-none", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options?.sessionId).toBeUndefined();
+    expect(o.verdict).not.toBeNull();
   });
 });
 

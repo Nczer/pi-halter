@@ -417,8 +417,11 @@ export interface JudgeLogEntry {
   // kind: "diff" — compact stage verdicts, "approve/low" form.
   s1?: string;
   s2?: string;
-  // kind: "infra".
-  stage?: 1 | 2;
+  // kind: "infra" — 1|2 = a judge verdict stage; 0 = the path-resolver call
+  // (a model call under the same judge settings, but NOT a verdict stage —
+  // keeping its tally separate is what makes "the judge is failing" readable
+  // apart from "the resolver is failing").
+  stage?: 0 | 1 | 2;
   // kind: "infra" — the failure class, straight from JudgeResult.failReason
   // (2026-10-04: the old fixed enum collapsed every no-verdict line into
   // "no-explanation" and put the real class in `detail`, so the ledger could
@@ -551,6 +554,28 @@ export function logJudgeInfra(
   detail?: string,
 ): void {
   logJudge({ kind: "infra", mode, stage, error, cmd: judgeCmdOf(pd), model, detail });
+}
+
+/**
+ * The path-resolver call produced no resolutions because the call itself
+ * failed (auth, a dead model, a malformed reply, a throw). Same visibility
+ * rule as the verdict stages — no failure path stays silent (D17); until
+ * 3.40.2 the resolver returned null on every one of these with no ledger
+ * line, so an operator staring at judge.jsonl saw only the verdict-stage
+ * half of a provider problem that was hitting both calls.
+ *
+ * NOT failures, never logged: the judge/resolver being off, a prompt with no
+ * unresolved tokens, a cache hit, and a model that answered correctly but
+ * knew nothing (map.size === 0) — the last is a real answer, not a fault.
+ */
+export function logResolverInfra(
+  pd: PromptData,
+  mode: JudgeLogMode,
+  error: NonNullable<JudgeLogEntry["error"]>,
+  model?: string,
+  detail?: string,
+): void {
+  logJudge({ kind: "infra", mode, stage: 0, error, cmd: judgeCmdOf(pd), model, detail });
 }
 
 // The one-line prompt summary lives in prompt-builder (summarizePrompt);

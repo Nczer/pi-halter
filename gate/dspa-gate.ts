@@ -86,6 +86,7 @@ import { expandTilde, shortenToken } from "../analysis/path-util";
 import { isPathWarnedResolved, resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
 import { scriptFilePathInSegment } from "../analysis/script-payload";
 import { sanitizeJudgePaths } from "../judge/paths";
+import type { ResolutionMap } from "../judge/path-resolver";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { UNKNOWN_CWD_MARKER, cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
@@ -134,8 +135,11 @@ export type DspaGateResult =
        *  location it stopped on is unknown or opaque, so the intent pass can
        *  be asked to turn it into a location (`gate/fallthrough.ts`,
        *  tryIntentOverMiss). Absent when any part of the stop is NOT a miss:
-       *  a concrete write operand outside the write bar, an unanchorable
-       *  location, or any absolute bar (those return before a miss is typed). */
+       *  a concrete write operand outside the write bar, or any absolute bar
+       *  (those return before a miss is typed). Since 3.41.0 a location with
+       *  nothing static about it IS carried (`prefix: ""`) — the §4.2
+       *  amendment answers it from the path resolver instead of refusing to
+       *  ask. */
       misses?: MissFact[];
     };
 
@@ -156,7 +160,9 @@ export interface MissFact {
   token: string;
   /** The statically knowable leading dirs of `token` (`/proc` for
    *  `/proc/$EP/io`; the path itself for a concrete one). Guard §4.2 anchors
-   *  the judge's report here. */
+   *  the judge's report here. "" = nothing static to anchor on: the answer
+   *  must then come from the path resolver, per token, and land in-bar
+   *  (3.41.0 §4.2 amendment). */
   prefix: string;
   /** The operand role the parse gives it. A write effect at a location the
    *  floor cannot name is never handed to intent (§4.1). */
@@ -702,8 +708,9 @@ const REMOTE_EXEC_LABEL_RE = /download & execute/;
  * The statically knowable leading dirs of a location text — the place §4.2
  * can anchor a judge report. Cuts at the first dynamic part (a variable, a
  * substitution, a glob, an unresolved marker). A relative text has no anchor
- * of its own and returns "": intent cannot vouch for a location whose base is
- * itself unknown.
+ * of its own and returns "": the report cannot vouch for a location whose
+ * base is itself unknown, so such a fact is answered by the per-token path
+ * resolver instead (§4.2 amendment, 3.41.0 — see MissAnswers).
  */
 const DYNAMIC_SEGMENT_RE = /[$`*[\]{}<>\\]/;
 export function staticPrefixOf(raw: string): string {
@@ -736,16 +743,51 @@ const PROC_SECRET_RE = /\/proc\/[^/]+\/(environ|cmdline)\b/;
  * must CONTAIN, never what it claims.
  */
 /**
+ * §4.2's answer, per shape of the fact (3.41.0 amendment).
+ * A fact with a static anchor is answered by the stage-2 report naming it.
+ * A fact with NO anchor (`$rc`, `$f` from an unprovable in-list) has no
+ * static text a report could match, so its only admissible answer is the
+ * path resolver's OWN per-token answer (`judge/path-resolver.ts`) — and
+ * every dir in that answer must land inside the read bar. A flat report
+ * never vouches for an unanchored token: `cat $fi notes.md` names
+ * notes.md, and letting that stand in for `$fi` is the omission hole §4.2
+ * exists to close. An answer outside the bar keeps the stop (D-g: bars are
+ * absolute); no answer at all keeps the stop (fail closed).
+ */
+export interface MissAnswers {
+  /** token → absolute dirs, from the path resolver for THIS command. */
+  resolved?: ResolutionMap;
+  /** The manual read bar (`makeManualBar`) the answer must land inside. */
+  inBar?: (p: string) => boolean;
+}
+
+function anchorAnswer(miss: MissFact, reported: string[], answers: MissAnswers): string[] {
+  if (miss.prefix) {
+    return reported.filter((p) => p === miss.prefix || p.startsWith(`${miss.prefix}/`));
+  }
+  const dirs = answers.resolved?.get(miss.token) ?? [];
+  if (dirs.length === 0 || !answers.inBar) return [];
+  return dirs.every((d) => answers.inBar!(d)) ? dirs : [];
+}
+
+/**
  * §4.2's match set: the reported paths that ANSWER this miss. Exported so the
  * ledger records exactly the evidence the guard accepted (§7 `judgePaths`),
  * not a separate guess about the same report.
  */
-export function answeredMissPaths(miss: MissFact, reported: string[]): string[] {
-  if (!miss.prefix) return []; // no anchor → nothing can answer it (§3)
-  return reported.filter((p) => p === miss.prefix || p.startsWith(`${miss.prefix}/`));
+export function answeredMissPaths(
+  miss: MissFact,
+  reported: string[],
+  answers: MissAnswers = {},
+): string[] {
+  return anchorAnswer(miss, reported, answers);
 }
 
-export function intentGuardFaults(misses: MissFact[], reported: string[]): string[] {
+export function intentGuardFaults(
+  misses: MissFact[],
+  reported: string[],
+  answers: MissAnswers = {},
+): string[] {
   const faults: string[] = [];
   for (const m of misses) {
     // §4.1 destructive never rides on a miss: the parse puts this unnamed
@@ -771,8 +813,19 @@ export function intentGuardFaults(misses: MissFact[], reported: string[]): strin
     // class cannot vouch for it — omission is the one way the substitution
     // turns a stop into a silent wrong-location allow. This is also why an
     // EMPTY report never clears a miss (D-h: not the `writes: []` variant).
-    if (answeredMissPaths(m, reported).length === 0) {
-      faults.push(`no reported path under ${m.prefix || m.token}`);
+    const answered = anchorAnswer(m, reported, answers);
+    if (answered.length === 0) {
+      if (m.prefix) {
+        faults.push(`no reported path under ${m.prefix}`);
+      } else {
+        const dirs = answers.resolved?.get(m.token) ?? [];
+        const outside = dirs.filter((d) => !answers.inBar?.(d));
+        faults.push(
+          dirs.length === 0
+            ? `unanchored location unanswerable (${m.token})`
+            : `reported path outside the read bar (${outside.slice(0, 2).join(", ")})`,
+        );
+      }
     }
   }
   return [...new Set(faults)];
@@ -1069,6 +1122,27 @@ export async function checkDspaGate(
     (analysis.writePaths ?? []).some(
       (w) => w === p || w.startsWith(`${p}/`) || p.startsWith(`${w}/`),
     );
+  // 3.41.0, §4.1 over UNANCHORED misses: the parse records no `writePaths`
+  // entry for an unresolvable redirect target (`echo hi > $OUT` — there is no
+  // location to record, and `baseWriteAccess` skips it too, since an expansion
+  // makes it not a bare name under the base). So the WRITE role has to come
+  // from the redirect structure itself; without this the token would arrive as
+  // a READ miss and an in-bar resolver answer would clear a write to a name
+  // the floor never saw. fd duplication (`2>&1`, `>&3`) is not a write.
+  const redirectTargets: string[] = [];
+  for (const seg of analysis.parsedSegments) {
+    const toks = tokenizeSegment(seg.text);
+    for (let i = 0; i < toks.length; i++) {
+      const mOut = toks[i].match(OUT_REDIRECT_RE);
+      const target = mOut
+        ? (mOut[2] !== "" ? mOut[2] : (toks[i + 1] ?? null))
+        : BARE_REDIRECT_RE.test(toks[i]) && toks[i].includes(">")
+          ? (toks[i + 1] ?? null)
+          : null;
+      if (!target || target.startsWith("&") || /^\d+$/.test(target)) continue;
+      redirectTargets.push(target);
+    }
+  }
   // §7: the confirmed resolutions in effect for this command (the same set
   // `judge/paths.ts` treats as the floor's own knowledge).
   const confirmedDirs = analysis.prompt.unresolved.flatMap(
@@ -1076,11 +1150,23 @@ export async function checkDspaGate(
   );
   const confirmedPriorAt = (p: string): boolean =>
     confirmedDirs.some((d) => p === d || p.startsWith(`${d}/`) || d.startsWith(`${p}/`));
+  // §4.2's anchor for a CONCRETE location text. The judge's report is sanitized
+  // through `resolvePathReal` (`judge/paths.ts`, `toAbs`), so an anchor threaded
+  // textually from the parse — a `cd` base (`/etc` on a Mac, where the report
+  // says `/private/etc/…`) — has to be realpath'd to be matchable at all; the
+  // D-h base-write proxy was unreachable on a Darwin host for exactly this
+  // reason. Markers are left alone: they name no real location. (3.41.0)
+  const anchorOf = (p: string): string =>
+    staticPrefixOf(
+      p.startsWith(OPAQUE_VAR_DIR) || p.startsWith(UNKNOWN_CWD_MARKER)
+        ? p
+        : resolvePathReal(p, pd.cwd),
+    );
   const outsideFacts = (paths: string[]): MissFact[] =>
     [...new Set(paths)].map((p) => ({
       kind: "outside-path",
       token: p,
-      prefix: staticPrefixOf(p),
+      prefix: anchorOf(p),
       role: writeRoleAt(p) ? "write" : "read",
       confirmedPrior: confirmedPriorAt(p),
     }));
@@ -1090,16 +1176,23 @@ export async function checkDspaGate(
   const baseFacts: MissFact[] = baseOut.map((b) => ({
     kind: "base-write",
     token: b,
-    prefix: staticPrefixOf(b),
+    // The base is threaded textually from the `cd` (`cd /etc` → `/etc`, while
+    // the judge reports `/private/etc/…` on a Mac); the anchor must be matched
+    // where the report is, so it is realpath'd (3.41.0).
+    prefix: anchorOf(b),
     role: "write" as const,
     confirmedPrior: confirmedPriorAt(b),
   }));
   const unresolvedFact = (token: string | null, raw: string): MissFact => {
     const t = token ?? raw;
     const marker = token ? markerByToken.get(token) ?? null : null;
-    const isWrite = (analysis.writePaths ?? []).some(
-      (w) => (marker !== null && w.includes(marker)) || w.includes(t),
-    );
+    const isWrite =
+      (analysis.writePaths ?? []).some(
+        (w) => (marker !== null && w.includes(marker)) || w.includes(t),
+      ) ||
+      redirectTargets.some(
+        (r) => r.includes(t) || (marker !== null && r.includes(marker)),
+      );
     return {
       kind: "unresolved",
       token: t,
@@ -1108,9 +1201,12 @@ export async function checkDspaGate(
       confirmedPrior: token ? store.getConfirmedResolution(token) !== null : false,
     };
   };
-  // A location with nothing static about it can never be answered by a report,
-  // so intent is not asked (no wasted call) — and a stop that still hides an
-  // unanchorable location behind it is never cleared.
+  // An unanchorable location IS a miss now (3.41 G-a): the guard answers it
+  // from the path resolver's per-token report and requires that answer to
+  // land in-bar, so a token with nothing static about it is judged on what it
+  // ACTUALLY points at instead of prompting every run. What still drops the
+  // whole set is a concrete out-of-bar WRITE operand (D-g: the write bar is
+  // absolute, intent never relaxes it).
   const withMisses = (facts: MissFact[]) => {
     // The same location can arrive twice (a concrete ref and its resolution);
     // one fact per location keeps the guard report and the ledger honest.
@@ -1122,7 +1218,7 @@ export async function checkDspaGate(
       seen.add(k);
       all.push(f);
     }
-    if (writeOpDirs.length > 0 || all.some((f) => f.prefix === "")) return {};
+    if (writeOpDirs.length > 0) return {};
     return { misses: all };
   };
   for (const p of outside) {
