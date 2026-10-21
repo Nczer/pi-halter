@@ -25,7 +25,7 @@ import { createStore } from "../gate/store";
 import { RuleGenerator } from "../decide/rule-generator";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
-const base = "/home/nczer/project";
+const base = "/home/user/project";
 
 describe("the argv0 location class", () => {
   it("a bare name is bare — PATH is checked separately", () => {
