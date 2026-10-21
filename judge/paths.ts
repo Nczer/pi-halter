@@ -112,7 +112,7 @@ export function sanitizeJudgePaths(
 /**
  * A reported path is COVERED by the floor's knowledge when it is a floor
  * path itself, lies under one, or is an ANCESTOR of one (2026-10-04, D23:
- * the judge named `/home/nczer/.pi/agent/extensions/memory` for a command
+ * the judge named `/home/user/.pi/agent/extensions/memory` for a command
  * whose floor saw `…/memory/SKILL.md` — the same location, generalized
  * upward, not a location the gate never saw).
  *

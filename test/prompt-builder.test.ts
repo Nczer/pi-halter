@@ -232,7 +232,7 @@ describe("bash body content", () => {
       segments: segs,
       nonAllowedSegmentIndices: [9],
       needsPathApproval: true,
-      outsideDirs: ["/home/nczer/.config/joplin-desktop"],
+      outsideDirs: ["/home/user/.config/joplin-desktop"],
     }));
     expect(prompt.body).toContain("⚠️ head -30 ~/.config/joplin-desktop/userchrome.css");
     expect(prompt.body).not.toContain("⚠️ echo part 0");

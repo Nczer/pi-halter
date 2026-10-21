@@ -65,7 +65,7 @@ describe("D21 gate scenarios (MOSAC incident)", () => {
   });
 
   it("S2: base outside cwd, no grants → read-bar stop carries writeOutside (merged options)", async () => {
-    const r = await checkDspaGate(bashPd(CMD, "/Users/nczer"), createStore());
+    const r = await checkDspaGate(bashPd(CMD, "/Users/user"), createStore());
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe(`touches paths outside base (${B}); writes ${B}`);
@@ -76,7 +76,7 @@ describe("D21 gate scenarios (MOSAC incident)", () => {
   it("S3: base outside cwd, read-granted → D18 write stop with the 'Allow writes' option (D21 class 3)", async () => {
     const store = createStore();
     store.addAllowed({ readDirs: [B] });
-    const r = await checkDspaGate(bashPd(CMD, "/Users/nczer"), store);
+    const r = await checkDspaGate(bashPd(CMD, "/Users/user"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe(`write outside base (${B})`);
@@ -87,7 +87,7 @@ describe("D21 gate scenarios (MOSAC incident)", () => {
   it("S3b: after the 'Allow writes' grant (write implies read) → floor passes", async () => {
     const store = createStore();
     store.addAllowed({ writeDirs: [B] });
-    const r = await checkDspaGate(bashPd(CMD, "/Users/nczer"), store);
+    const r = await checkDspaGate(bashPd(CMD, "/Users/user"), store);
     expect(r.ok).toBe(true);
   });
 });
