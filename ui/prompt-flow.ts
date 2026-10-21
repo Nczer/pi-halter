@@ -79,9 +79,9 @@ export async function showPrompt(
     resolutions = merged;
   }
 
-  // Coverage predicate: "read" checks read+write grants, so a standing
-  // session grant that covers a prompt's scope suppresses its Always option.
-  const isCovered = (dir: string) => store.isInsideAllowedDir(dir, "read");
+  // Coverage predicate: the builder asks at the tier its prompt needs (a write
+  // prompt asks "write", so a read-only grant never covers it — 3.40.1).
+  const isCovered = (dir: string, kind: "read" | "write") => store.isInsideAllowedDir(dir, kind);
   // D18: the floor stopped a base write lacking a write grant — the prompt
   // offers a session write grant for EXACTLY those dirs (deterministic; no
   // LLM call). Root/sentinels are never grantable (same rule as

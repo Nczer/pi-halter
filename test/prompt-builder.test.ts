@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPrompt, pdTargetLabel, summarizePrompt } from "../ui/prompt-builder";
+import { createStore } from "../gate/store";
 import type {PromptDecision, BashPromptData, FilePromptData} from "../decide/types";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1076,6 +1077,47 @@ describe("file prompt: covered scopes are suppressed", () => {
       "/home/user",
       "/home",
     ]);
+  });
+
+  // ── The tier the coverage question is asked at ─────────────────────────
+  // A standing READ grant does not cover a WRITE prompt (file-policy checks the
+  // write tier); asking the read tier suppressed the dir + file Always tiers
+  // and left only the umbrella, one level up (3.40.1).
+  const storeCovered = (rules: { readDirs?: string[]; writeDirs?: string[] }) => {
+    const s = createStore();
+    s.addAllowed(rules);
+    // Same predicate ui/prompt-flow.ts hands the builder.
+    return (dir: string, kind: "read" | "write") => s.isInsideAllowedDir(dir, kind);
+  };
+  const BIN = { // the reported shape: a file outside cwd
+    action: "Edit",
+    isWriteOp: true,
+    outsideDir: "/home/user/.local/bin",
+    resolved: "/home/user/.local/bin/tool",
+  };
+
+  it("write prompt: a READ grant on the dir covers nothing — tiers stay offered", () => {
+    const prompt = buildPrompt(fileDecision(BIN), undefined, undefined, storeCovered({ readDirs: ["/home/user/.local/bin"] }));
+    expect(prompt.pathOptionCovered).toBe(false);
+    expect(prompt.fileOptionCovered).toBe(false);
+    expect(prompt.alwaysLabel).toBe("Edit /home/user/.local/bin/*");
+    // The umbrella starts where the dir tier ends.
+    expect(prompt.broaderPaths![0].dir).toBe("/home/user/.local");
+  });
+
+  it("write prompt: a WRITE grant on the dir covers path + file tiers", () => {
+    const prompt = buildPrompt(fileDecision(BIN), undefined, undefined, storeCovered({ writeDirs: ["/home/user/.local/bin"] }));
+    expect(prompt.pathOptionCovered).toBe(true);
+    expect(prompt.fileOptionCovered).toBe(true);
+  });
+
+  it("read prompt: a READ grant on the dir covers it (suppression intact)", () => {
+    const prompt = buildPrompt(
+      fileDecision({ ...BIN, action: "Read", isWriteOp: false }),
+      undefined, undefined, storeCovered({ readDirs: ["/home/user/.local/bin"] }),
+    );
+    expect(prompt.pathOptionCovered).toBe(true);
+    expect(prompt.fileOptionCovered).toBe(true);
   });
 });
 

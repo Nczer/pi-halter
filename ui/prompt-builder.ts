@@ -129,9 +129,9 @@ export function buildPrompt(
   decision: PromptDecision,
   resolutions?: ResolutionMap,
   confirmedTokens?: Set<string>,
-  /** A dir is "covered" when a standing session grant already covers it —
-   *  file prompts suppress Always options whose scope is covered. */
-  isCovered?: (dir: string) => boolean,
+  /** A dir is "covered" when a standing session grant covers it at the tier
+   *  this prompt needs — file prompts suppress covered Always options. */
+  isCovered?: (dir: string, kind: "read" | "write") => boolean,
   /** D18: bases the dspa gate stopped for a write without grant (bash only). */
   writeGrantDirs?: string[],
 ): BuiltPrompt {
@@ -421,11 +421,16 @@ function buildBashPrompt(
 
 function buildFilePrompt(
   data: FilePromptData,
-  isCovered?: (dir: string) => boolean,
+  isCovered?: (dir: string, kind: "read" | "write") => boolean,
 ): BuiltPrompt {
   const { action, filePath, resolved, cwd, outsideDir, isWriteOp, warnedRule, symlinkHint, exists } = data;
   const insideCwd = outsideDir === null;
-  const covered = (d: string) => (isCovered ? isCovered(d) : false);
+  // Coverage is asked at the tier THIS prompt needs: a WRITE prompt is not
+  // covered by a standing READ grant on the same dir — that grant is exactly
+  // why the prompt still fires (decide/file-policy.ts checks the write tier).
+  // Asking the read tier suppressed the dir/file tiers and left only the
+  // umbrella, one level up (3.40.1).
+  const covered = (d: string) => (isCovered ? isCovered(d, isWriteOp ? "write" : "read") : false);
   const symlinkLine = symlinkHint ? `\n\u{1F517} Resolved via symlink: ${symlinkHint}` : "";
   const warnLine = warnedRule ? `\n\u26a0\ufe0f credential pattern "${warnedRule}" — may contain secrets or tokens` : "";
   const existsNote = exists && action === "Write"

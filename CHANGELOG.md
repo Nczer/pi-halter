@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.40.1 — 2026-10-21
+**Prompt coverage is asked at the tier the prompt needs: a READ grant never
+covers a WRITE prompt.**
+
+- **What the operator saw.** An `edit ~/.local/bin/llama-unload-all` prompt
+  (cwd `/mnt/Ndr/Projects`) offered `Always (broader): Edit ~/.local/*` and no
+  way to grant the file's own directory: the `Always (path): …/.local/bin/*`
+  and `Always (file): Edit llama-unload-all` tiers were simply absent, so the
+  only one-click dir grant on the table was one level UP from the target.
+- **Why.** `ui/prompt-flow.ts` built the coverage predicate on the store's READ
+  tier — `isInsideAllowedDir(dir, "read")`, which answers from readDirs *and*
+  writeDirs — and `buildFilePrompt` used it for the `*Covered` flags and the
+  umbrella filter alike. The session was holding a READ grant for
+  `~/.local/bin` (an `Always (paths)` click on an earlier bash prompt over that
+  same dir is the shape that mints one), so the builder called the write
+  prompt's dir and file tiers "covered" and suppressed both — while
+  `decide/file-policy.ts` had prompted for exactly the opposite reason: that
+  dir carries no WRITE grant. The suppression claim and the bar it is supposed
+  to reflect disagreed, and the surviving option grants more than the
+  operation asked for.
+- **The fix.** The predicate now takes the tier — `(dir, kind) =>
+  store.isInsideAllowedDir(dir, kind)` — and `buildFilePrompt` asks it at
+  `isWriteOp ? "write" : "read"`, the same question `decideFile` asks of the
+  same path. The tier lives in the builder that knows the op kind, not in the
+  flow. Read prompts keep their suppression behavior; grant *matching* is
+  untouched, only which Always options are offered.
+- Repro pinned by three tests in `test/prompt-builder.test.ts` (read grant +
+  write prompt → dir/file tiers stay offered; write grant → suppressed; read
+  grant + read prompt → suppressed), driven by a real `createStore()` so the
+  store's tier semantics are part of the assertion. Suite 4293 passed, 1
+  skipped / 57 files (3.40.0: 4290 / 1).
+
 ## 3.40.0 — 2026-10-20
 **A floor stop is either a BAR or an unknown. The bars stay absolute — the
 irreversible patterns, egress, credential paths, delete reach, any write
