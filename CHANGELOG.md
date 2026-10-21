@@ -1,5 +1,193 @@
 # Changelog
 
+## 3.41.0 — 2026-10-21
+**The intent pass was locked out of the corpus it exists for. A stop with one
+unknowable location dropped ALL of its typed misses, so the unresolvable-token
+commands in the ledger prompted every time with no judge attempt at all — and
+two deterministic parser fixes remove part of that class upstream.**
+
+### 1. `runtime location unresolvable (<tok>)` never reached intent
+
+- **What the operator saw.** An unbound loop ref or single-letter ref (`$f`,
+  `$rc`, `$1`) prompted on every run, with no verdict text in the prompt and no
+  `intent-*` ledger row. `.log/unresolved.jsonl` held 12 `gate-stop` rows (5
+  unique commands) with that reason.
+- **Why.** Those rows carried `misses: NONE` (probed at HEAD: `/tmp/hmiss.mts`
+  over the ledger corpus). `checkDspaGate`'s `withMisses` veto was
+  `all.some(f => f.prefix === "")` → the WHOLE miss set was dropped as soon as
+  any part of the stop had nothing statically knowable about it. For an unbound
+  ref that is the normal shape, so the entire class was excluded from §3 — the
+  stop was treated as a bar, which 3.40.0's two-tier floor says it is not.
+- **The fix.** The veto is now `writeOpDirs.length > 0` only — the one part of a
+  stop that is genuinely never relaxable (D-g: a concrete out-of-bar write
+  operand). A location with nothing static about it is carried as a miss with
+  `prefix: ""`, and §4.2 gained a second admissible answer for it: the path
+  resolver's own per-token binding (`judge/path-resolver.ts`), accepted only
+  when **every** dir in it lands inside the manual read bar. A flat judge report
+  still cannot answer such a token (`cat $fi notes.md` names `notes.md`, not
+  `$fi`) — that is the omission hole §4.2 exists to close, so the guard fails
+  closed with `unanchored location unanswerable (<tok>)`.
+- **Measured, deterministically (`/tmp/hmiss3.mts`, no judge call):** 1 of the 5
+  unique commands no longer stops at all (`gate.ok: true`), the other 4 carry
+  1–3 miss facts each instead of `NONE`, so intent is now asked. Whether they
+  clear depends on the resolver binding the token in-bar — not simulable offline.
+- **Cost.** These stops used to skip the judge entirely; they now spend one
+  stage-2 call, plus one resolver call when a prefix-less fact is present (asked
+  only after the verdict, so a verdict-decline pays nothing, and it shares the
+  resolver's cache key with the prompt path, so a decline that reaches the prompt
+  costs one wire call, not two). Repeats stay uncached by design (D-f): nothing a
+  judge said about a location is persisted.
+
+### 2. Two opaque classes are now modeled, so no judge is needed at all
+
+- **Non-path special parameters.** `$?`, `$!`, `$$`, `$#` (whole-value only) and
+  `$SECONDS`, `$LINENO`, `$RANDOM`, `$pipestatus` (by name) resolve to a
+  `cwdLocal` value instead of an opaque path token — `rc=$?; tail -5 "$rc"` and
+  `cat "$LINENO"` no longer stop on a location the parse invented. Deliberately
+  narrow: an *ambiguous* assignment (`RANDOM=/Users/u/outside/x`) still binds as a
+  path, a special glued into a literal (`cat "/var/log/$?"`) stays unresolved, and
+  **`$OPTARG` (and positionals `$1`) are excluded** — an option's argument may be a
+  filename, and binding it non-path would hide a location (deviation from the grill
+  record, noted in `docs/dspa-intent-floor.md`).
+- **`~/`-rooted globs.** An unquoted `~/…` root token is tilde-expanded before
+  the known-root test in `isAllowedRootToken`, so `~/x/*` gets the verdict its
+  absolute spelling already had (measured: the absolute form was exempt, the
+  `~/` form was opaque). Implemented as expansion, NOT as pinning an absolute
+  glob to its parent dir — pinning is unsound, because a symlink inside that dir
+  can escape it, and `isAllowedRootToken`'s realpath/glob-match check is the
+  machinery that already proves the claim.
+
+### 3. A safety hole in §4.1, found by the new tests
+
+`echo hi > $OUT` gave `writePaths: []` (there is no location to record) and
+`baseWriteAccess: false` (`isResolvableTarget("$OUT")` is true via
+`hasRuntimeExpansionText`), so the token arrived as a **READ** miss and an in-bar
+resolver answer would have cleared a **WRITE** to a name the floor never saw.
+`checkDspaGate` now derives `redirectTargets` from the tokenizer
+(`OUT_REDIRECT_RE`/`BARE_REDIRECT_RE`, fd duplication excluded) and gives such a
+token role `write`, which §4.1 refuses to judge. Same stop before and after — the
+reason is now the honest one.
+
+### 4. Anchors are realpath'd: the D-h base-write proxy was unreachable on macOS
+
+`sanitizeJudgePaths` runs every report through `resolvePathReal`, but the miss
+anchors were threaded textually from the parse — `cd /etc` → `/etc` on a Mac,
+where the report says `/private/etc/…`. Two facts (`outside-path`, `base-write`)
+were therefore unanswerable on Darwin. `anchorOf()` realpath's a concrete anchor
+(markers excluded). Related test debt: two tests at HEAD asserted this behavior
+without exercising it — their stop carried no misses at all, so the intent path
+never ran (one passed vacuously, the other was a real Darwin failure).
+
+**Suite:** 4320 passed / 7 failed vs 4290 / 9 at HEAD — the remaining 7 are the
+pre-existing Darwin `/etc`→`/private/etc` realpath artifacts; 2 of them were
+fixed here. +21 tests (`test/opaque-binding.test.ts` 9, new `intent-floor`
+describe 12). Docs: `docs/dspa-intent-floor.md` §2/§3/§4.2/§7/§9 + build notes,
+`docs/architecture.md` §two-tier, README mode + stop-tag lines.
+
+## 3.40.2 — 2026-10-21
+**One reported prompt, three defects: the judge's cloud calls never carried a
+session id, a `cd`-relative PROGRAM word was modeled against the session cwd,
+and the two failure paths that could have shown the operator anything were blind — the
+resolver failed with no ledger line and the auth resolution lost two fields.**
+
+### 1. Judge and path-resolver calls die on OpenCode / OpenCode Go (400 MissingSessionID)
+
+- **What the operator saw.** With the session model on `opencode-go/deepseek-v4.1-flash`,
+  DSPA prompts showed no verdict at all. The always-on judge ledger
+  (`.log/judge.jsonl`) held 10/10 failures for that model, both stages:
+  `call-failed: 400: {"type":"MissingSessionID","message":"Request is missing
+  x-opencode-session…"}`. The same judge worked a minute earlier on a local model.
+  The path resolver said nothing at all — it returns null on a failed call without
+  a ledger line, so the identical 400 there is invisible.
+- **Why.** OpenCode requires `x-opencode-session`; pi-ai derives it from
+  `options.sessionId` (`providers/opencode-headers.ts`, wrapping all four opencode
+  adapters). pi's own calls get it from the agent loop's request builder
+  (`transformHeaders → mergeProviderAttributionHeaders(…, options.sessionId, …)`),
+  and pi had to fix the same class of omission for its own inherited requests
+  (pi CHANGELOG, issue #9326). The judge bypasses that builder: `judge/judge.ts`
+  and `judge/path-resolver.ts` call pi-ai's `stream` directly and passed only
+  `signal`/`apiKey`/`headers`/`toolChoice`/`reasoning` — never `sessionId`.
+  Local models were unaffected because the requirement is opencode-specific:
+  pi's `getSessionHeaders` fires only for provider `opencode`/`opencode-go` or an
+  `opencode.ai` baseUrl, so a missing id is a no-op for llama.cpp-style backends.
+- **The fix.** `judgeSessionId(ctx)` (judge/judge.ts) reads
+  `ctx.sessionManager.getSessionId()` — pi's own session id, one session one routing
+  key, same value pi's calls use — and both call sites forward it as
+  `options.sessionId`. pi-ai then injects the header for the opencode wires and
+  ignores the id for providers that do not use it (it also feeds those providers'
+  session-affinity/prompt-cache keys, which is what pi's own calls get).
+  A context without a usable session id stays callable (best-effort, never a throw).
+- Repro pinned by `test/judge-prompt.test.ts` (stage 1 + stage 2 carry the session
+  id; a ctx with no session id still calls) and a `sessionId` assertion in
+  `test/path-resolver.test.ts`.
+
+### 2. A relative program word after `cd` was resolved against the session cwd
+
+- **What the operator saw.** For
+  `cd …/extensions/halter && … ; ../node_modules/.bin/tsc --noEmit` (session cwd
+  `~/Projects`):
+
+  ```
+  🚧 DSPA: touches paths outside base (~/node_modules/.bin/tsc)
+  ⚠️ outside cwd: ~/node_modules/.bin
+  ```
+
+  That directory does not exist. The real one is `…/extensions/node_modules/.bin`
+  (the parent of the extension dir), and the operands in the SAME command
+  (`ls ../node_modules/.bin/`) were already modeled correctly.
+- **Why.** `cwdDependentTokens` (analysis/cwd-tracking.ts) scans
+  `rest = stage.slice(ti + 1)` — operands only, argv0 skipped. So the token
+  re-basing (`threadCwdPaths`: drop the stale session-cwd resolution, add the
+  base-resolved one) never saw the program word. A relative program IS a path to
+  parseCommand (the file it executes), so `../node_modules/.bin/tsc` stayed pinned
+  at `<session-cwd>/../node_modules/.bin/tsc` → `~/node_modules/…`. The outcome was
+  still a prompt (the relative-tool/unknown-program rule fires on its own), but the
+  prompt displayed a location the command never touches, the
+  `Always (paths): Read <dir>/*` grant it offered covered a nonexistent directory
+  (a dead grant — the prompt could not be won by clicking it), and the judge was
+  shown the phantom path as its evidence.
+- **The fix.** `cwdDependentTokens` classifies argv0 like any other token
+  (`./x`, `../x`, other `..`-bearing relatives, and the `$PWD/…` forms), so the
+  program word now moves with the tracked base and its stale resolution drops out;
+  the dot test is factored into `isDotRelativeWord` for the argv0 and operand
+  branches to share. Roles are unchanged — a program is a read, never a write
+  operand — so `writesOnly` re-basing is untouched.
+- Repro pinned by `test/cwd-threading.test.ts` (4 rows: `../bin/tool`, `./tool`, a
+  later pipeline stage's program, and the no-`cd` control); all three re-basing rows
+  fail against 3.40.1.
+
+### 3. The two blind spots that made #1 unreadable (same investigation, fixed together)
+
+- **The resolver failed in silence.** `path-resolver.ts` returned null on
+  `stopReason === "error"` (and on auth failure, an unresolvable model, a
+  prose-only reply, malformed arguments and a thrown stream) with NO ledger
+  line. So the operator staring at judge.jsonl saw the two verdict stages fail
+  with `MissingSessionID` and had no evidence the resolver was failing for the
+  same reason on the same prompt — against D17 (no failure path stays silent).
+- **`resolveJudgeAuth` kept two of the four fields.** pi's resolution returns
+  `apiKey`, `headers`, `baseUrl` and `env`
+  (`coding-agent/src/core/model-registry.ts:89`); the judge kept the first two.
+  A `baseUrl` override is not a request option in pi-ai — pi applies it to the
+  MODEL (`result.auth.baseUrl ? { ...model, baseUrl } : model`,
+  `core/agent-session.ts:524`) — and `env` (regional settings, endpoint
+  placeholders, proxy variables) is provider-scoped request config that wins
+  over `process.env`. Dropping them meant a judge/resolver call could hit the
+  catalog endpoint while pi's own call on the same model went to the configured
+  one — and the env-derived endpoint placeholder resolving differently.
+- **The fix.** `resolveJudgeAuth` forwards all four; new `judgeRequestModel(model,
+  auth)` applies the endpoint override the way pi does, used by both call sites
+  (so the resolver and the verdict stages always hit the same endpoint); `env`
+  is forwarded through `JudgeOptions` into the stream options.
+  New `logResolverInfra` writes the resolver's faults to the judge ledger as
+  `kind: "infra"`, **`stage: 0`** — a schema addition meaning "a judge-model
+  call that is not a verdict stage", so resolver and stage tallies stay
+  separable by eye. Not logged (not faults): judge/resolver off, a prompt with
+  no unresolved tokens, a cache hit, and a clean reply that knew nothing
+  (`map.size === 0`) — the last is an answer.
+- Repro pinned by 7 rows in `test/path-resolver.test.ts` (four ledger classes +
+  auth/model-unresolved, the never-logged controls, and baseUrl/env reaching the
+  call); 5 of them fail against 3.40.1.
+
 ## 3.40.1 — 2026-10-21
 **Prompt coverage is asked at the tier the prompt needs: a READ grant never
 covers a WRITE prompt.**

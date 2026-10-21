@@ -93,6 +93,17 @@ function globBaseDir(v: string): string {
   return i === -1 ? cut : cut.slice(0, i);
 }
 
+/** Shell parameters whose expansion provably contains no `/`: an exit status,
+ *  a process id, an argument count, a timer, a random number. Used in path
+ *  position they name a file relative to the effective base — the same model
+ *  an assigned number already gets (`n=5; cat "$n"`). Deliberately NOT in
+ *  this set: `$@`/`$*`/`$1`… (they carry the command's own arguments, which
+ *  may be paths), `$OPTARG` (an option's argument may be a filename), `$PWD`
+ *  /`$CDPATH`/anything the environment can hold a path in, and `$-` (option
+ *  letters, shell-version-dependent). */
+const NON_PATH_PARAM_SINGLE = new Set(["?", "!", "$", "#"]);
+const NON_PATH_PARAM_NAME = /^(SECONDS|LINENO|RANDOM|pipestatus)$/;
+
 /** Parse a `${NAME}` / `${NAME:-default}` expression (balanced braces).
  *  Other ${…} forms (arithmetic, ${#x}, …) → null. */
 function parseVarExpr(v: string, start: number): { name: string; def: string | null; end: number } | null {
@@ -143,6 +154,13 @@ function resolveRef(
   // a twice-assigned HOME is ambiguous, so no static fallback either.
   if (name === "HOME" && def === null && !assignments.has("HOME") && homeStatic !== null) {
     return { kind: "literal", value: homeStatic };
+  }
+  // 3.41 G-c: an unassigned special parameter expands to a number, never a
+  // path — its value is a name under the base. An assignment to the same name
+  // is a real value and must win, including an AMBIGUOUS one (`RANDOM=/etc/x;
+  // RANDOM=/etc/y`), which is why this requires the name to be unassigned.
+  if (def === null && !assignments.has(name) && NON_PATH_PARAM_NAME.test(name)) {
+    return { kind: "cwdLocal" };
   }
   return null; // env var with no local assignment and no default
 }
@@ -209,7 +227,22 @@ function substitute(v: string, assignments: Map<string, string[]>, depth: number
       continue;
     }
     const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(v.slice(i + 1));
-    if (!m) return null; // $?, $$, $@, trailing $ — unresolvable
+    if (!m) {
+      // 3.41 G-c: `$?`, `$!`, `$$`, `$#` — the single-character special
+      // parameters. Their expansion is a number, never a path, so as the
+      // WHOLE value they name a location under the base; glued into a longer
+      // text the location is unknowable and the sentinel stands (fail closed).
+      // Every other form ($@, $*, $1, a trailing $) carries the command's own
+      // arguments and stays unresolvable.
+      if (
+        NON_PATH_PARAM_SINGLE.has(v[i + 1]) &&
+        out === "" &&
+        i + 2 === v.length
+      ) {
+        return { kind: "cwdLocal" };
+      }
+      return null;
+    }
     const r = resolveRef(m[0], null, assignments, depth, homeStatic);
     if (r === null) return null;
     if (r.kind === "cwdLocal") {

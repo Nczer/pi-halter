@@ -807,6 +807,12 @@ interface CwdDependentToken {
   readonly isWrite: boolean;
 }
 
+/** A word whose location depends on the effective cwd because it is relative
+ *  with a dot (`./x`, `../x`, any `..`-bearing relative). */
+function isDotRelativeWord(text: string): boolean {
+  return text.startsWith("./") || text.startsWith("../") || (text.includes("..") && text.includes("/"));
+}
+
 function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
   const out: CwdDependentToken[] = [];
   const quotedTokens = tokenizeSegmentQuoted(seg.text);
@@ -816,7 +822,19 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
   for (const stage of stages) {
     let ti = 0;
     while (ti < stage.length && ENV_ASSIGN_RE.test(stage[ti].text)) ti++;
-    const cmd = stage[ti] ? path.basename(stage[ti].text).toLowerCase() : "";
+    // argv0 re-bases too: parseCommand models a relative program word as a path
+    // (an executed file), so a post-cd `./evil.sh` must move with its operands.
+    // Skipping argv0 left `cd /tmp && ./evil.sh` modeled as <session-cwd>/evil.sh
+    // — inside the base, auto-allowed, while bash runs /tmp/evil.sh.
+    const argv0 = stage[ti];
+    if (argv0) {
+      if ((argv0.hasExpansion ?? true) && /^\$\{?PWD\}?\//.test(argv0.text)) {
+        out.push({ isPwd: true, rel: argv0.text.slice(argv0.text.indexOf("/") + 1), isWrite: false });
+      } else if (isDotRelativeWord(argv0.text)) {
+        out.push({ isPwd: false, rel: argv0.text, isWrite: false });
+      }
+    }
+    const cmd = argv0 ? path.basename(argv0.text).toLowerCase() : "";
     const rest = stage.slice(ti + 1);
     const skip = cmd && pathAwareCommands.has(cmd)
       ? nonFileArgIndices(cmd, rest.map((r) => r.text))
@@ -843,7 +861,7 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
         out.push({ isPwd: true, rel: t.slice(t.indexOf("/") + 1), isWrite: writeIdx.has(i) });
         continue;
       }
-      if (t.startsWith("./") || t.startsWith("../") || (t.includes("..") && t.includes("/"))) {
+      if (isDotRelativeWord(t)) {
         out.push({ isPwd: false, rel: t, isWrite: writeIdx.has(i) });
       }
     }

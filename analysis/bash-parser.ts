@@ -471,6 +471,14 @@ function isAllowedRootToken(w: string, cwd: string): boolean {
     t = q[2];
   } else if (/[$`]/.test(t)) {
     return false;
+  } else {
+    // 3.41 G-d: the proof runs on the tilde-expanded word. `~/.pi/agent/*.log`
+    // and its absolute spelling name the same place, and the trust this
+    // function establishes is the realpath/glob verification, not the spelling.
+    // (The ledger case: a loop over a root-pinned glob written with `~` stayed
+    // an unresolvable sentinel although every match verified.) A QUOTED `~` is
+    // no expansion at runtime, so it is not expanded here either.
+    t = expandTilde(t);
   }
   if (!t.startsWith("/") || t === "/" || /(^|\/)\.\.(\/|$)/.test(t)) return false;
   const globIdx = t.search(/[*?[[]/);
@@ -763,7 +771,7 @@ function opaqueRef(node: TSNode, arg: string, cwd: string, segIdx: number, segme
     const inList = enclosingLoopInList(node, ref.name);
     if (inList !== null) {
       // Base-independent: every in-list word is pinned to a known root
-      // (absolute, realpath/glob-verified) — no base needed at all.
+      // (absolute or ~/, realpath/glob-verified) — no base needed at all.
       if (inList.every(w => !isBareName(w) && isAllowedRootToken(w, cwd))) return null;
       // Base-dependent: bare names and cwd-local finds — the values are
       // relative to the runtime cwd; the resolver bounds them against the

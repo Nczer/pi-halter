@@ -41,6 +41,9 @@ Line numbers are as of this spec's writing (2026-10-19); step 4 moved the
 write-bar block above the D7 sentinel pass, so everything below ~860 drifted
 by ~+55. "MISS" is now realized as the `misses?: MissFact[]` field — a stop
 carries it only when EVERY part of the stop is miss-class (§8 step-4 notes).
+Since **3.41.0** a location with nothing static about it IS carried, with
+`prefix: ""` (see §4.2's amendment); the old veto dropped the WHOLE miss set in
+that case, which is what made 12 ledger rows prompt with no judge attempt.
 
 | Stop reason | Line | Class under this proposal | Note |
 |---|---|---|---|
@@ -79,6 +82,12 @@ a miss stop from the same verdict):
 3. Any guard fail → the prompt as today, carrying the verdict (D16).
 4. Cost: an extra stage-2 call on every miss stop that stage 1 would have
    approved (D22 currently skips stage 2 there). Cheaper than a human prompt.
+   3.41.0 adds one more: a stop carrying a `prefix: ""` fact also spends one
+   path-resolver call (`judge/path-resolver.ts`), asked only after the verdict
+   (a verdict-decline pays nothing) and sharing the resolver's own cache key
+   with the prompt path, so a decline that reaches the prompt costs ONE wire
+   call, not two. Repeats are uncached by design (D-f: nothing learned about a
+   location from a judge answer is persisted).
 
 ## 4. Guards on intent-over-miss (proposed; D-d)
 
@@ -91,8 +100,7 @@ a miss stop from the same verdict):
    some reported path under `/proc/`). A judge that never acknowledged the
    location class cannot vouch for it. This is the omission guard — omission
    is the only way the substitution turns a stop into a silent wrong-location
-   allow.
-3. **Credential ceiling**: a miss token whose static parts name a credential
+   allow.3. **Credential ceiling**: a miss token whose static parts name a credential
    class (`warnPaths` names, `/proc/*/environ`, `/proc/*/cmdline`) is not
    judged. Note `/proc/<pid>/environ` appears in the Oct-18 decisions ledger
    as a real stop, and pseudo-fs widening makes it reachable.
@@ -112,6 +120,40 @@ it**: while the sanitizer resolved a URL-shaped token against the cwd, that
 cwd-child text satisfied §4.2 for any miss whose static prefix is an ANCESTOR of
 the cwd — `cat /Users/u/$V/data` (prefix `/Users/u`) with a report of
 `http://127.0.0.1:8080` auto-allowed before the drop, and prompts now.
+
+**§4.2 amendment (3.41.0, G-a/G-b) — two admissible answers, not one.** A miss
+with a static anchor is answered as before, by the report naming it. A miss with
+`prefix: ""` (`$rc`, `$f` from an unprovable in-list) has no static text for a
+report to match, so its ONLY admissible answer is the path resolver's own
+per-token answer (`judge/path-resolver.ts`, `resolveUnresolvedPaths`), and every
+dir in that answer must land inside the manual read bar (`makeManualBar`). A flat
+report never vouches for an unanchored token: `cat $fi notes.md` names `notes.md`,
+and accepting that as the answer for `$fi` is exactly the omission hole this guard
+closes. No answer, or an answer outside the bar, keeps the stop (fail closed).
+The implementation is `anchorAnswer()` — one function feeding both
+`intentGuardFaults` and `answeredMissPaths`, so the ledger records the evidence
+the guard actually used. `MissAnswers{resolved, inBar}` is threaded from
+`tryIntentOverMiss` through `dspaAutoAllowed` for the same reason.
+
+Two anchor rules followed from that, both Darwin-driven and both found by test:
+
+- **Anchors are realpath'd** (`anchorOf`). `sanitizeJudgePaths` runs every report
+  through `resolvePathReal`, so a location text threaded from the parse (`cd /etc`
+  → `/etc`) was unmatchable on a Mac, where the report says `/private/etc/…`.
+  The D-h base-write proxy was therefore unreachable on Darwin — the two tests
+  covering it were failing at HEAD for that reason (and two more, §4.1's
+  base-write case and the D-h end-to-end, were passing VACUOUSLY: their stop
+  carried no misses at all, so the intent path never ran).
+- **A write role can come from the redirect structure, not only `writePaths`**.
+  For `echo hi > $OUT` the parse records no write operand (there is no location
+  to record) and `baseWriteAccess` skips it (`isResolvableTarget("$OUT")` is true
+  via `hasRuntimeExpansionText`), so the token arrived as a READ miss and an
+  in-bar resolver answer would have cleared a WRITE to a name the floor never
+  saw. `checkDspaGate` now collects `redirectTargets` from `tokenizeSegment` +
+  `OUT_REDIRECT_RE`/`BARE_REDIRECT_RE` (fd duplication `2>&1`/`>&3` excluded)
+  and `unresolvedFact` gives the token role `write` — which §4.1 refuses to
+  judge. `echo hi > $OUT` is a stop before and after; what changed is that the
+  reason is now the honest one (§4.1, not "the report did not name it").
 
 Evidence for why the guards are not optional — the sampled judge path report
 (7 `paths` rows, model local-2/Qwen3.8-Flash-Next) contained: an invented
@@ -229,6 +271,11 @@ the intent route (§3) is the one that trades determinism for friction.
 - `outcome: "intent-allowed"` — a miss stop that intent cleared; carries the
   stop kind, the token, the judge's reported paths for that token, and
   whether a prior confirmed resolution existed (`confirmedPrior`).
+  **3.41.0 caveat on `judgePaths`**: for an ANCHORED fact it is a subset of the
+  judge's report, but for a `prefix: ""` fact it is the path RESOLVER's answer
+  for that token (the deterministic binding the guard accepted) — the judge's
+  report cannot answer such a fact at all. A row is therefore evidence of "what
+  the guard accepted", not a claim about what the model said.
 - `outcome: "intent-declined"` — the guard set or the verdict kept the stop,
   and the operator was prompted.
   Built (steps 4–5): both outcomes exist with `missKind` (the class the floor
@@ -517,6 +564,53 @@ is scoped to stops that reach the prompt, and the `unresolved.jsonl` entry
 lists the five outcomes. The historical line numbers in this document's header
 became section names so they stop drifting.
 
+### 3.41.0 build notes (2026-10-21): the prefix-less miss corpus
+
+**The defect.** 12 `outcome:"gate-stop"` rows in `.log/unresolved.jsonl` (5
+unique commands) all read `reason: "runtime location unresolvable (<tok>)"` and
+— probed at HEAD — carried `misses: NONE`, so intent was never asked and the
+operator was prompted every time. Cause: `withMisses`' veto
+`all.some(f => f.prefix === "")` returned `{}` (no misses) whenever ANY part of
+the stop had nothing static about it. For an unbound loop ref or an unbound
+single-letter ref that is the normal shape, so the whole class was locked out.
+The veto is now `writeOpDirs.length > 0` only — the one part of a stop that is
+never relaxable (D-g's concrete out-of-bar write operand).
+
+**What shipped.** (a) Two deterministic bindings, so fewer commands need a judge
+at all: non-path special parameters (`$?`, `$!`, `$$`, `$#` whole-value; plus
+`$SECONDS`/`$LINENO`/`$RANDOM`/`$pipestatus` by name) resolve to a `cwdLocal`
+value instead of an opaque path token (`analysis/var-resolution.ts`), and an
+unquoted `~/…` root token is tilde-expanded before the known-root test in
+`isAllowedRootToken` (`analysis/bash-parser.ts`), so `~/x/*` behaves like its
+absolute spelling. (b) `prefix: ""` facts are carried and answered by the path
+resolver in-bar (§4.2 amendment above). (c) The two anchor fixes (§4.2 notes
+above). (d) Ledger: `dspaAutoAllowed` takes `answers`, so an `intent-allowed`
+row for an unanchored token names the answer it cleared on.
+
+**Measured, deterministically (no judge, `/tmp/hmiss3.mts` over the 12 rows'**
+5 unique commands): 1 of 5 no longer stops at all (`gate.ok: true` — the
+special-parameter fix), 4 of 5 now carry 1–3 miss facts each (was `NONE`), so
+they reach intent; whether they CLEAR depends on the resolver binding the token
+in-bar, which the probe cannot simulate. Two of those four also carry a
+`base-write` fact (they `cd` outside cwd and write there) — relaxable per D-h.
+
+**Test debt found.** Two tests at HEAD asserted this behavior and were not
+really exercising it: §4.1's "the base-write proxy may" case and the D-h
+end-to-end — their stop carried no misses at HEAD, so the intent path never ran
+(the first passed vacuously; the second was a real Darwin failure). Suite:
+**4320 passed / 7 failed** at 3.41.0 vs **4290 / 9** at HEAD — same Darwin
+`/etc`→`/private/etc` realpath artifacts, 2 of them fixed here, +21 tests
+(`test/opaque-binding.test.ts` 9, new intent-floor describe 12).
+
+**Deviations from the grill record.** `$OPTARG` was DROPPED from the special set
+(an option's argument may legitimately be a filename — binding it as non-path
+would hide a path). G-d was implemented as tilde-expansion of the root token,
+not as pinning an absolute glob to its parent dir: pinning is unsound (a symlink
+inside the glob's dir can escape the pin), and `isAllowedRootToken`'s existing
+realpath/glob-match verification is the machinery that already proves the claim.
+Measured before/after: `for f in /Users/…/.pi/agent/*.log` was already exempt;
+the `~/` spelling was not.
+
 ## 9. Out of scope here
 
 The unbuilt grill items G8–G11/G13 from the ledger round (loop in-list taint
@@ -584,6 +678,19 @@ Still fail-open / invisible to the floor:
   sees a base the analysis can resolve, so a typo'd or deleted base is invisible
   rather than outside it. Pre-existing read-bar reality, not introduced here —
   but the intent pass cannot help either, because no miss is typed.
+- **An absolute glob outside the known roots stays opaque and fail-closed**
+  (3.41.0, G-d): `isAllowedRootToken` exempts a root token only when its real
+  expansion lands under a known root, so `/opt/data/*` with no grant keeps its
+  opaque miss and the stop. The `~/` spelling now reaches the same verdict as
+  the absolute spelling (tilde-expanded first); neither grows a new pin kind.
+- **Special parameters glued into a literal path stay unresolved**
+  (3.41.0): `NON_PATH_PARAM_SINGLE` binds the WHOLE value only, so
+  `cat /etc/$?x` keeps its opaque token. Deliberate — a glued special is a
+  dynamic segment, and inventing `/etc/0x` for `$?` would be the fabrication
+  §4's guards exist to prevent.
+- **A resolver answer is never persisted** (D-f). A repeat of the same command
+  pays the stage-2 and resolver calls again; the resolver's own cache is per
+  session and keyed on the command bytes, not a learned location.
 
 Not defects, by design: unknown-command args are not path-extracted
 (`pathAwareCommands` is a closed set, the judge is the backstop — such

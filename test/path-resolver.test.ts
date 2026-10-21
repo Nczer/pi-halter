@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -61,15 +61,16 @@ function textReply(text: string): AssistantMessage {
 }
 
 interface CapturedCall {
+  model: Model<any>;
   context: Context;
   options: Record<string, unknown> | undefined;
 }
 
 /** Fake stream: pushes start → toolcall_start → done (or error, matching
  *  the reply's stop reason) on a microtask, and captures the call. */
-function fixedStream(reply: () => AssistantMessage, calls: CapturedCall[]): JudgeStreamFn {
-  return (_model, context, options) => {
-    calls.push({ context, options: options as CapturedCall["options"] });
+function fixedStream(reply: () => AssistantMessage, calls: CapturedCall[] = []): JudgeStreamFn {
+  return (model, context, options) => {
+    calls.push({ model, context, options: options as CapturedCall["options"] });
     const s = createAssistantMessageEventStream();
     queueMicrotask(() => {
       const msg = reply();
@@ -86,14 +87,19 @@ function fixedStream(reply: () => AssistantMessage, calls: CapturedCall[]): Judg
   };
 }
 
-function makeCtx(model: Model<any> | undefined, authOk = true): ExtensionContext {
+function makeCtx(
+  model: Model<any> | undefined,
+  authOk = true,
+  authExtra: Record<string, unknown> = {},
+): ExtensionContext {
   return {
     hasUI: true,
     model,
+    sessionManager: { getSessionId: () => "sess-42" },
     modelRegistry: {
       find: () => undefined,
       getApiKeyAndHeaders: async () =>
-        authOk ? { ok: true, apiKey: "k" } : { ok: false, error: "no key" },
+        authOk ? { ok: true, apiKey: "k", ...authExtra } : { ok: false, error: "no key" },
     },
     ui: { setWidget: () => {} },
   } as unknown as ExtensionContext;
@@ -203,6 +209,8 @@ describe("resolveUnresolvedPaths", () => {
     expect([...(r ?? new Map()).entries()]).toEqual([[TOKEN, ["/Users/u/ext/a", "/Users/u/ext/b"]]]);
     // The resolver forces the call the same per-wire way the verdict does.
     expect(calls[0].options?.toolChoice).toBe("required");
+    // And it carries pi's session id: OpenCode 400s a request without it.
+    expect(calls[0].options?.sessionId).toBe("sess-42");
   });
 
   it("the packet names the command, cwd, and the numbered tokens", async () => {
@@ -324,5 +332,120 @@ describe("resolveUnresolvedPaths", () => {
     // A changed command is a different key.
     await resolveUnresolvedPaths(makePd(CMD + " 2>/dev/null", "/Users/u/project", [TOKEN]), ctx, { stream: streamFn, settings: ON });
     expect(calls).toHaveLength(2);
+  });
+});
+
+describe("resolver call faults reach the judge ledger (stage 0, D17)", () => {
+  // 3.40.2: every no-map fault used to `return null` in silence. An operator
+  // reading judge.jsonl saw the verdict stages failing and had no way to know
+  // the resolver was failing for the same reason (the user-reported OpenCode
+  // MissingSessionID outage hit BOTH calls; only one was visible).
+  let ledger: string;
+  let savedEnv: string | undefined;
+  beforeEach(() => {
+    savedEnv = process.env.HALTER_JUDGE_LOG;
+    ledger = path.join(tmp, "judge.jsonl");
+    process.env.HALTER_JUDGE_LOG = ledger;
+  });
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.HALTER_JUDGE_LOG;
+    else process.env.HALTER_JUDGE_LOG = savedEnv;
+  });
+  const lines = (): Array<Record<string, unknown>> =>
+    fs.existsSync(ledger)
+      ? fs
+          .readFileSync(ledger, "utf8")
+          .split("\n")
+          .filter((l) => l.trim() !== "")
+          .map((l) => JSON.parse(l) as Record<string, unknown>)
+      : [];
+  const run = async (stream: JudgeStreamFn, ctx = makeCtx(fakeModel())) => {
+    await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), ctx, { stream, settings: ON });
+  };
+
+  it("an error stop: one call-failed line carrying the provider's message", async () => {
+    const err = '400: {"type":"MissingSessionID","message":"Request is missing x-opencode-session"}';
+    await run(fixedStream(() => ({ ...textReply(""), stopReason: "error", errorMessage: err }) as never));
+    const l = lines();
+    expect(l).toHaveLength(1);
+    expect(l[0]).toMatchObject({
+      kind: "infra",
+      stage: 0, // not a verdict stage — the resolver's own tally
+      mode: "manual",
+      error: "call-failed",
+      model: "llama-cpp/qwen3-27b",
+      cmd: CMD,
+    });
+    expect(String(l[0].detail)).toContain("MissingSessionID");
+  });
+
+  it("a text-only reply is no-tool-call; malformed arguments are bad-args", async () => {
+    await run(fixedStream(() => textReply("I cannot tell.")));
+    await run(fixedStream(() => toolCallReply("report_paths", { results: "nope" })));
+    const l = lines();
+    expect(l.map((e) => e.error)).toEqual(["no-tool-call", "bad-args"]);
+    expect(l.every((e) => e.stage === 0)).toBe(true);
+  });
+
+  it("a stream that throws is a call-failed line with the message", async () => {
+    await run((() => {
+      throw new Error("network down");
+    }) as JudgeStreamFn);
+    const l = lines();
+    expect(l).toHaveLength(1);
+    expect(l[0]).toMatchObject({ stage: 0, error: "call-failed" });
+    expect(String(l[0].detail)).toContain("network down");
+  });
+
+  it("auth failure and an unresolvable model are logged too (no call is made)", async () => {
+    await run(fixedStream(() => toolCallReply("report_paths", { results: [] })), makeCtx(fakeModel(), false));
+    await run(fixedStream(() => toolCallReply("report_paths", { results: [] })), makeCtx(undefined));
+    const l = lines();
+    expect(l.map((e) => e.error)).toEqual(["auth-failed", "model-unresolved"]);
+    expect(l[0].model).toBe("llama-cpp/qwen3-27b");
+    expect(l[1].model).toBeUndefined();
+  });
+
+  it("NOT faults, no lines: judge off, nothing unresolved, a clean 'I do not know'", async () => {
+    const pd = makePd(CMD, "/Users/u/project", [TOKEN]);
+    const ctx = makeCtx(fakeModel());
+    await resolveUnresolvedPaths(pd, ctx, { stream: fixedStream(() => toolCallReply("report_paths", { results: [] })), settings: OFF });
+    await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", []), ctx, { stream: fixedStream(() => toolCallReply("report_paths", { results: [] })), settings: ON });
+    await resolveUnresolvedPaths(pd, ctx, {
+      stream: fixedStream(() => toolCallReply("report_paths", { results: [{ index: 0, known: false, dirs: [] }] })),
+      settings: ON,
+    });
+    expect(lines()).toEqual([]);
+  });
+});
+
+describe("the auth resolution's endpoint and env reach the model call", () => {
+  // resolveJudgeAuth used to keep only apiKey/headers. pi returns more
+  // (coding-agent/src/core/model-registry.ts:89): a baseUrl override, which
+  // belongs ON THE MODEL (agent-session.ts:524), and provider-scoped env.
+  it("a resolved baseUrl overrides the model endpoint; env is forwarded", async () => {
+    const calls: CapturedCall[] = [];
+    const ctx = makeCtx(fakeModel(), true, {
+      baseUrl: "http://proxy.internal:3000/v1",
+      env: { HTTPS_PROXY: "http://proxy.internal:3000" },
+    });
+    await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), ctx, {
+      stream: fixedStream(() => toolCallReply("report_paths", { results: [{ index: 0, known: true, dirs: ["/a"] }] }), calls),
+      settings: ON,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].model.baseUrl).toBe("http://proxy.internal:3000/v1");
+    expect(calls[0].model.id).toBe("qwen3-27b"); // the model itself is untouched
+    expect(calls[0].options?.env).toEqual({ HTTPS_PROXY: "http://proxy.internal:3000" });
+  });
+
+  it("no override in the resolution → the model goes out as resolved", async () => {
+    const calls: CapturedCall[] = [];
+    await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
+      stream: fixedStream(() => toolCallReply("report_paths", { results: [{ index: 0, known: true, dirs: ["/a"] }] }), calls),
+      settings: ON,
+    });
+    expect(calls[0].model.baseUrl).toBe("http://localhost:8080/v1");
+    expect(calls[0].options?.env).toBeUndefined();
   });
 });

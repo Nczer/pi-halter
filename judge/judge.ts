@@ -24,12 +24,14 @@ import type {
   AssistantMessageEventStream,
   Context,
   Model,
+  ProviderEnv,
   ProviderHeaders,
   ThinkingLevel,
   Tool,
   ToolCall,
   TextContent,
 } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SETTINGS_PATH, readSettingsFile, writeSettings, JUDGE_DEFAULTS } from "../halter-settings";
 import { buildJudgmentPacket, type JudgmentInput } from "./packet";
 
@@ -286,7 +288,9 @@ export type JudgeStreamFn = (
     signal?: AbortSignal;
     apiKey?: string;
     headers?: Record<string, string>;
+    env?: ProviderEnv;
     toolChoice?: string;
+    sessionId?: string;
   },
 ) => AssistantMessageEventStream;
 
@@ -303,7 +307,15 @@ export const JUDGE_RESPONSE_CAP_MS = 60_000;
 export interface ModelRegistryLike {
   find(provider: string, modelId: string): Model<any> | undefined;
   getApiKeyAndHeaders(model: Model<any>): Promise<
-    | { ok: true; apiKey?: string; headers?: ProviderHeaders }
+    | {
+        ok: true;
+        apiKey?: string;
+        headers?: ProviderHeaders;
+        /** Endpoint override from the auth resolution (see JudgeAuth.baseUrl). */
+        baseUrl?: string;
+        /** Provider-scoped env config (see JudgeAuth.env). */
+        env?: ProviderEnv;
+      }
     | { ok: false; error: string }
   >;
 }
@@ -323,6 +335,39 @@ export function resolveJudgeModel(
 export interface JudgeAuth {
   apiKey?: string;
   headers?: ProviderHeaders;
+  /**
+   * Endpoint override the auth resolution carries (a custom provider whose
+   * models.json entry sets a baseUrl, an auth `baseUrl`, a proxy…). It is NOT
+   * a request-option: pi-ai reads the endpoint off the MODEL, and pi applies it
+   * the same way — `result.auth.baseUrl ? { ...model, baseUrl } : model`
+   * (coding-agent/src/core/agent-session.ts:524). A judge call that drops it
+   * talks to the catalog endpoint instead of the one the user configured.
+   */
+  baseUrl?: string;
+  /**
+   * Provider-scoped environment values (regional settings, endpoint
+   * placeholders, proxy variables). pi-ai takes these from the request options
+   * and they win over process.env; dropping them silently makes a
+   * env-configured provider resolve a different endpoint than pi's own calls.
+   */
+  env?: ProviderEnv;
+}
+
+/**
+ * The session id to put on a judge call. Required, not cosmetic:
+ * OpenCode/OpenCode Go rejects a request with no `x-opencode-session`
+ * (HTTP 400 MissingSessionID), and pi-ai derives that header from
+ * `options.sessionId` (providers/opencode-headers.ts). pi's own calls get it
+ * from the agent loop's request builder; the judge calls pi-ai directly, so
+ * it has to supply the id itself. pi reuses its session id for the same
+ * reason — one session, one routing key.
+ */
+export function judgeSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string | undefined {
+  try {
+    return ctx.sessionManager.getSessionId();
+  } catch {
+    return undefined; // no id available: the call goes out without one
+  }
 }
 
 /** Resolve auth for a model; null = auth failed (no call is made). */
@@ -331,7 +376,21 @@ export async function resolveJudgeAuth(
   registry: ModelRegistryLike,
 ): Promise<JudgeAuth | null> {
   const auth = await registry.getApiKeyAndHeaders(model);
-  return auth.ok ? { apiKey: auth.apiKey, headers: auth.headers } : null;
+  if (!auth.ok) return null;
+  // Forward everything the resolution returned — pi's own calls do (the
+  // changelog's migration note is explicit: forward both apiKey and headers;
+  // baseUrl/env are the two that are easy to drop because the call site never
+  // names them).
+  return { apiKey: auth.apiKey, headers: auth.headers, baseUrl: auth.baseUrl, env: auth.env };
+}
+
+/**
+ * The model to put on the wire for a resolved auth: the judge model with the
+ * auth's endpoint override applied (see JudgeAuth.baseUrl). Applied to the
+ * model, not the options — that is how pi's own request assembly does it.
+ */
+export function judgeRequestModel(model: Model<any>, auth: JudgeAuth): Model<any> {
+  return auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
 }
 
 /**
@@ -344,6 +403,10 @@ export interface JudgeOptions {
   stream: JudgeStreamFn;
   apiKey?: string;
   headers?: ProviderHeaders;
+  /** Provider-scoped env config, forwarded from the auth resolution. */
+  env?: ProviderEnv;
+  /** Session id forwarded to the provider (see judgeSessionId). */
+  sessionId?: string;
   /** FIRST-TOKEN deadline: abort if the model produces no output (any
    *  event past the stream's `start` handshake) within this window.
    *  Defaults to DEFAULT_JUDGE_SETTINGS.timeoutMs. */
@@ -521,7 +584,7 @@ function stopTag(reply: AssistantMessage): string {
  * Those need opposite fixes, so the ledger now carries the part kinds, the
  * finish_reason, the token counts and the head of any text/thinking.
  */
-function replyDiag(reply: AssistantMessage): string {
+export function replyDiag(reply: AssistantMessage): string {
   const kinds = reply.content.map((p) => p.type).join(",") || "none";
   const u = reply.usage;
   const bits = [
@@ -577,6 +640,8 @@ async function judgeOnce(input: JudgmentInput, opts: JudgeOptions): Promise<Judg
       signal: controller.signal,
       apiKey: opts.apiKey,
       headers: opts.headers,
+      env: opts.env,
+      sessionId: opts.sessionId,
       // Forced per adapter (TOOL_CHOICE_BY_API): the verdict is the only
       // channel, so a reply without a call is never worth a retry budget.
       toolChoice: judgeToolChoice(opts.model),

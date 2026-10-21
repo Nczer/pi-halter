@@ -26,7 +26,7 @@ import { analyzeCommand } from "../analysis/command-analysis";
 import { findExecutedScript } from "../analysis/script-payload";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { expandTilde } from "../analysis/path-util";
-import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, JudgeStreamFn, JudgeResult, JudgeSettings, JudgeFailReason} from "./judge";
+import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeRequestModel, judgeSessionId, JudgeStreamFn, JudgeResult, JudgeSettings, JudgeFailReason} from "./judge";
 import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
 import { isDspaActive, setDspaJudging } from "../modes/dspa-mode";
@@ -262,10 +262,16 @@ async function runJudgeStage(
     let result: JudgeResult;
     try {
       result = await judge(input, {
-        model,
+        // The endpoint override the auth resolution carries goes on the model
+        // (pi assembles its requests the same way); `env` is provider-scoped
+        // request config. Both were dropped before 3.40.2, so a custom-provider
+        // judge call could hit the catalog endpoint instead of the configured one.
+        model: judgeRequestModel(model, auth),
         stream: deps.stream ?? stream,
         apiKey: auth.apiKey,
         headers: auth.headers,
+        env: auth.env,
+        sessionId: judgeSessionId(ctx),
         timeoutMs: stage === 2 ? Math.round(settings.timeoutMs * STAGE2_TIMEOUT_FACTOR) : settings.timeoutMs,
         thinking: settings.thinking,
         systemPrompt: stage === 2 ? JUDGE_STAGE2_SYSTEM_PROMPT : undefined,

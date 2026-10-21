@@ -17,7 +17,8 @@ import type {PermissionRequest, Decision, PromptData} from "../decide/types";
 import type { Store } from "./store";
 import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decision-log";
 import { findExecutedScript } from "../analysis/script-payload";
-import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, answeredMissPaths, intentGuardFaults, type DspaGateResult, type MissFact } from "./dspa-gate";
+import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, answeredMissPaths, intentGuardFaults, makeManualBar, type DspaGateResult, type MissAnswers, type MissFact } from "./dspa-gate";
+import { resolveUnresolvedPaths } from "../judge/path-resolver";
 import { sanitizeJudgePaths } from "../judge/paths";
 import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
@@ -92,6 +93,10 @@ export function dspaAutoAllowed(
   /** Intent path only (§7): the sanitized stage-2 report, so the intent rows
    *  can record the paths that answered each unknown location. */
   reported?: string[],
+  /** Intent path only (3.41.0, G-b): the resolver answers behind an
+   *  unanchored miss, so the row names the ANSWER (the deterministic
+   *  binding), not only the reported paths that happened to match. */
+  answers?: MissAnswers,
 ): void {
   // D13: a stage-2 auto-allow logs the judge's path report (and any path
   // the floor never saw) — the parser-gap probe. Stage 1 never reports.
@@ -118,7 +123,7 @@ export function dspaAutoAllowed(
     // The intent path logs its own line per unknown location (§7) — the more
     // specific outcome tag replaces the generic one, and D-f's no-toggle
     // promise depends on these rows being in the ledger.
-    logIntentMisses(pd, misses, "intent-allowed", undefined, reported ?? []);
+    logIntentMisses(pd, misses, "intent-allowed", undefined, reported ?? [], answers);
   } else if (pd.type === "bash" && pd.unresolved?.length) {
     for (const u of pd.unresolved) {
       const confirmed = store.getConfirmedResolution(u.token);
@@ -155,13 +160,14 @@ function logIntentMisses(
   outcome: "intent-allowed" | "intent-declined",
   guard: string | undefined,
   reported: string[],
+  answers: MissAnswers = {},
 ): void {
   if (pd.type !== "bash") return;
   for (const m of misses) {
     // The row carries the evidence the decision turned on: which reported
     // paths answered THIS token (§4.2's match set, §7 `judgePaths`) and
     // whether the operator had already confirmed this location.
-    const answered = answeredMissPaths(m, reported);
+    const answered = answeredMissPaths(m, reported, answers);
     logUnresolved({
       cmd: pd.command,
       cwd: pd.cwd,
@@ -219,6 +225,10 @@ async function tryIntentOverMiss(
   gateResult: DspaGateResult,
 ): Promise<{ autoAllowed: boolean; fallthrough: DspaFallthrough }> {
   const misses = gateResult.ok ? [] : gateResult.misses ?? [];
+  // The §4.2 answer set, shared by the guard and the ledger rows so a row
+  // cannot disagree with the decision it records (§7 `judgePaths`). The bar is
+  // the floor's own read bar — an unanchored miss clears only into it.
+  const answers: MissAnswers = { inBar: makeManualBar(store, pd.cwd) };
   const o2 = await getStage2Outcome(pd, ctx, store);
   const v2 = o2.verdict;
   logJudgeDiff(pd, "dspa", null, v2);
@@ -233,7 +243,7 @@ async function tryIntentOverMiss(
     verdict: JudgeResult | null,
     bucket: DspaStopKind,
   ): { autoAllowed: false; fallthrough: DspaFallthrough } => {
-    logIntentMisses(pd, misses, "intent-declined", why, reported);
+    logIntentMisses(pd, misses, "intent-declined", why, reported, answers);
     recordDspaStop(bucket, verdict?.model ?? o2.model ?? null);
     updateDspaWidget(ctx);
     return { autoAllowed: false, fallthrough: { gate, verdict, stage: verdict ? 2 : null } };
@@ -254,12 +264,22 @@ async function tryIntentOverMiss(
       v2.approve === "deny" ? "deny" : v2.approve === "defer" ? "defer" : "declined",
     );
   }
-  const faults = intentGuardFaults(misses, reported);
+  // §4.2 amendment (3.41.0, G-b): a miss with no static anchor can only be
+  // answered by the path resolver's per-token answer. Asked ONLY when such a
+  // fact exists (an anchored stop pays nothing) and only after the verdict
+  // (a decline spends no resolver call). Same `pd` → the same cache key the
+  // prompt's own resolution uses, so a decline that reaches the prompt pays
+  // ONE wire call, not two.
+  if (misses.some((m) => m.prefix === "")) {
+    const r = await resolveUnresolvedPaths(pd, ctx);
+    if (r) answers.resolved = r;
+  }
+  const faults = intentGuardFaults(misses, reported, answers);
   if (faults.length > 0) return stop(faults.join("; "), gateResult, v2, "gate");
   // The judge-ledger paths line is written by dspaAutoAllowed's stage-2 pass
   // (D17) — a declined attempt never executed, so its report rides the
   // prompt's decision line only and the parser-gap probe stays clean of stops.
-  dspaAutoAllowed(request, pd, ctx, store, v2, 2, misses, reported);
+  dspaAutoAllowed(request, pd, ctx, store, v2, 2, misses, reported, answers);
   return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v2, stage: 2 } };
 }
 
