@@ -31,6 +31,15 @@ covers a WRITE prompt.**
   grant + read prompt → suppressed), driven by a real `createStore()` so the
   store's tier semantics are part of the assertion. Suite 4293 passed, 1
   skipped / 57 files (3.40.0: 4290 / 1).
+- **Dropped the live-wire probe** — `test/live-judge-wire.test.ts`, the suite's
+  one skipped test. It was the A/B instrument behind 3.40.0's `toolChoice`
+  fix, and its verdict is already recorded there: 7 samples per arm, tool call
+  7/7 in both, forced arm +10 prompt tokens, so the guard was adopted as a
+  structural one, not a measured repair. Re-running it needs a live model and a
+  crash-dump corpus under `/mnt/Ndr`, which no CI of this repo will ever have —
+  it could never fail a build, only hold a skip line. `judge/judge.ts` keeps the
+  finding in its own comment, with the CHANGELOG as the pointer. Suite after the
+  removal: 4293 passed, 0 skipped / 56 files.
 
 ## 3.40.0 — 2026-10-20
 **A floor stop is either a BAR or an unknown. The bars stay absolute — the

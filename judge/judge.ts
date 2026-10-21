@@ -412,9 +412,9 @@ function sha256(text: string): string {
  * opener itself cannot produce that class. It does not fix the class that
  * still happens at temperature 1 — a call opened and immediately closed with
  * empty arguments (`bad-args`) — which is what the retry covers.
- * Verified on the live judge engine (2026-10-18 wire replay,
- * test/live-judge-wire.test.ts): "required" and "any" both reach Strata's
- * forced-call path; the same tiny prompt at "auto" answers in prose instead.
+ * Measured on the live judge engine (2026-10-18 wire replay, recorded in
+ * CHANGELOG 3.40.0): "required" and "any" both reach Strata's forced-call
+ * path; the same tiny prompt at "auto" answers in prose instead.
  */
 const TOOL_CHOICE_BY_API: Record<string, string> = {
   "openai-completions": "required",
