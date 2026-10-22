@@ -6,6 +6,7 @@ import {
   readSettingsFile,
   writeSettings,
   resetSettingsCache,
+  readConfigReadDirs,
   HALTER_DEFAULTS,
 } from "../halter-settings";
 
@@ -54,7 +55,22 @@ describe("halter-settings", () => {
       ledgerLog: true,
       judge: { enabled: true, provider: null, model: null, thinking: "high", timeoutMs: 8000 },
       mode: "manual",
+      readDirs: [],
     });
+  });
+
+  it("a hand-written readDirs list survives materialization untouched", () => {
+    // Arrays are replaced, never element-merged — this list is operator-owned.
+    fs.writeFileSync(file, JSON.stringify({ halter: { readDirs: ["~/Strata"] } }));
+    expect(readSettingsFile(file).readDirs).toEqual(["~/Strata"]);
+    expect(readConfigReadDirs(file)).toEqual(["~/Strata"]);
+    expect(JSON.parse(fs.readFileSync(file, "utf-8")).halter.readDirs).toEqual(["~/Strata"]);
+  });
+
+  it("readConfigReadDirs: missing or malformed → [] (never throws)", () => {
+    expect(readConfigReadDirs(file)).toEqual([]);
+    fs.writeFileSync(file, JSON.stringify({ halter: { readDirs: "/home" } }));
+    expect(readConfigReadDirs(file)).toEqual([]);
   });
 
   it("writeSettings merges a namespace patch and preserves other namespaces", () => {
@@ -68,6 +84,7 @@ describe("halter-settings", () => {
       ledgerLog: true,
       judge: { enabled: true, provider: null, model: null, thinking: "high", timeoutMs: 8000 },
       mode: "manual",
+      readDirs: [],
     });
     const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
     // The judge section survived the toggle write, and so did another

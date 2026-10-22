@@ -1,7 +1,9 @@
 # dspa intent floor — two-tier floor
 
 Status: **BUILT — released as 3.40.0 (2026-10-20)**; all six steps of §8 are
-in (D-a…D-h decided 2026-10-19, §6). This document proposes re-cutting the
+in (D-a…D-h decided 2026-10-19, §6). 3.41.0 (the prefix-less miss corpus) and
+3.42.0 (the session READ grant an allow records — a recorded deviation from
+D-f, see its §8 build notes) follow as build notes in §8. This document proposes re-cutting the
 dspa hard gate (`gate/dspa-gate.ts`) along a new axis. It **reverses part of
 Q1** (the D7 point-4 paragraph and D11 in `docs/dspa-redesign.md`; the "the
 judge never grants over the floor" line in `docs/architecture.md`'s dspa
@@ -263,6 +265,12 @@ the intent route (§3) is the one that trades determinism for friction.
   operator reverts with git if the philosophy turns out wrong ("keep the code
   clean and lean"). Every intent-over-miss allow is logged (§7), so a bad
   class is visible in the ledger without a toggle.
+  **3.42.0 amendment (recorded deviation, §8 build notes):** a cleared stop
+  whose location the FLOOR named also enters the session READ bar, so its
+  repeat is answered by the bar instead of re-asked. D-f's substance is intact
+  — no toggle, no mode, nothing durable, no grant minted from a resolver answer
+  for an unanchored token — and the learned grants are visible (toast, widget
+  `R intent`, `grantedDirs` in the row) and removable (`/halter-forget`).
 
 ## 7. Ledger contract after the change
 
@@ -276,6 +284,10 @@ the intent route (§3) is the one that trades determinism for friction.
   for that token (the deterministic binding the guard accepted) — the judge's
   report cannot answer such a fact at all. A row is therefore evidence of "what
   the guard accepted", not a claim about what the model said.
+  **3.42.0 addition — `grantedDirs`**: the session READ dirs this allow put in
+  the bar (the fast track the row created). Absent when nothing was grantable:
+  an unanchored stop, or a write-shaped one. Session-scoped like the store, so
+  the field describes that session, not the machine.
 - `outcome: "intent-declined"` — the guard set or the verdict kept the stop,
   and the operator was prompted.
   Built (steps 4–5): both outcomes exist with `missKind` (the class the floor
@@ -611,6 +623,96 @@ realpath/glob-match verification is the machinery that already proves the claim.
 Measured before/after: `for f in /Users/…/.pi/agent/*.log` was already exempt;
 the `~/` spelling was not.
 
+### 3.42.0 build notes (2026-10-22): the location an allow cleared becomes a bar entry
+
+**The report that opened this.** `ls -la ~/Strata` in a session whose cwd is
+elsewhere: every repeat of that command paid an uncached stage-2 intent call
+(D-f's "repeats are uncached by design"). The operator's expectation — "prompt
+me once, then fast track" — is what a manual-mode prompt already delivers via
+Always (paths); the intent pass had no equivalent, so nothing converged.
+
+**Ledger evidence** (`.log/unresolved.jsonl`, 156 rows at build time): 128 rows
+are `intent-allowed`, and they are concentrated — 60 name one token
+(`~/Strata`, spelled expanded in the rows), 9 a NAS-shelf dir (`<nas>/Pi`).
+Rows/day vs distinct tokens/day:
+36/19, 60/24, 32/8. 30 of the 128 rows are byte-identical command repeats
+(98 distinct commands). So the cost is not a long tail of one-off lookups; it
+is a handful of locations re-asked about.
+
+**What shipped.**
+
+- **A — `halter.readDirs`** (settings-ext.json, `halter` namespace): operator
+  scope grants appended to `config/path-rules.ts → allowedReadPaths` at
+  activation (`registerAllowedReadDirs`). Dirs only, `~` expands, `/` and
+  relative entries and existing regular files are refused. The bar is shared,
+  so one entry widens manual AND dspa: a read inside it auto-allows and takes
+  **no judge call at all** (reads are never dspa-converted —
+  `gate/conversions.ts`). There is deliberately no `writeDirs` key: a durable
+  write grant hand-edited into JSON is G3's bad click with nobody in the loop.
+- **B — the learned session grant** (`learnedReadGrants` in
+  `gate/fallthrough.ts`): when an intent allow clears a stop, the dirs of that
+  stop enter the session READ bar via the same generator the prompt's
+  "Always (paths)" option uses (`RuleGenerator.generatePathsOnlyRules`), so the
+  grant shape is identical — the DIR, not the file, so siblings converge. The
+  store tracks them separately (`addLearnedReadDirs` /
+  `listLearnedReadDirs` / `forgetLearnedReadDirs`): they are not clicked
+  grants, and the UI must be able to tell them apart.
+
+**Four boundaries** (all in `learnedReadGrants`, tested):
+
+1. only a stop that carried an `outside-path` fact — the FLOOR named the
+   location. A resolver answer for an opaque token mints nothing (§4.2's
+   omission hole);
+2. no write-shaped fact — a `base-write` proxy means the subject is a write
+   under a cd-named base, and the analysis write set can be empty for it
+   (`cd /etc && sed -i … hosts`: the only dir the prompt data carries is the
+   base itself, in its READ tier);
+3. READ tier only (D-g) — the WRITE tier is never taken from a verdict;
+4. session-scoped — volatile store, cleared by `store.reset()`;
+   `/halter-forget` clears exactly the learned ones and never
+   `halter.readDirs` or a clicked grant.
+
+**Visibility** (D-f promised a bad class is visible without a toggle — it is):
+a toast per newly learned dir (`✓ session read grant: ~/Strata —
+/halter-forget clears`), a separate widget segment `R intent`, and
+`grantedDirs` on the `intent-allowed` ledger row (§7, amended below).
+
+**Deviation from the grill record (D-f).** D-f said nothing a judge answer
+teaches about a location is persisted, and §9's known-gap line claimed a
+repeat therefore pays again. That is now narrower: a repeat of a stop whose
+location the FLOOR named is answered by the bar, not by the judge. D-f's
+substance survives — no toggle, no mode, no new setting, nothing durable, and
+a resolver answer for an unanchored token still records nothing. What changed
+is that a verdict is allowed to *converge* the same way a click does, one
+session at a time.
+
+**Measured before/after** (deterministic A/B probe, `/tmp/hgrant-probe.mts`
+over those 128 ledger rows — real `decide()` + `checkDspaGate`, no judge call;
+fitted to this ledger, so read it as this machine's shape, not a general
+rate): fresh store — 127 of 128 rows reach the uncached stage-2 intent pass.
+Seeded with the 8 hottest dirs in the read bar — 78 rows auto-allow with no
+judge call at all, 14 pass the floor (stage 1 only), **35 still need the
+intent pass**: a 72% drop in stage-2 intent calls for this corpus. The rows
+that keep costing are genuinely one-off (`/proc/meminfo`, `/opt/cuda/bin/nvcc`,
+`~/.zshrc`) — which is what the design wants: unlearned locations stay cheap
+in count and expensive in attention.
+
+**Safety probe** (`/tmp/hgrant-safety.mts`, now a test): with a grant
+registered, `cat <dir>/.env` still stops on `credential pattern (.env)`,
+`rm -rf <dir>/logs` and `echo > <dir>/f` still stop on `write outside base`.
+A widened read bar moves no other bar.
+
+**Suite:** 4341 passed / 0 failed on Linux at 3.42.0 (HEAD measured in the
+same run: 4327 / 0 — the "7 failed" in the 3.41.0 notes are Darwin
+`/etc`→`/private/etc` realpath artifacts and do not fire on Linux). +14 tests:
+`test/intent-floor.test.ts` new describe 4 (incl. the two-run no-judge case),
+`test/dspa-gate.test.ts` 3 (config grant: normalization, bar entry, ceiling),
+`test/store.test.ts` 4, `test/widget.test.ts` 1, `test/halter-settings.test.ts`
+2. Harness fidelity fix found on the way: `test/intent-floor.test.ts`'s `run()`
+now carries `analysis.prompt.outsideDirs`/`outsideWriteDirs` onto the prompt
+data (as `decide/bash-rules.ts` does) and passes the WRITE predicate — without
+those the grant-derivation path could not be tested at all.
+
 ## 9. Out of scope here
 
 The unbuilt grill items G8–G11/G13 from the ledger round (loop in-list taint
@@ -688,9 +790,13 @@ Still fail-open / invisible to the floor:
   `cat /etc/$?x` keeps its opaque token. Deliberate — a glued special is a
   dynamic segment, and inventing `/etc/0x` for `$?` would be the fabrication
   §4's guards exist to prevent.
-- **A resolver answer is never persisted** (D-f). A repeat of the same command
-  pays the stage-2 and resolver calls again; the resolver's own cache is per
-  session and keyed on the command bytes, not a learned location.
+- **A resolver answer is never persisted** (D-f, narrowed by 3.42.0 — §8 build
+  notes): an unanchored token answered by the resolver still records no
+  location, so its repeat pays the stage-2 and resolver calls again (the
+  resolver's own cache is per session and keyed on the command bytes, not a
+  learned location). What DOES persist for the session is the READ-bar entry
+  learned from a stop the FLOOR named with a concrete dir (`grantedDirs`) —
+  that repeat needs no judge at all.
 
 Not defects, by design: unknown-command args are not path-extracted
 (`pathAwareCommands` is a closed set, the judge is the backstop — such

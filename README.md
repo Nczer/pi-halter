@@ -9,6 +9,7 @@ A halter for pi tool calls. Intercepts `bash` and `read`/`write`/`edit` calls, a
 - **Opaque path resolution** — tokens static analysis cannot bind (`$VAR`, `$(…)`, globs over unknown bases) are listed as unresolved in the prompt; with the judge enabled it suggests concrete dirs, and a user-confirmed suggestion becomes a binding deterministic resolution (the token stops prompting)
 - **Tool plugins** — any tool ext that ships `<ext>/halter/index.ts` is gated: the plugin classifies calls as `exec` (script payload → judge/dspa), `file` (target path → outside-cwd warning), or `consent` (per-kind session consent); discovery calls pass ungated; a broken plugin blocks its tool fail-closed
 - **Auto-allow** — "Always" option grants session-scoped permission; status widget shows active allowances
+- **Read bar** — the scope a READ must sit inside: session cwd ∪ config-allowed paths ∪ `halter.readDirs` (settings-ext.json) ∪ this session's grants. A read inside it auto-allows in manual and needs **no judge call** under `/dspa`. An intent-allowed location enters the bar for the rest of the session (widget segment `R intent`, toast, `/halter-forget` drops exactly those learned grants); `credential` names and writes keep stopping inside a granted dir, and the bar is read-only — a durable WRITE grant is always an explicit click
 - **Retry-loop prevention** — recently-aborted commands are auto-blocked for 60 seconds
 - **Prompt frequency warning** — after 20 prompts, warns the user to use "Always" to reduce noise
 - **No-UI fallback** — auto-blocks when no UI is available
@@ -113,10 +114,14 @@ Config is split across focused modules in `config/`:
 |------|-----------------|
 | `config/index.ts` | Thresholds: `ABORT_REMEMBER_MS` (60s), `PROMPT_WARNING_THRESHOLD` (20). Re-exports from other config modules. |
 | `config/bash-patterns.ts` | `unconditionallySafeCommands`, `pathAwareCommands`, `isAllowedCommand()`, `isSafeSubcommand()`, `isWriteOperation()`, `wrapperCommands`, `SHELL_INTERPRETERS`, `PACKAGE_MANAGERS`, `dangerousFindFlags`, `dangerousSedFlags`, `dangerousPerlFlags` |
-| `config/path-rules.ts` | `warnPaths` (credential names — prompt tier), `allowedReadPaths`, `allowedWritePaths` |
+| `config/path-rules.ts` | `warnPaths` (credential names — prompt tier), `allowedReadPaths`, `allowedWritePaths`, `registerAllowedReadDirs()` (appends the settings key `halter.readDirs` to the read bar at activation — dirs only, `~` expanded, `/` and relative entries refused) |
 | `config/dangerous-patterns.ts` | `dangerousCommandPatterns`, `dangerousContextPatterns` (regex patterns) |
 | `config/trusted-scripts.ts` | `TRUSTED_PACKAGES` allowlist for `uv run --with`, `isTrustedScriptPath()`, `isTrustedScriptCommand()`, `registryRunDeps()` (the `--with` packages the judge packet names, marked with the allowlist verdict), `uvRunFlags()`/`resolveDepSource()`/`uvFetchFormOk()` (the same scan as grant identity — a run-form signature names its deps and its non-benign options; uv's option classes decide what the umbrella survives) |
 | `config/script-operand.ts` | `findScriptOperand()` — the one file-operand scan (interpreters, direct exec, `uv run`/`deno run`, `npx`/`uvx` package runners, pass-through wrappers) shared by identification and trust |
+
+### Read-bar grants (`halter.readDirs`)
+
+Hand-written scope grants: `"readDirs": ["~/Strata", "<nas>/Pi"]` in the `halter` namespace of `~/.pi/agent/settings-ext.json`. Entries are directories (`~` expands; `/`, relative entries and existing regular files are refused), and the list is read once at activation — an edit lands next session or on `/reload`. Inside a granted dir a read auto-allows in manual and takes no judge call under `/dspa`; credential names and writes keep stopping there. The key grants READ only: writing needs the prompt's Always option, which is where a human decided it. `/halter-forget` drops the read grants the `/dspa` intent pass recorded this session (widget `R intent`) and never touches this list — making one of them durable is your own edit here.
 
 ### Decision log
 

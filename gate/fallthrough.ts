@@ -23,6 +23,8 @@ import { sanitizeJudgePaths } from "../judge/paths";
 import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
 import { pdTargetLabel } from "../ui/prompt-builder";
+import { shortenHomePath } from "../ui/path-display";
+import { RuleGenerator } from "../decide/rule-generator";
 import { recordDspaAutoAllowed, recordDspaStop, updateDspaWidget, type DspaStopKind } from "../modes/dspa-mode";
 import type {JudgeResult} from "../judge/judge";
 
@@ -97,6 +99,10 @@ export function dspaAutoAllowed(
    *  unanchored miss, so the row names the ANSWER (the deterministic
    *  binding), not only the reported paths that happened to match. */
   answers?: MissAnswers,
+  /** Intent path only (§8 3.42 build notes): the session read grants this allow recorded
+   *  (see `learnedReadGrants`), so the ledger row names the fast track it
+   *  created, not just the evidence that cleared the stop. */
+  learnedDirs?: string[],
 ): void {
   // D13: a stage-2 auto-allow logs the judge's path report (and any path
   // the floor never saw) — the parser-gap probe. Stage 1 never reports.
@@ -123,7 +129,7 @@ export function dspaAutoAllowed(
     // The intent path logs its own line per unknown location (§7) — the more
     // specific outcome tag replaces the generic one, and D-f's no-toggle
     // promise depends on these rows being in the ledger.
-    logIntentMisses(pd, misses, "intent-allowed", undefined, reported ?? [], answers);
+    logIntentMisses(pd, misses, "intent-allowed", undefined, reported ?? [], answers, learnedDirs);
   } else if (pd.type === "bash" && pd.unresolved?.length) {
     for (const u of pd.unresolved) {
       const confirmed = store.getConfirmedResolution(u.token);
@@ -161,6 +167,7 @@ function logIntentMisses(
   guard: string | undefined,
   reported: string[],
   answers: MissAnswers = {},
+  learnedDirs?: string[],
 ): void {
   if (pd.type !== "bash") return;
   for (const m of misses) {
@@ -178,6 +185,7 @@ function logIntentMisses(
       missKind: m.kind,
       guard,
       ...(answered.length > 0 ? { judgePaths: answered } : {}),
+      ...(learnedDirs && learnedDirs.length > 0 ? { grantedDirs: learnedDirs } : {}),
       confirmedPrior: m.confirmedPrior,
     });
   }
@@ -206,7 +214,40 @@ function writeOutsideStop(
 }
 
 /**
- * §3/§4 (docs/dspa-intent-floor.md): intent over a MISS stop — the location
+ * (docs/dspa-intent-floor.md §8 3.42 build notes) — the intent pass that cleared a miss
+ * with a CONCRETE location records the read grant that the prompt's
+ * "Always (paths)" click would have stored, so the next command touching that
+ * dir passes the floor deterministically (no judge call, no prompt). Four
+ * boundaries, all deliberate:
+ *
+ *  • only a stop that carried an `outside-path` fact — a location the FLOOR
+ *    named. A stop cleared purely by a judge/resolver answer for an opaque
+ *    token must not mint a grant for a place the floor never saw (§4.2's
+ *    omission hole is exactly that shape);
+ *  • no write-shaped fact — a `base-write` proxy (or any write-role fact) means
+ *    the stop's subject is a WRITE under a base the cd chain named, and the
+ *    analysis' own write-path set can be empty for it (`cd /etc && sed -i …
+ *    hosts`: the write target is relative to the cd base, so the only dir the
+ *    prompt data carries is the base itself, in its READ tier). Moving the read
+ *    bar under a write stop is D-g's bad click;
+ *  • READ half only — `generatePathsOnlyRules` puts a dir that is also a write
+ *    target in the WRITE tier, and this path never takes that tier (D-g: a
+ *    write bar moves on an explicit click, never on a verdict);
+ *  • session-scoped — the store is volatile (`store.reset()` on
+ *    session_shutdown), so a verdict buys convenience inside the session and
+ *    never a durable scope change. Durability is `halter.readDirs`, the
+ *    operator's own list.
+ */
+function learnedReadGrants(store: Store, pd: PromptData, misses: MissFact[]): string[] {
+  if (pd.type !== "bash") return [];
+  if (!misses.some((m) => m.kind === "outside-path")) return [];
+  if (misses.some((m) => m.kind === "base-write" || m.role === "write")) return [];
+  const rules = RuleGenerator.generatePathsOnlyRules(pd);
+  return store.addLearnedReadDirs(rules?.readDirs ?? []);
+}
+
+/**
+ * §3/§4 (docs/dspa-intent-floor.md §3): intent over a MISS stop — the location
  * the floor could not name goes to the intent pass to BECOME a location, and
  * the guards decide whether the verdict may clear the stop. Stage 1 is not
  * run: it is the stateless pass, eval-locked out of path reports
@@ -279,7 +320,20 @@ async function tryIntentOverMiss(
   // The judge-ledger paths line is written by dspaAutoAllowed's stage-2 pass
   // (D17) — a declined attempt never executed, so its report rides the
   // prompt's decision line only and the parser-gap probe stays clean of stops.
-  dspaAutoAllowed(request, pd, ctx, store, v2, 2, misses, reported, answers);
+  // 3.42 (3.42 notes): the cleared location also enters the session READ bar, which is
+  // what makes the second run of the same command free.
+  const learned = learnedReadGrants(store, pd, misses);
+  if (learned.length > 0) {
+    try {
+      ctx.ui.notify(
+        `✓ session read grant: ${learned.map(shortenHomePath).join(", ")} — /halter-forget clears`,
+        "info",
+      );
+    } catch {
+      /* toast must never break the allow */
+    }
+  }
+  dspaAutoAllowed(request, pd, ctx, store, v2, 2, misses, reported, answers, learned);
   return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v2, stage: 2 } };
 }
 

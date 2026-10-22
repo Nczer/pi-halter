@@ -360,6 +360,14 @@ export interface UnresolvedLogEntry {
    *  session) already covered this location. `persisted` is the OTHER half —
    *  a confirmation stored by THIS run, which an intent row never has. */
   confirmedPrior?: boolean;
+  /**
+   * Intent-allowed rows only (docs/dspa-intent-floor.md §8 3.42 build notes): the session
+   * READ dirs this allow put in the bar — the fast track this row created, so a
+   * repeat of the class stops showing up as a fresh stage-2 cost. Absent when
+   * nothing was grantable (an opaque-token-only stop, or write-shaped dirs).
+   * Session-scoped: these dirs are gone at session_shutdown.
+   */
+  grantedDirs?: string[];
 }
 
 /**

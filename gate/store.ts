@@ -48,6 +48,19 @@ export interface Store {
   hasTrustedPackage(pkg: string): boolean;
   /** D10: trust a bare package name for the session (prompt's "Trust" option). */
   trustPackage(pkg: string): void;
+  /**
+   * (docs/dspa-intent-floor.md §8 3.42 build notes): read dirs LEARNED by the dspa intent
+   * pass. Same effect as the prompt's "Always (paths)" click — the dir enters
+   * the session read bar, so the next command touching it needs no judge call —
+   * but it is tracked separately because it was never clicked: the widget tags
+   * it and `/halter-forget` clears it without touching the operator's own
+   * grants. Read half only (D-g). Returns the dirs that were NEW this call.
+   */
+  addLearnedReadDirs(dirs: string[]): string[];
+  /** True when this exact dir was recorded by the intent pass (not clicked). */
+  isLearnedReadDir(dir: string): boolean;
+  /** Clear every learned read dir; returns what was removed. */
+  forgetLearnedReadDirs(): string[];
   /** Check if a resolved path is inside a session-auto-allowed dir (no Set copy). */
   isInsideAllowedDir(resolved: string, kind: "read" | "write"): boolean;
   /**
@@ -76,6 +89,8 @@ export interface Store {
   listToolGrants(): Set<string>;
   /** D10: trusted package names (widget renders these alongside bash grants). */
   listTrustedPackages(): Set<string>;
+  /** Intent-learned read dirs (see addLearnedReadDirs). */
+  listLearnedReadDirs(): Set<string>;
 
   /** Get current time (uses injected clock for testability). */
   now(): number;
@@ -99,6 +114,7 @@ export function createStore(nowFn = Date.now): Store {
   const toolGrants = new Set<string>();
   const toolGrantModels = new Map<string, string>();
   const trustedPackages = new Set<string>();
+  const learnedReadDirs = new Set<string>();
   const confirmedResolutions = new Map<string, string[]>();
   const aborted = new Map<string, number>();
   let pcount = 0;
@@ -135,6 +151,24 @@ export function createStore(nowFn = Date.now): Store {
     recordToolGrantModel(g, modelId) { toolGrantModels.set(g, modelId); },
     hasTrustedPackage(pkg) { return trustedPackages.has(pkg); },
     trustPackage(pkg) { trustedPackages.add(pkg); },
+    addLearnedReadDirs(dirs) {
+      const fresh: string[] = [];
+      for (const d of dirs) {
+        if (!d || d === "/" || d.startsWith("<")) continue;
+        if (readDirs.has(d)) continue; // already granted (clicked) — not ours
+        readDirs.add(d);
+        learnedReadDirs.add(d);
+        fresh.push(d);
+      }
+      return fresh;
+    },
+    isLearnedReadDir(d) { return learnedReadDirs.has(d); },
+    forgetLearnedReadDirs() {
+      const removed = [...learnedReadDirs];
+      for (const d of removed) readDirs.delete(d);
+      learnedReadDirs.clear();
+      return removed;
+    },
     getConfirmedResolution(token) { return confirmedResolutions.get(token) ?? null; },
     confirmResolution(token, dirs) {
       // Positional parameters are call-site local: the map is keyed by the
@@ -164,7 +198,12 @@ export function createStore(nowFn = Date.now): Store {
         const set = bashSigCwds.get(sig);
         if (set) set.add(cwd); else bashSigCwds.set(sig, new Set([cwd]));
       });
-      rules.readDirs?.forEach(d => readDirs.add(d));
+      // A clicked grant is operator-owned: if it covers a dir the intent pass
+      // had learned, /halter-forget must no longer be able to drop it.
+      rules.readDirs?.forEach(d => {
+        readDirs.add(d);
+        learnedReadDirs.delete(d);
+      });
       rules.writeDirs?.forEach(d => writeDirs.add(d));
       rules.readPaths?.forEach(p => readPaths.add(p));
       rules.writePaths?.forEach(p => writePaths.add(p));
@@ -192,6 +231,7 @@ export function createStore(nowFn = Date.now): Store {
     listAllowedWritePaths() { return new Set(writePaths); },
     listToolGrants() { return new Set(toolGrants); },
     listTrustedPackages() { return new Set(trustedPackages); },
+    listLearnedReadDirs() { return new Set(learnedReadDirs); },
 
     incrementPromptCount() {
       pcount++;
@@ -208,6 +248,7 @@ export function createStore(nowFn = Date.now): Store {
       toolGrants.clear();
       toolGrantModels.clear();
       trustedPackages.clear();
+      learnedReadDirs.clear();
       confirmedResolutions.clear();
       aborted.clear();
       pcount = 0;

@@ -15,7 +15,8 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside } from "../gate/dspa-gate";
+import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, makeManualBar } from "../gate/dspa-gate";
+import { registerAllowedReadDirs } from "../config";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../gate/store";
 import type {BashPromptData, FilePromptData, ToolPromptData} from "../decide/types";
@@ -1926,4 +1927,65 @@ describe("egress floor sees through wrapper/prefix delegation (2026-10-03 incide
   // Residual, deliberately untested: a wrapper outside `wrapperCommands`
   // (`time git push`) is invisible to the floor AND to the risk layer — the
   // delegation table is shared, so both layers miss it together.
+});
+
+// ── Operator read-bar grants (settings `halter.readDirs`, 3.42) ─────────────
+
+describe("config read-bar grants (halter.readDirs)", () => {
+  // registerAllowedReadDirs appends to the module-level bar and there is no
+  // un-register, so each case uses its OWN path and never reads another
+  // case's grant.
+  const A = "/Users/u/halter-grant-a";
+  const B = "/Users/u/halter-grant-b";
+  const C = "/Users/u/halter-grant-c";
+
+  it("normalizes the list: ~ expands, `/`, relative entries and files are refused", () => {
+    const file = path.join(os.tmpdir(), `halter-grant-file-${process.pid}`);
+    fs.writeFileSync(file, "x");
+    try {
+      expect(
+        registerAllowedReadDirs([
+          "/",
+          "Strata",            // relative: the bar may not depend on the cwd
+          file,                // an existing regular FILE (the bar matches dirs)
+          42,                  // not a string
+          "   ",
+          "~/halter-grant-tilde",
+          A,
+          A,                   // dedup — a /reload re-registers the same list
+        ]),
+      ).toEqual([path.join(os.homedir(), "halter-grant-tilde"), A]);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
+  it("the granted dir is in the manual bar: a read inside it passes the floor", async () => {
+    const before = await checkDspaGate(bashPd(`cat ${B}/design.dxf`), store);
+    expect(before.ok).toBe(false);
+    if (!before.ok) {
+      expect(before.reason).toContain("touches paths outside base");
+      expect(before.misses).toEqual([expect.objectContaining({ kind: "outside-path" })]);
+    }
+    registerAllowedReadDirs([B]);
+    expect(makeManualBar(store, BASE)(`${B}/design.dxf`)).toBe(true);
+    expect(await checkDspaGate(bashPd(`cat ${B}/design.dxf`), store)).toEqual({ ok: true });
+    // A path that does not exist yet is a valid grant (a project dir to create).
+    expect(await checkDspaGate(bashPd(`cat ${B}/not/created/yet.dxf`), store)).toEqual({ ok: true });
+  });
+
+  it("the ceiling survives the grant: credentials and writes still stop", async () => {
+    registerAllowedReadDirs([C]);
+    const cases: Array<[string, Partial<BashPromptData>, string]> = [
+      [`cat ${C}/.env`, { credentialRule: ".env" }, "credential pattern"],
+      [`cat ${C}/id_rsa`, { credentialRule: "id_rsa" }, "credential pattern"],
+      [`rm -rf ${C}/logs`, {}, "write outside base"],
+      [`echo x > ${C}/notes.md`, {}, "write outside base"],
+    ];
+    for (const [cmd, over, why] of cases) {
+      const r = await checkDspaGate(bashPd(cmd, over), store);
+      expect(r.ok, cmd).toBe(false);
+      if (!r.ok) expect(String(r.reason), cmd).toContain(why);
+    }
+  });
 });

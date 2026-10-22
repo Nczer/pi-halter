@@ -70,12 +70,20 @@ export const JUDGE_DEFAULTS: {
  *
  * `ledgerLog` — the diagnostic-ledger toggle (the three ledgers: unresolved,
  * judge, glob-err; config/logging.ts), ON by default; decisionLog stays off
- * by default. */
+ * by default.
+ *
+ * `readDirs` — operator scope grants for the READ bar (dirs, `~` allowed).
+ * Read once at activation and appended to `config/path-rules.ts` →
+ * `allowedReadPaths`: commands that only read inside those dirs need no prompt
+ * and no judge call. Read half only — a durable WRITE grant in a settings file
+ * is G3's bad click with nobody in the loop (see path-rules for the full rule).
+ * Applied at activation, so an edit lands next session / `/reload`. */
 export const HALTER_DEFAULTS: Record<string, unknown> = {
   decisionLog: false,
   ledgerLog: true,
   judge: JUDGE_DEFAULTS,
   mode: "manual",
+  readDirs: [],
 };
 
 // Single-slot stat cache (production always reads SETTINGS_PATH; tests pass
@@ -195,6 +203,16 @@ function readWholeCached(filePath: string): Record<string, unknown> {
  */
 export function readSettingsFile(filePath: string = SETTINGS_PATH): Record<string, unknown> {
   return materialize(filePath, readWholeCached(filePath));
+}
+
+/**
+ * The operator's read-bar grants (the raw `readDirs` list). Normalizing and
+ * registering is the bar's own job — `registerAllowedReadDirs`
+ * (config/path-rules.ts) expands `~`, drops `/`, existing files and junk.
+ */
+export function readConfigReadDirs(filePath: string = SETTINGS_PATH): unknown {
+  const v = readSettingsFile(filePath)["readDirs"];
+  return Array.isArray(v) ? v : [];
 }
 
 /**
