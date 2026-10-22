@@ -45,9 +45,10 @@ export function groupCommandVariants(items: string[]): string[] {
 // ── Status rendering ──
 
 /**
- * One session-rules line: `· R/W: … · R: … · Bash: … · Pkg: … · Cwd: … ·
- * Tools: …` — every grant category on ONE row (same style as the other
- * bottom-bar lines), in safety-priority order (the write boundary first).
+ * One session-rules line: `· R/W: … · R: … · R intent: … · Bash: … · Pkg: … ·
+ * Cwd: … · Tools: …` — every grant category on ONE row (same style as the
+ * other bottom-bar lines), in safety-priority order (the write boundary first,
+ * learned read grants after the clicked ones).
  * Each category caps its items (paths 3, commands 5, cwd 2, tools 3) with a
  * `…+N` tail; when the line outgrows the width, whole low-priority segments
  * drop behind one `…+N` marker (N = hidden categories). The widget is thus
@@ -107,8 +108,8 @@ function displayPaths(paths: string[], cap: number): string {
  *   » DSPA                                       order: a auto-allowed, g floor stop,
  *   » DSPA: 3a — judging stage 2…                r judge reject, c declined, d defer;
  *   ◎ DSPAT: 3/4 agreed                          bare name pre-first-op, like ◎ DSPAT.
- *   · R/W: … · R: … · Bash: … · Pkg: …           The model tag shows only when the
- *   · R: … · Bash: …                             judge model differs from the session
+ *   · R/W: … · R: … · R intent: … · Bash: …      The model tag shows only when the
+ *   · Pkg: … · Cwd: … · Tools: …                 judge model differs from the session
  *                                                 model. The in-flight judging stage
  *                                                 rides the mode line inline (the
  *                                                 widget's indicator, restored). The
@@ -144,7 +145,13 @@ export function updateStatus(ctx: ExtensionContext): void {
   const bashItems = [...store.listAllowedBash()];
   const readPathItems = filterSubPaths([...store.listAllowedReadPaths()]);
   const writePathItems = filterSubPaths([...store.listAllowedWritePaths()]);
-  const readDirItems = filterSubPaths([...store.listAllowedReadDirs()]);
+  // (§8 3.42 build notes): intent-learned read dirs get their OWN segment — the operator
+  // must be able to tell a grant they clicked from one a verdict recorded, and
+  // /halter-forget clears only the latter.
+  const learnedDirItems = filterSubPaths([...store.listLearnedReadDirs()]);
+  const readDirItems = filterSubPaths(
+    [...store.listAllowedReadDirs()].filter((d) => !store.isLearnedReadDir(d)),
+  );
   const writeDirItems = filterSubPaths([...store.listAllowedWriteDirs()]);
   const pkgItems = [...store.listTrustedPackages()];
   const toolGrantItems = [...store.listToolGrants()];
@@ -156,10 +163,14 @@ export function updateStatus(ctx: ExtensionContext): void {
   const allReadPaths = filterSubPaths([...readDirItems, ...readPathItems]);
   const allWritePaths = filterSubPaths([...writeDirItems, ...writePathItems]);
   const readOnlyPaths = allReadPaths.filter(p => !allWritePaths.some(wp => p === wp || p.startsWith(wp + "/")));
+  const learnedReadPaths = learnedDirItems.filter(
+    p => !allWritePaths.some(wp => p === wp || p.startsWith(wp + "/")),
+  );
 
   const hasSessionRules =
     bashItems.length > 0 ||
     readOnlyPaths.length > 0 ||
+    learnedReadPaths.length > 0 ||
     allWritePaths.length > 0 ||
     cwdItems.length > 0 ||
     pkgItems.length > 0 ||
@@ -242,6 +253,11 @@ export function updateStatus(ctx: ExtensionContext): void {
     }
     if (readOnlyPaths.length > 0) {
       segments.push({ label: "R", text: displayPaths(readOnlyPaths.map(shortenHomePath), 3) });
+    }
+    if (learnedReadPaths.length > 0) {
+      // "R intent" = read dirs the dspa intent pass recorded for this session
+      // (docs/dspa-intent-floor.md §8 3.42 build notes); /halter-forget drops them.
+      segments.push({ label: "R intent", text: displayPaths(learnedReadPaths.map(shortenHomePath), 3) });
     }
     if (bashItems.length > 0) {
       segments.push({ label: "Bash", text: capList(groupCommandVariants(bashItems), 5) });

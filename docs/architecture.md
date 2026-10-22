@@ -14,7 +14,7 @@ Decision rationale for the judge regimes lives in `docs/dspa-redesign.md`; per-c
 | floor | The deterministic hard gate in `gate/dspa-gate.ts`. Code only, no model. The only thing that may stop `/dspa` from asking the judge. |
 | judgeable | An operation the floor lets through to the two-stage judge. |
 | operation class | The four-way split that selects the judge pipeline: C1 content-determined (the payload IS the effect), C2 effect-extending (payload is code), C3 context-dependent (opaque refs), C4 policy-absolute. `docs/dspa-content-classes.md`. |
-| bar | The manual bar: exactly the set of paths manual mode auto-allows (cwd + session grants + config-allowed + trusted scripts). Since D11 the floor's bar IS the manual bar. |
+| bar | The manual bar: exactly the set of paths manual mode auto-allows (cwd + session grants + config-allowed + trusted scripts). Since D11 the floor's bar IS the manual bar. Its READ side also takes the operator's `halter.readDirs` and the session read grants the dspa intent floor learns (`R intent` in the widget). |
 | opaque ref | A path token static analysis cannot bind: `$VAR`, `${VAR}`, `$(…)`, backticks in path position, a glob over an unknown base. Marked, never fast-allowed, resolved via D12 convergence when the user confirms. |
 | unknown base | A `cd` whose target does not resolve; later relative paths in that segment chain get the `<unresolved-cwd>` marker. |
 | fetchable form | A package-manager run form that fetches from a registry: `npx <pkg>`, `uvx`, `npm exec`, `pnpm dlx`, `bun x`. Gated by per-package trust (D10). |
@@ -73,7 +73,10 @@ mode: it is stored in `settings-ext.json` (`halter.mode`, written by the
 `/dspa` command, applied on `session_start` — restart and `/reload` both
 re-apply it). `/dsp` (the full bypass) and `/dspat` never touch the setting —
 a new session must never silently start with all checks skipped. Session-health
-counters stay session-scoped even when the mode persists.
+counters stay session-scoped even when the mode persists. The same settings
+namespace holds `readDirs` (`halter.readDirs`): the operator's read-bar scope
+grants, read once at activation (`config/path-rules.ts →
+registerAllowedReadDirs`), never written by a command.
 
 ## Manual regime (the contract)
 
@@ -92,7 +95,9 @@ The five principles, from the header of `test/cases.test.ts`:
   deliberately includes first-time writes: safe creation, non-destructive git
   (`add`, `commit`, `checkout`, `branch`, `merge`, `stash`);
 - every resolved path stays inside the session cwd, `allowedReadPaths`,
-  `allowedWritePaths`, or the trusted skills dir;
+  `allowedWritePaths`, or the trusted skills dir (`allowedReadPaths` is widened
+  at activation by `halter.readDirs`; the intent floor can add to it for the
+  session — `docs/dspa-intent-floor.md` §8 3.42 build notes);
 - no write operation or dangerous flag: write redirects, `tee`/`cp`/`mv`/`rm`/
   `truncate`, `sed -i`, `sort -o`, `find -delete`/`-exec`, any `git push`,
   destructive git, `npm install`, script execution, wrappers running writes.
@@ -702,14 +707,19 @@ at halter load.
 ## Session state and observability
 
 - **Store** (`gate/store.ts`): session-scoped grants (signatures, paths,
-  trusted packages), confirmed path resolutions, abort timestamps. Injected
-  into `decide()` and the prompt flow; a runtime singleton.
+  trusted packages), confirmed path resolutions, abort timestamps, and the
+  learned session READ dirs (`addLearnedReadDirs` / `listLearnedReadDirs` /
+  `forgetLearnedReadDirs` — kept apart from clicked grants so the widget and
+  `/halter-forget` can tell them apart). Injected into `decide()` and the
+  prompt flow; a runtime singleton.
 - **Decision log** (`.log/decisions.jsonl`, off by default): one line per tool
   call with kind, target, why/reason, regime tag, and dspa stop tag.
   Version-bound: delete after a `/reload` of gate code. The decision log has
   its own toggle (`/halter-decision-log`); the three ledgers share one
   (`/halter-ledger-log`; same arg handling; D17 split). `tools/log-inspect.mjs`
   does the recurring extractions (summary, audit, dspa, dspa --paths, stats).
+  `halter-forget` clears the session READ grants the intent floor learned —
+  never a clicked grant, never `halter.readDirs`.
 - **Unresolved log** (`.log/unresolved.jsonl`, on by default): the fate of
   each unbound token (outcome — `prompted` / `gate-stop` / `auto-allowed` /
   `intent-allowed` / `intent-declined`; intent rows also carry the miss kind,

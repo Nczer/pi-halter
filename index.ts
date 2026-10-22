@@ -12,6 +12,8 @@ import {readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES,
 import {judgeStatus} from "./judge/verdict";
 import { store } from "./gate/store";
 import { withUILock } from "./ui/ui-lock";
+import { registerAllowedReadDirs } from "./config";
+import { readConfigReadDirs } from "./halter-settings";
 
 // ── Main extension ──
 
@@ -45,6 +47,15 @@ export default async function halterExtension(pi: ExtensionAPI) {
   // Loaded before the tool_call handler can fire; a broken plugin blocks its
   // tool rather than leaving it ungated.
   setLoadedPlugins(await loadPlugins());
+
+  // ── Operator read-bar grants (halter.readDirs in settings-ext.json) ──
+  // Registered here, not in a session_start handler, so the bar is complete
+  // before any tool_call can fire. Read-once at activation is the contract:
+  // an edit to the list lands next session (or on /reload, which re-runs this).
+  // Normalizing (~/-expansion, `/` and existing-file rejection) is the bar's
+  // job — config/path-rules.ts — and it dedups, so a /reload re-registering
+  // the same dirs is a no-op.
+  registerAllowedReadDirs(readConfigReadDirs());
 
   // Mode→UI edge (modes/status-bus.ts): the mode modules emit
   // notifyStatus on state changes; the unified status (widget.ts) is the
@@ -250,6 +261,26 @@ export default async function halterExtension(pi: ExtensionAPI) {
     isLedgerLogEnabled,
     setLedgerLogEnabled,
   );
+
+  // ── /halter-forget — drop the read grants the dspa intent pass recorded ──
+  // Only the learned ones (docs/dspa-intent-floor.md §8 3.42 build notes): the operator's own
+  // halter.readDirs list and everything clicked in a prompt stay. Deliberately
+  // does not touch settings-ext.json — a learned grant is session state, and
+  // making one durable means writing the list by hand (3.42 design, G3).
+  pi.registerCommand("halter-forget", {
+    description:
+      "Drop the session read grants the dspa intent pass recorded this session (the widget's 'R intent' segment) so those locations need the judge again. Never touches halter.readDirs in settings-ext.json or grants you confirmed in a prompt.",
+    handler: async (_args, ctx) => {
+      const removed = store.forgetLearnedReadDirs();
+      ctx.ui.notify(
+        removed.length > 0
+          ? `Halter: forgot ${removed.length} session read grant${removed.length === 1 ? "" : "s"} — those dirs need the judge again`
+          : "Halter: no session read grants to forget (halter.readDirs is untouched)",
+        "info",
+      );
+      updateStatus(ctx);
+    },
+  });
 
   // ── Tool call interception ──
   pi.on("tool_call", async (event, ctx) => {

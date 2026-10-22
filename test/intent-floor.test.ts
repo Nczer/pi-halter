@@ -97,8 +97,14 @@ async function run(
   const pd = bashPd(command);
   pd.analysis = await analyzeCommand(command, CWD, {
     isInsideAllowedDir: (p) => store.isInsideAllowedDir(p, "read"),
+    isInsideAllowedWriteDir: (p) => store.isInsideAllowedDir(p, "write") || store.hasAllowedWritePath(p),
     getConfirmedResolution: (t) => store.getConfirmedResolution(t),
   });
+  // decide() carries the analysis' prompt dirs onto the prompt data
+  // (decide/bash-rules.ts:304) — they are what an "Always (paths)" click and
+  // the 3.42 learned grant are built from, so the harness has to carry them too.
+  pd.outsideDirs = pd.analysis.prompt.outsideDirs ?? [];
+  pd.outsideWriteDirs = pd.analysis.prompt.outsideWriteDirs ?? [];
   vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(v1);
   vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(v2);
   setDspaActive(true);
@@ -509,5 +515,81 @@ describe("intent over a miss stop", () => {
       }),
     ]);
     expect(String(unres()[0].guard)).toContain("unanchored location unanswerable ($D)");
+  });
+});
+
+// ── The learned session read grant (docs/dspa-intent-floor.md §8 3.42 build notes) ─────
+
+describe("intent-learned session read grant (3.42 notes)", () => {
+  /** gate() with the REAL decide(): whether the second run reaches the judge at
+   *  all is decided inside decide(), which `run()` mocks away. */
+  async function runForReal(command: string, store: Store) {
+    setDspaActive(true);
+    const ctx = {
+      cwd: CWD,
+      hasUI: true,
+      ui: { notify: vi.fn(), setWidget: vi.fn(), getToolsExpanded: () => false, setToolsExpanded: () => {} },
+    } as any;
+    await gate(
+      { type: "bash", command, cwd: CWD },
+      ctx,
+      store,
+      (d, r) => rejectBash(d, r, store, ctx),
+    );
+  }
+
+  it("an outside-path allow records the dir; the same command needs NO judge", async () => {
+    const store = createStore();
+    await run("cat /Users/u/Strata/design.dxf", null,
+      verdict({ paths: [canon("/Users/u/Strata/design.dxf")] }), store);
+    // The grant is the prompt's "Always (paths)" shape: the DIR (siblings
+    // converge), tracked as learned so the UI can tell it from a click.
+    expect([...store.listLearnedReadDirs()]).toEqual([canon("/Users/u/Strata")]);
+    expect(store.isLearnedReadDir(canon("/Users/u/Strata"))).toBe(true);
+    // §7: the row names the fast track it created.
+    expect(unres()[0].grantedDirs).toEqual([canon("/Users/u/Strata")]);
+
+    const stage2Before = vi.mocked(judgePrompt.getStage2Verdict).mock.calls.length;
+    await runForReal("cat /Users/u/Strata/design.dxf", store);
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    // The whole point: no stage 2, and no stage 1 either — an in-bar read is a
+    // manual auto-allow and reads are never dspa-converted (gate/conversions).
+    expect(vi.mocked(judgePrompt.getStage2Verdict).mock.calls.length).toBe(stage2Before);
+    expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
+  });
+
+  it("a stop the floor could not name grants nothing (3.42 boundary 1)", async () => {
+    // An opaque token answered by the resolver auto-allows, but the FLOOR never
+    // saw a location — minting a grant here is §4.2's omission hole.
+    vi.mocked(pathResolver.resolveUnresolvedPaths).mockResolvedValue(new Map([["$fi", [`${CWD}/notes.md`]]]));
+    const store = createStore();
+    await run("cat $fi", null, verdict({ paths: [] }), store);
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    expect(store.listAllowedReadDirs().size).toBe(0);
+    expect(unres()[0].grantedDirs).toBeUndefined();
+  });
+
+  it("a write-shaped stop grants nothing (D-g)", async () => {
+    // The D-h base-write proxy shape clears on a verdict that names the base.
+    // Its dir (`/etc`) sits in the prompt data's READ tier — the write target
+    // is relative to the cd base and never reaches the analysis write set — so
+    // the fact kind is what keeps the read bar from moving under a write stop.
+    const store = createStore();
+    await run("cd /etc && sed -i 's/a/b/' hosts", null,
+      verdict({ paths: [canon("/etc/hosts")], writes: [] }), store);
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    expect(store.listAllowedReadDirs().size).toBe(0);
+    expect(unres().every((r) => r.grantedDirs === undefined)).toBe(true);
+  });
+
+  it("the grant is read-half only: a write in the learned dir still stops", async () => {
+    const store = createStore();
+    store.addLearnedReadDirs([canon("/Users/u/Strata")]);
+    for (const cmd of ["rm -rf /Users/u/Strata/logs", "echo x > /Users/u/Strata/notes.md"]) {
+      const r = await checkDspaGate(bashPd(cmd), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(String(r.reason)).toContain("outside base");
+      expect(r.ok ? [] : (r.misses ?? [])).toEqual([]); // never grantable (D-g)
+    }
   });
 });

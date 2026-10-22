@@ -246,6 +246,45 @@ describe("trusted packages (D10)", () => {
   });
 });
 
+describe("intent-learned read dirs (3.42 notes)", () => {
+  it("add → in the read bar, listed as learned, forget drops it", () => {
+    const store = createStore();
+    expect(store.addLearnedReadDirs(["/opt/seen"])).toEqual(["/opt/seen"]);
+    expect(store.isInsideAllowedDir("/opt/seen/sub/f", "read")).toBe(true);
+    expect(store.isInsideAllowedDir("/opt/seen/sub/f", "write")).toBe(false); // read half only (D-g)
+    expect(store.isLearnedReadDir("/opt/seen")).toBe(true);
+    expect([...store.listLearnedReadDirs()]).toEqual(["/opt/seen"]);
+    // Repeat learn: nothing new to report, nothing to double-count in the toast.
+    expect(store.addLearnedReadDirs(["/opt/seen"])).toEqual([]);
+    expect(store.forgetLearnedReadDirs()).toEqual(["/opt/seen"]);
+    expect(store.listAllowedReadDirs().size).toBe(0);
+    expect(store.forgetLearnedReadDirs()).toEqual([]);
+  });
+
+  it("junk never enters the bar", () => {
+    const store = createStore();
+    expect(store.addLearnedReadDirs(["", "/", "<unresolved>"])).toEqual([]);
+    expect(store.listAllowedReadDirs().size).toBe(0);
+  });
+
+  it("a dir the operator clicked is never forgettable, even if it was learned first", () => {
+    const store = createStore();
+    store.addLearnedReadDirs(["/opt/seen"]);
+    store.addAllowed({ readDirs: ["/opt/seen"] }); // a later "Always (paths)" click
+    expect(store.isLearnedReadDir("/opt/seen")).toBe(false);
+    expect(store.forgetLearnedReadDirs()).toEqual([]);
+    expect(store.listAllowedReadDirs().size).toBe(1);
+  });
+
+  it("reset clears learned grants (the session is their whole lifetime)", () => {
+    const store = createStore();
+    store.addLearnedReadDirs(["/opt/seen"]);
+    store.reset();
+    expect(store.listAllowedReadDirs().size).toBe(0);
+    expect(store.listLearnedReadDirs().size).toBe(0);
+  });
+});
+
 describe("Store: confirmed resolutions (LLM-suggested token dirs)", () => {
   it("starts with none", () => {
     const store = createStore();

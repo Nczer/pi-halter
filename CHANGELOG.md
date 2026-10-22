@@ -1,5 +1,90 @@
 # Changelog
 
+## 3.42.0 — 2026-10-22
+**The same out-of-bar READ paid an uncached stage-2 intent call every time it ran. The read bar now converges: the operator can hand it a directory (`halter.readDirs`), and an intent allow records the location it just cleared as a session read grant.**
+
+### 1. What the operator saw
+
+`ls -la ~/Strata` in a session whose cwd was elsewhere: allowed, and the next
+identical `ls -la ~/Strata` paid the same uncached intent call — D-f's
+"repeats are uncached by design". Manual mode never worked that way: its
+Always (paths) click moves the bar, so the next command touching that dir costs
+nothing. The intent pass had no equivalent, so nothing converged. Ledger
+(`.log/unresolved.jsonl`, 156 rows at build time): 128 `intent-allowed`, 60 of
+them naming one token (`~/Strata`, spelled expanded in the row), 9 a NAS-shelf
+dir (`<nas>/Pi`);
+rows/day vs distinct tokens/day 36/19 → 60/24 → 32/8; 30 of the 128 rows are
+byte-identical command repeats. A handful of locations, re-asked about.
+
+### 2. `halter.readDirs` — read scope the operator writes once
+
+`"readDirs": ["~/Strata", "<nas>/Pi"]` in the `halter` namespace of
+`settings-ext.json`, appended to `config/path-rules.ts → allowedReadPaths` at
+activation (`registerAllowedReadDirs`). Directories only (`~` expands; `/`,
+relative entries and existing regular files are refused — the bar must not
+depend on the cwd the settings were read from). The bar is shared by manual and
+dspa (D11), and reads are never dspa-converted (`gate/conversions.ts`), so a
+read inside a granted dir auto-allows and costs **no judge call at all**. There
+is deliberately no `writeDirs` key: a durable write grant hand-edited into JSON
+is G3's bad click with nobody in the loop.
+
+### 3. The allow records what it cleared — a session read grant
+
+When an intent allow clears a stop, the dirs of that stop enter the session READ
+bar (`learnedReadGrants` in `gate/fallthrough.ts`) through the same generator
+the prompt's Always (paths) option uses (`RuleGenerator.generatePathsOnlyRules`)
+— the same grant shape on purpose: the DIR, not the file, so siblings converge
+and the machine stops re-asking. The store keeps them apart from clicked grants
+(`addLearnedReadDirs` / `listLearnedReadDirs` / `forgetLearnedReadDirs`) so the
+UI can name them: toast per newly learned dir, a separate widget segment
+`R intent`, `grantedDirs` on the `intent-allowed` ledger row, and
+`halter-forget` to drop exactly them (never a clicked grant, never
+`halter.readDirs`). Lifetime: the session. Making one durable is the operator's
+own edit to `readDirs`.
+
+Four boundaries (all tested): the stop must have carried an `outside-path` fact
+(the FLOOR named the location — a resolver answer for an opaque token mints
+nothing); no write-shaped fact (`base-write` — for `cd /etc && sed -i … hosts`
+the only dir the prompt data carries is the base itself, in its READ tier); the
+WRITE tier is never taken from a verdict (D-g); nothing survives
+`store.reset()`.
+
+### 4. The recorded deviation from D-f
+
+D-f said nothing a judge answer teaches about a location is persisted, and §9 of
+`docs/dspa-intent-floor.md` said a repeat therefore pays again. Narrowed: a
+repeat of a stop whose location the FLOOR named with a concrete dir is answered
+by the bar. What D-f actually protected is intact — no toggle, no mode, nothing
+durable, no grant minted from a resolver answer for an unanchored token — and a
+verdict is now allowed to converge the way a click does, one session at a time.
+Code and docs carry the deviation at the decision site, not only in this entry.
+
+### 5. Measured, deterministically
+
+A/B probe over those 128 ledger rows (`/tmp/hgrant-probe.mts`; real `decide()` +
+`checkDspaGate`, no judge call, same shape as the two-run case now pinned in
+`test/intent-floor.test.ts`): fresh store — 127 of 128 rows reach the uncached stage-2 pass.
+Seeded with the 8 hottest dirs — 78 auto-allow with no judge at all, 14 pass the
+floor (stage 1 only), **35 still need intent**: a 72% drop in stage-2 intent
+calls for this corpus. Fitted to this machine's ledger; read it as shape, not a
+general rate. The rows that keep costing are one-off (`/proc/meminfo`,
+`/opt/cuda/bin/nvcc`, `~/.zshrc`) — unlearned locations stay cheap in count and
+expensive in attention. Safety probe (now a test): with a grant registered,
+`cat <dir>/.env` still stops on `credential pattern (.env)`, `rm -rf <dir>/logs`
+and `echo > <dir>/f` still stop on `write outside base` — a widened read bar
+moves no other bar.
+
+**Suite:** 4341 passed / 0 failed (HEAD in the same run: 4327 / 0 — the "7
+failed" quoted in 3.41.0 are Darwin `/etc`→`/private/etc` realpath artifacts and
+do not fire on Linux). +14 tests (`test/intent-floor.test.ts` 4, new
+`test/dspa-gate.test.ts` describe 3, `test/store.test.ts` 4, `test/widget.test.ts`
+1, `test/halter-settings.test.ts` 2). One harness fix on the way:
+`test/intent-floor.test.ts`'s `run()` now carries `analysis.prompt.outsideDirs` /
+`outsideWriteDirs` onto the prompt data the way `decide/bash-rules.ts` does —
+without them the grant-derivation path could not be exercised at all.
+Docs: `docs/dspa-intent-floor.md` D-f/§7/§9 + build notes, `docs/architecture.md`
+bar glossary + pass conditions + store + settings, README read-bar section.
+
 ## 3.41.0 — 2026-10-21
 **The intent pass was locked out of the corpus it exists for. A stop with one
 unknowable location dropped ALL of its typed misses, so the unresolvable-token

@@ -108,6 +108,15 @@ describe("updateStatus", () => {
     expect(status).toBe("· R/W: /a/w · R: /a/r · Bash: du · Pkg: vitest");
   });
 
+  it("shows intent-learned read dirs in their own segment (3.42 notes)", () => {
+    // Learned ≠ clicked: /halter-forget drops the first and must not touch the
+    // second, so they cannot share a segment.
+    store.addLearnedReadDirs(["/a/seen"]);
+    store.addAllowed({ readDirs: ["/a/clicked"] });
+    updateStatus(ctx);
+    expect(status).toBe("· R: /a/clicked · R intent: /a/seen");
+  });
+
   it("caps path lists at 3 with a …+N tail and sibling-combines the shown ones", () => {
     store.addAllowed({
       writePaths: ["/a/x1", "/a/x2", "/a/x3", "/a/x4"],
