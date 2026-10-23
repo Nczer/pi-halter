@@ -304,8 +304,13 @@ function buildBashPrompt(
     if (readDirList.length > 0) {
       body += `\u26a0\ufe0f outside cwd: ${dirListBody(readDirList)}\n`;
     }
-    if (writeDirs.length > 0) {
-      body += `\u26a0\ufe0f writes outside cwd: ${dirListBody(writeDirs)}\n`;
+    // A dir the D18/D-h write stop already names below is printed once: the
+    // "writes not granted" line says the same thing with its grant state on
+    // the record.
+    const d18Named = new Set(writeGrantDirs ?? []);
+    const writeLineDirs = writeDirs.filter((d) => !d18Named.has(d));
+    if (writeLineDirs.length > 0) {
+      body += `\u26a0\ufe0f writes outside cwd: ${dirListBody(writeLineDirs)}\n`;
     }
     // Symlink hops: a written token that resolves into an outside dir that
     // appears nowhere in the command text — render the chain so the dir
@@ -409,9 +414,9 @@ function buildBashPrompt(
   // pathGrantDirs still carries every dir, and tier-2 lists them all.
   const alwaysLabel = (needsCommandApproval && (commandSigs.length > 0 || relToolIds.length > 0))
     ? [...commandSigs.map(s => s + " *"), ...relToolIds.map(r => r.sig + " (this cwd)")].join(", ")
-    : (needsAnyPathApproval ? dirGrantLabel(pathGrantDirs) : "");
+    : (needsAnyPathApproval ? dirGrantLabel(pathGrantDirs, writeDirs) : "");
   const alwaysPathsLabel = hasBoth && pathGrantDirs.length > 0
-    ? dirGrantLabel(pathGrantDirs)
+    ? dirGrantLabel(pathGrantDirs, writeDirs)
     : undefined;
 
   return { title, body, tier2Everything, tier2Paths, includePathsOption, includeFileOption: false, includeBroaderOption: false, includeAlwaysOption, alwaysLabel, alwaysPathsLabel, pathGrantDirs, trustPackages: trustPackages.length > 0 ? trustPackages : undefined, resolverDirs: resolverDirs.length > 0 ? resolverDirs : undefined, writeGrantDirs: writeGrantDirs && writeGrantDirs.length > 0 ? writeGrantDirs : undefined };

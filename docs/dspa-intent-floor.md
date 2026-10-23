@@ -1,9 +1,10 @@
 # dspa intent floor — two-tier floor
 
 Status: **BUILT — released as 3.40.0 (2026-10-20)**; all six steps of §8 are
-in (D-a…D-h decided 2026-10-19, §6). 3.41.0 (the prefix-less miss corpus) and
+in (D-a…D-h decided 2026-10-19, §6). 3.41.0 (the prefix-less miss corpus),
 3.42.0 (the session READ grant an allow records — a recorded deviation from
-D-f, see its §8 build notes) follow as build notes in §8. This document proposes re-cutting the
+D-f) and 3.42.1–3.42.2 (the heredoc body view; the WRITE tier a write-shaped
+stop names) follow as build notes in §8. This document proposes re-cutting the
 dspa hard gate (`gate/dspa-gate.ts`) along a new axis. It **reverses part of
 Q1** (the D7 point-4 paragraph and D11 in `docs/dspa-redesign.md`; the "the
 judge never grants over the floor" line in `docs/architecture.md`'s dspa
@@ -712,6 +713,32 @@ same run: 4327 / 0 — the "7 failed" in the 3.41.0 notes are Darwin
 now carries `analysis.prompt.outsideDirs`/`outsideWriteDirs` onto the prompt
 data (as `decide/bash-rules.ts` does) and passes the WRITE predicate — without
 those the grant-derivation path could not be tested at all.
+
+### 3.42.2 build note (2026-10-23): a write-shaped stop moves the prompt's WRITE tier
+
+A DSPA stop whose subject is a WRITE — the D18 base-write proxy, or the D-h stop
+on the stage-2 `writes` report (`gate/fallthrough.ts:296`) — names dirs that the
+prompt data's tiers did not carry: `outsideWriteDirs` is filled by the ANALYSIS
+only, so a write the judge reported, or a write stopped at the manual bar while
+analysis saw no out-of-bar operand, left the tier empty. `Always (paths)` minted
+`readDirs` (its generator splits tiers correctly — `decide/rule-generator.ts`
+G3 — from data that had none), and `dirGrantLabel` said `Read <dir>/*` for every
+dir. Measured on the ledger's own commands (`/tmp/halter-replay.mts`, real
+`decide` + `checkDspaGate`, no judge call): a `readDirs` grant leaves the floor
+stopping `write outside base (…)` — the same command prompts again — while a
+`writeDirs` grant (which implies read, `store.isInsideAllowedDir`) clears it.
+So the highlighted row was the click that could not converge.
+
+Built: `ui/prompt-flow.ts` merges the stop's `gate.writeOutside` dirs into the
+prompt data's WRITE tier (`grantDecision`) for both the prompt and the paths
+mint; the label is per kind (`Write <dir>/*`, `Read … + Write …` when mixed); a
+dir a D18 stop names prints one ⚠️ line; and the `Allow writes … (session)` row
+is dropped when the paths row on the table already mints those dirs as writes.
+
+D-g holds: §8 rule 3 ("the WRITE tier is never taken from a verdict") is
+untouched — no verdict writes to the tiers. What moves the tier is a STOP the
+floor or the cascade already raised, and the bar still moves only when the
+operator clicks; the grant stays session-scoped and never learned.
 
 ## 9. Out of scope here
 

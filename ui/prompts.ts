@@ -203,11 +203,16 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
       ),
     );
   }
-  if (prompt.writeGrantDirs?.length && cb.onWriteGrant) {
-    // D18: the floor stopped a bash base write lacking a write grant —
-    // granting it is what makes the next identical run pass the floor
-    // (the judge then sees the write state and decides). Session scope,
-    // said in full in the tier-2.
+  // D18: the floor stopped a bash base write lacking a write grant — granting
+  // it is what makes the next identical run pass the floor (the judge then
+  // sees the write state and decides). Session scope, said in full in the
+  // tier-2. One row per grant: when a paths row is on the table and its mint
+  // already records these dirs as WRITES (prompt-flow moved them into the write
+  // tier), that row grants the same thing plus the token resolutions, so a
+  // separate row would be a second click for one decision.
+  const pathsRowGrantsWrites = prompt.includePathsOption
+    && (prompt.writeGrantDirs ?? []).every(d => (prompt.pathGrantDirs ?? []).includes(d));
+  if (prompt.writeGrantDirs?.length && cb.onWriteGrant && !pathsRowGrantsWrites) {
     options.push(
       confirmOpt(
         `Allow writes: ${prompt.writeGrantDirs.join(", ")} (session)`,

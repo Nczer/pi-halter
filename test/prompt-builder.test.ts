@@ -1157,3 +1157,41 @@ describe("bash write dirs", () => {
     expect(b).toEqual(a);
   });
 });
+
+// ── The paths tier of a WRITE-shaped stop is labeled WRITE ────────────────
+// "Always (paths)" mints the prompt's write tier, so a prompt whose stop is a
+// write grants those dirs as writes. A row labeled Read reads as a grant that
+// cannot clear the stop — and the same command prompts again next run.
+
+describe("bash paths-tier labels for write dirs", () => {
+  const W = {
+    outsideDirs: ["/home/user/Downloads"],
+    outsideWriteDirs: ["/home/user/Downloads"],
+    needsWriteApproval: true,
+    needsPathApproval: true,
+    needsCommandApproval: true,
+  };
+
+  it("labels the paths row Write when every dir it grants is a write target", () => {
+    const prompt = buildPrompt(bashDecision(W));
+    expect(prompt.alwaysPathsLabel).toBe("Write /home/user/Downloads/*");
+    // The confirm tier says the same thing it always did.
+    expect(prompt.tier2Everything.body).toContain("/home/user/Downloads/* (write)");
+  });
+
+  it("labels each dir of a mixed tier by its own kind", () => {
+    const prompt = buildPrompt(bashDecision({
+      ...W,
+      outsideDirs: ["/mnt/Ndr/Download", "/home/user/Downloads"],
+    }));
+    expect(prompt.alwaysPathsLabel).toBe(
+      "Read /mnt/Ndr/Download/* + Write /home/user/Downloads/*",
+    );
+  });
+
+  it("a dir the D18 write stop already names is printed once", () => {
+    const prompt = buildPrompt(bashDecision(W), undefined, undefined, undefined, ["/home/user/Downloads"]);
+    expect(prompt.body).toContain("\u26a0\ufe0f writes not granted: /home/user/Downloads");
+    expect(prompt.body).not.toContain("writes outside cwd:");
+  });
+});

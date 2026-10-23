@@ -160,17 +160,30 @@ export function dirListBody(dirs: string[]): string {
 
 /**
  * The Always choice's label for a dir tier ("Read" included, matching the
- * per-dir form the option used before). The summary form deliberately does NOT
+ * per-dir form the option used before). `writeDirs` selects the verb per dir: a
+ * dir the prompt stopped as a WRITE target is labeled `Write <dir>/*` — a grant
+ * labeled Read cannot satisfy a write stop, and that mislabel is what made the
+ * same command prompt again after the click.
+ *
+ * The summary form deliberately does NOT
  * use the `<dir>/*` shape: that is how a minted rule reads, and the covering
  * dir is usually not granted at all — its sub-directories are. So the label
  * says what it counts. An empty tier yields "" (no dir Always tier exists).
  */
-export function dirGrantLabel(dirs: string[]): string {
+export function dirGrantLabel(dirs: string[], writeDirs: string[] = []): string {
+  const writes = dirs.filter((d) => writeDirs.includes(d));
+  const reads = dirs.filter((d) => !writeDirs.includes(d));
+  if (writes.length === 0) return dirGrantLabelTier(reads, "Read");
+  if (reads.length === 0) return dirGrantLabelTier(writes, "Write");
+  return [dirGrantLabelTier(reads, "Read"), dirGrantLabelTier(writes, "Write")].filter(Boolean).join(" + ");
+}
+
+function dirGrantLabelTier(dirs: string[], word: "Read" | "Write"): string {
   const s = pickCoveringDir(dirs);
   if (s) {
-    return `Read ${s.covered} dirs under ${s.covering}${s.others ? ` +${s.others} more` : ""}`;
+    return `${word} ${s.covered} dirs under ${s.covering}${s.others ? ` +${s.others} more` : ""}`;
   }
   const unique = filterSubPaths(dirs);
-  const shown = unique.slice(0, DIR_LABEL_CAP).map((d) => `Read ${d}/*`);
+  const shown = unique.slice(0, DIR_LABEL_CAP).map((d) => `${word} ${d}/*`);
   return shown.join(", ") + (unique.length > DIR_LABEL_CAP ? ` …+${unique.length - DIR_LABEL_CAP} more dirs` : "");
 }

@@ -391,6 +391,40 @@ describe("/dspa fall-through", () => {
   });
 });
 
+// A write-shaped DSPA stop (the D18 base write, or the D-h write the stage-2
+// judge reported): the "Always (paths)" click is the row that stops the
+// repetition, so the dirs the stop named must land in the WRITE tier that click
+// mints. A read-only grant leaves the write bar where it was — the identical
+// command prompts again on every run.
+
+describe("dspa write stop: the paths grant is write-shaped", () => {
+  it("mints the stopped dirs as writeDirs and stores them as writes", async () => {
+    const s = createStore();
+    const dspa: DspaFallthrough = {
+      gate: {
+        ok: false,
+        advisory: true,
+        reason: "reported write outside the write bar (/home/user/Downloads)",
+        writeOutside: ["/home/user/Downloads"],
+      },
+      verdict: null,
+      stage: null,
+    };
+    // The real generator splits the prompt data's two tiers; here it just
+    // echoes the write tier it was handed.
+    pathsRulesMock.mockImplementation((data: any) => ({ writeDirs: data.outsideWriteDirs ?? [] }));
+    promptSpy.mockImplementation(async (
+      _p: unknown, _s: unknown, _c: unknown, _onAlways: unknown, onAlwaysPaths?: () => void,
+    ) => {
+      onAlwaysPaths?.();
+      return "alwaysPaths";
+    });
+    await showPrompt(bashDecision(), ctx, s, dspa);
+    expect(pathsRulesMock.mock.calls[0][0].outsideWriteDirs).toEqual(["/home/user/Downloads"]);
+    expect([...s.listAllowedWriteDirs()]).toEqual(["/home/user/Downloads"]);
+  });
+});
+
 describe("Judge again wiring (dspa fall-through)", () => {
   const request: PermissionRequest = { type: "bash", command: "rm -rf /tmp/test", cwd: "/home/user/project" };
   const defer1 = { model: "llama-cpp/qwen", explanation: "E.", approve: "defer" as const, risk: "low" as const, reason: "r", latencyMs: 10, cached: false };

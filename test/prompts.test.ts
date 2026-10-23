@@ -973,6 +973,49 @@ describe("twoTierAlwaysPrompt: D18 Allow-writes option", () => {
     expect(cb.onAlways).not.toHaveBeenCalled();
   });
 
+  // One row per grant: the paths row of a write-shaped stop mints its dirs as
+  // WRITES (prompt-flow moves them into the prompt's write tier), so the
+  // separate Allow-writes row would be a second click for the same decision.
+  it("no Allow-writes row when the paths row already grants those writes", async () => {
+    const cb = makeCallbacks();
+    const onWriteGrant = vi.fn();
+    // choices = ["Yes", "Always: test *", "Always (paths): Write /a/b/*", "No"]
+    // indices:     0          1                      2                             3
+    const result = await twoTierAlwaysPrompt(
+      makePrompt({
+        includePathsOption: true,
+        alwaysPathsLabel: "Write /a/b/*",
+        pathGrantDirs: ["/a/b"],
+        writeGrantDirs: ["/a/b"],
+      }),
+      store, makeCtx([2, 0]),
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      undefined, undefined, undefined, onWriteGrant,
+    );
+    expect(result).toBe("alwaysPaths");
+    expect(cb.onAlwaysPaths).toHaveBeenCalledTimes(1);
+    expect(onWriteGrant).not.toHaveBeenCalled();
+  });
+
+  it("both rows when the paths tier would not grant every write dir", async () => {
+    const cb = makeCallbacks();
+    const onWriteGrant = vi.fn();
+    // choices = ["Yes", "Always: test *", "Always (paths): /path/*", "Allow writes: /c/d (session)", "No"]
+    const result = await twoTierAlwaysPrompt(
+      makePrompt({
+        includePathsOption: true,
+        pathGrantDirs: ["/a/b"],
+        writeGrantDirs: ["/c/d"],
+      }),
+      store, makeCtx([3, 0]),
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      undefined, undefined, undefined, onWriteGrant,
+    );
+    expect(result).toBe("always");
+    expect(onWriteGrant).toHaveBeenCalledTimes(1);
+    expect(cb.onAlwaysPaths).not.toHaveBeenCalled();
+  });
+
   it("no option without writeGrantDirs (plain layout unchanged)", async () => {
     const cb = makeCallbacks();
     const onWriteGrant = vi.fn();

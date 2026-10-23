@@ -1,5 +1,47 @@
 # Changelog
 
+## 3.42.2 — 2026-10-23
+**The `Always (paths)` row of a WRITE-shaped DSPA stop was labeled READ and
+minted a READ grant — the highlighted click could not clear the stop that
+opened the prompt.**
+
+- **What the operator saw.** The prompt in 3.42.1 also carried
+  `Always (paths): Read /Users/…/Downloads/*` above
+  `Allow writes: /Users/…/Downloads (session)`, and its ⚠️ block named the same
+  dir twice (`outside cwd:` and `writes not granted:`). Clicking the paths row
+  records a grant for a dir the command writes — and the identical command
+  prompts again on its next run.
+- **Why.** The stop was write-shaped (the D18 base write, or the D-h write the
+  stage-2 judge reported, `gate/fallthrough.ts:296`), but the prompt's grantable
+  tiers are `promptData.outsideDirs`/`outsideWriteDirs`, which only the
+  ANALYSIS fills. A write reported by the judge (or stopped at the manual write
+  bar) never moves them, so `RuleGenerator.generatePathsOnlyRules` — which does
+  split read/write tiers (G3) — saw an empty write tier and minted `readDirs`.
+  The one-line label (`dirGrantLabel`) said "Read" for every dir even when the
+  tier-2 body was already marking that same dir `(write)`: the mislabel reads as
+  "this grant covers the write".
+- **Measured.** Replay of the three commands of that job against
+  `checkDspaGate`: with `readDirs` granted the floor still stops
+  `write outside base (~/Downloads)` (the repetition the operator noticed);
+  with `writeDirs` — which imply read via `store.isInsideAllowedDir` — the gate
+  returns ok for all three. So a read grant never converges on a write stop.
+- **The fix.** `ui/prompt-flow.ts` merges the stop's dirs (`gate.writeOutside`)
+  into the prompt data's WRITE tier (`grantDecision`) before the prompt is built
+  and before the paths mint runs, so that row records `writeDirs`.
+  `dirGrantLabel(dirs, writeDirs)` (`ui/path-display.ts`) labels each dir by its
+  kind — `Write <dir>/*`, or `Read … + Write …` for a mixed tier — and the dir a
+  D18 stop already names prints one ⚠️ line, not two (`ui/prompt-builder.ts`).
+  The now-redundant `Allow writes … (session)` row is suppressed when a paths
+  row is on the table and already grants those dirs as writes (`ui/prompts.ts`)
+  — one row per grant; it stays when no paths row exists (there the primary
+  Always row, when offered, is the broader grant: signature plus dirs).
+- **Not in scope.** Write grants are still session-scoped and never learned
+  (D-g), and the floor's URL egress catch-all still matches the raw command (§9).
+- **Tests.** 6 new: labels and the ⚠️ dedupe (`prompt-builder`), row suppressed
+  / still offered (`prompts`), the paths mint is write-shaped and stores writes
+  (`prompt-flow`). Suite: 4346 passed / 7 failed (57 files) — the 7 are the
+  pre-existing macOS `/etc` → `/private/etc` realpath assertions.
+
 ## 3.42.1 — 2026-10-23
 **Two of a prompt's ⚠️ lines were invented by reading a heredoc BODY as shell
 syntax: every `python3 - <<'PY'` claimed "shell input redirection", and python
