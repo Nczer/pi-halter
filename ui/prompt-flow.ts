@@ -90,7 +90,24 @@ export async function showPrompt(
     pd.type === "bash" && dspa && !dspa.gate.ok
       ? (dspa.gate.writeOutside ?? []).filter((d) => d !== "/" && !d.startsWith("<"))
       : undefined;
-  let prompt = buildPrompt(decision, resolutions ?? undefined, confirmedTokens, isCovered, writeGrantDirs);
+  // A WRITE-shaped stop makes the paths tier a WRITE tier. `Always (paths)`
+  // mints what the prompt data's write tier says, so a stop whose subject is a
+  // write (the D18 base write, or the D-h write the stage-2 judge reported)
+  // has to move those dirs into it — otherwise the click records a READ grant
+  // for a dir the command writes, the write bar stays where it was, and the
+  // identical command prompts again every run (D-g is not violated: the bar
+  // still moves only on an explicit click, and the label says Write).
+  const grantDecision: Decision =
+    writeGrantDirs?.length && pd.type === "bash"
+      ? {
+          ...decision,
+          promptData: {
+            ...pd,
+            outsideWriteDirs: [...new Set([...(pd.outsideWriteDirs ?? []), ...writeGrantDirs])],
+          },
+        }
+      : decision;
+  let prompt = buildPrompt(grantDecision, resolutions ?? undefined, confirmedTokens, isCovered, writeGrantDirs);
   // T4 (content-classes): the consent trust prompt names the model — the
   // trust decision ("the model could be trusted and is not incompetent")
   // is made at the prompt. The session model identity also feeds the T5
@@ -314,7 +331,7 @@ export async function showPrompt(
     // generator splits that union into the read tier and the WRITE tier — a
     // dirs-only grant for a write prompt must store writeDirs, or the same
     // command prompts again next time.
-    const gen = RuleGenerator.generatePathsOnlyRules(decision.promptData);
+    const gen = RuleGenerator.generatePathsOnlyRules(grantDecision.promptData);
     const read = [...new Set([...(gen?.readDirs ?? []), ...(prompt.resolverDirs ?? [])])];
     const rules: AllowRules = {};
     if (read.length > 0) rules.readDirs = read;
