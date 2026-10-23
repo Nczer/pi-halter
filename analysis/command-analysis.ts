@@ -438,7 +438,7 @@ export async function analyzeCommand(
 ): Promise<CommandAnalysis> {
   // Single AST parse: segments, paths, opaque refs, and assignments in one pass
   const parseResult = await parseCommand(cmd, cwd);
-  const { segments, paths, opaque, assignments, hasParseError, unsets, obscuredArgv0 } = parseResult;
+  const { segments, paths, opaque, assignments, hasParseError, unsets, obscuredArgv0, heredocStrippedCommand } = parseResult;
   // G3: the write-role subset (analysis/write-roles). Threading mutates it in
   // step with `paths` so both sets name the same runtime locations.
   const writePaths = [...parseResult.writePaths];
@@ -610,7 +610,7 @@ export async function analyzeCommand(
   // Merge per-segment risks with whole-command risk (the [TmuxPayload] fold
   // below adds the send-keys payload reasons).
   const segmentRisks = segmentAnalyses.map(a => a.risk);
-  const wholeRisk = await analyzeWholeCommandRisk(cmd, segmentRisks);
+  const wholeRisk = await analyzeWholeCommandRisk(segmentRisks, heredocStrippedCommand);
 
   // Pre-compute relative path indices — decision engine consumes this instead of scanning tokens
   const relativePathSegmentIndices = segmentTexts

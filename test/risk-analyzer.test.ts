@@ -6,7 +6,7 @@ import { parseCommand } from "../analysis/bash-parser";
 async function analyze(cmd: string, cwd = "/home/user/project") {
   const result = await parseCommand(cmd, cwd);
   const segmentRisks = await Promise.all(result.segments.map(seg => analyzeSegment(seg, cwd).then(a => a.risk)));
-  return analyzeWholeCommandRisk(cmd, segmentRisks);
+  return analyzeWholeCommandRisk(segmentRisks, result.heredocStrippedCommand);
 }
 
 describe("analyzeRisk", () => {
@@ -217,6 +217,42 @@ describe("analyzeRisk", () => {
 sed -i 's/foo/bar/g' file.txt
 EOF`);
     expect(risk.reasons.some(r => r.includes("sed -i"))).toBe(false);
+  });
+
+  it("does not read a heredoc BODY as shell operators (the same rule, whole-command pass)", async () => {
+    // Bug: the whole-command operator scans tested the RAW command, so python
+    // inside a heredoc invented redirects and pipes: `if a>2:` -> "shell output
+    // redirection", `if a<=2` -> "shell input redirection", `a | b` -> "pipe
+    // operator". The parser already hides bodies from its own segment texts.
+    const risk = await analyze(`python3 - <<'PY'
+if a>2: print(1)
+if a<=2: print(2)
+x = a | b
+PY`);
+    expect(risk.reasons.some(r => r.includes("shell output redirection"))).toBe(false);
+    expect(risk.reasons.some(r => r.includes("input redirection"))).toBe(false);
+    expect(risk.reasons.some(r => r.includes("pipe operator"))).toBe(false);
+  });
+
+  it("keeps a real redirect that sits next to a heredoc", async () => {
+    const risk = await analyze(`cat <<'PY' > /tmp/out
+hello
+PY`);
+    expect(risk.reasons.some(r => r.includes("shell output redirection"))).toBe(true);
+  });
+
+  it("does not call a heredoc operator 'input redirection'", async () => {
+    // `<<` is a heredoc, `<<<` a herestring: neither reads a FILE, and the flag
+    // claimed input redirection on every `python3 - <<'PY'`.
+    for (const cmd of ["python3 - <<'PY'\nprint(1)\nPY", 'grep -q x <<< "a b"', "cat << EOF\nhi\nEOF"]) {
+      const risk = await analyze(cmd);
+      expect(risk.reasons.some(r => r.includes("input redirection")), cmd).toBe(false);
+    }
+  });
+
+  it("still flags a real input redirect and a real output redirect", async () => {
+    expect((await analyze("md5sum < file.bin")).reasons.some(r => r.includes("input redirection"))).toBe(true);
+    expect((await analyze("sort input.txt > out.txt")).reasons.some(r => r.includes("shell output redirection"))).toBe(true);
   });
 
   // ── Bug fixes: audit findings ──

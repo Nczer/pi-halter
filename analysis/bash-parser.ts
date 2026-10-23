@@ -28,6 +28,11 @@ interface TSNode {
   /** Source position (web-tree-sitter Node.startPosition / endPosition). */
   readonly startPosition: { readonly row: number; readonly column: number };
   readonly endPosition: { readonly row: number; readonly column: number };
+  /** Flat source offsets (web-tree-sitter Node.startIndex / endIndex). They are
+   *  UTF-16 code units — the same unit String.slice counts, so they index the
+   *  original command text directly. */
+  readonly startIndex: number;
+  readonly endIndex: number;
   child(index: number): TSNode | null;
 }
 
@@ -1967,6 +1972,44 @@ function bodyPaths(text: string, cwd: string, out: string[], hop?: (written: str
   }
 }
 
+/**
+ * The command with every HEREDOC BODY blanked to spaces — the operator and
+ * delimiter stay, the code the heredoc hands to an interpreter goes. A pass
+ * that scans for shell operators (`>`, `<`, `|`) must see shell syntax only:
+ * a python body line `if a>2:` is not a redirect. The parser already protects
+ * its own segment texts this way (`handleRedirectedStatement`); this is the
+ * same view for the whole command, for consumers that scan the command rather
+ * than the segments (analysis/risk-analyzer.ts).
+ *
+ * Blanking instead of deleting keeps every other byte offset valid, so the
+ * text stays a positional stand-in for the original.
+ */
+export function stripHeredocBodyText(node: TSNode, text: string): string {
+  const ranges: Array<[number, number]> = [];
+  const collect = (n: TSNode): void => {
+    if (n.type === "heredoc_body" || n.type === "heredoc_end") {
+      ranges.push([n.startIndex, n.endIndex]);
+      return; // the body is opaque: no nested parse to look at
+    }
+    if (SKIP_TYPES.has(n.type)) return;
+    for (let i = 0; i < n.childCount; i++) {
+      const c = n.child(i);
+      if (c) collect(c);
+    }
+  };
+  collect(node);
+  if (ranges.length === 0) return text;
+  ranges.sort((a, b) => a[0] - b[0]);
+  let out = "";
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    if (start < cursor) continue;
+    out += text.slice(cursor, start) + " ".repeat(Math.max(0, end - start));
+    cursor = end;
+  }
+  return out + text.slice(cursor);
+}
+
 /** Detect operators within a command/redirect node. */
 function detectOpsInNode(node: TSNode): string[] {
   const ops = new Set<string>();
@@ -2055,10 +2098,13 @@ export async function parseCommand(
    *  obscured AND unverifiable, so the analysis is blind there by
    *  construction. Callers treat a non-empty list like an unsafe pattern. */
   obscuredArgv0: string[];
+  /** `command` with heredoc BODIES blanked (operator + delimiter kept). The view
+   *  for any whole-command scan that must read SHELL syntax, not body content. */
+  heredocStrippedCommand: string;
 }> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], paths: [], writePaths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [], obscuredArgv0: [] };
+  if (!tree) return { segments: [], paths: [], writePaths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [], obscuredArgv0: [], heredocStrippedCommand: command };
 
   try {
     // Check for ERROR nodes in the AST (malformed bash)
@@ -2527,7 +2573,7 @@ export async function parseCommand(
       const seg = segments[si];
       if (seg) seg.codeBodies = bodies;
     }
-    return { segments, paths, writePaths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0 };
+    return { segments, paths, writePaths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0, heredocStrippedCommand: stripHeredocBodyText(tree.rootNode, command) };
   } finally {
     subshellCache = null;
     tree.delete();

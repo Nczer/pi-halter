@@ -1576,3 +1576,25 @@ describe("parseCommand: pipeline stages on the segment (G1)", () => {
     expect(r.segments[0].stages).toEqual(["cat <(ls /etc)", "grep root"]);
   });
 });
+
+describe("heredocStrippedCommand — the whole-command operator view", () => {
+  it("blanks the body, keeps operator + delimiter, keeps every offset valid", async () => {
+    const cmd = "cat > /tmp/x <<'PY'\nif a>2: print(1)\nPY\necho done";
+    const r = await parseCommand(cmd, "/home/user/project");
+    expect(r.heredocStrippedCommand.length).toBe(cmd.length);
+    expect(r.heredocStrippedCommand).toContain("cat > /tmp/x <<'PY'");
+    expect(r.heredocStrippedCommand).not.toContain("print(1)");
+    expect(r.heredocStrippedCommand.slice(cmd.indexOf("echo done"))).toBe("echo done");
+    // Offsets are UTF-16 code units: a non-ASCII body must not shift what follows.
+    const uni = await parseCommand("cat <<'PY'\nif x>1: print('\u{1f600}')\nPY\ntail $x", "/home/user/project");
+    expect(uni.heredocStrippedCommand).toContain("tail $x");
+    expect(uni.heredocStrippedCommand).not.toContain("x>1");
+  });
+
+  it("reaches a heredoc nested in a command substitution", async () => {
+    const cmd = "echo $(python3 - <<'PY'\nx = open('/tmp/inner>file').read()\nPY\n)";
+    const r = await parseCommand(cmd, "/home/user/project");
+    expect(r.heredocStrippedCommand).not.toContain("inner");
+    expect(r.heredocStrippedCommand).toContain("python3 - <<'PY'");
+  });
+});

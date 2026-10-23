@@ -14,15 +14,31 @@ export interface CommandRisk {
 /** Pre-compiled regex for whole-command write redirect check. */
 const WHOLE_CMD_WRITE_REDIRECT_RE = /[0-9]*&?>+\s*\S/;
 
+/**
+ * An INPUT redirect (`< file`), excluding the heredoc operators. `<<`/`<<<` are
+ * heredoc/herestring: the body is code the interpreter pass already sees, and
+ * flagging them here read as "input redirection" on every `python3 - <<'PY'`
+ * (58 of 69 multiline rows in the .log/ replay carried the flag, 53 of them on
+ * nothing but the operator). A real `<` reads a FILE, which is what the flag
+ * claims.
+ */
+const WHOLE_CMD_INPUT_REDIRECT_RE = /(?<![<>])<(?!<)/;
+
 // ── Whole-command risk analysis ──
 
 /**
  * Analyze whole-command risk factors that cannot be detected per-segment.
  * Merges per-segment risks (from segment-analysis.ts) with operator-level checks.
+ *
+ * `shellText` is the parser's heredoc-body-stripped view of the same command
+ * (`parseCommand → heredocStrippedCommand`). The operator scans below run on
+ * IT, never on the raw command: a heredoc body is code handed to an
+ * interpreter, and scanning it as shell syntax invented redirects out of python
+ * (`if a>2:` -> "shell output redirection") and pipes out of `a | b`.
  */
 export async function analyzeWholeCommandRisk(
-  cmd: string,
   segmentRisks: SegmentRisk[],
+  shellText: string,
 ): Promise<CommandRisk> {
   const reasons: string[] = [];
   let severity: "high" | "medium" | null = null;
@@ -42,7 +58,7 @@ export async function analyzeWholeCommandRisk(
   // Whole-command operator checks. Strip quoted strings first so operators that
   // appear inside quotes (e.g. a grep pattern containing "=>" or "<") are not
   // misread as shell redirects. Unquoted $(...) is preserved.
-  const cmdNoQuotes = stripQuotedStrings(cmd).replace(DOUBLE_BRACKET_COND_RE, "");
+  const cmdNoQuotes = stripQuotedStrings(shellText).replace(DOUBLE_BRACKET_COND_RE, "");
   const cmdNoNullRedirect = stripNullRedirects(cmdNoQuotes);
   const hasRealWriteRedirect = WHOLE_CMD_WRITE_REDIRECT_RE.test(cmdNoNullRedirect);
   if (hasRealWriteRedirect && !reasons.some(r => r.includes("shell output redirection"))) {
@@ -51,7 +67,7 @@ export async function analyzeWholeCommandRisk(
   }
 
   // Input redirect
-  if (cmdNoQuotes.includes("<") && !reasons.some(r => r.includes("input redirection"))) {
+  if (WHOLE_CMD_INPUT_REDIRECT_RE.test(cmdNoQuotes) && !reasons.some(r => r.includes("input redirection"))) {
     reasons.push("[Risk] shell input redirection");
   }
 
@@ -63,8 +79,8 @@ export async function analyzeWholeCommandRisk(
   ]);
 
   // Pipe operator — only flag if at least one stage is NOT an allowed command
-  if (cmd.includes("|") && !reasons.some(r => r.includes("pipe operator"))) {
-    const allStagesSafe = splitPipeline(cmd).every(part => {
+  if (shellText.includes("|") && !reasons.some(r => r.includes("pipe operator"))) {
+    const allStagesSafe = splitPipeline(shellText).every(part => {
       const stage = stripNullRedirects(part).trim();
       if (!stage) return true;
       const first = getFirstWord(stage);

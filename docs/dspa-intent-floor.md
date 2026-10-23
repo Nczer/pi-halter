@@ -761,7 +761,12 @@ Still fail-open / invisible to the floor:
   stops and hides them). The match runs on the raw command text; the precise
   fix is to source it from the parser's heredoc-stripped command texts
   (`analysis/bash-parser.ts:1267` already drops bodies for command text) rather
-  than grow a second heredoc scan in the gate.
+  than grow a second heredoc scan in the gate. **3.42.1 built that view**
+  (`parseCommand → heredocStrippedCommand`) and moved the whole-command RISK
+  pass onto it — the same mechanism was inventing redirects out of heredoc
+  bodies there (CHANGELOG 3.42.1). The catch-all above still matches on
+  `pd.command`: closing it needs the stripped view threaded into `PromptData`,
+  and loosening an egress bar is a decision of its own.
 - `git clone` is absolute although inbound — it lays down a tree the floor never
   named (deliberate, D-a).
 

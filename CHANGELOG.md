@@ -1,5 +1,60 @@
 # Changelog
 
+## 3.42.1 — 2026-10-23
+**Two of a prompt's ⚠️ lines were invented by reading a heredoc BODY as shell
+syntax: every `python3 - <<'PY'` claimed "shell input redirection", and python
+`>` characters claimed "shell output redirection".**
+
+- **What the operator saw.** A DSPA fall-through prompt for
+  `cd ~/Downloads && cat > /tmp/apply_cf.py <<'PY' … PY && uv run --with
+  openpyxl python /tmp/apply_cf.py` carried six ⚠️ lines for one real
+  redirect, including `shell input redirection` (no such redirect exists in
+  that command) and `shell output redirection` attributed to the flagged
+  segment `uv run --with openpyxl python /tmp/apply_cf.py`.
+- **Why.** Two separate slips in the same pass (`analysis/risk-analyzer.ts`).
+  (a) The whole-command operator checks tested the RAW command (after
+  `stripQuotedStrings`), so the code inside a heredoc was scanned as shell
+  syntax: a body line `if a>2:` -> "output redirection", `if a<=2` -> "input
+  redirection", `a | b` -> "pipe operator". The parser already refuses to do
+  this for its own segment texts (`handleRedirectedStatement`, "the body is
+  opaque data/code that the parser skips"), and `test/risk-analyzer.test.ts`
+  asserted that rule for `dangerousContextPatterns` — the operator scans were
+  the exception. This is the mechanism filed in `docs/dspa-intent-floor.md` §9.
+  (b) The input-redirect test was `cmdNoQuotes.includes("<")`, which matches
+  the HEREDOC OPERATOR `<<` itself — so the flag fired on the syntax of every
+  heredoc, and duplicated `[Shell] heredoc to shell interpreter`.
+- **Measured.** `.log/` replay on this host (69 multiline commands in
+  `judge.jsonl` + `unresolved.jsonl`): 58 rows carried `shell input
+  redirection`, **53 of them on nothing but the `<<` operator** (5 real
+  `< file`); 35 rows carried `shell output redirection`, 4 of them from body
+  text alone. Not noise-only: the flags feed `dangerous`/`severity` and the
+  judge's packet (`judge/packet.ts` obfuscation line), and a redirect-shaped
+  reason reads like a write the command does not perform.
+- **The fix.** The parser now returns the view §9 asked for:
+  `parseCommand → heredocStrippedCommand` (`stripHeredocBodyText`) — the
+  command with every `heredoc_body`/`heredoc_end` range blanked to spaces,
+  operator + delimiter kept, offsets kept valid (blank, not delete, so the
+  text stays a positional stand-in; `String.slice` matches tree-sitter's
+  UTF-16 units, pinned by a non-ASCII case). `analyzeWholeCommandRisk` takes
+  that text instead of the raw command — its `cmd` parameter is gone — so the
+  write-redirect, input-redirect and pipe checks all read shell syntax only.
+  Input redirection is now `/(?<![<>])<(?!<)/`: a real `< file` flags, `<<`
+  and `<<<` do not. True redirects are untouched: `cat <<'PY' > /tmp/out`
+  still flags, and the command above keeps its one genuine
+  `cat > /tmp/apply_cf.py` flag.
+- **Deliberately not closed.** The gate's URL catch-all
+  (`gate/dspa-gate.ts:441`) still matches on `pd.command`, so the §9 heredoc-URL
+  gap stands: it would need `heredocStrippedCommand` threaded into
+  `PromptData`, and loosening an EGRESS bar is a decision of its own. The
+  parser side of that fix exists now; the wiring does not.
+- Six tests in `test/risk-analyzer.test.ts` (body operators not read as
+  redirects/pipes; a real redirect next to a heredoc still flags; `<<`/`<<<`
+  are not input redirection; real `<`/`>` still flag) and two in
+  `test/bash-parser.test.ts` (blank/keep/offset behavior, nested body inside a
+  command substitution). Suite 4340 passed, 7 failed / 57 files (before the
+  change: 4334 / 57, same 7 failures — all macOS `/etc` -> `/private/etc`
+  realpath assertions, this checkout is the mac snapshot).
+
 ## 3.42.0 — 2026-10-22
 **The same out-of-bar READ paid an uncached stage-2 intent call every time it ran. The read bar now converges: the operator can hand it a directory (`halter.readDirs`), and an intent allow records the location it just cleared as a session read grant.**
 
