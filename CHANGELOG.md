@@ -1,5 +1,49 @@
 # Changelog
 
+## 3.43.1 — 2026-10-25
+**The path resolver was throwing away every answer it got — and writing no line
+while doing it.**
+
+- **What the operator saw.** No effect, anywhere: `.log/unresolved.jsonl` shows
+  0 resolutions across 112 rows, and the 56 tokens behind them repeat
+  (`~/Strata` ×11, `$d` ×6, `/mnt/Fast/Pi` ×5). The only trace was 4 stage-0 `bad-args` rows in
+  `.log/judge.jsonl` (2026-10-24/25), each carrying a complete answer in
+  `detail` — `{"index":1,"known":true,"dirs":["/mnt/Fast/Pi"]}` — proof the
+  model answered and the reader refused it. Everything else ran in total
+  silence: the unresolved ledger's `llm` field is a user-CONFIRMED resolution
+  (`gate/fallthrough.ts`), not the resolver's answer, so that ledger cannot show
+  a resolver output at all (this entry corrects the 3.42.3 note, which cited
+  those 0-`llm` rows as if they were resolver evidence — they never were).
+- **Why.** Two mismatches between the packet the model reads and the code that
+  reads its reply. (a) Shape: the schema asks for `results: […]`, but a
+  one-reference reply comes back as the bare object — all 4 recorded replies were
+  — and `{arguments}.results` failed `Array.isArray` → dropped. (b) Numbering:
+  `buildResolverPacket` numbers its references `1. … 2. …` while the reply was
+  read as an array offset, `tokens[r.index]`. Every recorded answer used
+  `index: 1`; on a one-reference packet that is `tokens[1]` = `undefined` →
+  skipped → empty map → `return null`, which is the same path as an honest
+  "I don't know". The existing suite pinned the code's 0-based read (`index: 0`
+  = first token), so the mismatch never showed up in a test either.
+- **The fix.** `judge/path-resolver.ts`. The reply is normalized: a bare
+  single-result object is accepted next to `results: […]` (only that observed
+  form — anything else stays a fault). The numbering is pinned 1-based on the
+  wire: the schema now spells it (`"1-based, as printed… first reference = 1"`),
+  the reply is read `tokens[index - 1]`, and the range check makes a wrong base
+  visible instead of harmful — an index of 0 can only mean a 0-based reply, whose
+  siblings all name the PREVIOUS reference, so it invalidates the whole reply
+  rather than applying the shifted part that lands in range; an index past the
+  list is dropped. Both cases now write a stage-0 `bad-args` line with the raw
+  reply in `detail` — the silence was the reason this survived a whole ledger
+  window. An honest empty answer (`known: false`, no dirs) still writes nothing.
+- **Not in scope.** Whether those repeated tokens deserve a `readDirs` config
+  action: 0 of 112 rows persisted a grant, so the existing "always (path)"
+  convergence path is the thing to measure first, not a second grant surface.
+- **Tests.** 4 new (bare-object reply resolves; a 0-based reply invalidates the
+  whole reply even with in-range siblings; an all-out-of-range reply and a past-
+  the-list index each write one line; a bare honest "unknown" still writes none),
+  and 12 fixtures moved onto the 1-based wire. Suite: 4372 passed (58 files),
+  `tsc --noEmit` clean.
+
 ## 3.43.0 — 2026-10-25
 **The judge ledger now records when the floor and the judge disagree about the
 ROLE of a location — "is this written" — not only about which locations exist.**
@@ -78,9 +122,8 @@ relative path — two ways the path set named a directory the command never touc
   bare `..` token is now re-based under the effective cwd (`cd ~/.pi/agent;
   ls ..` names `~/.pi`, previously the session cwd's parent), and a revspec no
   longer marks a segment as naming a resolvable target.
-- **Not in scope.** The unresolved-token resolver still numbers its packet 1-based
-  while reading the reply 0-based (0 of 105 unresolved rows carry an `llm`
-  answer) — separate fix.
+- **Not in scope.** The unresolved-token resolver numbers its packet 1-based
+  while reading the reply 0-based — separate fix (3.43.1).
 - **Tests.** 6 new (`cwd-threading`): the redirect forms thread while a real
   second target still fails the cd; revspec and label re-resolve to nothing while
   `..` segments still re-base; both ledger commands pinned end to end. Suite:

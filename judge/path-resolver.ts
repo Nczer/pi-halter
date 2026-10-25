@@ -62,7 +62,7 @@ const RESOLVE_TOOL = {
         items: {
           type: "object",
           properties: {
-            index: { type: "number" },
+            index: { type: "number", description: "1-based, as printed in the list (first reference = 1)" },
             known: { type: "boolean" },
             dirs: { type: "array", items: { type: "string" } },
           },
@@ -237,22 +237,80 @@ export async function resolveUnresolvedPaths(
         logResolverInfra(pd, logMode, "no-tool-call", modelId, replyDiag(reply));
         return null;
       }
-      const results = (call.arguments ?? {}).results;
-      if (!Array.isArray(results)) {
-        logResolverInfra(pd, logMode, "bad-args", modelId, JSON.stringify(call.arguments ?? {}).slice(0, 400));
+      // Normalize the reply to a result list. The schema asks for
+      // `results: [...]`, but a one-reference packet comes back as the bare
+      // object: all four replies the live ledger recorded (2026-10-24/25) were
+      // `{index,known,dirs}` at top level — usable answers, one of them naming
+      // `/mnt/Fast/Pi` — and every one was discarded as bad-args. Only that
+      // observed form is accepted; anything else stays a fault.
+      const args = (call.arguments ?? {}) as Record<string, unknown>;
+      const results: unknown[] = Array.isArray(args.results)
+        ? args.results
+        : Number.isInteger(args.index)
+          ? [args]
+          : [];
+      if (results.length === 0) {
+        logResolverInfra(pd, logMode, "bad-args", modelId, JSON.stringify(args).slice(0, 400));
         return null;
       }
 
+      // The packet numbers its references from 1 (buildResolverPacket), so the
+      // reply is 1-based — 3.43.1 pinned that on the wire. Reading the reply as
+      // an array offset (pre-3.43.1) resolved NOTHING for a one-reference packet
+      // (`tokens[1]` is undefined) and the empty map returned as "a clean reply
+      // that knew nothing", so the whole class ran in silence and the resolver
+      // contributed nothing for the whole ledger window. The range check is what
+      // keeps a wrong-base answer from shifting onto a neighbouring token: an
+      // off-by-one reply becomes a ledger line, never a wrong resolution.
       const map: ResolutionMap = new Map();
+      let outOfRange = 0;
+      let zeroBase = false;
       for (const r of results) {
-        if (!r || typeof r.index !== "number" || !Number.isInteger(r.index)) continue;
-        const token = tokens[r.index];
-        if (token === undefined) continue;
-        const dirs = sanitizeDirs(Array.isArray(r.dirs) ? r.dirs : []);
+        const reported = (r as { index?: unknown } | null)?.index;
+        if (!Number.isInteger(reported)) continue;
+        const idx = reported as number;
+        // Under a 1-based pin, index 0 has only one possible explanation: the
+        // reply is 0-based. Its siblings then ALL name the previous reference,
+        // and the shifted ones would land inside the range and resolve the
+        // WRONG token — so a zero anywhere invalidates the whole reply instead
+        // of applying the part that happens to be in range.
+        if (idx === 0) {
+          zeroBase = true;
+          continue;
+        }
+        const token = tokens[idx - 1];
+        if (token === undefined) {
+          outOfRange++;
+          continue;
+        }
+        const rd = (r as { dirs?: unknown })?.dirs;
+        const dirs = sanitizeDirs(Array.isArray(rd) ? rd : []);
         if (dirs.length > 0) map.set(token, dirs);
         // known:false or empty dirs → the token stays unresolved (no entry).
       }
-      // A clean reply that knew nothing is an ANSWER, not a fault: no line.
+      if (zeroBase) {
+        logResolverInfra(
+          pd,
+          logMode,
+          "bad-args",
+          modelId,
+          `0-based index in a 1-based list 1..${tokens.length}: ${JSON.stringify(results).slice(0, 300)}`,
+        );
+        return null;
+      }
+      // A clean reply that knew nothing is an ANSWER, not a fault: no line. But
+      // a reply whose references ALL fall outside the list is a wiring fault, and
+      // it used to be indistinguishable from honesty — that silence is what hid
+      // the numbering bug.
+      if (map.size === 0 && outOfRange > 0) {
+        logResolverInfra(
+          pd,
+          logMode,
+          "bad-args",
+          modelId,
+          `index out of range 1..${tokens.length}: ${JSON.stringify(results).slice(0, 300)}`,
+        );
+      }
       if (map.size === 0) return null;
       cacheSet(key, new Map(map));
       return map;
@@ -314,7 +372,11 @@ function sanitizeDirs(dirs: unknown[]): string[] {
 /**
  * The numbered token list + command + cwd + home the model reasons over.
  * Tokens are numbered (the reply references indices, not token text —
- * long glob expansions would be mangled by a model echoing them).
+ * long glob expansions would be mangled by a model echoing them). The
+ * numbering is 1-based and the reply is read 1-based (3.43.1): display
+ * numbering is what a model answers to, and a reply in the wrong base then
+ * lands OUT of range, where the range check turns it into a ledger line
+ * instead of resolving the neighbouring token.
  */
 function buildResolverPacket(
   pd: BashPromptData,

@@ -4,7 +4,9 @@
  * One judge-model call reports the runtime dirs per token (grounded in the
  * command text). Tests run through the injected `stream` seam (no real
  * model): happy path, sanitize/cap rules, fail-safes (off, auth, bad
- * reply, no tool call), and the LRU cache.
+ * reply, no tool call), and the LRU cache. The wire contract is pinned here:
+ * references are numbered from 1 in the packet and read 1-based from the
+ * reply, and a bare single-result object is accepted next to `results: […]`.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -196,8 +198,8 @@ describe("resolveUnresolvedPaths", () => {
       stream: fixedStream(
         () => toolCallReply("report_paths", {
           results: [
-            { index: 0, known: true, dirs: ["/Users/u/ext/a", "/Users/u/ext/b"] },
-            { index: 1, known: false, dirs: [] },
+            { index: 1, known: true, dirs: ["/Users/u/ext/a", "/Users/u/ext/b"] },
+            { index: 2, known: false, dirs: [] },
           ],
         }),
         calls,
@@ -213,11 +215,25 @@ describe("resolveUnresolvedPaths", () => {
     expect(calls[0].options?.sessionId).toBe("sess-42");
   });
 
+  it("a bare single-result reply resolves the token (3.43.1 — the wire that was actually sent)", async () => {
+    // All four resolver replies the live ledger recorded (2026-10-24/25) were
+    // `{index,known,dirs}` at top level, not wrapped in `results: […]` — each
+    // a usable answer, all four discarded as bad-args.
+    const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
+      stream: fixedStream(
+        () => toolCallReply("report_paths", { index: 1, known: true, dirs: ["/mnt/Fast/Pi"] }),
+        [],
+      ),
+      settings: ON,
+    });
+    expect([...(r ?? new Map()).entries()]).toEqual([[TOKEN, ["/mnt/Fast/Pi"]]]);
+  });
+
   it("the packet names the command, cwd, and the numbered tokens", async () => {
     const calls: CapturedCall[] = [];
     await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(
-        () => toolCallReply("report_paths", { results: [{ index: 0, known: false, dirs: [] }] }),
+        () => toolCallReply("report_paths", { results: [{ index: 1, known: false, dirs: [] }] }),
         calls,
       ),
       settings: ON,
@@ -234,7 +250,7 @@ describe("resolveUnresolvedPaths", () => {
       stream: fixedStream(
         () => toolCallReply("report_paths", {
           results: [{
-            index: 0,
+            index: 1,
             known: true,
             dirs: ["rel/dir", "<unresolved-var>/x", 42, "~/.pi/agent/extensions/a", "  /Users/u/ext/trim  "],
           }],
@@ -254,7 +270,7 @@ describe("resolveUnresolvedPaths", () => {
       stream: fixedStream(
         () => toolCallReply("report_paths", {
           results: [{
-            index: 0,
+            index: 1,
             known: true,
             dirs: ["/a", "/b", "/c", "/d", "/e", "/f", "/g"],
           }],
@@ -271,8 +287,8 @@ describe("resolveUnresolvedPaths", () => {
       stream: fixedStream(
         () => toolCallReply("report_paths", {
           results: [
-            { index: 9, known: true, dirs: ["/nope"] },
-            { index: 0, known: true, dirs: ["/x", "/x", "/y"] },
+            { index: 10, known: true, dirs: ["/nope"] },
+            { index: 1, known: true, dirs: ["/x", "/x", "/y"] },
           ],
         }),
         [],
@@ -285,7 +301,7 @@ describe("resolveUnresolvedPaths", () => {
   it("returns null when nothing is known", async () => {
     const r = await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
       stream: fixedStream(
-        () => toolCallReply("report_paths", { results: [{ index: 0, known: false, dirs: [] }] }),
+        () => toolCallReply("report_paths", { results: [{ index: 1, known: false, dirs: [] }] }),
         [],
       ),
       settings: ON,
@@ -319,7 +335,7 @@ describe("resolveUnresolvedPaths", () => {
   it("LRU-caches on model + command + tokens", async () => {
     const calls: CapturedCall[] = [];
     const streamFn = fixedStream(
-      () => toolCallReply("report_paths", { results: [{ index: 0, known: true, dirs: ["/a"] }] }),
+      () => toolCallReply("report_paths", { results: [{ index: 1, known: true, dirs: ["/a"] }] }),
       calls,
     );
     const ctx = makeCtx(fakeModel());
@@ -387,6 +403,51 @@ describe("resolver call faults reach the judge ledger (stage 0, D17)", () => {
     expect(l.every((e) => e.stage === 0)).toBe(true);
   });
 
+  it("a reply in the wrong numbering base is a bad-args line, not silence (3.43.1)", async () => {
+    // The packet prints its references from 1; pre-3.43.1 the reply was read as
+    // an array offset, so every answer landed out of range, the map came back
+    // empty, and the resolver returned null exactly as if the model had honest-
+    // ly known nothing — 0 ledger lines for the whole window.
+    await run(fixedStream(() => toolCallReply("report_paths", { results: [{ index: 0, known: true, dirs: ["/Users/u/ext/a"] }] })));
+    const l = lines();
+    expect(l).toHaveLength(1);
+    expect(l[0]).toMatchObject({ kind: "infra", stage: 0, error: "bad-args" });
+    expect(String(l[0].detail)).toContain("0-based index in a 1-based list 1..1");
+  });
+
+  it("a 0-based reply invalidates the WHOLE reply — the shifted entries would name the previous token", async () => {
+    // Two references, answered 0-based: index 1 is inside the range and maps to
+    // the FIRST token, so applying "what is in range" resolves the wrong
+    // location. Under the 1-based pin a zero can only mean a wrong base.
+    const r = await resolveUnresolvedPaths(
+      makePd(CMD, "/Users/u/project", [TOKEN, "/Users/u/other/$f/*.ts"]),
+      makeCtx(fakeModel()),
+      {
+        stream: fixedStream(
+          () => toolCallReply("report_paths", {
+            results: [
+              { index: 0, known: true, dirs: ["/Users/u/ext/a"] },
+              { index: 1, known: true, dirs: ["/Users/u/ext/b"] },
+            ],
+          }),
+          [],
+        ),
+        settings: ON,
+      },
+    );
+    expect(r).toBeNull();
+    const l = lines();
+    expect(l).toHaveLength(1);
+    expect(String(l[0].detail)).toContain("0-based index in a 1-based list 1..2");
+  });
+
+  it("every index above the list is a bad-args line too (the pre-3.43.1 silence)", async () => {
+    await run(fixedStream(() => toolCallReply("report_paths", { results: [{ index: 5, known: true, dirs: ["/Users/u/ext/a"] }] })));
+    const l = lines();
+    expect(l).toHaveLength(1);
+    expect(String(l[0].detail)).toContain("index out of range 1..1");
+  });
+
   it("a stream that throws is a call-failed line with the message", async () => {
     await run((() => {
       throw new Error("network down");
@@ -412,7 +473,7 @@ describe("resolver call faults reach the judge ledger (stage 0, D17)", () => {
     await resolveUnresolvedPaths(pd, ctx, { stream: fixedStream(() => toolCallReply("report_paths", { results: [] })), settings: OFF });
     await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", []), ctx, { stream: fixedStream(() => toolCallReply("report_paths", { results: [] })), settings: ON });
     await resolveUnresolvedPaths(pd, ctx, {
-      stream: fixedStream(() => toolCallReply("report_paths", { results: [{ index: 0, known: false, dirs: [] }] })),
+      stream: fixedStream(() => toolCallReply("report_paths", { index: 1, known: false, dirs: [] })),
       settings: ON,
     });
     expect(lines()).toEqual([]);
@@ -430,7 +491,7 @@ describe("the auth resolution's endpoint and env reach the model call", () => {
       env: { HTTPS_PROXY: "http://proxy.internal:3000" },
     });
     await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), ctx, {
-      stream: fixedStream(() => toolCallReply("report_paths", { results: [{ index: 0, known: true, dirs: ["/a"] }] }), calls),
+      stream: fixedStream(() => toolCallReply("report_paths", { results: [{ index: 1, known: true, dirs: ["/a"] }] }), calls),
       settings: ON,
     });
     expect(calls).toHaveLength(1);
@@ -442,7 +503,7 @@ describe("the auth resolution's endpoint and env reach the model call", () => {
   it("no override in the resolution → the model goes out as resolved", async () => {
     const calls: CapturedCall[] = [];
     await resolveUnresolvedPaths(makePd(CMD, "/Users/u/project", [TOKEN]), makeCtx(fakeModel()), {
-      stream: fixedStream(() => toolCallReply("report_paths", { results: [{ index: 0, known: true, dirs: ["/a"] }] }), calls),
+      stream: fixedStream(() => toolCallReply("report_paths", { results: [{ index: 1, known: true, dirs: ["/a"] }] }), calls),
       settings: ON,
     });
     expect(calls[0].model.baseUrl).toBe("http://localhost:8080/v1");

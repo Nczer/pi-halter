@@ -643,7 +643,13 @@ gate then persists the confirmed resolution (D12 convergence) and resolves the
 same token deterministically thereafter: no LLM call, the token flips from
 `prompted` to `auto-allowed` in `.log/unresolved.jsonl`. The gate never
 auto-allows on the resolver's output; any failure resolves to null and the
-prompt is unchanged. (3.40.0 leaves that intact: an intent clear needs the
+prompt is unchanged. The wire contract is pinned: the packet numbers its
+references from 1 and the reply is read 1-based with a range check — an index of
+0 can only mean a 0-based reply, so it invalidates the whole reply (its shifted
+siblings would otherwise resolve the PREVIOUS reference), an index past the list
+is dropped, and either case writes a stage-0 `bad-args` ledger line rather than
+resolving nothing in silence; a single-result reply sent bare is accepted next to
+`results: […]`. (3.40.0 leaves that intact: an intent clear needs the
 stage-2 report to answer the token itself, and a confirmed resolution is
 ledger data — `confirmedPrior` vouches for nothing in a guard.)
 
