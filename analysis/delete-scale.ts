@@ -155,7 +155,7 @@ function countUnder(dir: string, cap: number): { n: number; capped: boolean } {
   const stack = [dir];
   while (stack.length > 0) {
     const d = stack.pop() as string;
-    let it: fs.DirectoryHandle;
+    let it: fs.Dir;
     try {
       it = fs.opendirSync(d);
     } catch {
