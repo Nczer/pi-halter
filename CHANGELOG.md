@@ -1,5 +1,53 @@
 # Changelog
 
+## 3.43.0 — 2026-10-25
+**The judge ledger now records when the floor and the judge disagree about the
+ROLE of a location — "is this written" — not only about which locations exist.**
+
+- **What the operator saw.** A `paths` row says the judge named a place the
+  floor never derived (`floorMisses`) or echoed a path from the Session context
+  section (`contextMisses`). It said nothing when both sides named the SAME
+  place and disagreed about whether the command writes it — say `cp /srv/db/app.db
+  ./copy`, judged as a write to `/srv/db/app.db` while the floor derived that
+  location as a read: no line. That asymmetry has teeth: a judge-reported write
+  faces the
+  deterministic write bar in the same pass as auto-allow (`judgeWriteOutside`),
+  so a location the READ bar admitted can be stopped by the WRITE bar, and the
+  parser's role table — the same class the §4.1 redirect-target and D18/D21
+  baseWrite fixes were — never appears in the mining corpus.
+- **Why.** `judgePathReport` compared one set: `paths` against the floor's
+  location knowledge. The floor computes a second set — `analysis.writePaths`,
+  the write-role operands (`sed -i f`, `cp a d`, `mkdir d`, `> f`), a subset of
+  `paths` — and the stage-2 report carries `writes` (D19). Both sides of the
+  role question were already in hand; nothing crossed them.
+- **The fix.** `judge/paths.ts` compares the two role sets and the ledger
+  carries the result on the SAME kind-`paths` line (additive optional fields,
+  so existing readers are untouched): `roleFloorMisses` — the judge reports a
+  write at a location the floor derived but its write set does not cover (a
+  parser role-table gap: mine it); `roleJudgeMisses` — an out-of-cwd floor
+  write operand with no judge-reported write covering it, including a report
+  that leaves `writes` empty (the verdict reasoned about a write as if it were
+  a read; the floor is not exposed there, its own operands already face the
+  write bar). Out of the session cwd only — writes inside it are the working
+  set: no bar, no grant, so a role gap there changes no outcome and the ledger
+  stays a signal log. Coverage uses the existing ancestor-tolerant `isCovered`
+  in both directions, matching the gate's own `writeRoleAt`, and attribution
+  stays disjoint: a location the floor never derived remains solely a
+  `floorMiss` (the stronger fact). A role-only disagreement now writes a line;
+  a verdict that reported no paths at all still writes none — with no report
+  there is nothing to attribute. `tools/log-inspect.mjs judge` rolls both
+  directions up per path and shows them per line (`ROLE-F:` / `ROLE-J:`).
+- **Not in scope.** `decisions.jsonl` keeps its `judgePaths`/`floorMisses`
+  mirror unchanged — the role fields live in the always-on ledger only. The
+  resolver's 1-based-packet / 0-based-reply bug and the `readDirs` config action
+  (from 3.42.3) are still open.
+- **Tests.** 8 new: 7 in `judge-paths` (each direction alone, both in-cwd
+  exclusions, disjointness from `floorMisses`, ancestor tolerance both ways,
+  sentinel write operands, the cap, and no comparison without both sides) and 1
+  in `decision-log` (a role-only disagreement writes a line; a pd without
+  analysis still writes nothing). Suite: 4368 passed (58 files), `tsc --noEmit`
+  clean.
+
 ## 3.42.3 — 2026-10-25
 **A `cd` silenced with `2>/dev/null` stopped threading, and a git revspec became a
 relative path — two ways the path set named a directory the command never touched.**

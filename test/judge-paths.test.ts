@@ -156,3 +156,97 @@ describe("judgePathReport", () => {
     expect(judgePathReport([], { cwd, floorPaths: [] })).toEqual({});
   });
 });
+
+/**
+ * 3.43.0: the floor↔judge disagreement split by ROLE instead of location.
+ * Both directions share one question — "does the command WRITE here" — and
+ * are owned by opposite sides, so they must stay disjoint and separate.
+ */
+describe("judgePathReport — role disagreement", () => {
+  it("roleFloorMisses: the judge reports a write the floor's write set does not cover", () => {
+    // The floor derived /srv/data/app.db as an operand (so it is NOT a
+    // floorMiss) but as a READ — `cp /srv/data/app.db ./copy`. The judge
+    // says it writes there: the parser's role table is the gap to mine.
+    const r = judgePathReport(["/srv/data/app.db"], {
+      cwd,
+      floorPaths: ["/srv/data/app.db"],
+      floorWritePaths: ["/Users/u/project/copy"],
+    }, ["/srv/data/app.db"]);
+    expect(r.floorMisses).toBeUndefined();
+    expect(r.roleFloorMisses).toEqual(["/srv/data/app.db"]);
+    expect(r.roleJudgeMisses).toBeUndefined();
+  });
+
+  it("roleJudgeMisses: an out-of-cwd floor write the verdict never claims as a write", () => {
+    // Variant A — the omission counts: a report that leaves `writes` empty
+    // while the floor has an out-of-cwd write operand reasoned about a write
+    // as if it were a read.
+    const floor: JudgePathFloor = {
+      cwd,
+      floorPaths: ["/srv/data/app.db"],
+      floorWritePaths: ["/srv/data/app.db"],
+    };
+    const r = judgePathReport(["/srv/data/app.db"], floor);
+    expect(r.floorMisses).toBeUndefined();
+    expect(r.roleJudgeMisses).toEqual(["/srv/data/app.db"]);
+    expect(r.roleFloorMisses).toBeUndefined();
+    // …and the same when a writes list exists but names somewhere else: the
+    // floor operand is still unclaimed.
+    const r2 = judgePathReport(["/srv/data/app.db", "/srv/other/x"], floor, ["/srv/other/x"]);
+    expect(r2.roleJudgeMisses).toEqual(["/srv/data/app.db"]);
+  });
+
+  it("writes inside the session cwd are the working set — no role row either way", () => {
+    const r = judgePathReport(["build/out.js"], {
+      cwd,
+      floorPaths: [`${cwd}/build/out.js`],
+      floorWritePaths: [`${cwd}/build/other.js`],
+    }, [`${cwd}/build/out.js`]);
+    expect(r.roleFloorMisses).toBeUndefined();
+    expect(r.roleJudgeMisses).toBeUndefined();
+  });
+
+  it("attribution stays disjoint: a location the floor never derived is only a floorMiss", () => {
+    const r = judgePathReport(["/never/derived"], {
+      cwd,
+      floorPaths: [],
+      floorWritePaths: [],
+    }, ["/never/derived"]);
+    expect(r.floorMisses).toEqual(["/never/derived"]);
+    expect(r.roleFloorMisses).toBeUndefined();
+  });
+
+  it("ancestor-tolerant both ways (the gate's own writeRoleAt rule)", () => {
+    // The judge names the directory, the floor has the file under it: the
+    // same location, and the write bar sees the raw list regardless.
+    const r = judgePathReport(["/srv/data"], {
+      cwd,
+      floorPaths: ["/srv/data/app.db"],
+      floorWritePaths: ["/srv/data/app.db"],
+    }, ["/srv/data"]);
+    expect(r.floorMisses).toBeUndefined();
+    expect(r.roleFloorMisses).toBeUndefined();
+    expect(r.roleJudgeMisses).toBeUndefined();
+  });
+
+  it("no role comparison at all without both sides; sentinels are not write operands", () => {
+    expect(judgePathReport([canon("/etc/shadow")], { cwd, floorPaths: [] }).roleJudgeMisses).toBeUndefined();
+    const r = judgePathReport(["/srv/data/app.db"], {
+      cwd,
+      floorPaths: ["/srv/data/app.db"],
+      floorWritePaths: [`${OPAQUE_VAR_DIR}/app.db`, `${UNKNOWN_CWD_MARKER}/app.db`],
+    }, []);
+    expect(r.roleJudgeMisses).toBeUndefined();
+    expect(r.roleFloorMisses).toBeUndefined();
+  });
+
+  it("role lists cap at 5, like the set misses", () => {
+    const writes = Array.from({ length: 8 }, (_, i) => `/w${i}`);
+    const r = judgePathReport(writes, {
+      cwd,
+      floorPaths: writes,
+      floorWritePaths: writes,
+    }, []);
+    expect(r.roleJudgeMisses).toHaveLength(5);
+  });
+});

@@ -21,8 +21,12 @@
  *   judge     the always-on judge ledger (.log/judge.jsonl, D17): stage-1/
  *             stage-2 verdict disagreements, infra failures, D13 path
  *             disagreements (both sides on the line: floorPaths +
- *             judgePaths + floorMisses — the fault is the miner's call)
- *             — with error/floor-miss rollups. Reads the ledger directly
+ *             judgePaths + floorMisses — the fault is the miner's call),
+ *             plus the ROLE disagreements at locations the floor knows
+ *             (roleFloorMisses = the judge says write where the floor's write
+ *             set has no entry — a parser role-table gap; roleJudgeMisses = a
+ *             floor write operand the verdict never claims as a write)
+ *             — with error/floor-miss/role rollups. Reads the ledger directly
  *             (not decisions.jsonl), so --file is rarely needed
  *   unresolved the always-on unresolved-token ledger (.log/unresolved.jsonl):
  *             each token's outcome history (prompted / gate-stop / auto-allowed),
@@ -582,6 +586,20 @@ function judgeCmd() {
     console.log("\ncontext misses (stage-2 echo of a path only named in the Session context section):");
     for (const [m, n] of Object.entries(ctxMissCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
   }
+  // 3.43.0: the same disagreement split by ROLE at a location the floor DOES
+  // know — one owner per list, out of cwd only, disjoint from the misses above.
+  const roleFloorCount = {};
+  const roleJudgeCount = {};
+  for (const e of pathLines) for (const m of e.roleFloorMisses ?? []) roleFloorCount[m] = (roleFloorCount[m] ?? 0) + 1;
+  for (const e of pathLines) for (const m of e.roleJudgeMisses ?? []) roleJudgeCount[m] = (roleJudgeCount[m] ?? 0) + 1;
+  if (Object.keys(roleFloorCount).length) {
+    console.log("\nrole: floor side (judge reports a WRITE the floor's write set does not cover — mine for parser role-table gaps):");
+    for (const [m, n] of Object.entries(roleFloorCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
+  }
+  if (Object.keys(roleJudgeCount).length) {
+    console.log("\nrole: judge side (out-of-cwd floor write operand the verdict never claims as a write — judge reasoning):");
+    for (const [m, n] of Object.entries(roleJudgeCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
+  }
   if (F.length) {
     console.log("\nlines:");
     for (const e of F) {
@@ -594,6 +612,8 @@ function judgeCmd() {
         const mm = floorMissesOf(e);
         if (mm?.length) parts.push(`MISS:   ${trunc(mm.join(", "), 100)}`);
         if (e.contextMisses?.length) parts.push(`CTX:    ${trunc(e.contextMisses.join(", "), 100)}`);
+        if (e.roleFloorMisses?.length) parts.push(`ROLE-F: ${trunc(e.roleFloorMisses.join(", "), 100)}`);
+        if (e.roleJudgeMisses?.length) parts.push(`ROLE-J: ${trunc(e.roleJudgeMisses.join(", "), 100)}`);
       } else if (e.misses?.length) parts.push(`misses: ${e.misses.join(", ")}`);
       if (e.cmd) parts.push(trunc(e.cmd, 80));
       console.log(`  ${parts.join("  ")}`);

@@ -416,9 +416,9 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
   let settingsFile: string;
   const savedEnv = process.env.HALTER_JUDGE_LOG;
 
-  function v(approve: "approve" | "defer" | "deny", risk: "low" | "medium" | "high", paths?: string[]): JudgeResult {
+  function v(approve: "approve" | "defer" | "deny", risk: "low" | "medium" | "high", paths?: string[], writes?: string[]): JudgeResult {
     return {
-      model: "llama-cpp/qwen", explanation: "x", approve, risk, paths,
+      model: "llama-cpp/qwen", explanation: "x", approve, risk, paths, writes,
       reason: "r", latencyMs: 100, cached: false,
     } as JudgeResult;
   }
@@ -545,6 +545,47 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     expect(e.kind).toBe("paths");
     expect(e.floorMisses).toEqual(["/never/seen"]);
     expect(e.contextMisses).toEqual(["/Users/u/sessions/x.jsonl"]);
+  });
+
+  it("paths: a ROLE-only disagreement writes a line (3.43.0) — and no-analysis still writes nothing", () => {
+    const cwd = "/Users/u/project";
+    // `cp /srv/data/app.db ./copy` — the floor knows the source location but
+    // records it as a READ; the judge says it writes there.
+    const cp = {
+      type: "bash", command: "cp /srv/data/app.db ./copy", cwd,
+      analysis: {
+        paths: ["/srv/data/app.db", `${cwd}/copy`],
+        writePaths: [`${cwd}/copy`],
+        segments: ["cp /srv/data/app.db ./copy"],
+        effectiveCwds: [cwd],
+        prompt: { unresolved: [], outsidePaths: [] },
+      },
+    } as never;
+    // Same command read the other way: the floor HAS an out-of-cwd write
+    // operand, the verdict claims no write at all.
+    const tee = {
+      type: "bash", command: "tee /srv/data/app.db", cwd,
+      analysis: {
+        paths: ["/srv/data/app.db"],
+        writePaths: ["/srv/data/app.db"],
+        segments: ["tee /srv/data/app.db"],
+        effectiveCwds: [cwd],
+        prompt: { unresolved: [], outsidePaths: [] },
+      },
+    } as never;
+    const before = fs.existsSync(judgeFile) ? judgeLines().length : 0;
+    logJudgePaths(cp, createStore(), v("approve", "low", ["/srv/data/app.db"], ["/srv/data/app.db"]), "dspa");
+    logJudgePaths(tee, createStore(), v("approve", "low", ["/srv/data/app.db"]), "dspa");
+    const [a, b] = judgeLines().slice(before);
+    expect(a.roleFloorMisses).toEqual(["/srv/data/app.db"]);
+    expect(a.floorMisses).toBeUndefined();
+    expect(a.roleJudgeMisses).toBeUndefined();
+    expect(b.roleJudgeMisses).toEqual(["/srv/data/app.db"]);
+    expect(b.roleFloorMisses).toBeUndefined();
+    // A pd with no analysis has no write set to compare — role fields cannot
+    // conjure a line on their own.
+    logJudgePaths(bashPd, createStore(), v("approve", "low", ["/srv/data/app.db"], ["/srv/data/app.db"]), "dspa");
+    expect(judgeLines()).toHaveLength(before + 2);
   });
 
   it("cmd is truncated to 1000 (log economy, still attributable — a heredoc head cut at 200 said nothing)", () => {

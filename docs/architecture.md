@@ -736,7 +736,12 @@ at halter load.
   `asked-user: …`; `no-tool-call` needs a wire the tool-choice map leaves at
   `auto`, since the call is otherwise required), and D13 path mismatches (`paths`: `floorMisses` = paths
   the floor never saw, `contextMisses` = stage-2 echoes of paths named only
-  in the Session context section). Mine with `tools/log-inspect.mjs judge`.
+  in the Session context section; and the same disagreement split by ROLE at
+  locations the floor does know, out of cwd only — `roleFloorMisses` = the
+  judge reports a write the floor's write-role set does not cover (a parser
+  role-table gap), `roleJudgeMisses` = an out-of-cwd floor write operand the
+  verdict never claims as a write; one finding per path). Mine with
+  `tools/log-inspect.mjs judge`.
 - **Glob-err ledger** (`.log/glob-err.jsonl`, on by default): credential-scan
   glob-verify failures only — a healthy run writes nothing. When a relative
   glob's `fs.globSync` throws (or is missing in the runtime), the scan fails

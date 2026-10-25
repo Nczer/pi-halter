@@ -451,10 +451,18 @@ export interface JudgeLogEntry {
   // — a stage-2 echo, not a floor gap). Written only when the command PASSED
   // the floor (auto-allow or judge-declined prompt) — fault attribution is
   // the miner's call; the line carries both sides for it.
+  // 3.43.0: the same disagreement split by ROLE at locations the floor DOES
+  // know, out of cwd only — roleFloorMisses (the judge reports a write the
+  // floor's write-role set does not cover: a parser role-table gap) and
+  // roleJudgeMisses (a floor write operand the judge never claims as a write:
+  // the verdict reasoned about a write as if it were a read). Disjoint from
+  // the location fields — one finding per path.
   floorPaths?: string[];
   judgePaths?: string[];
   floorMisses?: string[];
   contextMisses?: string[];
+  roleFloorMisses?: string[];
+  roleJudgeMisses?: string[];
 }
 
 /** The operation a log line is about (logJudge truncates to LEDGER_CMD_MAX). */
@@ -517,14 +525,19 @@ export function logJudgeDiff(
 }
 
 /**
- * D13: a stage-2 verdict with a path the floor's path model never saw — the
+ * D13: a stage-2 verdict whose path model disagrees with the floor's — the
  * floor↔judge disagreement line, mirrored to the on-by-default ledger so it
  * survives the decision log being off (or wiped on /reload). Both sides sit
  * on the line (floorPaths + judgePaths) and the mismatch is split by cause
- * (floorMisses = floor blind spot, contextMisses = stage-2 context echo), so
- * the miner can attribute it. A no-op when the report is absent or fully
- * covered by the floor; a context-only bleed still writes a line — the bleed
- * rate is what makes the prompt fix measurable.
+ * (floorMisses = floor blind spot, contextMisses = stage-2 context echo) and
+ * by role (roleFloorMisses / roleJudgeMisses = the two sides disagreeing about
+ * whether a known out-of-cwd location is WRITTEN), so the miner can attribute
+ * it. A no-op when the report is absent or fully covered by the floor; a
+ * context-only bleed, or a role-only disagreement, still writes a line — the
+ * bleed and role-gap rates are what make the fixes measurable. A verdict that
+ * reported NO paths at all stays a no-op: with no report there is nothing to
+ * attribute a gap to (that is the no-verdict/no-report case, not a
+ * disagreement).
  */
 export function logJudgePaths(
   pd: PromptData,
@@ -534,8 +547,15 @@ export function logJudgePaths(
   ctx?: ExtensionContext,
 ): void {
   if (pd.type !== "bash") return;
-  const f = judgePathLogFields(pd, store, verdict.paths, ctx);
-  if (!f.floorMisses?.length && !f.contextMisses?.length) return;
+  const f = judgePathLogFields(pd, store, verdict.paths, ctx, verdict.writes);
+  if (
+    !f.floorMisses?.length &&
+    !f.contextMisses?.length &&
+    !f.roleFloorMisses?.length &&
+    !f.roleJudgeMisses?.length
+  ) {
+    return;
+  }
   logJudge({
     kind: "paths",
     mode,
@@ -545,6 +565,8 @@ export function logJudgePaths(
     judgePaths: f.judgePaths,
     floorMisses: f.floorMisses,
     contextMisses: f.contextMisses,
+    roleFloorMisses: f.roleFloorMisses,
+    roleJudgeMisses: f.roleJudgeMisses,
   });
 }
 

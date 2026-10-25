@@ -35,7 +35,15 @@
  * judgePaths — plus the mismatch, split by cause: floorMisses (the floor's
  * blind spots — mine them, that is how D7–D12 were found) and contextMisses
  * (the stage-2 judge echoing a path it only saw in the Session context
- * section — a judge-side defect, kept so its rate is measurable).
+ * section — a judge-side defect, kept so its rate is measurable). Two more
+ * fields split the SAME disagreement by ROLE instead of location (3.43.0,
+ * out of cwd only): roleFloorMisses (the judge reports a WRITE at a location
+ * the floor knows but its write-role set does not cover — a parser role-table
+ * gap) and roleJudgeMisses (the floor has an out-of-cwd write operand the
+ * judge never claims as a write — the verdict reasoned about a write as if it
+ * were a read, the common case being a report that leaves `writes` empty).
+ * Attribution stays disjoint: a location the floor never derived is already a
+ * floorMiss, the stronger fact.
  *
  * Wording: the name names the SUBJECT — `floorMisses` = paths the JUDGE
  * reported that the FLOOR never saw (the floor's blind spots), not misses
@@ -141,6 +149,16 @@ export interface JudgePathReport {
    *  operation reaching it (omitted when empty). Kept, never suppressed —
    *  the bleed rate is what makes the prompt fix measurable. */
   contextMisses?: string[];
+  /** 3.43.0: the judge reports a WRITE at a location the floor DID derive,
+   *  and the floor's write-role set does not cover it — the floor got the
+   *  ROLE wrong (omitted when empty; see the role block in
+   *  judgePathReport for the ownership split). */
+  roleFloorMisses?: string[];
+  /** 3.43.0: an out-of-cwd floor write operand with no judge-reported write
+   *  covering it — the stage-2 verdict reasoned about a write as if it were a
+   *  read, including a report that never populates `writes` (omitted when
+   *  empty). */
+  roleJudgeMisses?: string[];
 }
 
 export interface JudgePathFloor {
@@ -154,15 +172,24 @@ export interface JudgePathFloor {
   /** Paths named in the stage-2 Session context section (sessionContextPaths)
    *  — a miss matching one is classified as context bleed, not a floor gap. */
   contextPaths?: string[];
+  /** 3.43.0: the floor's WRITE-role operands (`analysis.writePaths` —
+   *  `sed -i f`, `cp a d`, `mkdir d`, `> f`). Absent = no role comparison
+   *  (the write set is what makes a role disagreement observable at all). */
+  floorWritePaths?: string[];
 }
 
 /**
  * Cross-check one model report against the floor. `{}` when the model
  * reported nothing usable.
+ *
+ * @param writes - the stage-2 report's WRITE subset (JudgeResult.writes,
+ *   D19); pass it to get the role comparison (3.43.0). Omit and the report
+ *   carries only the set-level fields.
  */
 export function judgePathReport(
   reported: string[] | undefined,
   floor: JudgePathFloor,
+  writes?: string[],
 ): JudgePathReport {
   const paths = sanitizeJudgePaths(reported, floor.cwd);
   if (paths.length === 0) return {};
@@ -190,6 +217,49 @@ export function judgePathReport(
   const r: JudgePathReport = { paths };
   if (floorMisses.length > 0) r.floorMisses = floorMisses;
   if (contextMisses.length > 0) r.contextMisses = contextMisses;
+
+  // ── 3.43.0: ROLE disagreement ────────────────────────────────────────────
+  // The set comparison above asks "did the floor get the LOCATION wrong".
+  // These two fields ask whether it got the ROLE wrong at a location it DOES
+  // know — the floor and the judge can name the same place and disagree about
+  // whether the command writes it, and today that disagreement writes no line
+  // at all. Split by cause, one owner per field (attribution stays disjoint):
+  //  • roleFloorMisses — the judge reports a write there, the floor's write set
+  //    does not cover it: a missing write-verb / redirect role entry, the class
+  //    the §4.1 redirect-target and D18/D21 baseWrite fixes were. Mine these to
+  //    find role-table gaps the parser never surfaces (nothing stopped, because
+  //    the READ bar admitted the location).
+  //  • roleJudgeMisses — a floor write with no judge-reported write covering
+  //    it, INCLUDING a report that never populates `writes` (the common model
+  //    omission): the verdict argued about a write as if it were a read. The
+  //    floor is not exposed here — its own write operands already face the write
+  //    bar (dspa-gate.ts:1078) — this measures the judge's own reasoning.
+  // Out of cwd only: writes inside the session cwd are the working set (no bar,
+  // no grant involved), so a role gap there can change no outcome. Disjoint from
+  // the set misses: a location the floor never derived is already a floorMiss —
+  // the stronger fact, and the judge's raw writes list faces the write bar
+  // regardless (judgeWriteOutside). Coverage uses isCovered in both directions,
+  // the same ancestor-tolerant rule the gate's own writeRoleAt uses, so the log
+  // describes the comparison the gate actually makes. Operand roles only: a base
+  // write the floor derives via baseWriteAccess is not a writePaths entry.
+  if (writes !== undefined || floor.floorWritePaths?.length) {
+    const cwdAbs = toAbs(floor.cwd, floor.cwd);
+    const insideCwd = (p: string): boolean => p === cwdAbs || p.startsWith(cwdAbs + "/");
+    const floorWrites = (floor.floorWritePaths ?? []).filter((p) => p.startsWith("/") && !isSentinel(p));
+    const judgeWrites = sanitizeJudgePaths(writes, floor.cwd);
+    const roleFloorMisses: string[] = [];
+    for (const p of paths) {
+      if (insideCwd(p) || isCovered(p, misses)) continue;
+      if (judgeWrites.length > 0 && isCovered(p, judgeWrites) && !isCovered(p, floorWrites)) {
+        roleFloorMisses.push(p);
+      }
+    }
+    const roleJudgeMisses = floorWrites.filter(
+      (w) => !insideCwd(w) && !isCovered(w, judgeWrites),
+    );
+    if (roleFloorMisses.length > 0) r.roleFloorMisses = roleFloorMisses.slice(0, JUDGE_MISSES_MAX);
+    if (roleJudgeMisses.length > 0) r.roleJudgeMisses = roleJudgeMisses.slice(0, JUDGE_MISSES_MAX);
+  }
   return r;
 }
 
@@ -205,7 +275,15 @@ export function judgePathLogFields(
   store: Store,
   reported: string[] | undefined,
   ctx?: ExtensionContext,
-): { judgePaths?: string[]; floorPaths?: string[]; floorMisses?: string[]; contextMisses?: string[] } {
+  writes?: string[],
+): {
+  judgePaths?: string[];
+  floorPaths?: string[];
+  floorMisses?: string[];
+  contextMisses?: string[];
+  roleFloorMisses?: string[];
+  roleJudgeMisses?: string[];
+} {
   if (pd.type !== "bash" || !reported?.length || !pd.analysis) return {};
   const analysis = pd.analysis;
   // Confirmed dirs are the floor's own (deterministic) knowledge — the
@@ -234,11 +312,14 @@ export function judgePathLogFields(
     floorPaths,
     confirmedDirs,
     contextPaths: ctx ? sessionContextPaths(ctx, store) : undefined,
-  });
+    floorWritePaths: analysis.writePaths,
+  }, writes);
   return {
     judgePaths: r.paths,
     floorPaths: floorPaths.slice(0, JUDGE_PATHS_MAX),
     floorMisses: r.floorMisses,
     contextMisses: r.contextMisses,
+    roleFloorMisses: r.roleFloorMisses,
+    roleJudgeMisses: r.roleJudgeMisses,
   };
 }
