@@ -1,5 +1,43 @@
 # Changelog
 
+## 3.42.3 — 2026-10-25
+**A `cd` silenced with `2>/dev/null` stopped threading, and a git revspec became a
+relative path — two ways the path set named a directory the command never touched.**
+
+- **What the operator saw.** Two 2026-10-24 ledger shapes. (a) A prompt for
+  `cd /home/u/proj; cd third_party/llama.cpp 2>/dev/null; grep -rn x ../../CMakeLists.txt`
+  listed `outside /home`: the read was resolved two directories above the one
+  the shell actually ran in (`/home/CMakeLists.txt`); without the redirect the
+  same command resolved inside the project. (b) `cd ~/proj && git rev-list
+  --count origin/main..HEAD` (three rows) surfaced `…/proj/origin` as an outside
+  dir — a directory that does not exist, so the grant offered for it is dead;
+  the same clause turned a quoted label (`=== ahead/behind (local..origin/main)
+  ===`) into a path.
+- **Why.** Two slips in `analysis/cwd-tracking.ts`. (a) `resolveCdTarget`'s
+  target scan counted every trailing token, so `2>/dev/null` read as a second
+  target → `cd: too many arguments` → `{kind:"unchanged"}`: the effective base
+  stayed at the pre-cd directory while the later `../../x` was re-based against
+  it. (b) The `..`-bearing clause shared by `isResolvableTarget` and
+  `isDotRelativeWord` was `text.includes("..") && text.includes("/")` — true for
+  any `..` anywhere before a `/`, so a revspec or a slash-bearing quoted string
+  classified as a dot-relative word and got re-based under the post-cd base.
+- **The fix.** The cd target scan now skips redirections the way the operand
+  scan already does: an output or input redirect (glued, or with its target as a
+  separate token) and the heredoc/herestring operators (`<<`, `<<-`, `<<<` —
+  they carry DATA, not a location) are not arguments, so `cd sub 2>/dev/null`
+  threads. Both `..` clauses now test `DOT_SEGMENT_RE`, a `..` that is its own
+  path segment (`..`, `../x`, `src/../x`). Two side effects, both corrections: a
+  bare `..` token is now re-based under the effective cwd (`cd ~/.pi/agent;
+  ls ..` names `~/.pi`, previously the session cwd's parent), and a revspec no
+  longer marks a segment as naming a resolvable target.
+- **Not in scope.** The unresolved-token resolver still numbers its packet 1-based
+  while reading the reply 0-based (0 of 105 unresolved rows carry an `llm`
+  answer) — separate fix.
+- **Tests.** 6 new (`cwd-threading`): the redirect forms thread while a real
+  second target still fails the cd; revspec and label re-resolve to nothing while
+  `..` segments still re-base; both ledger commands pinned end to end. Suite:
+  4360 passed (58 files), `tsc --noEmit` clean.
+
 ## 3.42.2 — 2026-10-23
 **The `Always (paths)` row of a WRITE-shaped DSPA stop was labeled READ and
 minted a READ grant — the highlighted click could not clear the stop that

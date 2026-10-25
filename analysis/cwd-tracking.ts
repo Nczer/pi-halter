@@ -108,7 +108,31 @@ export function resolveCdTarget(
   // so the cwd does not change.
   let target: string | null = null;
   let targetCount = 0;
-  for (const t of tokens.slice(ti + 1)) {
+  const args = tokens.slice(ti + 1);
+  for (let ai = 0; ai < args.length; ai++) {
+    const t = args[ai];
+    // Redirections are NOT cd arguments — `cd sub 2>/dev/null` runs the cd and
+    // only silences its stderr. Counting a redirect as a second target read as
+    // `cd: too many arguments` (unchanged), so the base stayed at the pre-cd
+    // directory and a later `../../x` resolved above $HOME (2026-10-24 ledger:
+    // `cd …; cd third_party/llama.cpp 2>/dev/null; grep x ../../CMakeLists.txt`
+    // → `/home/CMakeLists.txt`). An unglued operator takes the NEXT token as
+    // its target (same idiom as the operand scan below).
+    const mOut = t.match(OUT_REDIRECT_RE);
+    if (mOut) {
+      if (mOut[2] === "") ai++; // `> file`, `2> file`: the target is a separate token
+      continue;
+    }
+    if (IN_REDIRECT_RE.test(t)) {
+      if (BARE_REDIRECT_RE.test(t)) ai++; // `< file`: the target is a separate token
+      continue;
+    }
+    // `<<` / `<<-` / `<<<`: the operator carries DATA (a delimiter or a word),
+    // never a location, so it is not a cd target either.
+    if (/^<<-?<?/.test(t)) {
+      if (t === "<<" || t === "<<-" || t === "<<<") ai++; // `<<< in`: the word is a separate token
+      continue;
+    }
     if (t === "--" || t === "-L" || t === "-P") continue;
     // `cd -` → OLDPWD: `-` is a target here, not a flag (checked below).
     if (t !== "-" && t.startsWith("-")) return { kind: "unchanged" };
@@ -391,11 +415,21 @@ export const OUT_REDIRECT_RE = /^(\d{0,1}(?:&?>|>&))(.*)$/;
 export const IN_REDIRECT_RE = /^(\d{0,1}<)(?!<)(.*)$/;
 export const BARE_REDIRECT_RE = /^(?:\d{0,1}(?:&?>|>&)|\d{0,1}<)$/;
 
+/** A `..` that is its OWN path segment — `..`, `../x`, `src/../x` — the only
+ *  shape that makes a word's location depend on a parent directory. The clause
+ *  this replaces accepted `..` ANYWHERE before a `/`, which made a git revspec
+ *  (`origin/main..HEAD`) and a slash-bearing quoted label
+ *  (`=== ahead/behind (local..origin/main) ===`) look dot-relative: after a cd
+ *  they were re-based into locations the command never touches
+ *  (`/home/nczer/Strata/origin/main..HEAD`) and the revspec even surfaced a
+ *  fake `/home/nczer/Strata/origin` outside-dir (three 2026-10-24 ledger rows). */
+const DOT_SEGMENT_RE = /(^|\/)\.\.(\/|$)/;
+
 /** Token names a location resolvable (or already marker-flagged) by the path set. */
 function isResolvableTarget(t: string, hasExpansion = true): boolean {
   if (
     t.startsWith("/") || t.startsWith("~") ||
-    t.startsWith("./") || t.startsWith("../") || (t.includes("..") && t.includes("/"))
+    t.startsWith("./") || t.startsWith("../") || DOT_SEGMENT_RE.test(t)
   ) {
     return true;
   }
@@ -808,9 +842,10 @@ interface CwdDependentToken {
 }
 
 /** A word whose location depends on the effective cwd because it is relative
- *  with a dot (`./x`, `../x`, any `..`-bearing relative). */
+ *  with a dot (`./x`, `../x`, any `..`-bearing RELATIVE PATH — see
+ *  DOT_SEGMENT_RE for why a bare `..` occurrence does not qualify). */
 function isDotRelativeWord(text: string): boolean {
-  return text.startsWith("./") || text.startsWith("../") || (text.includes("..") && text.includes("/"));
+  return text.startsWith("./") || DOT_SEGMENT_RE.test(text);
 }
 
 function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {

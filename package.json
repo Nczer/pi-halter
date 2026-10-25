@@ -1,6 +1,6 @@
 {
   "name": "pi-halter",
-  "version": "3.42.2",
+  "version": "3.42.3",
   "private": true,
   "type": "module",
   "scripts": {

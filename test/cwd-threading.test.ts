@@ -118,6 +118,19 @@ describe("trackEffectiveCwd", () => {
     expect(trackEffectiveCwd([seg("cd /nonexistent-dir-xyz"), seg("ls")], BASE)).toEqual([BASE, BASE]);
   });
 
+  it("threads a cd whose redirections are not arguments (2026-10-24 ledger row)", () => {
+    // `cd sub 2>/dev/null` runs the cd — a redirection is not a second target,
+    // so the base must move. Counting it read as `cd: too many arguments`
+    // (unchanged) and a later `../../x` resolved above $HOME.
+    for (const redir of ["2>/dev/null", "2> /dev/null", ">/dev/null", "> /dev/null 2>&1", "&>/dev/null", "2>&1", "<<<in", "<<< in"]) {
+      expect(trackEffectiveCwd([seg("cd ~"), seg(`cd .pi ${redir}`), seg("ls")], BASE), redir)
+        .toEqual([BASE, HOME, path.join(HOME, ".pi")]);
+    }
+    // A real second TARGET still makes the cd fail (bash: too many arguments).
+    expect(trackEffectiveCwd([seg("cd ~"), seg("cd .pi agent"), seg("ls")], BASE))
+      .toEqual([BASE, HOME, HOME]);
+  });
+
   it("does not thread cd in pipeline stages or subshells (subshell cwd doesn't persist)", () => {
     expect(trackEffectiveCwd([seg("cd /tmp | wc -l", ["|"]), seg("ls")], BASE)).toEqual([BASE, BASE]);
     expect(trackEffectiveCwd([seg("cd /tmp |& tee x", ["|&"]), seg("ls")], BASE)).toEqual([BASE, BASE]);
@@ -301,6 +314,20 @@ describe("reResolveCwdDependentPaths", () => {
   it("re-resolves ./ and ../ tokens against the effective cwd", () => {
     expect(reResolveCwdDependentPaths(seg("cat ./secret.txt"), "/tmp")).toEqual(["/tmp/secret.txt"]);
     expect(reResolveCwdDependentPaths(seg("cat ../x.txt"), "/tmp/a")).toEqual(["/tmp/x.txt"]);
+  });
+
+  it("treats only a `..` path SEGMENT as relative — not a revspec or a quoted label", () => {
+    // The old clause accepted `..` anywhere before a `/`, so a git revspec or a
+    // slash-bearing label became a dot-relative token and was re-based under a
+    // post-cd base into a path the command never touches (three 2026-10-24 rows:
+    // `/home/nczer/Strata/origin/main..HEAD`, `…/=== … (local..origin/main) ===`).
+    expect(reResolveCwdDependentPaths(seg("git rev-list --count origin/main..HEAD"), "/home/u/repo")).toEqual([]);
+    expect(reResolveCwdDependentPaths(seg('echo "=== ahead/behind (local..origin/main) ==="'), "/home/u/repo")).toEqual([]);
+    expect(reResolveCwdDependentPaths(seg("git log main..release -- src/x.c"), "/home/u/repo")).toEqual([]);
+    // A `..` that IS a segment still re-bases under the effective cwd (the parse
+    // normalizes the token, so `src/../x.txt` lands in the base itself).
+    expect(reResolveCwdDependentPaths(seg("cat src/../x.txt"), "/tmp/a/b")).toEqual(["/tmp/a/b/x.txt"]);
+    expect(reResolveCwdDependentPaths(seg("ls .."), "/tmp/a/b")).toEqual(["/tmp/a"]); // bare `..` too
   });
 
   it("re-resolves flag-embedded relative values", () => {
@@ -1200,4 +1227,34 @@ describe("baseWriteAccess (D18)", () => {
   it("subshells are not modeled here (baseAccessPath flags their base for the read bar)", () => {
     expect(baseWriteAccess(seg("(cd x && echo hi > f)", [], true))).toBe(false);
   });
+});
+
+describe("2026-10-24 ledger rows end to end (redirect-carrying cd, git revspec)", () => {
+  const deep = () => fs.mkdirSync(path.join(CWD, "sub", "deep"), { recursive: true });
+
+  it("cd <dir> 2>/dev/null threads — ../../x reads under the new base, not above $HOME", async () => {
+    deep();
+    const a = await analyzeCommand(`cd ${CWD}/sub/deep 2>/dev/null; grep -rn x ../../x.txt | head -5`, CWD);
+    expect(a.paths).toContain(path.join(CWD, "x.txt"));
+    expect(a.paths).not.toContain(path.resolve(CWD, "..", "..", "x.txt"));
+  }, 15000);
+
+  it("a git revspec after a cd names no location (no fake <base>/origin outside-dir)", async () => {
+    deep();
+    const a = await analyzeCommand(`cd ${CWD}/sub && git rev-list --count origin/main..HEAD`, CWD);
+    expect(a.paths).toEqual([]);
+  }, 15000);
+
+  it("a slash-bearing quoted label after a cd names no location", async () => {
+    deep();
+    const a = await analyzeCommand(`cd ${CWD}/sub && echo "=== ahead/behind (local..origin/main) ==="`, CWD);
+    expect(a.paths).toEqual([]);
+  }, 15000);
+
+  it("a real `..` segment after a cd still re-bases (the tightening leaves no blind spot)", async () => {
+    deep();
+    const a = await analyzeCommand(`cd ${CWD}/sub/deep && cat other/../x.txt; ls ..`, CWD);
+    expect(a.paths).toContain(path.join(CWD, "sub", "deep", "x.txt"));
+    expect(a.paths).toContain(path.join(CWD, "sub"));
+  }, 15000);
 });
