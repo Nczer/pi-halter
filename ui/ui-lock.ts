@@ -8,7 +8,8 @@
  * the same time therefore replace each other: the first is cancelled when the
  * second opens.
  *
- * halter's permission prompts are tool-call UIs, so they race against consult.
+ * halter's permission prompts are tool-call UIs, so they race against the
+ * ask extension's dialogs.
  * Both extensions chain on the same `globalThis` key — a
  * module-local lock only serializes one extension against itself.
  */

@@ -1,12 +1,13 @@
 /**
  * halter's permission prompts are tool-call UIs: pi runs the tool calls of one
  * assistant message concurrently, and every dialog is shown by clearing the
- * editor container. A consult dialog opening while a halter prompt is open
+ * editor container. An ask dialog opening while a halter prompt is open
  * therefore cancels the halter prompt. Both chain on one mutex.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { withUILock as halterLock } from "../ui/ui-lock";
-import { withUILock as consultLock } from "../../consult/index";
+// The ask extension holds the same mutex; its lock lives in the sibling repo.
+import { withUILock as askLock } from "../../ask/index";
 import { twoTierAlwaysPrompt } from "../ui/prompts";
 import type { BuiltPrompt } from "../ui/prompt-builder";
 import { store } from "../gate/store";
@@ -34,12 +35,12 @@ beforeEach(() => {
   store.reset();
 });
 
-describe("shared UI lock (halter ↔ consult)", () => {
-  it("halter uses the same globalThis mutex as consult", () => {
+describe("shared UI lock (halter ↔ ask)", () => {
+  it("halter uses the same globalThis mutex as the ask extension", () => {
     expect((globalThis as any).__piSharedUiLock).toBeDefined();
   });
 
-  it("a consult dialog cannot open while a halter permission prompt is open", async () => {
+  it("an ask dialog cannot open while a halter permission prompt is open", async () => {
     const order: string[] = [];
     let releaseSelect: () => void;
     const ctx: any = {
@@ -54,25 +55,25 @@ describe("shared UI lock (halter ↔ consult)", () => {
 
     const prompt = twoTierAlwaysPrompt(makePrompt(), store, ctx, vi.fn(), vi.fn(), vi.fn());
     await Promise.resolve();
-    const consult = consultLock(async () => {
-      order.push("consult open");
+    const ask = askLock(async () => {
+      order.push("ask open");
     });
 
-    expect(order).toEqual(["halter prompt open"]); // consult must wait
+    expect(order).toEqual(["halter prompt open"]); // the ask must wait
     releaseSelect!();
     await prompt;
-    await consult;
-    expect(order).toEqual(["halter prompt open", "consult open"]);
+    await ask;
+    expect(order).toEqual(["halter prompt open", "ask open"]);
   });
 
-  it("a halter prompt cannot cut in front of a held consult dialog", async () => {
+  it("a halter prompt cannot cut in front of a held ask dialog", async () => {
     const order: string[] = [];
     let releaseConsult: () => void;
     const gate = new Promise<void>((resolve) => {
       releaseConsult = resolve;
     });
-    const consult = consultLock(async () => {
-      order.push("consult open");
+    const ask = askLock(async () => {
+      order.push("ask open");
       await gate;
     });
     await Promise.resolve();
@@ -82,11 +83,11 @@ describe("shared UI lock (halter ↔ consult)", () => {
       return "Yes";
     });
 
-    expect(order).toEqual(["consult open"]);
+    expect(order).toEqual(["ask open"]);
     releaseConsult!();
-    await consult;
+    await ask;
     await halter;
-    expect(order).toEqual(["consult open", "halter prompt open"]);
+    expect(order).toEqual(["ask open", "halter prompt open"]);
   });
 
   it("the lock is released when the prompt select resolves with a cancel", async () => {
