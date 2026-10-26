@@ -667,6 +667,51 @@ describe("outsideDirs: unbound-token locations are not grantable", () => {
   });
 });
 
+describe("outsideDirs: a brace-alternation dir is never a grant (3.44.0)", () => {
+  // unresolved.jsonl 2026-10-25T15:04:48: `ls ~/{Applications,apps,bin,.local/bin}`
+  // is ONE token to the parser, so its dirname cut inside the group and yielded
+  // `$HOME/{Applications,apps,bin,.local` — text no shell can produce.
+  // The intent pass minted it into the session READ bar (the row's
+  // `grantedDirs`) while the four real dirs got nothing, so the command
+  // stopped again on every run: a grant that can never bind is not
+  // convergence. Refusing it is the fail-closed half — the stop still fires,
+  // because needsPathApproval/needsWriteApproval come from the PATH sets, not
+  // the dir sets. Expanding an alternation into its real dirs is the other
+  // half, and that is a floor-model change, not a filter: not in scope.
+  const bar = {
+    isInsideAllowedDir: () => false,
+    isInsideAllowedWriteDir: () => false,
+  };
+
+  it("a group spanning `/` yields no dir grant, and the read still stops", async () => {
+    const a = await analyzeCommand(`ls ~/{Applications,apps,bin,.local/bin}`, cwd, bar);
+    expect(a.prompt.outsideDirs!.filter((d) => d.includes("{"))).toEqual([]);
+    expect(a.prompt.outsidePaths!.length).toBeGreaterThan(0);
+    expect(a.prompt.needsPathApproval).toBe(true);
+  });
+
+  it("a dir that IS an alternation is not a grant either", async () => {
+    const a = await analyzeCommand(`ls ${home}/halt-pfx-{a,b}/{c,d}/f`, cwd, bar);
+    expect(a.prompt.outsideDirs!.filter((d) => d.includes("{"))).toEqual([]);
+    expect(a.prompt.needsPathApproval).toBe(true);
+  });
+
+  it("no over-refusal: a brace suffix below the dirname keeps the real dir", async () => {
+    // `/home/u/pfx-{a,b}.conf` → the brace group sits in the BASENAME, so the
+    // dirname is a real location the shell can produce. That grant stays live.
+    const a = await analyzeCommand(`cat ${home}/halt-pfx-{a,b}.conf`, cwd, bar);
+    expect(a.prompt.outsideDirs).toContain(home);
+    expect(a.prompt.needsPathApproval).toBe(true);
+  });
+
+  it("the write tier refuses it too — an \"Always: write\" could not bind", async () => {
+    const a = await analyzeCommand(`rm -rf ${home}/halt-pfx-{a,b}`, cwd, bar);
+    expect(a.prompt.outsideWriteDirs!.filter((d) => d.includes("{"))).toEqual([]);
+    expect(a.prompt.outsideWritePaths!.length).toBeGreaterThan(0);
+    expect(a.prompt.needsWriteApproval).toBe(true);
+  });
+});
+
 describe("confirmed resolutions converge the approval bar (D12)", () => {
   const prefix = fs.mkdtempSync(path.join(home, ".halter-cf-"));
   afterAll(() => fs.rmSync(prefix, { recursive: true, force: true }));

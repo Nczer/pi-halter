@@ -180,6 +180,11 @@ const UNKNOWN_BASE_CWD = "/";
 /** Nested `$(…)` depth cap (same shape as the tmux payload recursion). */
 const SUBST_MAX_DEPTH = 3;
 
+/** Brace metacharacters in a derived dir: what the shell EXPANDS, not a name
+ *  (same reading as analysis/delete-scale.ts's `[*?[{]`). See the filters in
+ *  `analyzeCommand` for why a dir carrying one is never a grant. */
+const BRACE_META_RE = /[{}]/;
+
 /**
  * Analyze command-substitution and process-substitution BODIES (G5).
  *
@@ -672,6 +677,18 @@ export async function analyzeCommand(
     outsideDirs = (await resolvePathsToDirs(op)).filter(d => {
       if (d === OPAQUE_VAR_DIR) return false;
       if (d === UNKNOWN_CWD_MARKER) return true;
+      // A dir whose own text carries a brace is not a location the shell can
+      // produce (3.44.0, unresolved.jsonl 2026-10-25T15:04:48): `ls
+      // ~/{Applications,apps,bin,.local/bin}` is ONE token to the parser, so
+      // its dirname cut inside the group and yielded
+      // `$HOME/{Applications,apps,bin,.local` — which the intent pass
+      // then put in the session READ bar while the four real dirs got nothing.
+      // Same shape as a dir that is itself an alternation (`/etc/{a,b}`).
+      // Refusing it is the fail-closed half of the dead-grant rule below: the
+      // stop still fires (the path set is untouched), only the grant that
+      // could never bind goes away. Expanding the alternation into its real
+      // dirs is the other half, and it is a floor-model change, not a filter.
+      if (BRACE_META_RE.test(d)) return false;
       // A directory backed ONLY by unresolved-var marker paths is the static
       // prefix of an unbound token (e.g. ~/.pi/agent/extensions from
       // <unresolved-var>/~/.pi/agent/extensions/$e/*.ts). The marker keeps
@@ -702,6 +719,9 @@ export async function analyzeCommand(
     outsideWriteDirs = (await resolvePathsToDirs(ow)).filter((d) => {
       if (d === OPAQUE_VAR_DIR) return false;
       if (d === UNKNOWN_CWD_MARKER) return true;
+      // Same dead-grant rule as the read tier: an "Always: write" for
+      // `/home/x/{a,b` would never match the next run of `rm -rf ~/{a,b}`.
+      if (BRACE_META_RE.test(d)) return false;
       return ow.some((p) =>
         !p.startsWith(OPAQUE_VAR_DIR + "/") &&
         !p.includes(UNKNOWN_CWD_MARKER) &&
