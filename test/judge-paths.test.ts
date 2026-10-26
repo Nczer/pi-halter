@@ -178,12 +178,15 @@ describe("judgePathReport", () => {
     }
   });
 
-  it("caps floorMisses at 5; {} when the model reported nothing", () => {
+  it("the miss lists are uncapped (3.44.1); {} when the model reported nothing", () => {
+    // The report of a long command is exactly where a blind spot hides, so a
+    // silent cut here costs the most: the cap lives on the stored SETS at the
+    // row site and is marked (judgePathsMore / floorPathsMore).
     const r = judgePathReport(
-      Array.from({ length: 8 }, (_, i) => `/m${i}`),
+      Array.from({ length: 12 }, (_, i) => `/m${i}`),
       { cwd, floorPaths: [] },
     );
-    expect(r.floorMisses).toHaveLength(5);
+    expect(r.floorMisses).toHaveLength(12);
     expect(judgePathReport(undefined, { cwd, floorPaths: [] })).toEqual({});
     expect(judgePathReport([], { cwd, floorPaths: [] })).toEqual({});
   });
@@ -272,13 +275,13 @@ describe("judgePathReport — role disagreement", () => {
     expect(r.roleFloorMisses).toBeUndefined();
   });
 
-  it("role lists cap at 5, like the set misses", () => {
+  it("the role lists are uncapped too (3.44.1)", () => {
     const writes = Array.from({ length: 8 }, (_, i) => `/w${i}`);
     const r = judgePathReport(writes, {
       cwd,
       floorPaths: writes,
       floorWritePaths: writes,
     }, []);
-    expect(r.roleJudgeMisses).toHaveLength(5);
+    expect(r.roleJudgeMisses).toHaveLength(8);
   });
 });

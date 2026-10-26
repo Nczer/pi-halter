@@ -644,23 +644,26 @@ LLM call) and mines the diff:
   Stage 1 is unchanged (its prompt is eval-locked).
 - **Cross-check** (judge-paths.ts, deterministic code): the report is
   sanitized (sentinels dropped, ~ expanded, relatives resolved against
-  cwd, deduped, capped at 8). A path is COVERED by the floor's own
+  cwd, deduped; the sanitizer is uncapped since 3.44.0 — only the stored row
+  slices). A path is COVERED by the floor's own
   knowledge — the analysis's paths, the outside list, confirmed
-  resolution dirs, the cwd — when it equals a floor path or lies under
+  resolution dirs, the cwd, and the DIRECTORY a dynamic floor path pins
+  (`/tmp/snap-x/$e` → `/tmp/snap-x`, 3.44.0) — when it equals a floor path or lies under
   one, or lies under a GLOB floor path. Uncovered = a **floor miss** —
   a path the JUDGE saw that the FLOOR never did (the floor's blind spot;
   the field is named `floorMisses` so the direction survives a raw read
   of the ledger — bare "misses" read as misses of the judge).
 - **Logged only** (decision log, final stage-2 verdict — auto-allow and
-  fall-through lines alike): `judgePaths` (sanitized report, capped) and
-  `floorMisses` (capped at 5). Nothing in the gate reads these fields
+  fall-through lines alike): `judgePaths` (sanitized report, sliced at the row
+  site with `judgePathsMore`) and `floorMisses` (uncapped since 3.44.1 — the
+  list is the reason the row exists). Nothing in the gate reads these fields
   back — the runtime decision is untouched. D17: mismatches that RAN
   THROUGH the floor (the gate passed — auto-allow or judge-declined
   prompt; a floor STOP writes no ledger line — the miss never ran
   through, and the prompt's decision line still carries the report) are
   ALSO mirrored to the always-on judge ledger (judge.jsonl) with BOTH
   SIDES on the line: `floorPaths` (the floor's own path set, sentinels
-  included, capped at 8) + `judgePaths` + `floorMisses` — the fault (the
+  included, sliced at 8 with `floorPathsMore`) + `judgePaths` + `floorMisses` — the fault (the
   floor's blind spot vs judge reach) is the miner's call. The decision
   log is toggle-gated and version-bound, so the ledger is the durable
   home.

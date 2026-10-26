@@ -651,8 +651,9 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     expect(pathsRow.judgePathsMore).toBe(4);
     expect(pathsRow.floorPaths).toHaveLength(8);
     expect(pathsRow.floorPathsMore).toBe(4);
-    // The miss cap stays as it was — it is now the only cap left in the module.
-    expect(pathsRow.floorMisses).toHaveLength(5);
+    // The disagreement lists are uncapped (3.44.1): the cap rule applies to the
+    // SETS above, and a cut miss list would hide the finding the row exists for.
+    expect(pathsRow.floorMisses).toHaveLength(12);
     const infraRow = judgeLines().find((e) => e.kind === "infra");
     expect(infraRow.cmd).toHaveLength(1000);
     expect(infraRow.cmdCut).toBe(true);

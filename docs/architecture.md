@@ -730,7 +730,9 @@ at halter load.
   stage-2 `paths` row that left report or floor paths out carries
   `judgePathsMore` / `floorPathsMore`. A cut `cmd` is suspect for replay —
   a heredoc body turns into segments — and a sliced path list is not the whole
-  answer set.
+  answer set. The disagreement lists themselves (`floorMisses`, `contextMisses`,
+  `roleFloorMisses`, `roleJudgeMisses`) are uncapped (3.44.1): economy applies to
+  the SETS, because a cut miss list hides the finding the row exists to record.
 - **Unresolved log** (`.log/unresolved.jsonl`, on by default): the fate of
   each unbound token (outcome — `prompted` / `gate-stop` / `auto-allowed` /
   `intent-allowed` / `intent-declined`; intent rows also carry the miss kind,

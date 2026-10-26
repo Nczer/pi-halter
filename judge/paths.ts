@@ -18,6 +18,13 @@
  *    direction this file's D19 note claims is impossible. The cap is now a
  *    LOG-SITE concern (`JUDGE_PATHS_MAX` applied where a row is written), and
  *    a truncated row says so (`judgePathsMore` / `floorPathsMore`).
+ *  - 3.44.1 removed the last silent cap in this file. `JUDGE_MISSES_MAX = 5`
+ *    sliced `floorMisses`, `contextMisses` and both role lists, unmarked — the
+ *    same shape as the bug above, in the one place where a cut costs the most:
+ *    the miss list IS why a paths row exists, and the entry past slot 5 was the
+ *    likeliest to be the blind spot worth finding. The four disagreement lists
+ *    are uncapped. Row economy stays on the SETS (`JUDGE_PATHS_MAX`, applied
+ *    where the row is written, marked by `judgePathsMore`/`floorPathsMore`).
  *  - coverage uses the floor's OWN anchor (3.44.0): a floor path with a
  *    dynamic segment (`/tmp/snap-x/$e`, `/etc/*.conf`) pins a directory, so
  *    `staticPrefixOf` of it joins the covered set — exactly the anchor the
@@ -84,8 +91,6 @@ import { sessionContextPaths } from "./session-context";
  * answer set are never capped — see the header.
  */
 export const JUDGE_PATHS_MAX = 8;
-/** Log economy: cap the stored floor misses. */
-const JUDGE_MISSES_MAX = 5;
 
 /** The floor's own marker sentinels (echoed back by the model — not paths). */
 function isSentinel(p: string): boolean {
@@ -163,7 +168,8 @@ export interface JudgePathReport {
   /** The model's touched paths, sanitized, uncapped (omitted when empty). */
   paths?: string[];
   /** Judge-reported paths not covered by the floor's knowledge — the
-   *  floor's blind spots (omitted when empty). */
+   *  floor's blind spots. Uncapped (3.44.1): this list is the row's evidence
+   *  (omitted when empty). */
   floorMisses?: string[];
   /** Misses that are only a STAGE-2 CONTEXT ECHO: the path is named in the
    *  Session context section (an earlier tool call's target, a path the user
@@ -240,10 +246,8 @@ export function judgePathReport(
   const contextMisses =
     floorConcrete.length === 0
       ? []
-      : misses
-          .filter((p) => inContext.some((c) => p === c || p.startsWith(c + "/") || c.startsWith(p + "/")))
-          .slice(0, JUDGE_MISSES_MAX);
-  const floorMisses = misses.filter((p) => !contextMisses.includes(p)).slice(0, JUDGE_MISSES_MAX);
+      : misses.filter((p) => inContext.some((c) => p === c || p.startsWith(c + "/") || c.startsWith(p + "/")));
+  const floorMisses = misses.filter((p) => !contextMisses.includes(p));
   const r: JudgePathReport = { paths };
   if (floorMisses.length > 0) r.floorMisses = floorMisses;
   if (contextMisses.length > 0) r.contextMisses = contextMisses;
@@ -287,8 +291,8 @@ export function judgePathReport(
     const roleJudgeMisses = floorWrites.filter(
       (w) => !insideCwd(w) && !isCovered(w, judgeWrites),
     );
-    if (roleFloorMisses.length > 0) r.roleFloorMisses = roleFloorMisses.slice(0, JUDGE_MISSES_MAX);
-    if (roleJudgeMisses.length > 0) r.roleJudgeMisses = roleJudgeMisses.slice(0, JUDGE_MISSES_MAX);
+    if (roleFloorMisses.length > 0) r.roleFloorMisses = roleFloorMisses;
+    if (roleJudgeMisses.length > 0) r.roleJudgeMisses = roleJudgeMisses;
   }
   return r;
 }
