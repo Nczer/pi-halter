@@ -548,7 +548,7 @@ export function logJudgeDiff(
 /**
  * D13: a stage-2 verdict whose path model disagrees with the floor's — the
  * floor↔judge disagreement line, mirrored to the on-by-default ledger so it
- * survives the decision log being off (or wiped on /reload). Both sides sit
+ * survives the decision log being off. Both sides sit
  * on the line (floorPaths + judgePaths) and the mismatch is split by cause
  * (floorMisses = floor blind spot, contextMisses = stage-2 context echo) and
  * by role (roleFloorMisses / roleJudgeMisses = the two sides disagreeing about

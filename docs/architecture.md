@@ -737,7 +737,10 @@ at halter load.
   prompt flow; a runtime singleton.
 - **Decision log** (`.log/decisions.jsonl`, off by default): one line per tool
   call with kind, target, why/reason, regime tag, and dspa stop tag.
-  Version-bound: delete after a `/reload` of gate code. The decision log has
+  Nothing wipes it: it appends and rotates at 5 MiB, so rows from several gate
+  versions pile up. It is version-bound by review, not by code — delete or
+  freeze a copy before comparing replays across a `/reload` of gate code. The
+  decision log has
   its own toggle (`/halter-decision-log`); the three ledgers share one
   (`/halter-ledger-log`; same arg handling; D17 split). `tools/log-inspect.mjs`
   does the recurring extractions (summary, audit, dspa, dspa --paths, stats).
