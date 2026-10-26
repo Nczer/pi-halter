@@ -5,6 +5,11 @@
  * Zero-dependency reader/aggregator over .log/decisions.jsonl (the blast-
  * radius log, see decision-log.ts). Answers the recurring review questions:
  *
+ * Fields are read by the names the current code writes, with no legacy
+ * fallbacks: the ledgers are version-bound (delete after a `/reload` of gate
+ * code), so a schema generation whose corpus is gone has no reader here. When
+ * decision-log.ts renames a field, this tool is renamed in the same commit.
+ *
  *   summary   counts, prompt rate, top prompt reasons, every block, anomaly
  *             counts — the 30-second "what did the gate do" view
  *   list      filtered entries, one compact line each
@@ -215,7 +220,7 @@ function summary() {
   const stops = F.filter((e) => e.kind === "prompt" && e.dspa);
   if (!stops.length) console.log("  (none)");
   for (const [r, n] of counts(stops, (e) => e.dspa)) console.log(`  ${String(n).padStart(4)}  ${trunc(r, 100)}`);
-  const pathMissN = F.filter((e) => (e.floorMisses ?? e.judgePathMisses)?.length).length;
+  const pathMissN = F.filter((e) => e.floorMisses?.length).length;
   console.log(`  floor misses (dspa --paths): ${pathMissN}`);
   console.log("");
 
@@ -263,7 +268,7 @@ function dspaCmd() {
     if (e.reason) console.log(`  reason: ${trunc(e.reason, 160)}`);
     if (e.judgeDeny) console.log(`  judgeDeny: ${trunc(e.judgeDeny, 160)}`);
     if (e.judgePaths?.length) console.log(`  judgePaths: ${e.judgePaths.join(", ")}`);
-    if (e.judgePathMisses?.length) console.log(`  pathMisses: ${e.judgePathMisses.join(", ")}`);
+    if (e.floorMisses?.length) console.log(`  floorMisses: ${e.floorMisses.join(", ")}`);
     console.log(`  target: ${trunc(firstLine(e.target), 160)}`);
   }
 }
@@ -272,16 +277,12 @@ function dspaCmd() {
  *  flagged where the report contains paths the static floor never saw.
  *  The floor misses are the mining target — a miss is either a real
  *  static-analysis hole (fix the parser) or a judge hallucination (a
- *  reliability data point for the report field). Legacy lines (pre-rename)
- *  carry judgePathMisses / misses — read both. */
-function floorMissesOf(e) {
-  return e.floorMisses ?? e.judgePathMisses ?? e.misses;
-}
+ *  reliability data point for the report field). */
 function dspaPaths() {
   const ds = F.filter(
-    (e) => (e.mode === "dspa" || e.mode === "dspat") && (e.judgePaths?.length || floorMissesOf(e)?.length),
+    (e) => (e.mode === "dspa" || e.mode === "dspat") && (e.judgePaths?.length || e.floorMisses?.length),
   );
-  const withMisses = ds.filter((e) => floorMissesOf(e)?.length);
+  const withMisses = ds.filter((e) => e.floorMisses?.length);
   console.log(`# dspa --paths — ${withMisses.length} entries with floor mismatches, ${ds.length} with any stage-2 path report`);
   if (!ds.length) {
     console.log("(none — the judge reported no paths in this window)");
@@ -293,7 +294,7 @@ function dspaPaths() {
     if (e.reason) console.log(`  reason: ${trunc(e.reason, 160)}`);
     console.log(`  target: ${trunc(firstLine(e.target), 160)}`);
     if (e.judgePaths?.length) console.log(`  judge:  ${e.judgePaths.join(", ")}`);
-    for (const m of e.judgePathMisses ?? []) console.log(`  MISS:   ${m}`);
+    for (const m of e.floorMisses ?? []) console.log(`  MISS:   ${m}`);
   }
 }
 
@@ -326,7 +327,7 @@ function dspaReasons() {
   section("auto-allow reasons", ds.filter((e) => e.kind === "auto-allow"), (e) => e.reason ?? "(no reason)");
   section("stop tags (fall-through prompts)", ds.filter((e) => e.kind === "prompt"), (e) => e.dspa ?? "(no stop tag)");
   section("judge denials (the LLM's words)", ds, (e) => e.judgeDeny);
-  section("D13 floor misses (judge-reported, floor never saw)", ds, (e) => floorMissesOf(e)?.join(", "));
+  section("D13 floor misses (judge-reported, floor never saw)", ds, (e) => e.floorMisses?.join(", "));
   section("stage-2 context echoes (path only named in the Session context section)", ds, (e) => e.contextMisses?.join(", "));
 }
 
@@ -583,7 +584,7 @@ function judgeCmd() {
   }
   const missCount = {};
   const ctxMissCount = {};
-  for (const e of pathLines) for (const m of floorMissesOf(e) ?? []) missCount[m] = (missCount[m] ?? 0) + 1;
+  for (const e of pathLines) for (const m of e.floorMisses ?? []) missCount[m] = (missCount[m] ?? 0) + 1;
   if (Object.keys(missCount).length) {
     console.log("\nfloor misses (top 10 — ran through the floor; judge-reported, floor never saw):");
     for (const [m, n] of Object.entries(missCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
@@ -624,12 +625,11 @@ function judgeCmd() {
       if (e.kind === "paths") {
         if (e.floorPaths?.length) parts.push(`floor:  ${trunc(e.floorPaths.join(", "), 100)}${e.floorPathsMore ? ` +${e.floorPathsMore}` : ""}`);
         if (e.judgePaths?.length) parts.push(`judge:  ${trunc(e.judgePaths.join(", "), 100)}${e.judgePathsMore ? ` +${e.judgePathsMore}` : ""}`);
-        const mm = floorMissesOf(e);
-        if (mm?.length) parts.push(`MISS:   ${trunc(mm.join(", "), 100)}`);
+        if (e.floorMisses?.length) parts.push(`MISS:   ${trunc(e.floorMisses.join(", "), 100)}`);
         if (e.contextMisses?.length) parts.push(`CTX:    ${trunc(e.contextMisses.join(", "), 100)}`);
         if (e.roleFloorMisses?.length) parts.push(`ROLE-F: ${trunc(e.roleFloorMisses.join(", "), 100)}`);
         if (e.roleJudgeMisses?.length) parts.push(`ROLE-J: ${trunc(e.roleJudgeMisses.join(", "), 100)}`);
-      } else if (e.misses?.length) parts.push(`misses: ${e.misses.join(", ")}`);
+      }
       if (e.cmd) parts.push(trunc(e.cmd, 80));
       console.log(`  ${parts.join("  ")}`);
     }
