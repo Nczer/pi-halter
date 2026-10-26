@@ -1801,6 +1801,15 @@ describe("D19: judgeWriteOutside — the write bar on the fresh report", () => {
     ).toEqual([]);
   });
 
+  it("the bar faces EVERY reported write, not the first 8 (3.44.0)", () => {
+    // The ledger economy cap used to live inside `sanitizeJudgePaths`, so it
+    // also cut this bar's input: a 12-write report met it on 8 and writes 9+
+    // could auto-allow unchecked — the false-allow direction D19's note claims
+    // is impossible. The cap is now a log-site concern (fallthrough/decision-log).
+    const many = Array.from({ length: 12 }, (_, i) => `${PI}/d${i}/f.txt`);
+    expect(judgeWriteOutside(bashPd("ls"), store, many)).toHaveLength(12);
+  });
+
   it("dedupes dirs and keeps each distinct outside dir", () => {
     const a = path.join(PI, "a");
     const b = path.join(PI, "b");

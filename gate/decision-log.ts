@@ -368,6 +368,14 @@ export interface UnresolvedLogEntry {
    * Session-scoped: these dirs are gone at session_shutdown.
    */
   grantedDirs?: string[];
+  /** Report paths that answered this token beyond the stored cap — the row is
+   *  truncated (3.44.0: the caps used to be silent, which hid evidence). */
+  judgePathsMore?: number;
+  /** The `cmd` text is truncated at the ledger cap (3.44.0). A cut heredoc is
+   *  the known replay hazard — its body lines become segments, which fakes an
+   *  egress/outside-base stop — so a mining pass must treat these rows as
+   *  suspect and recover the full command from its source before replaying. */
+  cmdCut?: boolean;
 }
 
 /**
@@ -399,6 +407,7 @@ export function logUnresolved(e: UnresolvedLogEntry): void {
       ...e,
       cmd: e.cmd.slice(0, LEDGER_CMD_MAX),
     };
+    if (e.cmd.length > LEDGER_CMD_MAX) entry.cmdCut = true;
     appendJsonl(file, JSON.stringify(entry) + "\n");
   } catch {
     /* never throw */
@@ -420,8 +429,10 @@ export interface JudgeLogEntry {
   mode: JudgeLogMode;
   /** The judge model (absent when the failure preceded model resolution). */
   model?: string;
-  /** The operation (command / file path / tool label), truncated. */
+  /** The operation (command / file path / tool label), truncated; `cmdCut`
+   *  says when it was. */
   cmd?: string;
+  cmdCut?: boolean;
   // kind: "diff" — compact stage verdicts, "approve/low" form.
   s1?: string;
   s2?: string;
@@ -459,6 +470,11 @@ export interface JudgeLogEntry {
   // the location fields — one finding per path.
   floorPaths?: string[];
   judgePaths?: string[];
+  /** Stored-side caps (3.44.0): how many report / floor paths the row left
+   *  out. Present only when the row is truncated — a silent cut previously
+   *  lost a real floor miss from the corpus. */
+  judgePathsMore?: number;
+  floorPathsMore?: number;
   floorMisses?: string[];
   contextMisses?: string[];
   roleFloorMisses?: string[];
@@ -481,7 +497,11 @@ export function logJudge(e: Omit<JudgeLogEntry, "ts">): void {
     if (!file) return;
     // Log economy: the ledger is mineable by eye — truncate the operation.
     const line = { ts: new Date().toISOString(), ...e };
-    if (line.cmd) line.cmd = line.cmd.slice(0, LEDGER_CMD_MAX);
+    if (line.cmd) {
+      const cut = line.cmd.length > LEDGER_CMD_MAX;
+      line.cmd = line.cmd.slice(0, LEDGER_CMD_MAX);
+      if (cut) line.cmdCut = true;
+    }
     appendJsonl(file, JSON.stringify(line) + "\n");
   } catch {
     /* never throw */
@@ -563,6 +583,8 @@ export function logJudgePaths(
     cmd: judgeCmdOf(pd),
     floorPaths: f.floorPaths,
     judgePaths: f.judgePaths,
+    judgePathsMore: f.judgePathsMore,
+    floorPathsMore: f.floorPathsMore,
     floorMisses: f.floorMisses,
     contextMisses: f.contextMisses,
     roleFloorMisses: f.roleFloorMisses,

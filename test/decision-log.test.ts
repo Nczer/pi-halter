@@ -336,7 +336,7 @@ describe("unresolved-token log (logUnresolved)", () => {
     }
   });
 
-  it("writes one entry per call (ts, full token, cmd truncated to 1000)", () => {
+  it("writes one entry per call (ts, full token, cmd truncated to 1000 + marked)", () => {
     logUnresolved({
       cmd: "x".repeat(1200),
       cwd: "/c",
@@ -349,6 +349,7 @@ describe("unresolved-token log (logUnresolved)", () => {
     const [entry] = fs.readFileSync(unresolvedFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(entry).toMatchObject({
       cmd: "x".repeat(1000),
+      cmdCut: true,
       cwd: "/c",
       token: "/x/$e/f",
       llm: ["/a"],
@@ -357,6 +358,34 @@ describe("unresolved-token log (logUnresolved)", () => {
       decision: "yes",
     });
     expect(new Date(entry.ts).toString()).not.toBe("Invalid Date");
+  });
+
+  it("a short cmd carries no cmdCut, and a capped judgePaths row says how much it left out", () => {
+    // 3.44.0: the caps used to be silent, which hid evidence when mining — a
+    // cut heredoc cmd reads as a real command (the replay hazard) and a sliced
+    // `judgePaths` list reads as the whole answer set.
+    logUnresolved({
+      cmd: "ls",
+      cwd: "/c",
+      token: "/x/$e/f",
+      persisted: false,
+      outcome: "intent-allowed",
+      decision: "auto-allow",
+      missKind: "outside-path",
+      judgePaths: ["/a", "/b", "/c", "/d", "/e", "/f", "/g", "/h"],
+      judgePathsMore: 3,
+    });
+    logUnresolved({ cmd: "ls", cwd: "/c", token: "$FOO", persisted: false, outcome: "gate-stop" });
+    const [a, b] = fs
+      .readFileSync(unresolvedFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(a.judgePaths).toHaveLength(8);
+    expect(a.judgePathsMore).toBe(3);
+    expect(a.cmdCut).toBeUndefined();
+    expect(b.judgePaths).toBeUndefined();
+    expect(b.judgePathsMore).toBeUndefined();
   });
 
   it("omits the llm key when the resolver found nothing", () => {
@@ -592,6 +621,41 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     logJudge({ kind: "infra", mode: "manual", stage: 1, error: "model-unresolved", cmd: "x".repeat(1200) });
     const [e] = judgeLines();
     expect(e.cmd).toHaveLength(1000);
+  });
+
+  it("a truncated row marks the cut: cmdCut, judgePathsMore, floorPathsMore (3.44.0)", () => {
+    // Silent cuts hid evidence: the 2026-10-26 row stored 8 of 12 reported
+    // paths, so `/tmp/snap-x/memory` — a real floor blind spot — never made it
+    // into the corpus. Now the row says how much it left out.
+    const cwd = "/Users/u/project";
+    const pd = {
+      type: "bash",
+      command: "diff -rq $p/x x",
+      cwd,
+      analysis: {
+        paths: Array.from({ length: 12 }, (_, i) => `${cwd}/d${i}/f`),
+        segments: ["diff -rq $p/x x"],
+        effectiveCwds: [cwd],
+        prompt: { unresolved: [], outsidePaths: [] },
+      },
+    } as never;
+    logJudgePaths(
+      pd,
+      createStore(),
+      v("approve", "low", Array.from({ length: 12 }, (_, i) => `/never/seen/p${i}`)),
+      "dspa",
+    );
+    logJudge({ kind: "infra", mode: "manual", stage: 1, error: "model-unresolved", cmd: "y".repeat(1200) });
+    const pathsRow = judgeLines().find((e) => e.kind === "paths");
+    expect(pathsRow.judgePaths).toHaveLength(8);
+    expect(pathsRow.judgePathsMore).toBe(4);
+    expect(pathsRow.floorPaths).toHaveLength(8);
+    expect(pathsRow.floorPathsMore).toBe(4);
+    // The miss cap stays as it was — it is now the only cap left in the module.
+    expect(pathsRow.floorMisses).toHaveLength(5);
+    const infraRow = judgeLines().find((e) => e.kind === "infra");
+    expect(infraRow.cmd).toHaveLength(1000);
+    expect(infraRow.cmdCut).toBe(true);
   });
 
   it("never throws when the log path is impossible", () => {

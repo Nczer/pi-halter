@@ -25,16 +25,23 @@
  *             plus the ROLE disagreements at locations the floor knows
  *             (roleFloorMisses = the judge says write where the floor's write
  *             set has no entry — a parser role-table gap; roleJudgeMisses = a
- *             floor write operand the verdict never claims as a write)
+ *             floor write operand the verdict never claims as a write), plus how
+ *             much the stored caps hide (judgePathsMore / floorPathsMore /
+ *             cmdCut, counted)
  *             — with error/floor-miss/role rollups. Reads the ledger directly
  *             (not decisions.jsonl), so --file is rarely needed
  *   unresolved the always-on unresolved-token ledger (.log/unresolved.jsonl):
- *             each token's outcome history (prompted / gate-stop / auto-allowed),
+ *             each token's outcome history (prompted / gate-stop / auto-allowed
+ *             / intent-allowed / intent-declined),
  *             whether a confirmed resolution was persisted, the LLM-resolver
  *             dirs, grouped per token — the convergence view (D12), plus the
  *             never-converges class (positional parameters: the store refuses
  *             the grant, so they keep prompting by design) and ledger
- *             contradictions
+ *             contradictions. Intent rows carry the evidence the decision turned
+ *             on (`missKind`, `guard`, the §4.2 `judgePaths`, `grantedDirs`,
+ *             `confirmedPrior`); a row whose `cmd` was sliced at 1000 is marked
+ *             CUT — complete it before replaying it (a cut heredoc body reads
+ *             as segments)
  *   globerr   the always-on glob-verify ledger (.log/glob-err.jsonl): failed
  *             glob probes (pattern + error + cwd), rolled up by pattern — a
  *             healthy run writes nothing, so any line is worth a look
@@ -600,6 +607,14 @@ function judgeCmd() {
     console.log("\nrole: judge side (out-of-cwd floor write operand the verdict never claims as a write — judge reasoning):");
     for (const [m, n] of Object.entries(roleJudgeCount).sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${n}× ${m}`);
   }
+  // 3.44.0: the stored caps are marked, so how much the corpus hides is
+  // measurable. A paths row that names fewer paths than the report/judge gave
+  // is a partial corpus for that row, not an empty one.
+  const cut = pathLines.filter((e) => e.judgePathsMore || e.floorPathsMore).length;
+  const cmdCutN = F.filter((e) => e.cmdCut).length;
+  if (cut || cmdCutN) {
+    console.log(`\nstored caps: ${cut}/${pathLines.length} paths rows sliced (judgePathsMore/floorPathsMore), ${cmdCutN} rows carry a cut cmd (cmdCut)`);
+  }
   if (F.length) {
     console.log("\nlines:");
     for (const e of F) {
@@ -607,8 +622,8 @@ function judgeCmd() {
       if (e.s1) parts.push(`${e.s1} → ${e.s2}`);
       if (e.error) parts.push(e.error);
       if (e.kind === "paths") {
-        if (e.floorPaths?.length) parts.push(`floor:  ${trunc(e.floorPaths.join(", "), 100)}`);
-        if (e.judgePaths?.length) parts.push(`judge:  ${trunc(e.judgePaths.join(", "), 100)}`);
+        if (e.floorPaths?.length) parts.push(`floor:  ${trunc(e.floorPaths.join(", "), 100)}${e.floorPathsMore ? ` +${e.floorPathsMore}` : ""}`);
+        if (e.judgePaths?.length) parts.push(`judge:  ${trunc(e.judgePaths.join(", "), 100)}${e.judgePathsMore ? ` +${e.judgePathsMore}` : ""}`);
         const mm = floorMissesOf(e);
         if (mm?.length) parts.push(`MISS:   ${trunc(mm.join(", "), 100)}`);
         if (e.contextMisses?.length) parts.push(`CTX:    ${trunc(e.contextMisses.join(", "), 100)}`);
@@ -680,7 +695,7 @@ function unresolvedCmd() {
     if (r.persisted) bits.push(`persisted ${r.persisted}/${r.es.length}`);
     if (r.dirs.length) bits.push(`→ LLM: ${trunc(r.dirs.join(", "), 60)}`);
     console.log(`  ${bits.join("  ")}`);
-    console.log(`         cmd: ${trunc(oneLine(r.last.cmd ?? ""), 150)}`);
+    console.log(`         cmd: ${trunc(oneLine(r.last.cmd ?? ""), 150)}${r.last.cmdCut ? "  [CUT at 1000 — replay-suspect: complete the row first]" : ""}`);
   };
   const section = (label, arr) => {
     console.log(`\n## ${label} (${arr.length})`);

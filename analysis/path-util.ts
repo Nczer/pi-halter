@@ -97,3 +97,33 @@ export function shortenToken(token: string, max = 60): string {
   if (line.length <= max) return line;
   return line.slice(0, max - 1) + "…";
 }
+
+/** A path segment with anything dynamic in it: a variable, a substitution,
+ *  a glob or extglob brace, an unresolved-marker sentinel, an escape. */
+const DYNAMIC_SEGMENT_RE = /[$`*[\]{}<>\\]/;
+
+/**
+ * The static PREFIX anchor of a path token — the deepest directory every
+ * expansion of that token must sit under, i.e. what the floor knows even when
+ * it cannot name the leaf. "" (no anchor) when the token is relative or when
+ * its first segment is already dynamic.
+ *
+ * Used in both directions of the same decision: the gate cuts a miss's anchor
+ * here (dspa-gate.anchorOf, and §4.2 requires a reported path to land under
+ * it), and the D13 diagnostic counts a judge report as covered by the floor
+ * when it lands under the anchor of one of the floor's own paths (3.44.0 —
+ * without this, `/tmp/snap-x/exa` read as a blind spot for a floor path of
+ * `/tmp/snap-x/$e`).
+ */
+export function staticPrefixOf(raw: string): string {
+  const text = expandTilde(raw);
+  const body = text.startsWith(`${OPAQUE_VAR_DIR}/`)
+    ? `/${text.slice(OPAQUE_VAR_DIR.length + 1)}`
+    : text;
+  if (!path.isAbsolute(body)) return "";
+  const comps = body.split("/").slice(1);
+  let i = 0;
+  while (i < comps.length && comps[i] !== "" && !DYNAMIC_SEGMENT_RE.test(comps[i])) i++;
+  if (i === 0) return ""; // nothing static before the first dynamic part
+  return path.normalize(`/${comps.slice(0, i).join("/")}`);
+}

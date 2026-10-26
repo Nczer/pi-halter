@@ -19,7 +19,7 @@ import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decis
 import { findExecutedScript } from "../analysis/script-payload";
 import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, answeredMissPaths, intentGuardFaults, makeManualBar, type DspaGateResult, type MissAnswers, type MissFact } from "./dspa-gate";
 import { resolveUnresolvedPaths } from "../judge/path-resolver";
-import { sanitizeJudgePaths } from "../judge/paths";
+import { sanitizeJudgePaths, JUDGE_PATHS_MAX } from "../judge/paths";
 import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
 import { pdTargetLabel } from "../ui/prompt-builder";
@@ -173,8 +173,12 @@ function logIntentMisses(
   for (const m of misses) {
     // The row carries the evidence the decision turned on: which reported
     // paths answered THIS token (§4.2's match set, §7 `judgePaths`) and
-    // whether the operator had already confirmed this location.
+    // whether the operator had already confirmed this location. The match set
+    // is uncapped in the guard (3.44.0 — a cap there hid answers and produced
+    // false stops); the ROW slices to the ledger economy cap and records the
+    // remainder, so a truncated row is visible when mined.
     const answered = answeredMissPaths(m, reported, answers);
+    const shown = answered.slice(0, JUDGE_PATHS_MAX);
     logUnresolved({
       cmd: pd.command,
       cwd: pd.cwd,
@@ -184,7 +188,14 @@ function logIntentMisses(
       decision: outcome === "intent-allowed" ? "auto-allow" : undefined,
       missKind: m.kind,
       guard,
-      ...(answered.length > 0 ? { judgePaths: answered } : {}),
+      ...(shown.length > 0
+        ? {
+            judgePaths: shown,
+            ...(answered.length > shown.length
+              ? { judgePathsMore: answered.length - shown.length }
+              : {}),
+          }
+        : {}),
       ...(learnedDirs && learnedDirs.length > 0 ? { grantedDirs: learnedDirs } : {}),
       confirmedPrior: m.confirmedPrior,
     });
@@ -274,7 +285,9 @@ async function tryIntentOverMiss(
   const v2 = o2.verdict;
   logJudgeDiff(pd, "dspa", null, v2);
   // One sanitized report serves both the §4.2 guard and the ledger rows, so a
-  // row cannot disagree with the decision it records (§7 `judgePaths`).
+  // row cannot disagree with the decision it records (§7 `judgePaths`). Full
+  // report, no cap: a truncated answer set can only have made this stop stick
+  // when the judge HAD acknowledged the location (3.44.0).
   const reported = sanitizeJudgePaths(v2?.paths, pd.cwd);
   // A decline is the FLOOR's stop standing — same counters and same prompt
   // shape as the D16 advisory path, plus the stage-2 verdict when it ran.

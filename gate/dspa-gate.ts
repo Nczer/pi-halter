@@ -82,7 +82,7 @@ import type {PromptData} from "../decide/types";
 import type { Store } from "./store";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { resolveOpaqueRefs } from "../analysis/var-resolution";
-import { expandTilde, shortenToken } from "../analysis/path-util";
+import { expandTilde, shortenToken, staticPrefixOf } from "../analysis/path-util";
 import { isPathWarnedResolved, resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
 import { scriptFilePathInSegment } from "../analysis/script-payload";
 import { sanitizeJudgePaths } from "../judge/paths";
@@ -218,6 +218,9 @@ export function judgeWriteOutside(
   const normCwd = path.resolve(expandTilde(pd.cwd));
   const out: string[] = [];
   for (const p of sanitizeJudgePaths(writes, pd.cwd)) {
+    // Uncapped on purpose (3.44.0): this IS the D19 bar, so every write the
+    // judge claims faces it. The old 8-path log cap lived inside
+    // `sanitizeJudgePaths`, which made writes 9+ of a long report unenforced.
     if (isInsideCwd(p, normCwd)) continue;
     if (!insideManualWriteBar(store, p, pd.cwd)) out.push(path.dirname(p));
   }
@@ -703,28 +706,6 @@ const CLASS_LABEL_REASON_RE = /^\[Pattern\]\s/;
  * Coupled to the label text — see config/dangerous-patterns.ts.
  */
 const REMOTE_EXEC_LABEL_RE = /download & execute/;
-
-/**
- * The statically knowable leading dirs of a location text — the place §4.2
- * can anchor a judge report. Cuts at the first dynamic part (a variable, a
- * substitution, a glob, an unresolved marker). A relative text has no anchor
- * of its own and returns "": the report cannot vouch for a location whose
- * base is itself unknown, so such a fact is answered by the per-token path
- * resolver instead (§4.2 amendment, 3.41.0 — see MissAnswers).
- */
-const DYNAMIC_SEGMENT_RE = /[$`*[\]{}<>\\]/;
-export function staticPrefixOf(raw: string): string {
-  const text = expandTilde(raw);
-  const body = text.startsWith(`${OPAQUE_VAR_DIR}/`)
-    ? `/${text.slice(OPAQUE_VAR_DIR.length + 1)}`
-    : text;
-  if (!path.isAbsolute(body)) return "";
-  const comps = body.split("/").slice(1);
-  let i = 0;
-  while (i < comps.length && comps[i] !== "" && !DYNAMIC_SEGMENT_RE.test(comps[i])) i++;
-  if (i === 0) return ""; // nothing static before the first dynamic part
-  return path.normalize(`/${comps.slice(0, i).join("/")}`);
-}
 
 /** Pseudo-fs files that hold secrets — not in `warnPaths` (name-based) but the
  *  same class §4.3 refuses to judge (the Oct-18 ledger has a real stop on

@@ -8,6 +8,23 @@
  * never saw (its paths list, the outside list, confirmed resolution dirs,
  * and the cwd are all the floor's own knowledge).
  *
+ * 3.44.0, two corrections to how this module's caps are applied:
+ *  - `sanitizeJudgePaths` no longer truncates. The 8-path economy cap was
+ *    baked into the sanitizer, so it also cut the INPUTS: the D19 write bar
+ *    (`dspa-gate.judgeWriteOutside`) checked only the first 8 reported writes
+ *    and §4.2's answer set only the first 8 reported paths. A report of 12
+ *    writes therefore faced the bar on 8 — a 9th reported write outside the
+ *    manual write bar could auto-allow unchecked, which is the false-allow
+ *    direction this file's D19 note claims is impossible. The cap is now a
+ *    LOG-SITE concern (`JUDGE_PATHS_MAX` applied where a row is written), and
+ *    a truncated row says so (`judgePathsMore` / `floorPathsMore`).
+ *  - coverage uses the floor's OWN anchor (3.44.0): a floor path with a
+ *    dynamic segment (`/tmp/snap-x/$e`, `/etc/*.conf`) pins a directory, so
+ *    `staticPrefixOf` of it joins the covered set — exactly the anchor the
+ *    gate computes for the same token in `dspa-gate.anchorOf`. Without it the
+ *    2026-10-26 ledger burned 2 of 5 miss slots on `/tmp/snap-x/exa` and
+ *    `/tmp/snap-x/gallop`, locations the floor had pinned.
+ *
  * The mismatch is a DIAGNOSTIC, not enforcement:
  *  - the judge stays advisory: the report may inform its verdict (an
  *    unexplained path is a hidden effect — deny/defer per its rules), but
@@ -51,7 +68,7 @@
  * the opposite direction.
  * tools/log-inspect.mjs `dspa --paths` lists them.
  */
-import { expandTilde } from "../analysis/path-util";
+import { expandTilde, staticPrefixOf } from "../analysis/path-util";
 import { resolvePathReal } from "../analysis/path-analysis";
 import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
@@ -62,8 +79,11 @@ import type { JudgeResult } from "./judge";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { sessionContextPaths } from "./session-context";
 
-/** Log economy: cap the stored report. */
-const JUDGE_PATHS_MAX = 8;
+/**
+ * Log economy: cap the STORED report and floor set. Enforcement and the §4.2
+ * answer set are never capped — see the header.
+ */
+export const JUDGE_PATHS_MAX = 8;
 /** Log economy: cap the stored floor misses. */
 const JUDGE_MISSES_MAX = 5;
 
@@ -98,7 +118,10 @@ function toAbs(p: string, cwd: string): string {
 /**
  * Sanitize the model's raw report to concrete absolute paths: sentinels
  * dropped, ~ expanded, relatives resolved against the operation's cwd,
- * deduped, capped. Pure model text is never stored — only this form.
+ * deduped. NOT capped — the callers that enforce (the D19 write bar) and the
+ * §4.2 answer set need every path the judge claimed; only the ledger rows
+ * slice, and they record the remainder. Pure model text is never stored —
+ * only this form.
  */
 export function sanitizeJudgePaths(
   reported: string[] | undefined,
@@ -112,7 +135,6 @@ export function sanitizeJudgePaths(
     if (!p || isSentinel(p) || URL_SHAPED_RE.test(p)) continue;
     const abs = toAbs(p, cwd);
     if (!out.includes(abs)) out.push(abs);
-    if (out.length >= JUDGE_PATHS_MAX) break;
   }
   return out;
 }
@@ -138,7 +160,7 @@ function isCovered(p: string, known: string[]): boolean {
 }
 
 export interface JudgePathReport {
-  /** The model's touched paths, sanitized (omitted when empty). */
+  /** The model's touched paths, sanitized, uncapped (omitted when empty). */
   paths?: string[];
   /** Judge-reported paths not covered by the floor's knowledge — the
    *  floor's blind spots (omitted when empty). */
@@ -194,7 +216,15 @@ export function judgePathReport(
   const paths = sanitizeJudgePaths(reported, floor.cwd);
   if (paths.length === 0) return {};
   const floorConcrete = floor.floorPaths.filter((p) => p.startsWith("/") && !isSentinel(p));
-  const known = [floor.cwd, ...(floor.confirmedDirs ?? []), ...floorConcrete];
+  // The floor's pinned anchors: a floor path with a dynamic segment names a
+  // DIRECTORY it does know (`/tmp/snap-x/$e` → `/tmp/snap-x`) even though it
+  // cannot name the leaf. Same rule the gate applies to the same token
+  // (`dspa-gate.anchorOf` / `staticPrefixOf`), so the diagnostic and the
+  // enforcement agree about what the floor saw.
+  const anchors = floorConcrete
+    .map((p) => staticPrefixOf(p))
+    .filter((a) => a !== "" && a !== "/" && !floorConcrete.includes(a));
+  const known = [floor.cwd, ...(floor.confirmedDirs ?? []), ...floorConcrete, ...anchors];
   const misses = paths.filter((p) => !isCovered(p, known));
   // Context paths arrive as written in the session (relative, ~, `..`); they
   // must be compared in the same absolute form the report was sanitized to.
@@ -278,7 +308,11 @@ export function judgePathLogFields(
   writes?: string[],
 ): {
   judgePaths?: string[];
+  /** Report paths beyond the stored cap (only when the row is truncated). */
+  judgePathsMore?: number;
   floorPaths?: string[];
+  /** Floor paths beyond the stored cap (only when the row is truncated). */
+  floorPathsMore?: number;
   floorMisses?: string[];
   contextMisses?: string[];
   roleFloorMisses?: string[];
@@ -314,9 +348,19 @@ export function judgePathLogFields(
     contextPaths: ctx ? sessionContextPaths(ctx, store) : undefined,
     floorWritePaths: analysis.writePaths,
   }, writes);
+  // The economy cap lives HERE, at the row-writing site, and a cut row says so
+  // — a silent cut hides a real blind spot (2026-10-26 judge.jsonl row: 12
+  // reported paths, 8 stored, `/tmp/snap-x/memory` never recorded).
+  const judgePaths = (r.paths ?? []).slice(0, JUDGE_PATHS_MAX);
+  const judgePathsMore = (r.paths?.length ?? 0) - judgePaths.length;
+  const storedFloorPaths = floorPaths.slice(0, JUDGE_PATHS_MAX);
   return {
-    judgePaths: r.paths,
-    floorPaths: floorPaths.slice(0, JUDGE_PATHS_MAX),
+    judgePaths,
+    ...(judgePathsMore > 0 ? { judgePathsMore } : {}),
+    floorPaths: storedFloorPaths,
+    ...(floorPaths.length > storedFloorPaths.length
+      ? { floorPathsMore: floorPaths.length - storedFloorPaths.length }
+      : {}),
     floorMisses: r.floorMisses,
     contextMisses: r.contextMisses,
     roleFloorMisses: r.roleFloorMisses,

@@ -49,9 +49,13 @@ describe("sanitizeJudgePaths", () => {
     ).toEqual([`${cwd}/real/file`]);
   });
 
-  it("caps at 8 and returns [] for nothing usable", () => {
+  it("keeps the WHOLE report — the sanitizer is not capped (3.44.0)", () => {
+    // The 8-path cap used to live here, so it also cut the INPUTS: the D19
+    // write bar checked 8 of 12 reported writes, and §4.2's answer set hid
+    // answers past #8. The cap is a row-writing concern (JUDGE_PATHS_MAX),
+    // and a cut row records the remainder.
     const many = Array.from({ length: 20 }, (_, i) => `/p${i}`);
-    expect(sanitizeJudgePaths(many, cwd)).toHaveLength(8);
+    expect(sanitizeJudgePaths(many, cwd)).toHaveLength(20);
     expect(sanitizeJudgePaths(undefined, cwd)).toEqual([]);
     expect(sanitizeJudgePaths([], cwd)).toEqual([]);
     expect(sanitizeJudgePaths(["  "], cwd)).toEqual([]);
@@ -96,6 +100,34 @@ describe("judgePathReport", () => {
     // the sanitized `writes` list directly); this is the diagnostic only.
     const r = judgePathReport(["/y"], { cwd: "/x", floorPaths: ["/y/z"] });
     expect(r.floorMisses).toBeUndefined();
+  });
+
+  it("a dynamic floor path covers its ANCHOR dir — the gate's own rule (3.44.0)", () => {
+    // The floor's `$e`/glob token cannot name a leaf but pins the directory:
+    // the 2026-10-26 ledger burned 2 of 5 miss slots on /tmp/snap-x/exa and
+    // /tmp/snap-x/gallop for a floor that had /tmp/snap-x/$e.
+    const r = judgePathReport(
+      ["/tmp/snap-x/exa", "/tmp/snap-x/gallop", "/tmp/snap-x/memory"],
+      { cwd, floorPaths: ["/tmp/snap-x/$e", "/Users/u/project/data/*.log"] },
+    );
+    expect(r.floorMisses).toBeUndefined();
+    // …and the anchor is a directory, not a free pass: an unrelated report
+    // under no floor path is still a blind spot.
+    const r2 = judgePathReport(["/tmp/elsewhere/x"], {
+      cwd,
+      floorPaths: ["/tmp/snap-x/$e"],
+    });
+    expect(r2.floorMisses).toEqual(["/tmp/elsewhere/x"]);
+  });
+
+  it("a floor path whose FIRST segment is dynamic gives the floor no anchor", () => {
+    // `/[abc]/x` pins no directory — the whole first segment is unknown — so
+    // the report stays a blind spot instead of being absorbed by a fake root.
+    const r = judgePathReport(["/[abc]/y"], {
+      cwd,
+      floorPaths: ["/[abc]/x"],
+    });
+    expect(r.floorMisses).toEqual(["/[abc]/y"]);
   });
 
   it("contextMisses: a miss the judge only saw in the Session context section is split out, never suppressed", () => {
