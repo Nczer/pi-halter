@@ -421,8 +421,8 @@ export const BARE_REDIRECT_RE = /^(?:\d{0,1}(?:&?>|>&)|\d{0,1}<)$/;
  *  (`origin/main..HEAD`) and a slash-bearing quoted label
  *  (`=== ahead/behind (local..origin/main) ===`) look dot-relative: after a cd
  *  they were re-based into locations the command never touches
- *  (`/home/nczer/Strata/origin/main..HEAD`) and the revspec even surfaced a
- *  fake `/home/nczer/Strata/origin` outside-dir (three 2026-10-24 ledger rows). */
+ *  (`$HOME/Strata/origin/main..HEAD`) and the revspec even surfaced a
+ *  fake `$HOME/Strata/origin` outside-dir (three 2026-10-24 ledger rows). */
 const DOT_SEGMENT_RE = /(^|\/)\.\.(\/|$)/;
 
 /** Token names a location resolvable (or already marker-flagged) by the path set. */

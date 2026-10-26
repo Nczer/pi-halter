@@ -320,7 +320,7 @@ describe("reResolveCwdDependentPaths", () => {
     // The old clause accepted `..` anywhere before a `/`, so a git revspec or a
     // slash-bearing label became a dot-relative token and was re-based under a
     // post-cd base into a path the command never touches (three 2026-10-24 rows:
-    // `/home/nczer/Strata/origin/main..HEAD`, `…/=== … (local..origin/main) ===`).
+    // `$HOME/Strata/origin/main..HEAD`, `…/=== … (local..origin/main) ===`).
     expect(reResolveCwdDependentPaths(seg("git rev-list --count origin/main..HEAD"), "/home/u/repo")).toEqual([]);
     expect(reResolveCwdDependentPaths(seg('echo "=== ahead/behind (local..origin/main) ==="'), "/home/u/repo")).toEqual([]);
     expect(reResolveCwdDependentPaths(seg("git log main..release -- src/x.c"), "/home/u/repo")).toEqual([]);
