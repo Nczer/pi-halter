@@ -1,5 +1,49 @@
 # Changelog
 
+## 3.44.1 — 2026-10-26
+**3.44.0 left its own cap rule unapplied in the same file, and the mining tool was
+still reading field names the ledger stopped writing.**
+
+- **What the operator saw.** Nothing in the runtime — none of this gates. Both
+  defects showed in the corpus and in the reader.
+  (a) `JUDGE_MISSES_MAX = 5` sliced `floorMisses`, `contextMisses`,
+  `roleFloorMisses` and `roleJudgeMisses` **silently**. 3.44.0 named it "the only
+  cap left in the module" and left it exactly as silent as the cap it had just
+  moved: the entry past slot 5 is the likeliest to be the blind spot worth
+  finding, and the miss list is the reason a `paths` row exists.
+  (b) `tools/log-inspect.mjs` read `e.floorMisses ?? e.judgePathMisses ?? e.misses`
+  in five places. `judgePathMisses` is the pre-rename D13 name and `misses` was
+  never a ledger field; the live corpus confirms it (`judge.jsonl`: 2 rows with
+  `floorMisses`, 0 with `judgePathMisses`; decisions.jsonl does not exist, and the
+  pre-rename corpus is gone). Worse than dead code: `dspa --paths` printed `MISS:`
+  from the RETIRED field only, so that view listed no misses at all for current
+  rows, and the `dspa` listing's `pathMisses:` line could never fire.
+- **Why it happened.** The ledgers are version-bound (`decisions.jsonl` is
+  deleted when gate code reloads), so alias readers were written for a schema
+  generation whose corpus no longer exists — and nothing in the suite exercises a
+  `.mjs` tool, so a wrong field name is invisible to `npm test`.
+- **The fix.** (1) The four disagreement lists are uncapped. The row economy cap
+  stays on the SETS — `JUDGE_PATHS_MAX` applied at the row-writing site, marked by
+  `judgePathsMore`/`floorPathsMore`, `LEDGER_CMD_MAX` marked by `cmdCut` — so the
+  rule is one sentence again: a cap lives where a row is written, and a cut row
+  says so. (2) The tool reads current field names only: `floorMissesOf` and its
+  fallbacks are gone, `dspa --paths` prints `MISS:` from `floorMisses`, and the
+  header states the convention (when `decision-log.ts` renames a field, the tool
+  is renamed in the same commit). `docs/dspa-redesign.md` still described the
+  pre-3.44.0 sanitizer cap and the 5-cap; corrected.
+- **Not in scope.** Cutting the role lists. `roleFloorMisses`/`roleJudgeMisses`
+  have produced no finding in the live corpus (the two rows there are mine); they
+  are a candidate to drop after the next mining round, which is a measurement
+  decision, not a bug fix.
+- **Tests.** 2 new cap-free expectations (12 report paths → 12 `floorMisses`; 8
+  unclaimed out-of-cwd floor writes → 8 `roleJudgeMisses`) replacing the two
+  cap tests, plus a new repo gate `repo-hygiene.test.ts`: it fails if any tracked
+  text file carries the running host's account name in a path (`home/<user>` or
+  `~<user>`), the name taken from the host so Linux and macOS each check their
+  own. That leak class reached a commit twice and was caught by hand twice
+  (probe: an intent-to-add file naming the account turned the gate red and named
+  the file). Suite: 4382 passed (59 files), `tsc --noEmit` clean.
+
 ## 3.44.0 — 2026-10-26
 **The ledger's economy caps had moved inside the sanitizer, so they were cutting
 what the FLOOR enforces — and four of them cut silently.**
