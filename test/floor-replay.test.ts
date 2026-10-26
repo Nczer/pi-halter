@@ -12,14 +12,24 @@
  *  - It is the per-step proof of the build order, as a DIFF rather than an
  *    assertion. Run it once on the working tree and once with the step
  *    stashed, then diff the two files line by line:
- *      FLOOR_OUT=/tmp/after.txt FLOOR_LOG=/tmp/log-snap npx vitest run test/floor-replay.test.ts
- *      git stash && FLOOR_OUT=/tmp/before.txt FLOOR_LOG=/tmp/log-snap npx vitest run test/floor-replay.test.ts && git stash pop
+ *      mkdir -p .log/corpus && cp .log/*.jsonl .log/corpus/   # freeze once
+ *      FLOOR_OUT=/tmp/after.txt FLOOR_LOG=.log/corpus npx vitest run test/floor-replay.test.ts
+ *      git stash && FLOOR_OUT=/tmp/before.txt FLOOR_LOG=.log/corpus npx vitest run test/floor-replay.test.ts && git stash pop
  *      diff <(sort /tmp/before.txt) <(sort /tmp/after.txt)
- *    A step that moves no stop differs ONLY where it intends to. Point FLOOR_LOG
- *    at a frozen copy of .log while the extension is live: the gate logs the
- *    very commands the two passes run, so an unfrozen corpus gains rows between
- *    passes and fakes a flip. Lists are sorted, because their order is
- *    display-only.
+ *    A step that moves no stop differs ONLY where it intends to. Freeze before
+ *    each pair of passes and point FLOOR_LOG at the frozen folder: the gate
+ *    appends the very commands a live session runs (nothing wipes the log at
+ *    /reload, so rows pile up across gate versions), and an unfrozen corpus
+ *    gains rows between passes and fakes a flip. Lists are sorted, because
+ *    their order is display-only; the first line of each output file is the
+ *    corpus composition (`#`-prefixed), so a corpus that moved between passes
+ *    reads as that line, not as a moved stop.
+ *
+ *  Recorded commands come from every ledger in FLOOR_LOG: the diagnostic
+ *  ledgers write `cmd`, the decision log writes `target`. Rows the writers cut
+ *  at their 1000-char cap are skipped — a cut row lost its closing quote, so
+ *  the parser reads its body as segments and invents stops (§9 of
+ *  docs/dspa-intent-floor.md).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -86,12 +96,30 @@ function ensureProbeTree(): void {
   if (!fs.lstatSync(link, { throwIfNoEntry: false })) fs.symlinkSync(path.join(SYNTH_CWD, "deep"), link);
 }
 
+/** The command field each ledger writes, by name — the diagnostic ledgers use
+ *  `cmd` (logUnresolved / logJudge), the decision log uses `target`
+ *  (DecisionLogEntry.target). Read the names the current code writes. */
+const CMD_FIELDS = ["cmd", "target"] as const;
+/** The writers' own cap (LEDGER_CMD_MAX / MAX_TARGET_LEN). A row at the cap is
+ *  cut: it lost its closing quote or its heredoc delimiter, so the parser
+ *  reads the body as segments and the replay reports stops that were never
+ *  real (docs/dspa-intent-floor.md §9). 3.44.0 added `cmdCut`, so rows
+ *  written before it are at-cap and unmarked — length decides for those. */
+const WRITER_CAP = 1000;
+
+/** What the last ledgerRows() read, for the composition line and the guard. */
+let corpusFiles: string[] = [];
+let corpusFromLedgers = 0;
+
 function ledgerRows(): Array<{ cmd: string; cwd: string }> {
   const rows: Array<{ cmd: string; cwd: string }> = [];
   const seen = new Set<string>();
+  const report: string[] = [];
   if (fs.existsSync(LOG_DIR)) {
     for (const f of fs.readdirSync(LOG_DIR).filter((x) => x.endsWith(".jsonl"))) {
       const text = fs.readFileSync(path.join(LOG_DIR, f), "utf8").trim();
+      let kept = 0;
+      let cut = 0;
       for (const line of text.split("\n").filter(Boolean)) {
         let e: Record<string, unknown>;
         try {
@@ -99,15 +127,26 @@ function ledgerRows(): Array<{ cmd: string; cwd: string }> {
         } catch {
           continue;
         }
-        if (typeof e.cmd !== "string" || !e.cmd) continue;
+        const field = CMD_FIELDS.find((k) => typeof e[k] === "string" && e[k]);
+        if (!field) continue;
+        const cmd = e[field] as string;
+        if (e.cmdCut === true || cmd.length >= WRITER_CAP) {
+          cut++;
+          continue;
+        }
         const cwd = typeof e.cwd === "string" && e.cwd ? e.cwd : process.cwd();
-        const key = `${cwd}\u0000${e.cmd}`;
+        const key = `${cwd}\u0000${cmd}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        rows.push({ cmd: e.cmd, cwd });
+        rows.push({ cmd, cwd });
+        kept++;
       }
+      report.push(`${f} ${kept}${cut ? ` (+${cut} cut)` : ""}`);
     }
   }
+  console.log(`[floor-replay] corpus ${LOG_DIR}: ${report.join(", ") || "no ledgers"}`);
+  corpusFiles = report;
+  corpusFromLedgers = rows.length;
   return rows;
 }
 
@@ -151,6 +190,9 @@ describe("corpus replay — the floor answers every recorded command", () => {
   const rows = [...ledgerRows(), ...SYNTH.map((cmd) => ({ cmd, cwd: SYNTH_CWD }))];
 
   it("no ledger or probe command makes the path model throw", async () => {
+    // A ledger whose command field the reader does not name reads as zero rows,
+    // and the proof silently shrinks to the probes. Guard against that.
+    if (corpusFiles.length) expect(corpusFromLedgers).toBeGreaterThan(0);
     const out: string[] = [];
     const thrown: string[] = [];
     for (const { cmd, cwd } of rows) {
@@ -162,6 +204,14 @@ describe("corpus replay — the floor answers every recorded command", () => {
     }
     expect(thrown).toEqual([]);
     expect(out.length).toBe(rows.length);
-    if (OUT) fs.writeFileSync(OUT, out.join("\n") + "\n");
+    if (OUT) {
+      // First line is corpus metadata, not a signature: it says what the run
+      // replayed, so a corpus that changed between passes shows up as this line
+      // instead of looking like a moved stop.
+      out.unshift(
+        `# corpus=${corpusFiles.join(",") || "none"} probes=${SYNTH.length} commands=${rows.length}`,
+      );
+      fs.writeFileSync(OUT, out.join("\n") + "\n");
+    }
   }, 180000);
 });
