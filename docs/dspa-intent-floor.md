@@ -789,7 +789,7 @@ Still fail-open / invisible to the floor:
   https://api.io/x | python3 -c 'json.load(sys.stdin)'` stops absolutely. Only
   loopback locality is exempt (`isLoopbackEgress`); that boundary is deliberate.
 
-### Filed 2026-10-26 from the same corpus (both need their own grill)
+### Filed 2026-10-26 from the same corpus (both decided the same day — L2 and L5 below)
 
 - A brace ALTERNATION operand is ONE token to the parser, so the floor knows its
   literal text and no location it names: `ls ~/{Applications,apps,bin,.local/bin}`
@@ -808,6 +808,84 @@ Still fail-open / invisible to the floor:
   var-resolution.ts` refuses env values on purpose ("anything the environment can
   hold a path in"), so binding one value is a policy change — it needs a HOME-style
   reassignment guard (`XDG_RUNTIME_DIR=/evil ls …`) before it is worth building.
+
+### Decided 2026-10-26 in the location-model grill (unbuilt)
+
+Goal of that grill: ONE record per path word in the command text, so the floor
+stops re-deriving structure from strings. Measured on 3.44.1: 15
+`path.dirname` sites across 7 files, 5 separate "is this inside that folder?"
+tests, 18 hand-written `x === r || x.startsWith(r + "/")` comparisons. The holes
+that class already produced: a granted dir cut out of the middle of a `{a,b}`
+group, which can never bind (3.44.0), and an anchor computed twice that
+disagreed with itself, which reported a blind spot that did not exist (3.44.0).
+
+- **L1 — the unit is the WORD, not the finished path.** One record per word
+  holds: the word as typed; the locations it can become; the folder it must sit
+  in when the last part cannot be named (what `staticPrefixOf` computes today);
+  what kind of word it is (exact, wildcard, `{a,b}` group, unbound `$VAR` /
+  `$(…)`, or under an unknown base folder); and whether the command reads or
+  writes it (the role rule, §"Argument roles"). Every path list the gate, the
+  prompt and the ledgers read is BUILT from these records — never re-derived
+  from the text where it is used. The word stays the identity: that is already
+  how `store.confirmResolution` keys a grant (a grant vouches for the spelling,
+  never for a path it never saw).
+- **L2 — a `{a,b}` group opens into the real words it names.** `ls ~/{a,b}`
+  becomes `~/a` and `~/b`, each judged on its own, so the prompt names real
+  folders and an approval can remember a folder that exists. Limits: at most 16
+  words out of one token, nesting no deeper than 3 (`SUBST_MAX_DEPTH` already uses
+  that number for substitution nesting). Past either limit the word names an
+  unreadable location, which is what 3.44.0 does with every group today — so the
+  refusal stays as the fallback and a range like `{1..200}` is honestly refused.
+  The arithmetic already exists for the credential scan (`braceVariants`,
+  `analysis/credentials.ts`): the path model uses it, and the per-token brace
+  refusal in `command-analysis` goes away with it rather than staying behind it.
+- **L3 — what an approval remembers is the fixed part of the word.** Everything
+  before the first unreadable part: `~/notes/*` remembers `~/notes`, and the
+  branches of a group are remembered one per branch. A read word remembers a READ
+  folder only (unchanged: a learned folder never moves the write bar, and a write
+  needs an explicit click). Today that is `outsideDirs`, the folder of each path
+  cut at the last slash (`decide/rule-generator.ts:70`); it becomes one function
+  over the records.
+- **L4 — every path is in real-disk form before it is stored or compared.**
+  `resolvePathReal` (`analysis/path-analysis.ts:53`) is the only normalization: it
+  follows symlinks, and for a path that does not exist yet it resolves the deepest
+  folder that does exist and re-appends the rest (memoized, so the cost is already
+  paid). One `under(a, b)` answers "is this inside that", and it refuses an input
+  that has not been through that form — a loud failure instead of a quiet wrong
+  answer. It replaces 5 hand-written containment tests and 18 inline
+  `x === r || x.startsWith(r + "/")` comparisons, and with them the class of bug
+  where the gate's answer and the ledger diagnostic's answer disagreed about the
+  same token (3.44.0).
+- **L5 — a short named list of environment values may be bound:**
+  `$XDG_RUNTIME_DIR`, `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, `$XDG_CACHE_HOME`,
+  `$TMPDIR`. Nothing else the environment holds. The guard that exists for `$HOME`
+  applies: a command that assigns or unsets one of those names throws the
+  environment value away, and the record keeps that the value came from the
+  environment so the prompt can say so. Why the bet is safe here: pi spawns a
+  fresh shell per bash call with `{ ...process.env }` plus a PATH entry
+  (`pi/packages/coding-agent/src/utils/shell.ts:138`, spawn at
+  `core/tools/bash.ts:112`, env built at `:193` — only `PI_*` is rewritten), and
+  halter reads `process.env` in that same process, so the two environments are the
+  same one. Residual risk, named: an extension that registers a bash spawn hook
+  could rewrite the environment for one command only, and halter would not know.
+  None of the installed extensions does today.
+- **L6 — the marker strings become display only.** "I cannot name this, but it
+  sits under X" is a field of the record, and the decision code reads that field;
+  `<unresolved-var>` / `<unresolved-cwd>` stay as what the record prints when a
+  prompt, a ledger row or a §4.2 guard string needs one. Deleting the fake-folder
+  spelling is a change of its own — measured on 3.44.1 there are 58 source sites
+  and 12 test files that touch it, and every one of them today has to remember the
+  marker is not a path (`isSentinel` in `judge/paths.ts` is one of them).
+
+**Build order (three releases, each green alone).** (1) one `under(a, b)` and one
+folder-derivation function, replacing the 15 `path.dirname` sites and the 5
+containment tests, no new type — where the old copies disagreed is a bug fix and
+gets named in that entry; (2) the record becomes the single producer inside the
+analysis, every path list is built from it, groups open under L2's limits; (3)
+L5's variable list and L6's marker demotion. Proof per step: the suite (4382
+tests) plus the structural ones that catch a stop moving by accident —
+`metamorphic-cd`, `gate-boundary`, `round-trip` — and a replay of the frozen
+ledger rows, diffed for which commands now stop.
 
 ### Known gaps opened by the egress split (filed 2026-10-19, step 2b)
 
