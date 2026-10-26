@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { allowedReadPaths, allowedWritePaths, pathAwareCommands, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, codeBodiesWrite, type CodeBody } from "../config";
-import { expandTilde, resolvePathReal } from "./path-analysis";
-import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandHomeToken, expandHomeLiterals } from "./path-util";
+import { resolvePathReal } from "./path-analysis";
+import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandTilde, expandHomeToken, expandHomeLiterals, under } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
 import { resolveDelegatedTokens } from "./wrapper-unwrap";
 import { classifyArgv0 } from "./argv0-path";
@@ -13,8 +13,6 @@ import { inlineCodeArgIndices } from "../config/script-operand";
 import { writeOperandIndices } from "./write-roles";
 import type { ShellAssignment } from "./var-resolution";
 import { decodeAnsiCEscapes } from "./tokenizer";
-
-export { OPAQUE_VAR_DIR }; // Re-export for existing importers
 
 // ── Lazy tree-sitter parser ────────────────────────────────────────────────
 
@@ -446,10 +444,10 @@ function isCwdLocalRelWord(w: string): boolean {
  */
 function underKnownRoots(p: string, cwd: string): boolean {
   const roots = [...allowedReadPaths, ...allowedWritePaths, path.resolve(cwd)];
-  const under = (x: string) => roots.some(r => x === r || x.startsWith(r + "/"));
-  if (under(p)) return true;
+  const insideRoot = (x: string) => roots.some(r => under(x, r));
+  if (insideRoot(p)) return true;
   try {
-    return under(fs.realpathSync(p));
+    return insideRoot(fs.realpathSync(p));
   } catch {
     return false;
   }
@@ -493,7 +491,7 @@ function isAllowedRootToken(w: string, cwd: string): boolean {
   // Prefix under a root — lexically, or through realpath (symlinked roots).
   if (!underKnownRoots(base, cwd)) return false;
   const roots = [...allowedReadPaths, ...allowedWritePaths, path.resolve(cwd)];
-  const underRoot = (p: string) => roots.some(r => p === r || p.startsWith(r + "/"));
+  const underRoot = (p: string) => roots.some(r => under(p, r));
   if (globIdx === -1) {
     // Literal path: verify where it really points.
     try {

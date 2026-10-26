@@ -4,10 +4,10 @@ import type {FileRequest} from "../decide/types";
 import { gate, gateDecide, rejectFile } from "../gate/gate";
 import { store } from "../gate/store";
 import {
-  expandTilde,
   resolvePathReal,
   isPathWarnedResolved,
 } from "../analysis/path-analysis";
+import { expandTilde } from "../analysis/path-util";
 
 const FILE_TOOLS = ["read", "write", "edit"] as const;
 

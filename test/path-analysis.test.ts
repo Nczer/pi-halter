@@ -3,14 +3,13 @@ import os from "node:os";
 import fs from "node:fs";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import {
-  expandTilde,
   resolvePathReal,
-  isInsideCwd,
   isAllowedReadPath,
   getOutsideCwdPaths,
   isProjectPiPathResolved,
   isPathWarnedResolved,
 } from "../analysis/path-analysis";
+import { expandTilde } from "../analysis/path-util";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
 const home = os.homedir();
@@ -72,32 +71,6 @@ describe("resolvePathReal", () => {
     expect(resolvePathReal("/tmp/nonexistent/deep/file.txt", cwd)).toBe(
       path.join(tmpReal, "nonexistent/deep/file.txt")
     );
-  });
-});
-
-describe("isInsideCwd", () => {
-  it("cwd is inside itself", () => {
-    expect(isInsideCwd(cwd, cwd)).toBe(true);
-  });
-
-  it("subdir is inside cwd", () => {
-    expect(isInsideCwd(`${cwd}/src`, cwd)).toBe(true);
-  });
-
-  it("file in subdir is inside cwd", () => {
-    expect(isInsideCwd(`${cwd}/src/index.ts`, cwd)).toBe(true);
-  });
-
-  it("/etc is outside cwd", () => {
-    expect(isInsideCwd("/etc/hosts", cwd)).toBe(false);
-  });
-
-  it("sibling dir is outside cwd", () => {
-    expect(isInsideCwd(path.join(home, "Other"), cwd)).toBe(false);
-  });
-
-  it("parent dir is outside cwd", () => {
-    expect(isInsideCwd(home, cwd)).toBe(false);
   });
 });
 

@@ -35,7 +35,7 @@ import { allowedWritePaths } from "../config/path-rules";
 import { skipEnvPrefixes } from "../config/bash-patterns";
 import { getDelegatedCommand } from "./segment-helpers";
 import { tokenizeSegment } from "./tokenizer";
-import { expandTilde } from "./path-util";
+import { expandTilde, under, isUnresolvedPath } from "./path-util";
 
 /** More than this many entries reached outside the temp dirs → absolute stop. */
 export const DELETE_SCALE_ABSOLUTE = 50;
@@ -98,7 +98,8 @@ export interface DeleteScale {
 
 /** Inside the temp/informational zone (config-allowed scratch dirs). */
 export function inTempZone(p: string): boolean {
-  return allowedWritePaths.some((d) => !!d && (p === d || p.startsWith(d + "/")));
+  if (isUnresolvedPath(p)) return false;
+  return allowedWritePaths.some((d) => !!d && under(p, d));
 }
 
 /** `/`, the home directory, or any top-level directory: deleting one is
@@ -108,9 +109,12 @@ export function isRootLevelTarget(resolved: string): boolean {
   return path.dirname(resolved) === "/";
 }
 
-/** true when `resolved` is a proper ancestor of `base` (`rm -rf ..`). */
+/** true when `resolved` is a proper ancestor of `base` (`rm -rf ..`). `/` is
+ *  excluded: it is an ancestor of everything, and the root-level rule above it
+ *  is the stronger, clearer claim (both stop; this one only picks the reason). */
 export function escapesAboveBase(resolved: string, base: string): boolean {
-  return resolved !== base && base.startsWith(resolved + "/");
+  if (isUnresolvedPath(resolved) || isUnresolvedPath(base)) return false;
+  return resolved !== base && resolved !== "/" && under(base, resolved);
 }
 
 /** Strip one pair of matching quotes (the tokenizer already removed most). */

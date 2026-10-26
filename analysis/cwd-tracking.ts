@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { expandTilde, expandHomeToken } from "./path-util";
+import { expandTilde, expandHomeToken, UNKNOWN_CWD_MARKER } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
 import { tokenizeSegment, tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS, codeBodiesWrite } from "../config";
@@ -303,9 +303,6 @@ export function trackEffectiveCwd(
   }
   return result;
 }
-
-/** Display marker for paths that resolve against an unknown effective cwd. */
-export const UNKNOWN_CWD_MARKER = "<unresolved-cwd>";
 
 /**
  * Resolve a for-loop in-list to the set of REAL directories a `cd $var` can

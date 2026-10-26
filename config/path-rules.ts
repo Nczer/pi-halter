@@ -41,7 +41,7 @@ export const allowedReadPaths: string[] = [
  *    tree becomes read-quiet. Credential patterns (`.env`, `.aws/credentials`,
  *    `id_rsa`, …) and the warn paths still stop, and writes still stop.
  *  • an existing regular FILE is skipped — the bar matches DIRS
- *    (`isChildOf`), so a file entry would look like a grant and never act
+ *    (`under`), so a file entry would look like a grant and never act
  *    as one. A path that does not exist yet is accepted (a project dir
  *    created later must work);
  *  • applied at activation, so an edit to settings-ext.json takes effect next

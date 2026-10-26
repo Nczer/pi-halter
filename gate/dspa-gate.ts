@@ -82,16 +82,15 @@ import type {PromptData} from "../decide/types";
 import type { Store } from "./store";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { resolveOpaqueRefs } from "../analysis/var-resolution";
-import { expandTilde, shortenToken, staticPrefixOf } from "../analysis/path-util";
-import { isPathWarnedResolved, resolvePathReal, isInsideCwd, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
+import { expandTilde, shortenToken, staticPrefixOf, OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER, under, isUnresolvedPath, rememberedDirOf } from "../analysis/path-util";
+import { isPathWarnedResolved, resolvePathReal, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
 import { scriptFilePathInSegment } from "../analysis/script-payload";
 import { sanitizeJudgePaths } from "../judge/paths";
 import type { ResolutionMap } from "../judge/path-resolver";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
-import { UNKNOWN_CWD_MARKER, cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
+import { cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
 import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
-import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
 import { getDelegatedCommand, segmentFetchPackage, segmentFetchOptionsOk } from "../analysis/segment-helpers";
 import { operativeTokens, staticRootOf } from "../analysis/delete-scale";
 import { tokenizeSegment, splitOnPipe } from "../analysis/tokenizer";
@@ -184,6 +183,7 @@ export interface MissFact {
  * stops a write the manual mode would prompt for, and only that.
  */
 export function insideManualWriteBar(store: Store, p: string, cwd: string): boolean {
+  if (isUnresolvedPath(p)) return false; // an unnameable location is in no write bar
   return (
     store.isInsideAllowedDir(p, "write") ||
     store.hasAllowedWritePath(p) ||
@@ -221,8 +221,13 @@ export function judgeWriteOutside(
     // Uncapped on purpose (3.44.0): this IS the D19 bar, so every write the
     // judge claims faces it. The old 8-path log cap lived inside
     // `sanitizeJudgePaths`, which made writes 9+ of a long report unenforced.
-    if (isInsideCwd(p, normCwd)) continue;
-    if (!insideManualWriteBar(store, p, pd.cwd)) out.push(path.dirname(p));
+    if (under(p, normCwd)) continue;
+    if (!insideManualWriteBar(store, p, pd.cwd)) {
+      // A word that pins no folder still faces the bar: the stop has to name
+      // something, so the word itself stands in.
+      const dir = rememberedDirOf(p);
+      out.push(dir === "" ? p : dir);
+    }
   }
   return [...new Set(out)];
 }
@@ -246,7 +251,7 @@ export function hasFileScriptOutsideCwd(pd: PromptData): boolean {
     const seg = analysis.parsedSegments[i]?.text.trim() ?? "";
     if (!seg) continue;
     const sp = scriptFilePathInSegment(seg, analysis.effectiveCwds[i] ?? pd.cwd);
-    if (sp && !isInsideCwd(sp, normCwd)) return true;
+    if (sp && !under(sp, normCwd)) return true;
   }
   return false;
 }
@@ -617,12 +622,16 @@ function destinationHosts(command: string, segments: string[]): string[] | null 
  * makes the next run deterministic).
  */
 export function makeManualBar(store: Store, cwd: string): (p: string) => boolean {
-  return (p: string) =>
-    isInsideCwd(p, cwd) ||
-    store.isInsideAllowedDir(p, "read") ||
-    isAllowedReadPath(p) ||
-    isAllowedWritePath(p) ||
-    isTrustedScriptPath(p);
+  return (p: string) => {
+    if (isUnresolvedPath(p)) return false; // an unnameable location is in no bar
+    return (
+      under(p, cwd) ||
+      store.isInsideAllowedDir(p, "read") ||
+      isAllowedReadPath(p) ||
+      isAllowedWritePath(p) ||
+      isTrustedScriptPath(p)
+    );
+  };
 }
 
 type D7Resolution =
@@ -1051,7 +1060,8 @@ export async function checkDspaGate(
   const baseOut: string[] = [];
   for (let i = 0; i < analysis.parsedSegments.length; i++) {
     const base = analysis.effectiveCwds[i];
-    if (base === null || isInsideCwd(base, normBase)) continue;
+    if (base === null) continue;
+    if (!isUnresolvedPath(base) && under(base, normBase)) continue;
     if (!baseWriteAccess(analysis.parsedSegments[i])) continue;
     if (!insideManualWriteBar(store, base, pd.cwd) && !baseOut.includes(base)) baseOut.push(base);
   }
@@ -1059,8 +1069,9 @@ export async function checkDspaGate(
   for (const p of analysis.writePaths ?? []) {
     if (outsideExempt.has(p) || p.includes("$") || p.includes("`")) continue;
     if (p.startsWith(OPAQUE_VAR_DIR) || p.startsWith(UNKNOWN_CWD_MARKER)) continue;
-    if (isInsideCwd(p, normBase) || insideManualWriteBar(store, p, pd.cwd)) continue;
-    writeOpDirs.push(path.dirname(p));
+    if ((!isUnresolvedPath(p) && under(p, normBase)) || insideManualWriteBar(store, p, pd.cwd)) continue;
+    const dir = rememberedDirOf(p);
+    writeOpDirs.push(dir === "" ? p : dir); // the stop still names the word itself
   }
   const writeOutside = [...new Set([...baseOut, ...writeOpDirs])];
   const outside = (analysis.prompt.outsidePaths ?? []).filter((p) => !outsideExempt.has(p));

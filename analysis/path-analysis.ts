@@ -3,9 +3,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import { allowedReadPaths, allowedWritePaths, warnPaths, isTrustedScriptPath } from "../config";
-import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
-import { UNKNOWN_CWD_MARKER } from "./cwd-tracking";
-export { expandTilde, OPAQUE_VAR_DIR }; // Re-export for existing importers
+import { expandTilde, OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER, under, isUnresolvedPath } from "./path-util";
 
 // ── Relative path detection ──
 
@@ -80,23 +78,15 @@ export function resolvePathReal(inputPath: string, cwd: string): string {
 }
 
 // ── Path containment checks ──
-
-/** Check if child is inside (or equal to) parent. Uses prefix check for O(1) performance. */
-export function isChildOf(child: string, parent: string): boolean {
-  if (child === parent) return true;
-  return child.startsWith(parent + "/");
-}
-
-export function isInsideCwd(resolved: string, cwd: string): boolean {
-  return isChildOf(resolved, cwd);
-}
+// The answer itself is `under` (analysis/path-util.ts) — one test, real-disk
+// form on both sides. These wrappers only name the bar being asked about.
 
 export function isAllowedReadPath(resolved: string): boolean {
-  return allowedReadPaths.some(d => isChildOf(resolved, d));
+  return allowedReadPaths.some(d => under(resolved, d));
 }
 
 export function isAllowedWritePath(resolved: string): boolean {
-  return allowedWritePaths.some(d => isChildOf(resolved, d));
+  return allowedWritePaths.some(d => under(resolved, d));
 }
 
 export function getOutsideCwdPaths(
@@ -105,7 +95,11 @@ export function getOutsideCwdPaths(
   isInsideAllowedDir?: (p: string) => boolean,
 ): string[] {
   return paths.filter(p => {
-    if (isInsideCwd(p, cwd)) return false;
+    // A word that names no location is OUTSIDE by definition — dropping it here
+    // is how an unbound path used to slip the bar (the sentinel sits outside
+    // every real dir on purpose).
+    if (isUnresolvedPath(p)) return true;
+    if (under(p, cwd)) return false;
     if (isInsideAllowedDir?.(p)) return false;
     if (isAllowedReadPath(p)) return false;
     if (isAllowedWritePath(p)) return false;
@@ -129,7 +123,8 @@ export function getOutsideWritePaths(
   isInsideAllowedWriteDir?: (p: string) => boolean,
 ): string[] {
   return paths.filter(p => {
-    if (isInsideCwd(p, cwd)) return false;
+    if (isUnresolvedPath(p)) return true; // an unnameable location is in no write bar
+    if (under(p, cwd)) return false;
     if (isInsideAllowedWriteDir?.(p)) return false;
     if (isAllowedWritePath(p)) return false;
     return true;
@@ -161,7 +156,7 @@ export function isProjectPiPathResolved(resolved: string, cwd: string): boolean 
     piDir = resolvePathReal(".pi", cwd);
     projectPiDirCache.set(cwd, piDir);
   }
-  return isChildOf(resolved, piDir) && !isChildOf(resolved, getHomePiDir());
+  return under(resolved, piDir) && !under(resolved, getHomePiDir());
 }
 
 /** Check a pre-resolved path against denied/warned patterns. Returns matched pattern or null. */

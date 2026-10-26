@@ -1660,7 +1660,7 @@ the rest were closed by 3.33–3.37. Each release below carries its rows as
     parse change; 3.39.0 = the bar model (G3) + `argv0` (G4) + flag tables
     (G7); 3.39.x = grants/UI/judge (G8/G9/G10/G11, G13) plus the independent
     one-line surgical fixes (Write-prompt `Always` suppressed by a Read grant,
-    `retryJudge` skipping `judgeWriteOutside`, `isInsideCwd` not realpath-ing
+    `retryJudge` skipping `judgeWriteOutside`, `isInsideCwd` not realpath-ing (that verb is `under` since 3.45.0)
     `cwd`, `sanitizeDirs` normalization). A `/dspa` replay round runs after
     3.38.0: the round-1–5 ledger corpus is gone (`DECISION_LOG_ENABLED = false`),
     so the decision log gets enabled to rebuild it going forward.

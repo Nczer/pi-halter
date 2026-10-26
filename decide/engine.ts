@@ -13,8 +13,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { decideBash } from "./bash-policy";
 import { decideFile } from "./file-policy";
-import { resolvePathReal, isInsideCwd } from "../analysis/path-analysis";
-import { expandTilde } from "../analysis/path-util";
+import { resolvePathReal } from "../analysis/path-analysis";
+import { expandTilde, under } from "../analysis/path-util";
 import type {
   DecideOptions,
   Decision,
@@ -80,7 +80,12 @@ function decideTool(req: ToolRequest, store: Store, modelId: string | null): Dec
   if (req.gate === "file" && req.path) {
     const resolved = resolvePathReal(expandTilde(req.path), req.cwd);
     pd.resolved = resolved;
-    pd.outsideDir = isInsideCwd(resolved, req.cwd) ? null : path.dirname(resolved);
+    // The file prompt's own unit is the file's parent — the same display value
+    // decide/file-policy.ts gives a real file prompt, whose UI has a designed
+    // case for a file directly under `/`. `rememberedDirOf` is the verb for what
+    // an approval REMEMBERS, and it refuses a root answer (a grant on `/` is the
+    // bar switched off); it is not used to name where a file sits.
+    pd.outsideDir = under(resolved, req.cwd) ? null : path.dirname(resolved);
     pd.exists = fs.existsSync(resolved);
   }
   return { kind: "prompt", promptData: pd };

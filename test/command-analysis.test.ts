@@ -712,6 +712,40 @@ describe("outsideDirs: a brace-alternation dir is never a grant (3.44.0)", () =>
   });
 });
 
+describe("outsideDirs: the root is never an approvable folder (step 1)", () => {
+  // Corpus replay of the step-1 refactor (the frozen .log rows + 37 probes for
+  // the moved seams): `ls /optfoo && ls /opt` gained `/` in the dir list. That
+  // is the honest containment answer — `/optfoo` really does sit under `/` — but
+  // the old prefix test could never match `/`, so the grant was dead by accident
+  // and a session-wide "everything readable" grant appeared the moment one
+  // containment verb answered the root correctly. Refused, as 3.44.0 refused a
+  // brace dir: a folder no operator meant is not a grant; the stop still fires
+  // because the approval comes from the PATH set.
+  const bar = {
+    isInsideAllowedDir: () => false,
+    isInsideAllowedWriteDir: () => false,
+  };
+
+  it("no `/` among the read dirs, and the read still stops", async () => {
+    const a = await analyzeCommand("ls /halt-pfx-nonexistent/x", cwd, bar);
+    expect(a.prompt.outsideDirs!.includes("/")).toBe(false);
+    expect(a.prompt.outsidePaths).toContain("/halt-pfx-nonexistent/x");
+    expect(a.prompt.needsPathApproval).toBe(true);
+  });
+
+  it("no `/` among the write dirs, and the write still stops", async () => {
+    const a = await analyzeCommand("rm -rf /halt-pfx-nonexistent/y", cwd, bar);
+    expect(a.prompt.outsideWriteDirs!.includes("/")).toBe(false);
+    expect(a.prompt.outsideWritePaths!.length).toBeGreaterThan(0);
+    expect(a.prompt.needsWriteApproval).toBe(true);
+  });
+
+  it("no over-refusal: a real folder one level down is still a grant", async () => {
+    const a = await analyzeCommand("cat /etc/hosts", cwd, bar);
+    expect(a.prompt.outsideDirs).toContain("/etc");
+  });
+});
+
 describe("confirmed resolutions converge the approval bar (D12)", () => {
   const prefix = fs.mkdtempSync(path.join(home, ".halter-cf-"));
   afterAll(() => fs.rmSync(prefix, { recursive: true, force: true }));

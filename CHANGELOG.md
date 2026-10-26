@@ -1,5 +1,71 @@
 # Changelog
 
+## 3.45.0 — 2026-10-26
+**One containment verb, one remembered-folder answer — and the root turned out to
+be a location the gate had never been able to see.**
+
+- **What the operator saw.** Nothing new stopped. What changed is what a click
+  can promise. (a) A word pinned only to the root — `ls /optfoo`, a name in a
+  top-level folder that does not exist, `rm -rf /` itself — no longer offers an
+  "Always" folder: the folder list used to name `/`, and clicking it recorded a
+  grant that could never match anything (below), so the command stopped again
+  every session with no way to converge. (b) A file prompt for a file directly
+  under `/` still says where the file sits — the display did not move, only what
+  an approval is allowed to remember.
+- **Why it happened.** The path layer asked "is this inside that?" in five
+  places with five implementations, and re-derived "which folder is this in" at
+  15 sites with `path.dirname`. Two bug classes from that arrangement were
+  already on record: a folder cut out of the middle of a `{a,b}` group, which can
+  never bind, and an anchor computed twice that disagreed with itself (both
+  3.44.0). The third was invisible because it stopped things more often, not
+  less: the containment test was `child === parent || child.startsWith(parent + "/")`,
+  so with `parent = "/"` it searched for `"//"` and **nothing was ever inside
+  `/`**. A grant on the root was therefore dead by construction, and any bar
+  based at the root silently understated its own reach — `rm -rf /` showed a
+  grantable `/` that could not be honoured.
+- **The fix.** Step 1 of the location model (`docs/dspa-intent-floor.md` §9).
+  `under(child, parent)` in `analysis/path-util.ts` answers containment and
+  insists both sides are in real-disk form — absolute, marker-free, unchanged by
+  `path.normalize` — and throws on anything else. A throw in the gate becomes a
+  blocked command (fail closed), so a call site that forgot to resolve first can
+  never produce a quiet allow. `isUnresolvedPath(word)` is the "this names no
+  location" test every bar asks first, replacing the inline marker-filter chains.
+  `rememberedDirOf(word)` is what an approval REMEMBERS: the containing dir when
+  the leaf is nameable; the deepest folder every expansion must sit under when it
+  is not (`/tmp/{a,b}/x` → `/tmp`, the 3.44.0 re-stop shape); `""` for a relative
+  word, a word dynamic in its first segment, or a root-pinned word — where a
+  grant would be the bar switched off rather than a place the operator named.
+  Deleted: `isChildOf`, `isInsideCwd`, the local `isSentinel`, two `export {}`
+  re-export shims. The display/grant split is explicit now: `decide/engine.ts`
+  and `decide/file-policy.ts` still report a file's parent for the prompt (the
+  file prompt has a designed case for a file under `/`), while
+  `decide/rule-generator.ts` refuses an umbrella over `/` or over nothing, and
+  the two prompt dir filters drop `/`. The write tier keeps the stop honest: a
+  write word that pins no folder names itself in the bar rather than vanishing
+  from it.
+- **Not in scope.** The record per path word (L1), brace groups opening into the
+  words they name under L2's caps, the short environment-value list (L5), and the
+  marker demotion (L6) — steps 2–3 of the same build order, all recorded and
+  unbuilt in §9.
+- **Tests.** `test/path-util.test.ts` (new, 20): containment — equal, subdir, the
+  `/optfoo` vs `/opt` prefix trap, the root — and the three refusals that throw
+  (relative, marker, not-in-real-disk-form); `rememberedDirOf` per word kind,
+  including the 3.44.0 dead-grant shape and the root. `test/floor-replay.test.ts`
+  (new, 1): the standing corpus replay — every command the ledgers recorded plus
+  37 probes aimed at each seam the refactor moved — asserting no recorded command
+  makes the path model throw, and writing the canonical location signature the
+  before/after diff reads. Run against a baseline captured by stashing this
+  change, over the frozen ledger rows (the running gate logs its own commands,
+  so an unfrozen corpus fakes a flip), the diff was **one command**: `rm -rf /`
+  lost `/` as a grantable folder, its stop and both approval flags unchanged.
+  Four prompt-tier cases pin the root refusal; the old `isInsideCwd` block moved
+  into the new file. 61 files / 4400 tests, `tsc --noEmit` clean. The replay
+  lives under `test/` rather than `tools/` because the repo's `.mts` probes need
+  `tsx`, which is not a dependency — node's own type-stripping cannot load the
+  extensionless import graph. Docs: `docs/architecture.md` gained the
+  "real-disk form" term and the three-verb paragraph; §9 of
+  `docs/dspa-intent-floor.md` records step 1 as built.
+
 ## 3.44.1 — 2026-10-26
 **3.44.0 left its own cap rule unapplied in the same file, and the mining tool was
 still reading field names the ledger stopped writing.**

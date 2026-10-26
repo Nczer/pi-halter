@@ -67,6 +67,60 @@ export function expandHomeLiterals(text: string): string {
  */
 export const OPAQUE_VAR_DIR = "<unresolved-var>";
 
+/** Display marker for paths that resolve against an unknown effective cwd.
+ *  Lives here, next to the other unnameable-location spelling, so the one
+ *  containment test can refuse both (step 1 of the location model). */
+export const UNKNOWN_CWD_MARKER = "<unresolved-cwd>";
+
+/** Both spellings of "this word names no location I can compare". */
+const UNRESOLVED_MARKER_RE = /<(?:unresolved-var|unresolved-cwd)>/;
+
+/**
+ * Only the two marker spellings — for a caller that resolves relatives itself
+ * (the judge's report sanitizer resolves against the operation's cwd, so a
+ * relative word is not unresolved there, and only a marker is unfixable).
+ */
+export function isUnresolvedMarker(p: string): boolean {
+  return UNRESOLVED_MARKER_RE.test(p);
+}
+
+/**
+ * Does this word name no location? True for a relative path (it still needs a
+ * base) and for either unnameable-location spelling. A caller that has to SHOW
+ * such a word, or stop on it anyway, tests here first — `under` refuses one
+ * rather than answering wrongly.
+ */
+export function isUnresolvedPath(p: string): boolean {
+  return !path.isAbsolute(p) || isUnresolvedMarker(p);
+}
+
+/**
+ * THE containment test: is `child` the same place as `parent`, or under it?
+ * Both sides must already be in real-disk form — absolute, marker-free and
+ * normalized (what `resolvePathReal` returns). An unresolved side is a bug at
+ * the call site: "inside" would be a false allow and "outside" a stop the
+ * operator cannot explain, so it throws. halter's tool handler turns a throw
+ * into a block (index.ts, fail-closed), so a missed call site stops loudly.
+ *
+ * Until 3.45.0 this answer was written five times over (plus 18 inline
+ * `x === r || x.startsWith(r + "/")` copies), and two of those copies disagreed
+ * about the same token — the gate stopped on it while the ledger diagnostic
+ * called it a floor blind spot that did not exist (3.44.0).
+ */
+export function under(child: string, parent: string): boolean {
+  for (const side of [child, parent]) {
+    if (!path.isAbsolute(side) || UNRESOLVED_MARKER_RE.test(side)) {
+      throw new Error(
+        `under(): ${JSON.stringify(side)} names no location — resolve it (resolvePathReal) or test isUnresolvedPath first`,
+      );
+    }
+    if (path.normalize(side) !== side) {
+      throw new Error(`under(): ${JSON.stringify(side)} is not in real-disk form (path.normalize would change it)`);
+    }
+  }
+  return child === parent || child.startsWith(parent === "/" ? "/" : `${parent}/`);
+}
+
 /**
  * Positional/one-letter shell parameters — a reference whose value comes from
  * a CALL SITE, never from the text of the command being judged: `$1`…`$9`,
@@ -126,4 +180,33 @@ export function staticPrefixOf(raw: string): string {
   while (i < comps.length && comps[i] !== "" && !DYNAMIC_SEGMENT_RE.test(comps[i])) i++;
   if (i === 0) return ""; // nothing static before the first dynamic part
   return path.normalize(`/${comps.slice(0, i).join("/")}`);
+}
+
+/**
+ * The folder an approval can REMEMBER for a path word — "which folder do I
+ * allow so this stops prompting". For a word that names its leaf, that is the
+ * containing dir. For a word that cannot name its leaf (`~/notes/*`,
+ * `/tmp/{a,b}/x`) it is the deepest folder every expansion must sit under, so
+ * the remembered dir is a real one that the next run can match.
+ *
+ * The old rule — cut at the last slash — mints a dir no run can ever match when
+ * the dynamic part is not the last segment: `/tmp/{a,b}/x` remembered
+ * `/tmp/{a,b}`, which is not a directory, so the command re-stopped after the
+ * user had already allowed it (the 3.44.0 read-bar case; step 1 of the location
+ * model, docs/dspa-intent-floor.md §9 L3). "" = the word pins no folder that an
+ * approval may remember — relative, dynamic in its first segment, or pinned only
+ * to the root (step-1 corpus replay: `ls /optfoo`, a word in a top-level folder
+ * that does not exist, is pinned to `/`, and "everything under the root" is the
+ * bar switched off rather than a folder the operator named; the stop still
+ * fires, and the caller keeps the word itself as the location it cannot name).
+ */
+export function rememberedDirOf(word: string): string {
+  const expanded = expandTilde(word);
+  if (!path.isAbsolute(expanded)) return "";
+  if (expanded.split("/").some((c) => c !== "" && DYNAMIC_SEGMENT_RE.test(c))) {
+    const prefix = staticPrefixOf(expanded);
+    return prefix === "/" ? "" : prefix;
+  }
+  const dir = path.dirname(expanded);
+  return dir === "/" ? "" : dir;
 }

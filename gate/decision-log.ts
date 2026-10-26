@@ -47,6 +47,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { rememberedDirOf } from "../analysis/path-util";
 import { DECISION_LOG_ENABLED, LEDGER_LOG_ENABLED, isLedgerLogEnabled } from "../config/logging";
 import { SETTINGS_PATH, readSettingsFile, writeSettings } from "../halter-settings";
 import { summarizePrompt } from "../ui/prompt-builder";
@@ -643,6 +644,6 @@ function targetOf(request: PermissionRequest): string {
 // both the resolved path's containing dir. The root is never offered — a
 // root file prompt grants the file, not "/".
 function promptDirOf(pd: FilePromptData): string | undefined {
-  const dir = path.dirname(pd.resolved);
-  return dir === "/" ? undefined : dir;
+  const dir = rememberedDirOf(pd.resolved);
+  return dir === "" ? undefined : dir; // a root file names no approvable dir
 }

@@ -16,6 +16,7 @@ Decision rationale for the judge regimes lives in `docs/dspa-redesign.md`; per-c
 | operation class | The four-way split that selects the judge pipeline: C1 content-determined (the payload IS the effect), C2 effect-extending (payload is code), C3 context-dependent (opaque refs), C4 policy-absolute. `docs/dspa-content-classes.md`. |
 | bar | The manual bar: exactly the set of paths manual mode auto-allows (cwd + session grants + config-allowed + trusted scripts). Since D11 the floor's bar IS the manual bar. Its READ side also takes the operator's `halter.readDirs` and the session read grants the dspa intent floor learns (`R intent` in the widget). |
 | opaque ref | A path token static analysis cannot bind: `$VAR`, `${VAR}`, `$(…)`, backticks in path position, a glob over an unknown base. Marked, never fast-allowed, resolved via D12 convergence when the user confirms. |
+| real-disk form | The state a location must be in before it is stored or compared: absolute, marker-free, unchanged by `path.normalize`. `resolvePathReal` produces it; `under` refuses anything else instead of answering wrongly. |
 | unknown base | A `cd` whose target does not resolve; later relative paths in that segment chain get the `<unresolved-cwd>` marker. |
 | fetchable form | A package-manager run form that fetches from a registry: `npx <pkg>`, `uvx`, `npm exec`, `pnpm dlx`, `bun x`. Gated by per-package trust (D10). |
 | run form | A package-manager form that executes local code: `npm run`, `uv run`, `bun <script>`, `python <file>`. Judgeable, never fetch-gated (D8). |
@@ -665,6 +666,22 @@ result is one `CommandAnalysis` per decision: paths with classification
 (inside/outside/warned/denied), opaque markers, assignments, safety verdicts,
 and the prompt hints. One tree-sitter parse per decision; the floor and the
 judge consume the same analysis.
+
+After the analysis, locations meet three verbs, all in `analysis/path-util.ts`
+(3.45.0, `docs/dspa-intent-floor.md` §9 step 1). `under(child, parent)` answers
+containment and insists both sides are in real-disk form — it throws on a
+relative or marker-carrying side, which the tool handler turns into a blocked
+command, so a forgotten resolve stops loudly rather than allowing quietly.
+`isUnresolvedPath(word)` is the "this names no location" test that has to come
+before it. `rememberedDirOf(word)` answers what an approval REMEMBERS for a word:
+the containing dir when the leaf is nameable, the deepest folder every expansion
+must sit under when it is not (`~/notes/*` → `~/notes`, `/tmp/{a,b}/x` → `/tmp`),
+and no folder at all — `""` — for a relative word, a word dynamic in its first
+segment, or a word pinned only to the root. A root answer is refused on purpose:
+a session grant on `/` is the bar switched off, not a place the operator named,
+so such a command stops with no path grant offered. Where a file SITS is a
+different question and stays its parent — the file prompt has a designed case for
+a file directly under `/`.
 
 ## Tool plugin contract
 

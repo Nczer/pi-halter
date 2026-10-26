@@ -1,4 +1,5 @@
 import path from "node:path";
+import { rememberedDirOf } from "../analysis/path-util";
 import type { AllowRules } from "../gate/store";
 import type {PromptData, BashPromptData, FilePromptData, ToolPromptData} from "./types";
 
@@ -158,8 +159,10 @@ export class RuleGenerator {
 
   private static generateFileBroaderRules(data: FilePromptData, targetDir?: string): AllowRules | undefined {
     if (data.outsideDir !== null && !targetDir) return undefined; // Only for inside-cwd (or explicit target)
-    const dir = targetDir ?? (data.outsideDir ?? path.dirname(data.resolved));
-    if (dir === "/") return undefined; // never grant the root
+    const dir = targetDir ?? (data.outsideDir ?? rememberedDirOf(data.resolved));
+    // Never an umbrella over the root, and never over "no folder at all" —
+    // rememberedDirOf answers "" for a word pinned only to `/`.
+    if (dir === "/" || dir === "") return undefined;
     return data.isWriteOp
       ? { writeDirs: [dir], readDirs: [dir] }
       : { readDirs: [dir] };

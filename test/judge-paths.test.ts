@@ -13,8 +13,7 @@ import {
   judgePathReport,
   type JudgePathFloor,
 } from "../judge/paths";
-import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
-import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
+import { OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER } from "../analysis/path-util";
 
 const cwd = "/Users/u/project";
 const home = os.homedir();

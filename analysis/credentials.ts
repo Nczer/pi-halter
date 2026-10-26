@@ -36,10 +36,9 @@ import path from "node:path";
 import fs from "node:fs";
 import { warnPaths } from "../config";
 import { logGlobVerifyError } from "../config/logging";
-import { expandTilde } from "./path-util";
+import { expandTilde, under } from "./path-util";
 import { tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import {
-  isChildOf,
   isPathWarnedResolved,
   resolvePathReal,
 } from "./path-analysis";
@@ -298,7 +297,7 @@ export function checkBareRelativeTokens(
       if (warnedResult.warned) { keep(warnedResult.matchedRule); return; }
     }
     for (const resolved of candidates) {
-      if (isChildOf(resolved, cwdReal)) continue;
+      if (under(resolved, cwdReal)) continue;
       // Symlink escapes cwd → same approval bar as reading the target path
       // directly (the file tool resolves symlinks the same way).
       keep(resolved);

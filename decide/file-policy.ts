@@ -2,13 +2,12 @@ import path from "node:path";
 import fs from "node:fs";
 import {
   resolvePathReal,
-  expandTilde,
-  isInsideCwd,
   isAllowedReadPath,
   isAllowedWritePath,
   isProjectPiPathResolved,
   isPathWarnedResolved,
 } from "../analysis/path-analysis";
+import { expandTilde, under } from "../analysis/path-util";
 import type {Store, AllowRules, FileRequest, Decision, FilePromptData, DecideOptions} from "./types";
 
 export function decideFile(req: FileRequest, store: Store, opts?: DecideOptions): Decision {
@@ -53,7 +52,7 @@ export function decideFile(req: FileRequest, store: Store, opts?: DecideOptions)
   }
 
   // Inside cwd (read only, unless warned)
-  const insideCwd = isInsideCwd(resolved, req.cwd);
+  const insideCwd = under(resolved, req.cwd);
   if (!isWriteOp && insideCwd && !warnResult.warned) return { kind: "auto-allow" };
   const action = req.toolName.charAt(0).toUpperCase() + req.toolName.slice(1);
 

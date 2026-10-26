@@ -1,9 +1,9 @@
 import path from "node:path";
 import os from "node:os";
-import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
+import { expandTilde, OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
 import { isCwdLocalSubstitution } from "./cwd-local";
-import { UNKNOWN_CWD_MARKER, homeReassigned } from "./cwd-tracking";
+import { homeReassigned } from "./cwd-tracking";
 import type { BashSegment, OpaqueRef } from "./bash-parser";
 
 /**

@@ -1,8 +1,8 @@
 import path from "node:path";
 import { parseCommand, type OpaqueRef, type BashSegment, type PathHop } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
-import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath, staleCwdResolutions, homeReassigned, UNKNOWN_CWD_MARKER, type CwdBase } from "./cwd-tracking";
-import { expandTilde, OPAQUE_VAR_DIR } from "./path-util";
+import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath, staleCwdResolutions, homeReassigned, type CwdBase } from "./cwd-tracking";
+import { expandTilde, OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER, under, isUnresolvedPath } from "./path-util";
 import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
@@ -408,7 +408,7 @@ async function analyzeTmuxSendKeysPayload(
       payloadCwds,
       parsed.assignments,
       cwd,
-      (p) => p === cwd || p.startsWith(cwd + "/"),
+      (p) => !isUnresolvedPath(p) && under(p, cwd),
       parsed.unsets,
     );
     paths.push(...parsed.paths, ...payloadOpaque.paths);
@@ -677,6 +677,12 @@ export async function analyzeCommand(
     outsideDirs = (await resolvePathsToDirs(op)).filter(d => {
       if (d === OPAQUE_VAR_DIR) return false;
       if (d === UNKNOWN_CWD_MARKER) return true;
+      // The root is not an approvable folder (step-1 corpus replay):
+      // `ls /optfoo` — a word in a top-level folder that does not exist — is
+      // pinned to `/`, and a session grant on `/` is the read bar switched
+      // off, not a location the operator meant. The stop still fires: the
+      // approval comes from the PATH set, and the path itself is displayed.
+      if (d === "/") return false;
       // A dir whose own text carries a brace is not a location the shell can
       // produce (3.44.0, unresolved.jsonl 2026-10-25T15:04:48): `ls
       // ~/{Applications,apps,bin,.local/bin}` is ONE token to the parser, so
@@ -695,11 +701,7 @@ export async function analyzeCommand(
       // forcing approval (a var value can contain `..`), so a grant of the
       // prefix could never satisfy it — offering "Always: Read prefix/*" for
       // it would be a dead, misleading grant. Concrete-path dirs stay.
-      return op.some(p =>
-        !p.startsWith(OPAQUE_VAR_DIR + "/") &&
-        !p.includes(UNKNOWN_CWD_MARKER) &&
-        (p === d || p.startsWith(d + "/")),
-      );
+      return op.some(p => !isUnresolvedPath(p) && under(p, d));
     });
     needsPathApproval = op.length > 0;
   }
@@ -719,14 +721,11 @@ export async function analyzeCommand(
     outsideWriteDirs = (await resolvePathsToDirs(ow)).filter((d) => {
       if (d === OPAQUE_VAR_DIR) return false;
       if (d === UNKNOWN_CWD_MARKER) return true;
+      if (d === "/") return false; // same as the read tier: no session-wide write
       // Same dead-grant rule as the read tier: an "Always: write" for
       // `/home/x/{a,b` would never match the next run of `rm -rf ~/{a,b}`.
       if (BRACE_META_RE.test(d)) return false;
-      return ow.some((p) =>
-        !p.startsWith(OPAQUE_VAR_DIR + "/") &&
-        !p.includes(UNKNOWN_CWD_MARKER) &&
-        (p === d || p.startsWith(d + "/")),
-      );
+      return ow.some((p) => !isUnresolvedPath(p) && under(p, d));
     });
     needsWriteApproval = ow.length > 0;
   }

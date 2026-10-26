@@ -875,7 +875,9 @@ disagreed with itself, which reported a blind spot that did not exist (3.44.0).
   prompt, a ledger row or a §4.2 guard string needs one. Deleting the fake-folder
   spelling is a change of its own — measured on 3.44.1 there are 58 source sites
   and 12 test files that touch it, and every one of them today has to remember the
-  marker is not a path (`isSentinel` in `judge/paths.ts` is one of them).
+  marker is not a path (step 1 made it ONE test, `isUnresolvedPath` in
+  `analysis/path-util.ts`, so the per-site remembering is over — the marker is
+  still spelled as a folder until L6 gives the record a field for it).
 
 **Build order (three releases, each green alone).** (1) one `under(a, b)` and one
 folder-derivation function, replacing the 15 `path.dirname` sites and the 5
@@ -886,6 +888,30 @@ L5's variable list and L6's marker demotion. Proof per step: the suite (4382
 tests) plus the structural ones that catch a stop moving by accident —
 `metamorphic-cd`, `gate-boundary`, `round-trip` — and a replay of the frozen
 ledger rows, diffed for which commands now stop.
+
+**Step 1 built (3.45.0).** `under(child, parent)` in `analysis/path-util.ts` is
+the containment verb, and it demands both sides in real-disk form: absolute,
+marker-free, unchanged by `path.normalize`. It throws rather than guess, and the
+tool handler turns a throw into a blocked command (fail closed), so a call site
+that forgot to resolve first stops loudly instead of allowing quietly. The
+"this names no location" question is `isUnresolvedPath`. What an approval
+remembers is one function, `rememberedDirOf` (L3): the containing dir for a word
+that names its leaf, the deepest folder every expansion must sit under for a word
+that cannot (`~/notes/*` → `~/notes`, `/tmp/{a,b}/x` → `/tmp` — the 3.44.0
+dead-grant shape), and no folder at all for a word that is relative, dynamic in
+its first segment, or pinned only to the root. The root case was not predicted
+here: it is a step-1 replay finding, and the rule it produced (a grant on `/` is
+the bar switched off, not a place the operator named) is in the CHANGELOG. Note
+the split the replay forced — where a file SITS is still its parent, because the
+file prompt has a designed case for a file directly under `/`; only what an
+approval REMEMBERS refuses the root. Deleted: `isChildOf`, `isInsideCwd`,
+`isSentinel`, two re-export shims, and the inline marker-filter chains. The proof
+is now a standing test, `test/floor-replay.test.ts` (frozen ledger rows + 37
+probes for the moved seams): it asserts no recorded command makes the path model
+throw, and it writes the signature file the before/after diff reads — the
+harness that used to be rebuilt per round from scratch. It moved one line over
+the recorded corpus (4400 tests, suite and structural ones green). Not done by
+step 1: the record itself, group opening under L2's caps, L5, L6.
 
 ### Known gaps opened by the egress split (filed 2026-10-19, step 2b)
 

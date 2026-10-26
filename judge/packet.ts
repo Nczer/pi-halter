@@ -11,6 +11,7 @@
  * the full text is what is judged.
  */
 import { findNetworkEgress, isTrustedScriptPath, registryRunDeps } from "../config";
+import { under, isUnresolvedPath } from "../analysis/path-util";
 import { getDelegatedCommand } from "../analysis/segment-helpers";
 
 // ── Judgment packet ──
@@ -126,7 +127,7 @@ function detectNetwork(input: JudgmentBashInput): string {
 }
 
 function classifyPath(p: string, cwd: string, outside: Set<string>): string {
-  if (p === cwd || p.startsWith(cwd + "/")) return "inside";
+  if (!isUnresolvedPath(p) && under(p, cwd)) return "inside";
   if (outside.has(p)) return "OUTSIDE base";
   return "outside cwd (session-allowed)";
 }

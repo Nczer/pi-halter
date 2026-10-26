@@ -75,10 +75,8 @@
  * the opposite direction.
  * tools/log-inspect.mjs `dspa --paths` lists them.
  */
-import { expandTilde, staticPrefixOf } from "../analysis/path-util";
+import { expandTilde, staticPrefixOf, under, isUnresolvedPath, isUnresolvedMarker } from "../analysis/path-util";
 import { resolvePathReal } from "../analysis/path-analysis";
-import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
-import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
 import type {PromptData} from "../decide/types";
 import type { Store } from "../gate/store";
 import { executedScriptPaths } from "../analysis/script-payload";
@@ -91,11 +89,6 @@ import { sessionContextPaths } from "./session-context";
  * answer set are never capped — see the header.
  */
 export const JUDGE_PATHS_MAX = 8;
-
-/** The floor's own marker sentinels (echoed back by the model — not paths). */
-function isSentinel(p: string): boolean {
-  return p.startsWith(OPAQUE_VAR_DIR) || p.startsWith(UNKNOWN_CWD_MARKER);
-}
 
 /**
  * §4.5 (docs/dspa-intent-floor.md): a scheme-shaped token is not a location.
@@ -137,7 +130,7 @@ export function sanitizeJudgePaths(
   for (const raw of reported) {
     if (typeof raw !== "string") continue;
     const p = raw.trim();
-    if (!p || isSentinel(p) || URL_SHAPED_RE.test(p)) continue;
+    if (!p || isUnresolvedMarker(p) || URL_SHAPED_RE.test(p)) continue;
     const abs = toAbs(p, cwd);
     if (!out.includes(abs)) out.push(abs);
   }
@@ -161,7 +154,7 @@ export function sanitizeJudgePaths(
  * reported a real floor sighting as a blind spot.
  */
 function isCovered(p: string, known: string[]): boolean {
-  return known.some((f) => p === f || p.startsWith(f + "/") || f.startsWith(p + "/"));
+  return known.some((f) => under(p, f) || under(f, p));
 }
 
 export interface JudgePathReport {
@@ -221,7 +214,7 @@ export function judgePathReport(
 ): JudgePathReport {
   const paths = sanitizeJudgePaths(reported, floor.cwd);
   if (paths.length === 0) return {};
-  const floorConcrete = floor.floorPaths.filter((p) => p.startsWith("/") && !isSentinel(p));
+  const floorConcrete = floor.floorPaths.filter((p) => !isUnresolvedPath(p));
   // The floor's pinned anchors: a floor path with a dynamic segment names a
   // DIRECTORY it does know (`/tmp/snap-x/$e` → `/tmp/snap-x`) even though it
   // cannot name the leaf. Same rule the gate applies to the same token
@@ -230,13 +223,13 @@ export function judgePathReport(
   const anchors = floorConcrete
     .map((p) => staticPrefixOf(p))
     .filter((a) => a !== "" && a !== "/" && !floorConcrete.includes(a));
-  const known = [floor.cwd, ...(floor.confirmedDirs ?? []), ...floorConcrete, ...anchors];
+  const known = [toAbs(floor.cwd, floor.cwd), ...(floor.confirmedDirs ?? []), ...floorConcrete, ...anchors];
   const misses = paths.filter((p) => !isCovered(p, known));
   // Context paths arrive as written in the session (relative, ~, `..`); they
   // must be compared in the same absolute form the report was sanitized to.
   const inContext = (floor.contextPaths ?? [])
     .map((c) => c.trim())
-    .filter((c) => c !== "" && !isSentinel(c))
+    .filter((c) => c !== "" && !isUnresolvedPath(c))
     .map((c) => toAbs(c, floor.cwd));
   // §4.4: with NO concrete location of its own, the floor cannot have been
   // out-of-date about a path it never derived — the cause is its own blindness,
@@ -246,7 +239,7 @@ export function judgePathReport(
   const contextMisses =
     floorConcrete.length === 0
       ? []
-      : misses.filter((p) => inContext.some((c) => p === c || p.startsWith(c + "/") || c.startsWith(p + "/")));
+      : misses.filter((p) => inContext.some((c) => under(p, c) || under(c, p)));
   const floorMisses = misses.filter((p) => !contextMisses.includes(p));
   const r: JudgePathReport = { paths };
   if (floorMisses.length > 0) r.floorMisses = floorMisses;
@@ -278,18 +271,17 @@ export function judgePathReport(
   // write the floor derives via baseWriteAccess is not a writePaths entry.
   if (writes !== undefined || floor.floorWritePaths?.length) {
     const cwdAbs = toAbs(floor.cwd, floor.cwd);
-    const insideCwd = (p: string): boolean => p === cwdAbs || p.startsWith(cwdAbs + "/");
-    const floorWrites = (floor.floorWritePaths ?? []).filter((p) => p.startsWith("/") && !isSentinel(p));
+    const floorWrites = (floor.floorWritePaths ?? []).filter((p) => !isUnresolvedPath(p));
     const judgeWrites = sanitizeJudgePaths(writes, floor.cwd);
     const roleFloorMisses: string[] = [];
     for (const p of paths) {
-      if (insideCwd(p) || isCovered(p, misses)) continue;
+      if (under(p, cwdAbs) || isCovered(p, misses)) continue;
       if (judgeWrites.length > 0 && isCovered(p, judgeWrites) && !isCovered(p, floorWrites)) {
         roleFloorMisses.push(p);
       }
     }
     const roleJudgeMisses = floorWrites.filter(
-      (w) => !insideCwd(w) && !isCovered(w, judgeWrites),
+      (w) => !under(w, cwdAbs) && !isCovered(w, judgeWrites),
     );
     if (roleFloorMisses.length > 0) r.roleFloorMisses = roleFloorMisses;
     if (roleJudgeMisses.length > 0) r.roleJudgeMisses = roleJudgeMisses;

@@ -10,7 +10,7 @@ import {
   TMUX_SAFE_SUBCOMMANDS,
 } from "../analysis/tmux";
 import { resolvePathReal } from "../analysis/path-analysis";
-import { UNKNOWN_CWD_MARKER } from "../analysis/cwd-tracking";
+import { UNKNOWN_CWD_MARKER } from "../analysis/path-util";
 import { MIRROR_CASES } from "./shared-cases";
 
 const cwd = "/home/user/project";

@@ -1,5 +1,5 @@
 import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "../config";
-import { isPositionalRef } from "../analysis/path-util";
+import { isPositionalRef, under, isUnresolvedPath } from "../analysis/path-util";
 
 // ── Allow rules ──
 
@@ -181,12 +181,15 @@ export function createStore(nowFn = Date.now): Store {
       if (deduped.length > 0) confirmedResolutions.set(token, deduped);
     },
     isInsideAllowedDir(resolved, kind) {
+      // A word that names no location is in no bar (fail closed: the caller
+      // stops, and `under` refuses to guess).
+      if (isUnresolvedPath(resolved)) return false;
       // Write dirs imply read, so "read" checks both sets.
       const sets = kind === "read" ? [readDirs, writeDirs] : [writeDirs];
       for (const set of sets) {
         if (set.has(resolved)) return true;
         for (const d of set) {
-          if (resolved === d || resolved.startsWith(d + "/")) return true;
+          if (under(resolved, d)) return true;
         }
       }
       return false;

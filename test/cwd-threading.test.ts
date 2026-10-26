@@ -7,9 +7,8 @@ import {
   reResolveCwdDependentPaths,
   baseWriteAccess,
   homeReassigned,
-  UNKNOWN_CWD_MARKER,
 } from "../analysis/cwd-tracking";
-import { OPAQUE_VAR_DIR } from "../analysis/bash-parser";
+import { OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER } from "../analysis/path-util";
 import { analyzeCommand } from "../analysis/command-analysis";
 import {decide} from "../decide/engine";
 import type {BashPromptData} from "../decide/types";

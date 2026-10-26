@@ -2,7 +2,8 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { afterEach, beforeAll, afterAll, describe, expect, it } from "vitest";
-import { parseCommand, OPAQUE_VAR_DIR } from "../analysis/bash-parser";
+import { parseCommand } from "../analysis/bash-parser";
+import { OPAQUE_VAR_DIR } from "../analysis/path-util";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 import { canon } from "./canon";
 
