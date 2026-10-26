@@ -1,5 +1,68 @@
 # Changelog
 
+## 3.44.0 — 2026-10-26
+**The ledger's economy caps had moved inside the sanitizer, so they were cutting
+what the FLOOR enforces — and four of them cut silently.**
+
+- **What the operator saw.** Two directions, both from the 2026-10-25/26 ledger
+  (41 `unresolved.jsonl` rows, 2 `judge.jsonl` rows).
+  (a) A stage-2 report of 12 paths stored 8, and `judgePaths`/`floorPaths` said
+  nothing about the rest: the 04:49:50 row lost `/tmp/snap-x/memory` — a real
+  floor blind spot — out of the corpus, and the same silent cut at
+  `LEDGER_CMD_MAX` (1000) turns a heredoc into body segments when the row is
+  replayed, which is a known false-stop source (§7 gotcha of the intent-floor
+  doc). (b) A false blind spot: that same row reported `floorMisses:
+  ["/tmp/snap-x/exa","/tmp/snap-x/gallop"]` for a floor whose own path set
+  contained `/tmp/snap-x/$e` — the floor HAD pinned that directory, and 2 of the
+  5 miss slots went to a gap that does not exist.
+- **Why the same constant caused a soundness problem.** `JUDGE_PATHS_MAX = 8`
+  was applied inside `sanitizeJudgePaths`, the single choke point every consumer
+  shares — the ledger AND the two enforcement inputs. So the D19 write bar
+  (`dspa-gate.judgeWriteOutside`) saw only the first 8 reported writes: writes
+  9+ of a long report auto-allowed without ever meeting the bar (probe: 12 in →
+  8 out), which is the false-allow direction that file's D19 note claims is
+  impossible. §4.2's answer set was cut the same way — safe direction, but it
+  hid answers the judge HAD given and produced false stops. And `isCovered`
+  compared raw text, ignoring the dynamic-segment anchor the gate itself uses for
+  the same token (`anchorOf` / `staticPrefixOf`), which is the false blind spot
+  above.
+- **The fix.** Four separations, none of them a bigger cap. (1) Enforcement and
+  the guard are uncapped: `sanitizeJudgePaths` no longer truncates, so the write
+  bar faces every reported write and §4.2 sees the whole answer set. (2) The
+  economy cap lives at the row-writing sites (`judgePathLogFields`,
+  `logIntentMisses`) and a cut row now says so — `judgePathsMore` /
+  `floorPathsMore` on the paths row, `cmdCut: true` on any row whose `cmd` was
+  sliced (`UnresolvedLogEntry`, `JudgeLogEntry`); the miss cap (`JUDGE_MISSES_MAX
+  = 5`) is now the only cap left in the module. `tools/log-inspect.mjs` surfaces
+  them: `judge` counts the sliced rows, `unresolved` marks a cut cmd
+  `[CUT at 1000 — replay-suspect]` (and its header listed the pre-3.41 outcome
+  set, which is why intent rows read as undocumented). (3) Coverage adds the floor's own
+  anchors: `staticPrefixOf` of each concrete floor path joins the covered set —
+  moved out of `gate/dspa-gate.ts` into `analysis/path-util.ts` so the gate and
+  the diagnostic apply one rule (diagnostic-only: this module gates nothing).
+  (4) A dir whose own text carries a brace is never a grant (`command-analysis`
+  read and write tiers): `ls ~/{Applications,apps,bin,.local/bin}` is ONE token
+  to the parser, so its dirname cut inside the group and yielded
+  `$HOME/{Applications,apps,bin,.local`, which the intent pass minted into the
+  session READ bar (the 15:04:48 rows' `grantedDirs`) while the four real dirs
+  got nothing — a grant that can never bind, so the command re-stopped on every
+  run. Refusing it is fail-closed: the stop still fires, because
+  `needsPathApproval`/`needsWriteApproval` come from the PATH sets, not the dir
+  sets.
+- **Not in scope.** Expanding an alternation into its real dirs — that is the
+  floor's half, it grants whole dir trees from one token, and it needs its own
+  grill (filed in the intent-floor doc §9, next to the `$XDG_RUNTIME_DIR` env-
+  binding question, which `analysis/var-resolution.ts` refuses on purpose).
+  A `halter.readDirs` action is a config decision, not a code fix; the corpus's
+  recurring always-allowed roots are the evidence for it.
+- **Tests.** 9 new (uncapped sanitizer keeps all 20; a 12-write report meets the
+  bar 12 times; a dynamic floor path covers its anchor and an unrelated report
+  still misses; a first-segment-dynamic floor path yields no anchor; the brace
+  group spanning `/`, the alternation-named dir, the write tier, and no
+  over-refusal when the group sits in the basename; `cmdCut` plus
+  `judgePathsMore`/`floorPathsMore` on both ledgers), and 1 fixture moved off the
+  old 8-cap expectation. Suite: 4381 passed (58 files), `tsc --noEmit` clean.
+
 ## 3.43.1 — 2026-10-25
 **The path resolver was throwing away every answer it got — and writing no line
 while doing it.**
@@ -1800,7 +1863,7 @@ knowable location).** `cd $HOME/.pi/agent/extensions/llama-link && grep -rn
 foo .` stopped with `outside cwd: <unresolved-cwd>` — the marker is never
 grantable, so the command could only be approved once at a time. The parser
 already resolves `$HOME`/`${HOME}/…` as a closed set for path tokens (`cat
-$HOME/x` → `/home/nczer/x`), but `resolveCdTarget` bailed on any `$` in a cd
+$HOME/x` → the home dir), but `resolveCdTarget` bailed on any `$` in a cd
 target: the base went unknown and the later `.` resolved to the marker. cd
 targets were the one place the closed set was not applied.
 
@@ -1826,7 +1889,7 @@ targets were the one place the closed set was not applied.
   command run with the same closed-set state.
 - **`gate/dspa-gate.ts`** — `cdBaseBounds(…, analysis.assignments)`.
 - Behaviour: `cd $HOME/.pi/… && grep -rn foo .` allows, as the literal form
-  does; `cd $HOME && ls` prompts naming `/home/nczer` (grantable) instead of
+  does; `cd $HOME && ls` prompts naming the home dir (grantable) instead of
   the marker; `HOME=/tmp cd $HOME && ls`, `export HOME=…; cd $HOME && ls` and
   `cd $HOMEDIR && ls` keep the marker stop; a non-existent `$HOME` target
   leaves the base unchanged (the cd fails, as in bash).
@@ -2164,8 +2227,8 @@ prompts, fewer auto-allows.
   full pipeline sees the parent / `$HOME` as outside. The tokens now fall
   through to the pipeline.
 - **Bare `~` and `~user` join the path set** — `isPathCandidate` only
-  accepted `~/…`, so `du ~` (a recursive `$HOME` read) and `ls ~nczer`
-  auto-allowed in every layer while `ls /home/nczer` prompted. `expandTilde`
+  accepted `~/…`, so `du ~` (a recursive `$HOME` read) and `ls ~<user>`
+  auto-allowed in every layer while `ls $HOME` prompted. `expandTilde`
   resolves `~user` (current user → `os.homedir()`, other users →
   `/home/<user>` — conservative).
 

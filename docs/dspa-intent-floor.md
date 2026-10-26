@@ -288,7 +288,15 @@ the intent route (§3) is the one that trades determinism for friction.
   **3.42.0 addition — `grantedDirs`**: the session READ dirs this allow put in
   the bar (the fast track the row created). Absent when nothing was grantable:
   an unanchored stop, or a write-shaped one. Session-scoped like the store, so
-  the field describes that session, not the machine.
+  the field describes that session, not the machine. **3.44.0 correction**: a
+  dir whose own text carries a brace is never in that list (and never offered
+  as an Always option). `ls ~/{Applications,apps,bin,.local/bin}` is ONE token
+  to the parser, so its dirname cut inside the group and yielded
+  `$HOME/{Applications,apps,bin,.local` — a grant no shell run can ever
+  match, which is why the same command stopped on every run while the real dirs
+  stayed ungranted. Refusing it changes no stop (`needsPathApproval` comes from
+  the path set, not the dir set); expanding an alternation into its real dirs
+  is a floor-model change and stays unbuilt (§9).
 - `outcome: "intent-declined"` — the guard set or the verdict kept the stop,
   and the operator was prompted.
   Built (steps 4–5): both outcomes exist with `missKind` (the class the floor
@@ -301,6 +309,12 @@ the intent route (§3) is the one that trades determinism for friction.
   stored by THIS run, which an intent row never has). One sanitized report per
   attempt feeds the guard and the rows, so a row cannot disagree with the
   decision it records.
+- **Row economy is marked, never silent (3.44.0).** `judgePaths` in a row is
+  sliced to 8 and the row carries `judgePathsMore` for the remainder; `cmd` is
+  sliced to 1000 and carries `cmdCut`. The slice is a ROW concern only — the
+  §4.2 guard and the D19 write bar see the full sanitized report, so a long
+  report can no longer hide an answer (a false stop) or leave a reported write
+  unbarred (writes 9+ of a 12-write report met no bar before this).
 - The manual path's rows are unchanged, so the deterministic fix work keeps a
   live corpus. A floorMiss is never reclassified as a judge contextMiss when
   `floorPaths` is empty (§4.4, built step 5).
@@ -394,7 +408,10 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
   body lines become segments of the command. That produced the replay's bogus
   `network egress (uv)` row and a bogus outside-base path on a `git fetch` row;
   both judge clean when the complete command is fed. Complete the row (or drop
-  it) before believing a replay stop.
+  it) before believing a replay stop. Since 3.44.0 the unresolved and judge
+  ledgers MARK such a row (`cmdCut: true`) — find them with
+  `jq 'select(.cmdCut)'`; decisions.jsonl rows carry no marker, so a long
+  `target` there stays suspect on its face.
 
 ### Step 3 build notes (2026-10-19)
 
@@ -771,6 +788,26 @@ Still fail-open / invisible to the floor:
 - The download-and-execute bar cannot tell a payload from a data response: `curl
   https://api.io/x | python3 -c 'json.load(sys.stdin)'` stops absolutely. Only
   loopback locality is exempt (`isLoopbackEgress`); that boundary is deliberate.
+
+### Filed 2026-10-26 from the same corpus (both need their own grill)
+
+- A brace ALTERNATION operand is ONE token to the parser, so the floor knows its
+  literal text and no location it names: `ls ~/{Applications,apps,bin,.local/bin}`
+  yields `paths=["$HOME/{Applications,apps,bin,.local/bin"]` and no real
+  dir. 3.44.0 stopped the DAMAGE (that dirname is no longer minted into the
+  session READ bar — a grant no run can match, so the command re-stopped forever)
+  but not the blindness. The fix is the floor's: expand a group into its
+  alternants and feed the path/dir sets (`braceVariants` in
+  `analysis/credentials.ts` is the existing helper). It grants whole dir trees
+  from one token, so it needs the same care as a `readDirs` entry.
+- An env var the shell would bind is invisible to the floor: `$XDG_RUNTIME_DIR`
+  (→ `/run/user/1000`) stopped twice on 2026-10-25 — `intent-declined` at
+  15:41:39 with guard `unanchored location unanswerable` (the floor has no base
+  to anchor a judge answer on) and a deterministic `gate-stop` at 15:41:41 for
+  `wayland-1` and `.X11-unix`. `analysis/
+  var-resolution.ts` refuses env values on purpose ("anything the environment can
+  hold a path in"), so binding one value is a policy change — it needs a HOME-style
+  reassignment guard (`XDG_RUNTIME_DIR=/evil ls …`) before it is worth building.
 
 ### Known gaps opened by the egress split (filed 2026-10-19, step 2b)
 

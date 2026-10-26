@@ -725,7 +725,12 @@ at halter load.
   (`/halter-ledger-log`; same arg handling; D17 split). `tools/log-inspect.mjs`
   does the recurring extractions (summary, audit, dspa, dspa --paths, stats).
   `halter-forget` clears the session READ grants the intent floor learned —
-  never a clicked grant, never `halter.readDirs`.
+  never a clicked grant, never `halter.readDirs`. A row that was economy-capped
+  says so (3.44.0): `cmd` sliced to 1000 chars carries `cmdCut`, and a
+  stage-2 `paths` row that left report or floor paths out carries
+  `judgePathsMore` / `floorPathsMore`. A cut `cmd` is suspect for replay —
+  a heredoc body turns into segments — and a sliced path list is not the whole
+  answer set.
 - **Unresolved log** (`.log/unresolved.jsonl`, on by default): the fate of
   each unbound token (outcome — `prompted` / `gate-stop` / `auto-allowed` /
   `intent-allowed` / `intent-declined`; intent rows also carry the miss kind,
