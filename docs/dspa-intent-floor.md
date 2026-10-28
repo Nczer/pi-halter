@@ -809,6 +809,39 @@ Still fail-open / invisible to the floor:
   hold a path in"), so binding one value is a policy change — it needs a HOME-style
   reassignment guard (`XDG_RUNTIME_DIR=/evil ls …`) before it is worth building.
 
+### Filed 2026-10-28 from the detached-launch incident (three seams closed, 3.46.0)
+
+`cd /tmp/… && setsid nohup sh -c 'sleep 15; sh /tmp/…/new4096.sh' >/dev/null 2>&1
+& sleep 1; echo launched` — the judge packet carried no script content:
+`decisions.jsonl` `judge: declined (stage 2)` with reason `cmd setsid -c`, and
+`judge.jsonl` `floorPaths: []` against `judgePaths: ["/tmp/…/new4096.sh"]` with
+the same path in `floorMisses`, so the floor scored its own blind report as a
+miss. Three seams, all closed and pinned: `setsid`/`nohup` were absent from
+`wrapperCommands`, so the segment named NO program to any verb-keyed consumer
+(severity `null`, `reasons: []`, `paths: []` — the residual the gate documents as
+"invisible to both layers" had a worse instance than `time git push`); the same
+set feeds the shared operand scan (`config/script-operand.ts`), so the wrapped
+interpreter named no payload either; and that scan aborted at `-c`, so a stage of
+the body handing off to a file was never identified. `shellBodyStages`
+(`config/bash-patterns.ts`) is now one helper for both body consumers.
+
+Still open from the same command, deliberately unbuilt:
+
+- **A `cd` inside a backgrounded list is dropped.** `analysis/cwd-tracking.ts`
+  does `if (seg.backgrounded) continue;` — the segment is skipped entirely
+  instead of threading its cd locally — so `cd X & ls` leaves no base for the
+  rest of that list. Re-basing a backgrounded list moves cwd bases broadly; it
+  needs its own measured replay diff (the 15-path diff of this step is the
+  shape of that proof).
+- **A wrapper's quoted command argument names nothing.** `watch -n 5 'python3
+  job.py'`: `scanOperands` stops at a token containing whitespace on purpose —
+  the string is a command line for the wrapper's own shell, not an operand of the
+  outer verb. Naming it means deciding, per wrapper, which arguments are command
+  lines.
+- **The rest of the wrapper word class** (`time`, `doas`, `pkexec`, `unshare`,
+  `chrt`, `taskset`): unmeasured, so unjoined. Each is a table edit plus a
+  replay diff, not a new seam.
+
 ### Decided 2026-10-26 in the location-model grill (unbuilt)
 
 Goal of that grill: ONE record per path word in the command text, so the floor

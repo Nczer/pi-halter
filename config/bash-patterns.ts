@@ -196,9 +196,21 @@ export function isSafeSubcommand(segment: string): boolean {
  * absolute bar could be stepped over by prefixing it (found by the D-b probe
  * 2026-10-19; the operator's caveat: in a non-interactive shell `sudo` usually
  * dies on the missing password, so the shapes that matter are NOPASSWD rules
- * and cached credentials). */
+ * and cached credentials).
+ * `nohup` and `setsid` change how long the process lives and which session it
+ * belongs to — never what it runs, so the inner command is the whole
+ * operation. Missing here made the ENTIRE segment invisible to every verb-
+ * keyed check: `setsid nohup sh job.sh` carried no risk reason at all (not
+ * even nohup's own danger) and named no executed script, while `timeout 60
+ * nohup sh job.sh` reported both (2026-10-28 decisions.jsonl: a detached
+ * launch that stopped the model backend reached the judge with `script: null`
+ * and the floor's only reason was its ungrantable-form stop).
+ * Still absent, deliberately unmeasured so far: `time`, `doas`, `pkexec`,
+ * `unshare`, `chrt`, `taskset` — same class, open residual (see the note at
+ * gate/dspa-gate.ts about a wrapper outside this set). */
 export const wrapperCommands = new Set([
   "xargs", "watch", "timeout", "parallel", "env", "nice", "ionice", "stdbuf", "sudo",
+  "nohup", "setsid",
 ]);
 
 /** Shell interpreters used by find -exec and similar constructs. */
@@ -723,6 +735,22 @@ function shellBodyRedirect(body: string): boolean {
   return false;
 }
 
+/**
+ * The stages of a shell body (`sh -c 'sleep 5; sh job.sh'`), with the
+ * redirects whose target is absolute/home dropped so the split leaves no
+ * stray token. TWO consumers, one parser: the write-verb scan below and the
+ * inline-body hand-off scan (config/script-operand.ts) — two parsers of one
+ * body is how a body stops being evidence for one of them (the G4/G6 lesson).
+ * A relative-target redirect is KEPT: for the write scan it is the write.
+ */
+export function shellBodyStages(body: string): string[] {
+  return body
+    .replace(/(?:\d*>>?|&>|<)+\s*(?:&[\d-]+|(?:~|\/)[^\s'"`;|)]*)/g, " ")
+    .split(/[;\n|&]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /** A shell body (`sh -c '…'`) is a list of shell commands, so its write-ness
  * is decided by the verbs it runs. The write-verb check runs before the set
  * check because `isAllowedCommand` is the auto-allow TABLE, not a read set —
@@ -735,13 +763,9 @@ function shellBodyRedirect(body: string): boolean {
 function shellBodyWrites(body: string): boolean {
   if (shellBodyRedirect(body)) return true;
   // Only fd operations and absolute-target redirects reach here (everything
-  // else was a write above). Drop them so the verb scan sees real stages —
-  // splitting on `&` would otherwise leave a stray `2` from `>&2`.
-  const stages = body
-    .replace(/(?:\d*>>?|&>|<)+\s*(?:&[\d-]+|(?:~|\/)[^\s'"`;|)]*)/g, " ")
-    .split(/[;\n|&]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // else was a write above), and shellBodyStages drops them so the verb scan
+  // sees real stages — splitting on `&` would otherwise leave a stray `2`.
+  const stages = shellBodyStages(body);
   if (stages.length === 0) return false;
   for (const st of stages) {
     const raw = st.replace(/^['"`]+/, "").split(/[\s'"`]+/)[0].toLowerCase();

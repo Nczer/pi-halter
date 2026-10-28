@@ -121,6 +121,46 @@ describe("a wrapped command still gets its operands modeled", () => {
   });
 });
 
+// ── detached launches: `setsid`/`nohup` change lifetime, not the program ──
+describe("setsid and nohup are wrappers", () => {
+  // 2026-10-28 .log/decisions.jsonl: `cd X && setsid nohup sh -c 'sleep 15;
+  // sh run.sh' >/dev/null 2>&1 & sleep 1; echo launched` carried no script for
+  // the judge and stopped twice on "cmd setsid -c": neither word was in
+  // `wrapperCommands`, so the segment named NO program to any verb-keyed
+  // consumer — payload identification, the operand model, the risk layer
+  // (severity=null, reasons=[], paths=[]). Launching and detaching is a
+  // lifetime change, so they belong with `sudo`/`env`/`timeout`.
+  it("the unwrapper passes through both, in either order, and their flags", () => {
+    expect(resolveDelegatedTokens(["setsid", "nohup", "sh", "job.sh"])).toMatchObject({ cmd: "sh", index: 2 });
+    expect(resolveDelegatedTokens(["setsid", "-f", "sh", "job.sh"])).toMatchObject({ cmd: "sh", index: 2 });
+    expect(resolveDelegatedTokens(["nohup", "-f", "setsid", "python3", "job.py"])).toMatchObject({ cmd: "python3", index: 3 });
+  });
+
+  it("signatures name the wrapped program, not the launcher", async () => {
+    expect((await analyzeCommand("setsid nohup sh job.sh", cwd)).signatures).toEqual(["setsid sh"]);
+    expect((await analyzeCommand("nohup setsid python3 job.py", cwd)).signatures).toEqual(["nohup python3"]);
+  });
+
+  it("the risk layer sees the inner program instead of a null segment", async () => {
+    for (const cmd of ["setsid nohup sh job.sh", "setsid nohup touch /tmp/x"]) {
+      const a = await analyzeCommand(cmd, cwd);
+      expect(a.risk.severity, cmd).toBe("high");
+      expect(a.risk.reasons.join(" | "), cmd).toContain("wrapper running write operation");
+    }
+    // The still-open class: a word outside the table is invisible to both
+    // layers at once (`time git push` stays null). The table is shared.
+    expect((await analyzeCommand("time git push", cwd)).risk.severity).toBeNull();
+  });
+
+  it("a detached launch of a script is not auto-allowable on the wrapper name", async () => {
+    const cmd = "setsid nohup sh job.sh";
+    const store = createStore();
+    store.addAllowed({ bashSigs: ["setsid"] });
+    expect((await decide({ type: "bash", command: cmd, cwd }, store)).kind).not.toBe("auto-allow");
+    expect((await decide({ type: "bash", command: cmd, cwd }, createStore())).kind).not.toBe("auto-allow");
+  });
+});
+
 // ── exec/code-body payloads get no segment-level vetting ──────────────
 describe("an exec payload is trusted only against the unconditionally-safe set", () => {
   it("a payload naming a vetted-entry program stops", async () => {

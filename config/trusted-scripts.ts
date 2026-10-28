@@ -397,9 +397,10 @@ const TRUST_TRANSPARENT_FORMS = new Set(["uv run", "deno run"]);
  *
  * `first` (any extension) is the trust operand: an extension-less
  * executable in the skills dir is trusted even though it is not a text
- * payload worth fencing. Command-string forms are NEVER trusted — the
- * operand scan aborts on `-c`/`-m`/`-e`, so the quoted code cannot inherit
- * trust from a path inside the string (`bash -c '~/skills/q.sh; rm -rf /'`).
+ * payload worth fencing. Command-string forms are NEVER trusted: the scan
+ * fills `first` only from operands the segment itself names, so a shell
+ * body's hand-off (which fills `script` alone) carries no trust —
+ * `bash -c '~/skills/q.sh; rm -rf /'` names no trust operand at all.
  */
 export function isTrustedScriptCommand(segment: string, cwd: string): boolean {
   const quoted = tokenizeSegmentQuoted(segment);

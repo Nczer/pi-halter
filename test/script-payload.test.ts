@@ -150,6 +150,64 @@ describe("wrapped run forms (identification walks past wrappers)", () => {
   });
 });
 
+// 2026-10-28 .log/decisions.jsonl + judge.jsonl: `setsid nohup sh -c 'sleep
+// 15; sh /tmp/…/new4096.sh'` ran with `floorPaths: []` — the packet carried no
+// content, so the judge declined and the floor counted its own blind report as
+// a miss. The wrappers were one seam (test/wrapper-delegation.test.ts); the
+// other was the body itself, which aborted the scan at `-c`. A SHELL body is
+// now scanned for a HAND-OFF to a file: a stage of `sh -c '<body>'` names its
+// payload under the same rules as the parent segment, one level deep.
+describe("a shell body that hands off to a file", () => {
+  const p = (seg: string) => scriptFilePathInSegment(seg, tmp);
+  const analyze = (command: string, cwd = tmp) => analyzeCommand(command, cwd);
+
+  it("identifies the file an inner stage runs, reads it, logs it", async () => {
+    fs.writeFileSync(path.join(tmp, "run.sh"), "#!/bin/sh\nsleep 15\nsh deeper.sh\n");
+    const a = await analyze("setsid nohup sh -c 'sleep 15; sh run.sh' >/dev/null 2>&1 &");
+    expect(findExecutedScript(a, tmp)?.path).toBe(path.join(tmp, "run.sh"));
+    expect(findExecutedScript(a, tmp)?.content).toContain("sleep 15");
+    expect(executedScriptPaths(a, tmp)).toEqual([path.join(tmp, "run.sh")]);
+  });
+
+  it("a bare wrapped interpreter names its operand the same way", () => {
+    expect(p("setsid nohup sh job.sh")).toBe(path.join(tmp, "job.sh"));
+    expect(p("nohup setsid python3 job.py")).toBe(path.join(tmp, "job.py"));
+  });
+
+  it("a relative body operand resolves against the cwd the `cd` left", async () => {
+    const sub = path.join(tmp, "sub");
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(sub, "job.sh"), "echo nested\n");
+    const s = findExecutedScript(await analyze("cd sub && sh -c 'sh job.sh'"), tmp);
+    expect(s?.path).toBe(path.join(sub, "job.sh"));
+  });
+
+  it("a body that computes its target or names no file stays null", () => {
+    expect(p("sh -c 'sh $JOB'")).toBeNull();
+    expect(p("sh -c 'echo hi'")).toBeNull();
+    expect(p("sh -c 'cat a b'")).toBeNull();
+  });
+
+  it("a non-shell body names no payload — its file operand is an argument", () => {
+    // `python3 -c 'open("job.py")'` may READ job.py, it does not run it; only
+    // a SHELL body's operand is a hand-off to execution.
+    expect(p("python3 -c 'open(\"job.py\")'")).toBeNull();
+  });
+
+  it("a `-c` inside a `-c` stays unidentified (MAX_BODY_DEPTH = 1)", () => {
+    expect(p("sh -c 'sh -c \"sh job.sh\"'")).toBeNull();
+  });
+
+  it("the hand-off names a payload without minting a location", async () => {
+    // A path inside someone else's code is not evidence about WHERE the
+    // command operates — only about what it runs (the role rule).
+    fs.writeFileSync(path.join(tmp, "job.sh"), "echo hi\n");
+    const a = await analyze("sh -c 'sh job.sh'");
+    expect(a.paths).not.toContain(path.join(tmp, "job.sh"));
+    expect(findExecutedScript(a, tmp)?.path).toBe(path.join(tmp, "job.sh"));
+  });
+});
+
 describe("scriptFilePathInSegment (D19 — pure, no file read)", () => {
   it("interpreter-run and direct-exec forms resolve against the base", () => {
     expect(scriptFilePathInSegment("python3 job.py", tmp)).toBe(path.join(tmp, "job.py"));

@@ -117,6 +117,16 @@ describe("isTrustedScriptCommand", () => {
     expect(isTrustedScriptCommand("uv run --with=pymupdf python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
   });
 
+  it("trusts neither a wrapper-detached launch nor a path named inside a body", () => {
+    // 2026-10-28: the operand scan now walks past `setsid`/`nohup` for the
+    // JUDGE (the packet carries the payload). Trust is a narrower closed
+    // world (TRUST_TRANSPARENT_FORMS: the run forms the bypass was granted
+    // for), and a `-c` body's hand-off fills `script`, never `first`.
+    expect(isTrustedScriptCommand("setsid nohup python3 ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("sh -c 'sleep 1; sh ~/.pi/agent/skills/my-script.py'", "/tmp")).toBe(false);
+    expect(isTrustedScriptCommand("python3 ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(true);
+  });
+
   it("rejects uv run --with-editable outside trusted dirs (supply chain defense)", () => {
     expect(isTrustedScriptCommand("uv run --with-editable ./pkg python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);
     expect(isTrustedScriptCommand("uv run --with-editable=/tmp/evil-dir python ~/.pi/agent/skills/my-script.py", "/tmp")).toBe(false);

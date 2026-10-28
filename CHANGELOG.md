@@ -1,5 +1,54 @@
 # Changelog
 
+## 3.46.0 — 2026-10-28
+**A detached launch named no program: the judge packet carried no script, and the
+floor scored its own blind report as a miss.**
+
+- **What the operator saw.** A backgrounded launch — `cd /tmp/… && setsid nohup
+  sh -c 'sleep 15; sh /tmp/…/new4096.sh' >/dev/null 2>&1 & sleep 1; echo
+  launched` — was asked twice and had nothing to answer with. The judge declined
+  at stage 2 (`reason: cmd setsid -c`) because the packet carried no script
+  content; the same command's path report read `floorPaths: []` against
+  `judgePaths: ["/tmp/…/new4096.sh"]`, with that path named again in
+  `floorMisses` — the floor counting a miss for a path it could not have seen.
+  The analysis behind the prompt was empty on every axis: severity `null`, no
+  risk reasons, `paths: []`.
+- **Why it happened.** `setsid` and `nohup` were not in `wrapperCommands`. The
+  command position is answered by ONE unwrapper for every verb-keyed consumer
+  (3.38.0 G6), so an unlisted prefix word makes the whole segment name no program
+  at all — not to the risk layer, not to the operand model, and not to
+  `config/script-operand.ts`, the scan that decides which file a command executes.
+  A second seam sat behind it: that scan aborted at an inline-code flag (`-c`), so
+  a stage of a SHELL body handing off to a file was never identified — it never
+  had to be, because the wrappers already hid the form. The gate documents the
+  wrapper-class residual as invisible to both layers, with `time git push` as the
+  example; a detached launch of the operator's own long-running script is the
+  worse instance.
+- **The fix.** (1) `nohup` and `setsid` joined `wrapperCommands`: they change a
+  process's LIFETIME, never what it runs, so they belong with `sudo`/`env`/
+  `timeout`. Both take boolean flags only, so no value-flag entry was needed —
+  `nohup -f setsid python3 job.py` resolves to `python3`. (2) The body scan is one
+  helper, `shellBodyStages` (`config/bash-patterns.ts`), where it used to be
+  inline in `shellBodyWrites`, the other consumer of body stages. (3) A SHELL body
+  is scanned for a HAND-OFF to a file: `findScriptOperand` descends one body level
+  and reads each stage under the same rules as the parent segment. The result
+  fills `script` and nothing else — no location token (the role rule: a path
+  inside someone else's code says what runs, not where), and never `first`, so the
+  skills-dir bypass stays out of reach from a body (`sh -c '~/skills/q.sh; rm -rf
+  /'` names no trust operand). Only `SHELL_INTERPRETERS` verbs get the scan — a
+  `python3 -c 'open("x.py")'` body may read x.py, it does not run it — and only
+  one level deep: a `-c` inside a `-c` names nothing.
+- **Cost, measured.** The frozen corpus (`.log/corpus`, 1081 commands), before and
+  after: zero changes to any stop, prompt or bar, and 15 rows gained exactly one
+  path each — the operand of a `setsid nohup python3 <dir> …` segment that
+  previously modeled nothing at all. Suite 4412 (+12 rows), typecheck clean.
+- **Still open, same command, filed in `docs/dspa-intent-floor.md`:** a `cd`
+  inside a backgrounded list is dropped (`analysis/cwd-tracking.ts` skips the
+  segment rather than threading it locally), a wrapper's quoted command argument
+  (`watch -n 5 'python3 job.py'`) names nothing, and the rest of the wrapper word
+  class (`time`, `doas`, `pkexec`, `unshare`, `chrt`, `taskset`) is unmeasured and
+  unjoined.
+
 ## 3.45.0 — 2026-10-26
 **One containment verb, one remembered-folder answer — and the root turned out to
 be a location the gate had never been able to see.**

@@ -1935,7 +1935,9 @@ describe("egress floor sees through wrapper/prefix delegation (2026-10-03 incide
 
   // Residual, deliberately untested: a wrapper outside `wrapperCommands`
   // (`time git push`) is invisible to the floor AND to the risk layer — the
-  // delegation table is shared, so both layers miss it together.
+  // delegation table is shared, so both layers miss it together. `setsid` and
+  // `nohup` joined the table on 2026-10-28 (a detached launch named no payload
+  // at all); their rows are pinned in wrapper-delegation.test.ts, not here.
 });
 
 // ── Operator read-bar grants (settings `halter.readDirs`, 3.42) ─────────────

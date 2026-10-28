@@ -23,9 +23,13 @@
  * behavior changes: `script` is the first operand that looks like a TEXT
  * script (an extension-less direct exec is a binary — reading it would
  * fence bytes as prose), `first` is the first operand of any kind (trust
- * covers an extension-less executable in the skills dir).
+ * covers an extension-less executable in the skills dir). A SHELL program
+ * string is scanned too, but only for a hand-off to a file, and the result
+ * fills `script` alone (inlineBodyScriptHandoff) — a path inside someone
+ * else's code never becomes a trust operand.
  */
-import { FETCH_PKG_FORMS, skipEnvPrefixes, stripPkgVersion, UV_VALUE_FLAGS, wrapperCommands } from "./bash-patterns";
+import { FETCH_PKG_FORMS, shellBodyStages, SHELL_INTERPRETERS, skipEnvPrefixes, stripPkgVersion, UV_VALUE_FLAGS, wrapperCommands } from "./bash-patterns";
+import { tokenizeSegment } from "../analysis/tokenizer";
 
 /** Extensions whose content is worth reviewing (text scripts). */
 const SCRIPT_EXT_RE = /\.(sh|bash|zsh|py|pyi|js|mjs|cjs|mts|cts|ts|rb|pl|php|lua|exs?)$/i;
@@ -51,6 +55,10 @@ const RUNNER_STEM_RE = /^(python|pypy|node|ruby|php|lua|perl|deno|bun|jruby|graa
  * `python3 -c 'open("/etc/shadow")'` never name a script. `-` = stdin.
  * `-r` is php's (`php -r 'code'`; without it a later file operand was named as
  * the payload while php ran the string).
+ * The one exception is the SHELL body hand-off (see inlineBodyScriptHandoff):
+ * a shell program is itself a command list, so a stage of it can execute a
+ * file. It fills `script` only — never `first` — so trust can still not fire
+ * on a path inside a command string.
  */
 const INLINE_CODE_FLAGS = new Set([
   "-c", "--command", "-m", "--module", "-e", "--eval", "-p", "--print", "-r", "-",
@@ -65,6 +73,10 @@ const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 /** Never walk an unbounded chain (a token soup like `timeout timeout timeout …`). */
 const MAX_WRAPPER_HOPS = 4;
+
+/** How deep to follow inline program strings for a hand-off: one body. A `-c`
+ *  inside a `-c` stays unidentified — the second body is data to the first. */
+const MAX_BODY_DEPTH = 1;
 
 export interface ScriptCandidate {
   /** The operand token as the tokenizer produced it (quotes stripped). */
@@ -81,7 +93,6 @@ export interface ScriptOperand {
   /** Wrapper commands skipped to reach the operand (timeout, npx, uv run). */
   wrappers: string[];
 }
-
 /** Command name for set lookups: basename, lowercased (`/bin/bash` = `bash`). */
 function nameOf(token: string): string {
   const t = token.toLowerCase();
@@ -99,10 +110,42 @@ function isComputed(token: string): boolean {
 }
 
 /**
+ * The file an inline SHELL program hands off to (`sh -c 'sleep 15; sh job.sh'`).
+ * 2026-10-28 decisions.jsonl: a detached launch stopped the model backend
+ * inside `job.sh`; the packet carried no script, so the judge ruled on the
+ * one-liner, and the executed-path ledger stayed empty while the floor's own
+ * stage-2 report named the script and was logged as a floorMiss.
+ *
+ * A shell program is a command list, so its stages get the SAME scan as any
+ * segment (config.shellBodyStages + the tokenizer — one parser for one body).
+ * Only a shell verb qualifies: a python body's file operand is an argument,
+ * not necessarily an exec (`python3 -c 'open("job.py")'`). An opaque body —
+ * one the shell expands part of (`-c "sh $JOB"`) — yields nothing: what runs
+ * is not knowable, and naming the wrong file is worse than naming none.
+ * Relative operands resolve against the segment's effective base, which is
+ * right unless the body itself cds; that re-basing is out of scope here (the
+ * write-verb scan does not model it either).
+ */
+function inlineBodyScriptHandoff(
+  body: string | undefined,
+  at: number,
+  wrappers: string[],
+  depth: number,
+): ScriptCandidate | null {
+  if (!body || isComputed(body)) return null;
+  for (const stage of shellBodyStages(body)) {
+    const inner = findScriptOperand(tokenizeSegment(stage), depth + 1);
+    if (inner?.script) return { token: inner.script.token, index: at };
+  }
+  return null;
+}
+
+/**
  * Scan for the operand at/after `start`. Aborts (no operand) on an inline
  * code flag or a computed token — a payload built at runtime is not
  * knowable statically, and naming the wrong token is worse than naming
- * none. `launcher` = the token at `start` is the executable itself (a
+ * none (the one exception: a SHELL body's hand-off to a file, below).
+ * `launcher` = the token at `start` is the executable itself (a
  * path-like direct exec), which is reported as `first` while the scan
  * keeps looking for the text payload it hands off to
  * (`…/.bin/vite-node /tmp/x.mts` — 2026-10-04 judge.jsonl).
@@ -112,6 +155,8 @@ function scanOperands(
   start: number,
   wrappers: string[],
   launcher: boolean,
+  verb: string,
+  depth: number,
 ): ScriptOperand | null {
   let first: ScriptCandidate | null = null;
   let script: ScriptCandidate | null = null;
@@ -126,7 +171,19 @@ function scanOperands(
   for (let j = launcher ? start + 1 : start; j < tokens.length; j++) {
     const t = tokens[j];
     if (t.startsWith("-")) {
-      if (INLINE_CODE_FLAGS.has(t.split("=")[0])) return null;
+      const flag = t.split("=")[0];
+      if (INLINE_CODE_FLAGS.has(flag)) {
+        // The payload is the program string — unless that string is a shell
+        // one and a stage of it executes a file. The hand-off fills `script`
+        // only, so a path inside a command string can never become the trust
+        // operand (`first` stays whatever the segment itself named).
+        const handoff =
+          depth < MAX_BODY_DEPTH && (flag === "-c" || flag === "--command") && SHELL_INTERPRETERS.has(verb)
+            ? inlineBodyScriptHandoff(t.length > flag.length ? t.slice(flag.length + 1) : tokens[j + 1], j, wrappers, depth)
+            : null;
+        if (!handoff) return null;
+        return { first, script: handoff, wrappers };
+      }
       continue;
     }
     if (isComputed(t)) return null;
@@ -152,10 +209,13 @@ function scanOperands(
 
 /**
  * The file operands one segment names, past its wrappers. Null when the
- * segment has no knowable file operand (inline code, computed paths, a
- * bare command, a package runner that is not a runner of files).
+ * segment has no knowable file operand (inline code with no shell hand-off,
+ * computed paths, a bare command, a package runner that is not a runner of
+ * files). `depth` counts the inline programs already descended through; it
+ * exists so a body's stages get the same scan without opening an unbounded
+ * chain of `-c` inside `-c`.
  */
-export function findScriptOperand(tokens: string[]): ScriptOperand | null {
+export function findScriptOperand(tokens: string[], depth = 0): ScriptOperand | null {
   let i = skipEnvPrefixes(tokens);
   const wrappers: string[] = [];
 
@@ -205,14 +265,14 @@ export function findScriptOperand(tokens: string[]): ScriptOperand | null {
         i = j + 1;
         continue;
       }
-      return scanOperands(tokens, j, wrappers, false);
+      return scanOperands(tokens, j, wrappers, false, nameOf(tokens[j]), depth);
     }
 
     // Runner with a file operand (`python3 job.py`, `/usr/bin/python3 job.py`,
     // `bun job.ts`). Checked before the package run forms so a local runner
     // that also has an `x` form (`bun job.ts` vs `bun x tsx job.ts`) still
     // resolves its own operand.
-    if (isRunner(cmd)) return scanOperands(tokens, i + 1, wrappers, false);
+    if (isRunner(cmd)) return scanOperands(tokens, i + 1, wrappers, false, cmd, depth);
 
     // Package run forms (`npx tsx job.mts`, `uvx python job.py`, `npm exec
     // tsx job.mts`). Only a package that names a runner hands off to a file.
@@ -235,14 +295,14 @@ export function findScriptOperand(tokens: string[]): ScriptOperand | null {
     // Direct exec (`./scripts/job.sh`), or a path-like launcher that hands
     // off to a payload (`…/.bin/vite-node /tmp/x.mts`).
     if (raw.includes("/") || raw.startsWith("~")) {
-      return scanOperands(tokens, i, wrappers, true);
+      return scanOperands(tokens, i, wrappers, true, cmd, depth);
     }
 
     // After a wrapper hop the token at i is the INNER command, which may run
     // a file directly (`timeout ./job.sh`, `npx tsx job.mts` — the operand is
     // the token itself, not an argument of a command name here).
     if (wrappers.length && SCRIPT_EXT_RE.test(raw) && !/\s/.test(raw)) {
-      return scanOperands(tokens, i, wrappers, true);
+      return scanOperands(tokens, i, wrappers, true, cmd, depth);
     }
 
     return null; // a bare command that runs no file
@@ -259,7 +319,10 @@ export function findScriptOperand(tokens: string[]): ScriptOperand | null {
  * string to the interpreter and touches no path named inside it (the role rule;
  * 2026-10-15 unresolved.jsonl: 13 of 28 rows were `python3 -c` / `node -e`
  * bodies whose "token" was the whole mashed program). The same flags make this
- * scan refuse to name a script, so the two views cannot drift.
+ * scan refuse to name a script, so the two views cannot drift — with one
+ * exception that does not touch the role rule: a SHELL body's hand-off fills
+ * `script` (the payload whose CONTENT the judge reviews) and never `first`, so
+ * no location token is ever minted at a program position.
  *
  * Empty set for a command that takes no inline program (`sed`/`awk`/`grep`
  * positions are the parser's own rules — the file-grained grammars differ).

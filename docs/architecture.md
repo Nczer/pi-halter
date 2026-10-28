@@ -163,9 +163,10 @@ so each body gets its own credential pass with the body's base.
 ### The command position (prefixes and wrappers)
 
 `command`/`builtin`/`exec`/`env` and the pass-through wrappers
-(`timeout`/`nice`/`ionice`/`stdbuf`/`xargs`/`watch`/`parallel`) do not run a
-program of their own, so every rule that asks *what does this segment run* asks
-ONE unwrapper — `analysis/wrapper-unwrap.ts`, `resolveDelegatedTokens`. It
+(`timeout`/`nice`/`ionice`/`stdbuf`/`xargs`/`watch`/`parallel`, and since 3.46.0
+`nohup`/`setsid` — they change a process's LIFETIME, never what it runs) do not
+run a program of their own, so every rule that asks *what does this segment run*
+asks ONE unwrapper — `analysis/wrapper-unwrap.ts`, `resolveDelegatedTokens`. It
 iterates to a fixpoint (prefixes nest: `nice command ssh` unwraps once to
 `command`, which names nothing) up to `MAX_UNWRAP_HOPS`, and the signature, the
 allow-table/delegation grant path, the parser's operand model, the egress check
@@ -179,7 +180,13 @@ Past the hop cap there is no program identity, and the answer is `capped`, never
 pattern), the signature collapses to the wrapper alone so no grant can name it,
 and the base checks assume the base is touched. `lookup` resolutions
 (`command -v ls`) keep the head word — nothing runs, so nothing may be modeled
-as running.
+as running. A word outside the table names no program to ANY consumer, so both
+layers miss it together (`time git push` reads null to the risk layer and to the
+floor; `doas`/`pkexec`/`unshare`/`chrt`/`taskset` likewise) — the class is open,
+and joining it is a table edit, not a new seam. Cost of adding `nohup`/`setsid`,
+measured on the frozen corpus (1081 commands, `.log/corpus`): zero stop changes,
+15 rows gained one path each — the operand of a `setsid nohup python3 <dir> …`
+segment that previously modeled nothing at all.
 
 The corollary for payloads (`find -exec`, `fd -x`, `rg --pre`, a shell body):
 only `unconditionallySafeCommands` — table entries with NO exclusion reason — are
@@ -237,7 +244,18 @@ program bodies are where `$` is densest). The grammars below are instances of
 this one rule (sed script, grep/rg pattern, awk program), and so is an
 interpreter's inline program (`-c`/`-e`/`-m`/`-r`, read from
 config/script-operand.ts — the same flag set that decides which operand the
-judge reads, so the two views cannot drift). Data is still read: path-like
+judge reads, so the two views cannot drift). One reading of a SHELL body crosses
+into the OTHER axis, deliberately (3.46.0): a stage of `sh -c '<body>'` that
+hands off to a file (`setsid nohup sh -c 'sleep 15; sh run.sh' >/dev/null 2>&1 &`
+— 2026-10-28 judge ledger: `floorPaths: []` while the judge reported
+`/tmp/…/new4096.sh`, so the packet carried no content, the judge declined, and
+the floor scored its own blind report as a miss) names that file as the executed
+PAYLOAD. It fills `script` only: no location token is minted (the role rule
+above), no trust operand (config/trusted-scripts.ts fills `first`, and a path
+inside someone else's code never becomes the operand the skills-dir bypass keys
+on), only `SHELL_INTERPRETERS` verbs get the scan (a `python3 -c` body's file
+operand is an argument — it may read the file, it does not run it), and one body
+depth only: a `-c` inside a `-c` names nothing. Data is still read: path-like
 literals inside it join the path set (see D15), with closed-set `$HOME`
 expanded exactly where the shell would expand it (a double-quoted arg, HOME
 not reassigned), and no expansion the closed set cannot bind contributes a path
