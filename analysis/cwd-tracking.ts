@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { expandTilde, expandHomeToken, UNKNOWN_CWD_MARKER } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
+import { pathWord, type PathWord } from "./path-word";
 import { tokenizeSegment, tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS, codeBodiesWrite } from "../config";
 import { writeOperandIndices } from "./write-roles";
@@ -911,14 +912,18 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
  * location is unresolvable.
  *
  * `skipDotPaths` — when the base equals the session cwd, parseCommand already
- * resolved ./../ tokens against it; collect only the $PWD tokens it never saw.
+ *  resolved ./../ tokens against it; collect only the $PWD tokens it never saw.
+ *
+ * One record per TOKEN, text as typed: these are words the parser resolved
+ * against the wrong base, so the record is where the re-based location and the
+ * spelling the operator typed stay together.
  */
-export function reResolveCwdDependentPaths(
+export function reResolveCwdDependentWords(
   seg: BashSegment,
   base: CwdBase,
   opts?: { skipDotPaths?: boolean; writesOnly?: boolean },
-): string[] {
-  const out: string[] = [];
+): PathWord[] {
+  const out: PathWord[] = [];
   for (const { isPwd, rel, isWrite } of cwdDependentTokens(seg)) {
     if (opts?.skipDotPaths && !isPwd) continue;
     if (opts?.writesOnly && !isWrite) continue;
@@ -926,9 +931,10 @@ export function reResolveCwdDependentPaths(
     // (`<unresolved-cwd>/../x` → `../x`) and a bare relative token lands in
     // the outside set — displayed as its dirname (`.`, `node_modules/.bin`).
     // Keeping the marker prefix intact makes the prompt read `outside <unresolved-cwd>`.
-    out.push(base === null
+    const location = base === null
       ? (rel ? `${UNKNOWN_CWD_MARKER}/${rel.replace(/^\.\//, "")}` : UNKNOWN_CWD_MARKER)
-      : path.resolve(base, rel));
+      : path.resolve(base, rel);
+    out.push(pathWord(rel, [location]));
   }
   return out;
 }

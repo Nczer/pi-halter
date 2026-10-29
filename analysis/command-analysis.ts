@@ -1,12 +1,13 @@
 import path from "node:path";
 import { parseCommand, type OpaqueRef, type BashSegment, type PathHop } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
-import { trackEffectiveCwd, reResolveCwdDependentPaths, baseAccessPath, staleCwdResolutions, homeReassigned, type CwdBase } from "./cwd-tracking";
+import { trackEffectiveCwd, reResolveCwdDependentWords, baseAccessPath, staleCwdResolutions, homeReassigned, type CwdBase } from "./cwd-tracking";
 import { expandTilde, OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER, under, isUnresolvedPath } from "./path-util";
 import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
-import { hasRelativePath, getOutsideCwdPaths, getOutsideWritePaths, resolvePathsToDirs } from "./path-analysis";
+import { hasRelativePath, getOutsideCwdPaths, getOutsideWritePaths } from "./path-analysis";
+import { dirsOfLocations, locationsOf, pathWord, type PathWord } from "./path-word";
 import { classifyStageArgv0 } from "./argv0-path";
 import { assessDeletes, type DeleteScale } from "./delete-scale";
 import { checkCommandForCredentialPaths } from "./credentials";
@@ -99,8 +100,14 @@ export interface CommandAnalysis {
    *  package the shell decides at run time, or a path value whose cwd is not
    *  knowable. */
   ungrantableRunFormSegmentIndices: number[];
-  /** All extracted file/dir paths, resolved to absolute. */
+  /** The LOCATION view over `words`: every place the command's path words can
+   *  name, resolved to absolute. A caller that prints one line per place reads
+   *  this; a caller that names the word the operator typed reads `words`. */
   paths: string[];
+  /** The PATH WORDS behind `paths` (analysis/path-word, docs/dspa-intent-floor
+   *  §9 L1): one entry per word in the command text that names a location.
+   *  `paths` is the flat view over these records, never an independent list. */
+  words: PathWord[];
   /** The subset of `paths` the command WRITES (see analysis/write-roles): the
    *  operand a `mv`/`cp`/`mkdir`/`rm` lands in, a `>` destination, `sort -o`'s
    *  value, a write-capable code body's operand. Always a subset of `paths`
@@ -217,8 +224,8 @@ async function analyzeSubstBodies(
   depth: number,
 ): Promise<{
   byParent: Map<number, Array<{ seg: BashSegment; base: CwdBase }>>;
-  paths: string[];
-  /** Write-role operands of the bodies, same subset rule as `paths`. */
+  words: PathWord[];
+  /** Write-role operands of the bodies, same subset rule as `words`. */
   writePaths: string[];
   simple: boolean;
   unsafe: boolean;
@@ -227,12 +234,12 @@ async function analyzeSubstBodies(
   credential: string | null;
 }> {
   const byParent = new Map<number, Array<{ seg: BashSegment; base: CwdBase }>>();
-  const paths: string[] = [];
+  const words: PathWord[] = [];
   const writePaths: string[] = [];
   const reasons: string[] = [];
   let credential: string | null = null;
   if (depth > SUBST_MAX_DEPTH) {
-    return { byParent, paths, writePaths, simple: false, unsafe: true, reasons: [`command substitution nested beyond ${SUBST_MAX_DEPTH} levels`], credential };
+    return { byParent, words, writePaths, simple: false, unsafe: true, reasons: [`command substitution nested beyond ${SUBST_MAX_DEPTH} levels`], credential };
   }
   const work: Array<{ seg: BashSegment; base: CwdBase }> = [];
   for (let i = 0; i < segments.length; i++) {
@@ -257,14 +264,14 @@ async function analyzeSubstBodies(
         parsed = null;
       }
       if (!parsed || parsed.hasParseError || parsed.segments.length === 0) {
-        return { byParent, paths, writePaths, simple: false, unsafe: true, reasons: [`unreadable command substitution body: ${trimmed.slice(0, 60)}`], credential };
+        return { byParent, words, writePaths, simple: false, unsafe: true, reasons: [`unreadable command substitution body: ${trimmed.slice(0, 60)}`], credential };
       }
       // The body's own cd/pushd re-base only the body; it never persists to
       // the parent (the substitution runs in a subshell — trackEffectiveCwd
       // already treats the parent side that way).
       const bodyCwds = trackEffectiveCwd(parsed.segments, root, parsed.assignments);
-      threadCwdPaths(parsed.segments, bodyCwds, normBase, parsed.paths, parsed.assignments, parsed.writePaths);
-      paths.push(...parsed.paths);
+      threadCwdPaths(parsed.segments, bodyCwds, normBase, parsed.words, parsed.assignments, parsed.writePaths);
+      words.push(...parsed.words);
       writePaths.push(...parsed.writePaths);
       parsed.segments.forEach((bs, k) => {
         const base = bodyCwds[k] ?? null;
@@ -280,10 +287,10 @@ async function analyzeSubstBodies(
         const dest = byParent.get(i);
         if (dest) dest.push(...list); else byParent.set(i, [...list]);
       }
-      paths.push(...inner.paths);
+      words.push(...inner.words);
       writePaths.push(...inner.writePaths);
       if (inner.reasons.length) reasons.push(...inner.reasons);
-      if (inner.unsafe) return { byParent, paths, writePaths, simple: false, unsafe: true, reasons, credential };
+      if (inner.unsafe) return { byParent, words, writePaths, simple: false, unsafe: true, reasons, credential };
     }
   }
   const analyses = await Promise.all(
@@ -296,7 +303,7 @@ async function analyzeSubstBodies(
     unsafe ||= a.isUnsafe;
     for (const r of a.risk.reasons) if (!reasons.includes(r)) reasons.push(r);
   }
-  return { byParent, paths, writePaths, simple, unsafe, reasons, credential };
+  return { byParent, words, writePaths, simple, unsafe, reasons, credential };
 }
 
 /**
@@ -334,13 +341,16 @@ function normalizeTmuxPayload(keys: string | null): string {
  * segment AND the legitimate resolution of another (base === session cwd) —
  * those are kept: removing them would under-flag the second segment.
  * One derivation for the direct command and the tmux send-keys payload —
- * both bars must converge identically. Mutates `paths`.
+ * both bars must converge identically. Mutates `words` (records in place:
+ * dropping a stale resolution removes one LOCATION, and a record whose
+ * locations all go away leaves the list — a word that names no place must not
+ * reach the prompt with an empty guess).
  */
 function threadCwdPaths(
   segments: BashSegment[],
   effectiveCwds: CwdBase[],
   normBase: string,
-  paths: string[],
+  words: PathWord[],
   assignments?: ShellAssignment[],
   writePaths?: string[],
 ): void {
@@ -355,26 +365,37 @@ function threadCwdPaths(
   }
   for (const s of dropStale) {
     if (keepStale.has(s)) continue;
-    const idx = paths.indexOf(s);
-    if (idx !== -1) paths.splice(idx, 1);
+    // One occurrence, exactly as the flat list did: parseCommand dedupes by
+    // location, so a stale string is one place in one record.
+    for (const w of words) {
+      const idx = w.locations.indexOf(s);
+      if (idx === -1) continue;
+      w.locations.splice(idx, 1);
+      break;
+    }
+    for (let i = words.length - 1; i >= 0; i--) {
+      if (words[i].locations.length === 0) words.splice(i, 1);
+    }
     const wi = writePaths?.indexOf(s) ?? -1;
     if (writePaths && wi !== -1) writePaths.splice(wi, 1);
   }
   for (let i = 0; i < segments.length; i++) {
     const base = effectiveCwds[i];
     if (base !== normBase) {
-      paths.push(...reResolveCwdDependentPaths(segments[i], base));
+      words.push(...reResolveCwdDependentWords(segments[i], base));
       // G3: the same re-basing for the write set, restricted to the tokens the
       // write-role table calls a destination — otherwise a cd chain hides the
       // write (`cd ~/.pi/agent && mkdir ./x`) while the read bar sees it.
-      if (writePaths) writePaths.push(...reResolveCwdDependentPaths(segments[i], base, { writesOnly: true }));
+      if (writePaths) writePaths.push(...reResolveCwdDependentWords(segments[i], base, { writesOnly: true }).flatMap((w) => w.locations));
       const basePath = baseAccessPath(segments[i], base, homeFixed);
-      if (basePath) paths.push(basePath);
+      // No word in the text names this — the segment itself touches its base
+      // (`cd /var/tmp && ls`), so the location is what the parser mints.
+      if (basePath) words.push(pathWord(basePath, [basePath]));
     } else {
       // Base === session cwd: parseCommand already resolved ./../ tokens
       // against it — collect only the $PWD tokens it never saw.
-      paths.push(...reResolveCwdDependentPaths(segments[i], base, { skipDotPaths: true }));
-      if (writePaths) writePaths.push(...reResolveCwdDependentPaths(segments[i], base, { skipDotPaths: true, writesOnly: true }));
+      words.push(...reResolveCwdDependentWords(segments[i], base, { skipDotPaths: true }));
+      if (writePaths) writePaths.push(...reResolveCwdDependentWords(segments[i], base, { skipDotPaths: true, writesOnly: true }).flatMap((w) => w.locations));
     }
   }
 }
@@ -383,17 +404,17 @@ async function analyzeTmuxSendKeysPayload(
   payload: string,
   cwd: string,
   depth: number,
-): Promise<{ simple: boolean; unsafe: boolean; paths: string[]; reasons: string[] }> {
-  if (depth > TMUX_PAYLOAD_MAX_DEPTH) return { simple: false, unsafe: true, paths: [], reasons: [] };
+): Promise<{ simple: boolean; unsafe: boolean; words: PathWord[]; reasons: string[] }> {
+  if (depth > TMUX_PAYLOAD_MAX_DEPTH) return { simple: false, unsafe: true, words: [], reasons: [] };
   const chunks = payload.split(TMUX_PAYLOAD_ENTER_RE).map(p => p.trim()).filter(Boolean);
   let simple = true;
   let unsafe = false;
-  const paths: string[] = [];
+  const words: PathWord[] = [];
   const reasons: string[] = [];
   const normBase = path.resolve(expandTilde(cwd));
   for (const chunk of chunks) {
     const parsed = await parseCommand(chunk, cwd);
-    if (parsed.hasParseError) return { simple: false, unsafe: true, paths: [], reasons: [] };
+    if (parsed.hasParseError) return { simple: false, unsafe: true, words: [], reasons: [] };
     // Cwd threading (same bar as the direct command): a cd inside the payload
     // re-bases later segments — re-resolve dot tokens against the effective
     // base, drop the stale session-cwd resolutions, flag base access
@@ -401,7 +422,7 @@ async function analyzeTmuxSendKeysPayload(
     // resolve against the payload's own segment bases; the full outside-cwd
     // bar (allowed roots, granted dirs) applies downstream at command level.
     const payloadCwds = trackEffectiveCwd(parsed.segments, cwd, parsed.assignments);
-    threadCwdPaths(parsed.segments, payloadCwds, normBase, parsed.paths, parsed.assignments);
+    threadCwdPaths(parsed.segments, payloadCwds, normBase, parsed.words, parsed.assignments);
     const payloadOpaque = resolveOpaqueRefs(
       parsed.opaque,
       parsed.segments,
@@ -411,8 +432,13 @@ async function analyzeTmuxSendKeysPayload(
       (p) => !isUnresolvedPath(p) && under(p, cwd),
       parsed.unsets,
     );
-    paths.push(...parsed.paths, ...payloadOpaque.paths);
-    for (const u of payloadOpaque.unresolved) paths.push(u.marker);
+    words.push(...parsed.words);
+    // A bound opaque ref resolves to a location; the token that produced it is
+    // known inside the resolver (var-resolution) and is threaded out with the
+    // reference work (docs/dspa-intent-floor.md §9 step 3), so here the
+    // location stands as the word.
+    for (const p of payloadOpaque.paths) words.push(pathWord(p, [p]));
+    for (const u of payloadOpaque.unresolved) words.push(pathWord(u.token, [u.marker]));
     for (const seg of parsed.segments) {
       const text = seg.text.trim();
       const innerTmux = parseTmuxCommand(text);
@@ -420,10 +446,10 @@ async function analyzeTmuxSendKeysPayload(
         const innerPayload = normalizeTmuxPayload(tmuxSendKeysKeys(innerTmux));
         const r = innerPayload
           ? await analyzeTmuxSendKeysPayload(innerPayload, cwd, depth + 1)
-          : { simple: true, unsafe: false, paths: [], reasons: [] };
+          : { simple: true, unsafe: false, words: [], reasons: [] };
         simple &&= r.simple;
         unsafe ||= r.unsafe;
-        paths.push(...r.paths);
+        words.push(...r.words);
         for (const reason of r.reasons) if (!reasons.includes(reason)) reasons.push(reason);
       } else {
         const a = await analyzeSegment(seg, cwd);
@@ -433,7 +459,7 @@ async function analyzeTmuxSendKeysPayload(
       }
     }
   }
-  return { simple, unsafe, paths, reasons };
+  return { simple, unsafe, words, reasons };
 }
 
 export async function analyzeCommand(
@@ -443,9 +469,9 @@ export async function analyzeCommand(
 ): Promise<CommandAnalysis> {
   // Single AST parse: segments, paths, opaque refs, and assignments in one pass
   const parseResult = await parseCommand(cmd, cwd);
-  const { segments, paths, opaque, assignments, hasParseError, unsets, obscuredArgv0, heredocStrippedCommand } = parseResult;
+  const { segments, words, opaque, assignments, hasParseError, unsets, obscuredArgv0, heredocStrippedCommand } = parseResult;
   // G3: the write-role subset (analysis/write-roles). Threading mutates it in
-  // step with `paths` so both sets name the same runtime locations.
+  // step with `words` so both sets name the same runtime locations.
   const writePaths = [...parseResult.writePaths];
   const segmentTexts = segments.map(s => s.text);
 
@@ -493,7 +519,7 @@ export async function analyzeCommand(
   // base access. Under an unknown base the tokens resolve to a marker path
   // outside every allowed dir, forcing path approval.
   const normBase = path.resolve(expandTilde(cwd));
-  threadCwdPaths(segments, effectiveCwds, normBase, paths, assignments, writePaths);
+  threadCwdPaths(segments, effectiveCwds, normBase, words, assignments, writePaths);
 
   // G5: substitution bodies are analyzed as programs (see analyzeSubstBodies).
   // Their operands join the path set, their danger folds into the command's
@@ -501,7 +527,7 @@ export async function analyzeCommand(
   // grant unit — so `Always` can cover a body the user runs on purpose, and a
   // body nothing is granted for can never auto-allow.
   const subst = await analyzeSubstBodies(segments, effectiveCwds, normBase, 1);
-  paths.push(...subst.paths);
+  words.push(...subst.words);
   writePaths.push(...subst.writePaths);
   const substSimple = subst.simple;
   const substUnsafe = subst.unsafe;
@@ -534,7 +560,11 @@ export async function analyzeCommand(
     (p) => getOutsideCwdPaths([p], cwd, options?.isInsideAllowedDir).length === 0,
     unsets,
   );
-  paths.push(...opaqueResolution.paths);
+  // A bound ref resolves to a location; the token that produced it stays
+  // inside the resolver (var-resolution) until the reference work threads it
+  // out (docs/dspa-intent-floor.md §9 step 3), so the location stands as the
+  // word here.
+  for (const p of opaqueResolution.paths) words.push(pathWord(p, [p]));
   for (const u of opaqueResolution.unresolved) {
     // A confirmed resolution makes the sentinel concrete (D12): push only the
     // confirmed dirs outside the manual bar (all in-bar → push nothing — the
@@ -547,10 +577,10 @@ export async function analyzeCommand(
     if (confirmed && confirmed.length > 0) {
       for (const d of confirmed) {
         const outside = getOutsideCwdPaths([d], cwd, options?.isInsideAllowedDir);
-        if (outside.length > 0) paths.push(d);
+        if (outside.length > 0) words.push(pathWord(u.token, [d]));
       }
     } else {
-      paths.push(u.marker);
+      words.push(pathWord(u.token, [u.marker]));
     }
   }
   // The raw text of an unbound ref is not a location (its value is unknown or
@@ -607,9 +637,9 @@ export async function analyzeCommand(
       const tagged = `[TmuxPayload] ${reason}`;
       if (!tmuxPayloadReasons.includes(tagged)) tmuxPayloadReasons.push(tagged);
     }
-    // Payload paths join the command's path set so getOutsideCwdPaths below
+    // Payload path words join the command's word set so getOutsideCwdPaths below
     // applies the same outside-cwd approval bar as for direct commands.
-    paths.push(...r.paths);
+    words.push(...r.words);
   }
 
   // Merge per-segment risks with whole-command risk (the [TmuxPayload] fold
@@ -662,7 +692,7 @@ export async function analyzeCommand(
   let symlinkHops: PathHop[] | undefined;
   if (options?.isInsideAllowedDir) {
     const op = getOutsideCwdPaths(
-      paths.filter((p) => !unresolvedRawTokens.has(p)),
+      locationsOf(words).filter((p) => !unresolvedRawTokens.has(p)),
       cwd,
       options.isInsideAllowedDir,
     );
@@ -674,7 +704,7 @@ export async function analyzeCommand(
     // it via the unresolved list instead (the unknown-cwd marker stays: it is
     // the display of a base the cd chain could not resolve, and is never
     // grantable — the prompt filters "<" dirs from Always options).
-    outsideDirs = (await resolvePathsToDirs(op)).filter(d => {
+    outsideDirs = (await dirsOfLocations(words, op)).filter(d => {
       if (d === OPAQUE_VAR_DIR) return false;
       if (d === UNKNOWN_CWD_MARKER) return true;
       // The root is not an approvable folder (step-1 corpus replay):
@@ -718,7 +748,7 @@ export async function analyzeCommand(
       options.isInsideAllowedWriteDir,
     );
     outsideWritePaths = ow;
-    outsideWriteDirs = (await resolvePathsToDirs(ow)).filter((d) => {
+    outsideWriteDirs = (await dirsOfLocations(words, ow)).filter((d) => {
       if (d === OPAQUE_VAR_DIR) return false;
       if (d === UNKNOWN_CWD_MARKER) return true;
       if (d === "/") return false; // same as the read tier: no session-wide write
@@ -758,7 +788,8 @@ export async function analyzeCommand(
     stageArgv0Qualified,
     runOptionSegmentIndices,
     ungrantableRunFormSegmentIndices,
-    paths,
+    paths: locationsOf(words),
+    words,
     writePaths: [...new Set(writePaths)],
     hasParseError,
     safety: {

@@ -4,11 +4,12 @@ import path from "node:path";
 import fs from "node:fs";
 import {
   trackEffectiveCwd,
-  reResolveCwdDependentPaths,
+  reResolveCwdDependentWords,
   baseWriteAccess,
   homeReassigned,
 } from "../analysis/cwd-tracking";
 import { OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER } from "../analysis/path-util";
+import { dirsOfLocations, pathWord } from "../analysis/path-word";
 import { analyzeCommand } from "../analysis/command-analysis";
 import {decide} from "../decide/engine";
 import type {BashPromptData} from "../decide/types";
@@ -16,6 +17,12 @@ import { createStore } from "../gate/store";
 import type { BashSegment } from "../analysis/bash-parser";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 import { canon } from "./canon";
+
+/** The LOCATIONS a re-resolve yields: these tests are about places. The record
+ *  itself (text, kind, completeness — analysis/path-word) is pinned in
+ *  test/path-word.test.ts. */
+const rr = (...a: Parameters<typeof reResolveCwdDependentWords>) =>
+  reResolveCwdDependentWords(...a).flatMap((w) => w.locations);
 
 const HOME = os.homedir();
 const DOC_EXTRACT = path.join(HOME, ".pi", "agent", "skills", "doc-extract");
@@ -309,10 +316,10 @@ describe("parser operator metadata (precedingOp / backgrounded)", () => {
   }, 15000);
 });
 
-describe("reResolveCwdDependentPaths", () => {
+describe("reResolveCwdDependentWords", () => {
   it("re-resolves ./ and ../ tokens against the effective cwd", () => {
-    expect(reResolveCwdDependentPaths(seg("cat ./secret.txt"), "/tmp")).toEqual(["/tmp/secret.txt"]);
-    expect(reResolveCwdDependentPaths(seg("cat ../x.txt"), "/tmp/a")).toEqual(["/tmp/x.txt"]);
+    expect(rr(seg("cat ./secret.txt"), "/tmp")).toEqual(["/tmp/secret.txt"]);
+    expect(rr(seg("cat ../x.txt"), "/tmp/a")).toEqual(["/tmp/x.txt"]);
   });
 
   it("treats only a `..` path SEGMENT as relative — not a revspec or a quoted label", () => {
@@ -320,40 +327,40 @@ describe("reResolveCwdDependentPaths", () => {
     // slash-bearing label became a dot-relative token and was re-based under a
     // post-cd base into a path the command never touches (three 2026-10-24 rows:
     // `$HOME/Strata/origin/main..HEAD`, `…/=== … (local..origin/main) ===`).
-    expect(reResolveCwdDependentPaths(seg("git rev-list --count origin/main..HEAD"), "/home/u/repo")).toEqual([]);
-    expect(reResolveCwdDependentPaths(seg('echo "=== ahead/behind (local..origin/main) ==="'), "/home/u/repo")).toEqual([]);
-    expect(reResolveCwdDependentPaths(seg("git log main..release -- src/x.c"), "/home/u/repo")).toEqual([]);
+    expect(rr(seg("git rev-list --count origin/main..HEAD"), "/home/u/repo")).toEqual([]);
+    expect(rr(seg('echo "=== ahead/behind (local..origin/main) ==="'), "/home/u/repo")).toEqual([]);
+    expect(rr(seg("git log main..release -- src/x.c"), "/home/u/repo")).toEqual([]);
     // A `..` that IS a segment still re-bases under the effective cwd (the parse
     // normalizes the token, so `src/../x.txt` lands in the base itself).
-    expect(reResolveCwdDependentPaths(seg("cat src/../x.txt"), "/tmp/a/b")).toEqual(["/tmp/a/b/x.txt"]);
-    expect(reResolveCwdDependentPaths(seg("ls .."), "/tmp/a/b")).toEqual(["/tmp/a"]); // bare `..` too
+    expect(rr(seg("cat src/../x.txt"), "/tmp/a/b")).toEqual(["/tmp/a/b/x.txt"]);
+    expect(rr(seg("ls .."), "/tmp/a/b")).toEqual(["/tmp/a"]); // bare `..` too
   });
 
   it("re-resolves flag-embedded relative values", () => {
-    expect(reResolveCwdDependentPaths(seg("sort -o ./out.txt in.txt"), "/tmp/a")).toEqual(["/tmp/a/out.txt"]);
-    expect(reResolveCwdDependentPaths(seg("grep -r x --include=./y ."), "/tmp/a")).toEqual(["/tmp/a/y"]);
+    expect(rr(seg("sort -o ./out.txt in.txt"), "/tmp/a")).toEqual(["/tmp/a/out.txt"]);
+    expect(rr(seg("grep -r x --include=./y ."), "/tmp/a")).toEqual(["/tmp/a/y"]);
   });
 
   it("re-resolves $PWD / ${PWD} tokens against the effective cwd", () => {
-    expect(reResolveCwdDependentPaths(seg("cat $PWD/secret.txt"), "/tmp")).toEqual(["/tmp/secret.txt"]);
-    expect(reResolveCwdDependentPaths(seg("cat ${PWD}/secret.txt"), "/tmp")).toEqual(["/tmp/secret.txt"]);
-    expect(reResolveCwdDependentPaths(seg("ls $PWD"), "/tmp/a")).toEqual(["/tmp/a"]);
-    expect(reResolveCwdDependentPaths(seg("sort -o $PWD/out.txt in.txt"), "/tmp/a")).toEqual(["/tmp/a/out.txt"]);
+    expect(rr(seg("cat $PWD/secret.txt"), "/tmp")).toEqual(["/tmp/secret.txt"]);
+    expect(rr(seg("cat ${PWD}/secret.txt"), "/tmp")).toEqual(["/tmp/secret.txt"]);
+    expect(rr(seg("ls $PWD"), "/tmp/a")).toEqual(["/tmp/a"]);
+    expect(rr(seg("sort -o $PWD/out.txt in.txt"), "/tmp/a")).toEqual(["/tmp/a/out.txt"]);
   });
 
   it("resolves unknown-base tokens to the marker (forces path approval)", () => {
-    expect(reResolveCwdDependentPaths(seg("cat ./secret.txt"), null)).toEqual([`${UNKNOWN_CWD_MARKER}/secret.txt`]);
-    expect(reResolveCwdDependentPaths(seg("cat $PWD/secret.txt"), null)).toEqual([`${UNKNOWN_CWD_MARKER}/secret.txt`]);
-    expect(reResolveCwdDependentPaths(seg("ls $PWD"), null)).toEqual([UNKNOWN_CWD_MARKER]);
+    expect(rr(seg("cat ./secret.txt"), null)).toEqual([`${UNKNOWN_CWD_MARKER}/secret.txt`]);
+    expect(rr(seg("cat $PWD/secret.txt"), null)).toEqual([`${UNKNOWN_CWD_MARKER}/secret.txt`]);
+    expect(rr(seg("ls $PWD"), null)).toEqual([UNKNOWN_CWD_MARKER]);
   });
 
   it("skipDotPaths collects only $PWD tokens (./.. already resolved by the parser)", () => {
-    expect(reResolveCwdDependentPaths(seg("cat ./x $PWD/y"), "/tmp", { skipDotPaths: true })).toEqual(["/tmp/y"]);
-    expect(reResolveCwdDependentPaths(seg("cat ./x ../y"), "/tmp", { skipDotPaths: true })).toEqual([]);
+    expect(rr(seg("cat ./x $PWD/y"), "/tmp", { skipDotPaths: true })).toEqual(["/tmp/y"]);
+    expect(rr(seg("cat ./x ../y"), "/tmp", { skipDotPaths: true })).toEqual([]);
   });
 
   it("ignores absolute, ~, bare non-path tokens, and other variables", () => {
-    expect(reResolveCwdDependentPaths(seg("cat /abs.txt ~/x.txt foo.txt $D/x"), "/tmp/a")).toEqual([]);
+    expect(rr(seg("cat /abs.txt ~/x.txt foo.txt $D/x"), "/tmp/a")).toEqual([]);
   });
 });
 
@@ -1133,7 +1140,7 @@ describe("compound-body chain boundaries (over-freeze fix: for/if/case bodies)",
 
 describe("unknown-cwd marker hygiene (log-review display FPs)", () => {
   it("marker keeps its prefix for ..-relative tokens (no path.join normalization)", () => {
-    expect(reResolveCwdDependentPaths(seg("cat ../node_modules/x"), null))
+    expect(rr(seg("cat ../node_modules/x"), null))
       .toEqual([`${UNKNOWN_CWD_MARKER}/../node_modules/x`]);
   });
 
@@ -1143,9 +1150,12 @@ describe("unknown-cwd marker hygiene (log-review display FPs)", () => {
   }, 15000);
 
   it("marker paths display as the marker, not their dirname (e.g. '.')", async () => {
-    const { resolvePathsToDirs } = await import("../analysis/path-analysis");
-    expect(await resolvePathsToDirs([`${UNKNOWN_CWD_MARKER}/../node_modules/x`, UNKNOWN_CWD_MARKER]))
-      .toEqual([UNKNOWN_CWD_MARKER]);
+    // A marker location keeps its marker as the display dir: dirname would
+    // degrade it to `.`. Records, not bare strings, are the input now.
+    expect(await dirsOfLocations([
+      pathWord("../node_modules/x", [`${UNKNOWN_CWD_MARKER}/../node_modules/x`]),
+      pathWord("x", [UNKNOWN_CWD_MARKER]),
+    ])).toEqual([UNKNOWN_CWD_MARKER]);
   }, 15000);
 });
 

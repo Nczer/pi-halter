@@ -1,0 +1,256 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parseCommand } from "../analysis/bash-parser";
+import { analyzeCommand } from "../analysis/command-analysis";
+import {
+  dirsOfLocations,
+  kindOfWord,
+  locationsOf,
+  pathWord,
+  type PathWord,
+} from "../analysis/path-word";
+import { OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER } from "../analysis/path-util";
+import { canon } from "./canon";
+import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
+
+/**
+ * The PATH WORD record (analysis/path-word, docs/dspa-intent-floor.md §9 L1–L2).
+ *
+ * These tests pin the RECORD — the word as typed, its kind, its completeness,
+ * the places it names — not the flat lists the bars read (those are pinned by
+ * the command-analysis, cwd-threading and floor suites, and the replay diff is
+ * the standing proof the view did not move).
+ *
+ * Fixtures use the anonymized `/Users/u` namespace (test/canon.ts) unless a
+ * stat answer is under test, which needs a real directory or file: those live
+ * in TREE, under $HOME, never under /tmp (config/path-rules.ts puts /tmp in
+ * both bars, so a /tmp fixture would quietly flip approval rows).
+ */
+const U = "/Users/u";
+let CWD: string;
+let TREE: string;
+
+beforeAll(() => {
+  CWD = createContractCwd();
+  TREE = fs.mkdtempSync(path.join(os.homedir(), ".halter-pw-"));
+  fs.mkdirSync(path.join(TREE, "dir"));
+  fs.mkdirSync(path.join(TREE, "sub"));
+  fs.writeFileSync(path.join(TREE, "file.txt"), "x\n");
+});
+afterAll(() => {
+  removeContractCwd(CWD);
+  fs.rmSync(TREE, { recursive: true, force: true });
+});
+
+const wordsOf = async (cmd: string): Promise<PathWord[]> => (await parseCommand(cmd, CWD)).words;
+
+/** Assert the command names exactly one path word and return it. */
+async function oneWord(cmd: string): Promise<PathWord> {
+  const words = await wordsOf(cmd);
+  expect(words.map((w) => w.text)).toEqual([expect.any(String)]);
+  return words[0];
+}
+
+describe("kindOfWord — how the text names its location", () => {
+  it("a literal word with a literal location is exact", () => {
+    expect(kindOfWord(`${U}/notes.md`, `${U}/notes.md`)).toBe("exact");
+  });
+  it("a glob is a wildcard (its leaf set is a disk question)", () => {
+    expect(kindOfWord(`${U}/*.md`, `${U}/*.md`)).toBe("wildcard");
+    expect(kindOfWord(`${U}/[ab].md`, `${U}/[ab].md`)).toBe("wildcard");
+  });
+  it("a brace alternation is a group, a brace range is a range", () => {
+    expect(kindOfWord(`${U}/{a,b}`, `${U}/{a,b}`)).toBe("group");
+    expect(kindOfWord(`${U}/{a,}`, `${U}/{a,}`)).toBe("group");
+    expect(kindOfWord(`${U}/{1..200}`, `${U}/{1..200}`)).toBe("range");
+    // A brace with no comma and no range is literal text, not a group.
+    expect(kindOfWord(`${U}/{a}`, `${U}/{a}`)).toBe("exact");
+  });
+  it("the sentinels win over the text — they say WHY nothing is named", () => {
+    // An unbound ref's token may carry a glob (`$e/*.ts`) and still name no
+    // place; its kind must not claim a wildcard prefix the disk was asked for.
+    expect(kindOfWord("$e/*.ts", path.join(OPAQUE_VAR_DIR, "$e/*.ts"))).toBe("opaque-var");
+    expect(kindOfWord("./x", `${UNKNOWN_CWD_MARKER}/./x`)).toBe("unknown-cwd");
+    expect(kindOfWord("", OPAQUE_VAR_DIR)).toBe("opaque-var");
+  });
+});
+
+describe("pathWord — minting", () => {
+  it("a word that proved no place carries an empty list, not a guess", () => {
+    expect(pathWord("$f", [])).toEqual({ text: "$f", kind: "exact", locations: [], complete: true });
+  });
+  it("only a single provable place is complete", () => {
+    expect(pathWord(`${U}/a`, [`${U}/a`]).complete).toBe(true);
+    expect(pathWord(`${U}/*`, [`${U}/*`]).complete).toBe(false);
+    expect(pathWord(`${U}/{a,b}`, [`${U}/{a,b}`]).complete).toBe(false);
+    expect(pathWord(`${U}/{1..9}`, [`${U}/{1..9}`]).complete).toBe(false);
+    // A sentinel names no place either, but it is the whole answer: there is
+    // exactly one stop and no hidden leaf set behind it.
+    expect(pathWord("$f", [path.join(OPAQUE_VAR_DIR, "$f")]).complete).toBe(true);
+  });
+});
+
+describe("the words a command names (parseCommand)", () => {
+  it("an absolute operand: the word as typed, one location", async () => {
+    const w = await oneWord(`cat ${U}/notes.md`);
+    expect(w).toMatchObject({
+      text: `${U}/notes.md`,
+      kind: "exact",
+      complete: true,
+      locations: [canon(`${U}/notes.md`)],
+    });
+  });
+
+  it("a tilde operand keeps the typed text and resolves the location", async () => {
+    const w = await oneWord("cat ~/notes.md");
+    expect(w).toMatchObject({
+      text: "~/notes.md",
+      kind: "exact",
+      locations: [canon(path.join(os.homedir(), "notes.md"))],
+    });
+  });
+
+  it("a relative operand keeps `./` in the text", async () => {
+    const w = await oneWord("cat ./notes.md");
+    expect(w).toMatchObject({
+      text: "./notes.md",
+      kind: "exact",
+      locations: [canon(path.join(CWD, "notes.md"))],
+    });
+  });
+
+  it("a flag value is the word, not the flag (`--file=/x`)", async () => {
+    const w = await oneWord("grep --file=/Users/u/pat x");
+    expect(w.text).toBe("/Users/u/pat");
+  });
+
+  it("a glob is one word, incomplete, and its location keeps the glob", async () => {
+    const w = await oneWord(`ls ${U}/*.md`);
+    expect(w).toMatchObject({ text: `${U}/*.md`, kind: "wildcard", complete: false });
+    expect(w.locations).toEqual([canon(`${U}/*.md`)]);
+  });
+
+  it("a brace group is one word today — opened by the next step (§9 S3)", async () => {
+    const w = await oneWord(`ls ${U}/{a,b}`);
+    expect(w).toMatchObject({ text: `${U}/{a,b}`, kind: "group", complete: false });
+    // The single location is the literal string, NOT a place a run can produce.
+    // It keeps forcing the stop; the group's real dirs are the step-2b work.
+    expect(w.locations).toEqual([canon(`${U}/{a,b}`)]);
+  });
+
+  it("a brace range is a range, not a set of 200 locations", async () => {
+    const w = await oneWord(`ls ${U}/{1..200}`);
+    expect(w).toMatchObject({ text: `${U}/{1..200}`, kind: "range", complete: false });
+    expect(w.locations).toHaveLength(1);
+  });
+
+  it("`sort -o` and `dd if=/of=` name their operands as words", async () => {
+    const sort = await wordsOf(`sort -o ${TREE}/sorted.json ${TREE}/data.txt`);
+    expect(sort.map((w) => w.text)).toEqual([`${TREE}/sorted.json`, `${TREE}/data.txt`]);
+    const dd = await wordsOf(`dd if=${U}/a of=${U}/b`);
+    expect(dd.map((w) => w.text)).toEqual([`${U}/a`, `${U}/b`]);
+  });
+
+  it("a redirect destination is a word", async () => {
+    const w = await oneWord(`echo hi > ${U}/log.txt`);
+    expect(w).toMatchObject({ text: `${U}/log.txt`, kind: "exact" });
+  });
+
+  it("a path inside a code body is a word", async () => {
+    const words = await wordsOf(`python3 -c 'open("${U}/x", "w")'`);
+    expect(words.map((w) => w.text)).toContain(`${U}/x`);
+  });
+
+  it("a word screened as a safe system path leaves no record", async () => {
+    expect(await wordsOf("cat /dev/null")).toEqual([]);
+  });
+
+  it("a location is one place: a second word naming it adds no location", async () => {
+    const words = await wordsOf(`cat ${U}/a ${U}/a`);
+    expect(locationsOf(words)).toEqual([canon(`${U}/a`)]);
+    expect(words).toHaveLength(1); // one stop, not two
+  });
+
+  it("`paths` is the flat view over the records, never an independent list", async () => {
+    const cmd = `cat ${U}/a ${U}/*.md ~/{a,b} ./rel 2>${U}/err`;
+    const r = await parseCommand(cmd, CWD);
+    expect(r.paths).toEqual(locationsOf(r.words));
+    expect(r.writePaths.every((p) => r.paths.includes(p))).toBe(true);
+  });
+});
+
+describe("the words the floor's own derivations mint (analyzeCommand)", () => {
+  it("an unbound variable: the token is the word, its place is the sentinel", async () => {
+    const a = await analyzeCommand("cat $HALTER_PW_UNBOUND", CWD);
+    const w = a.words.find((x) => x.text === "$HALTER_PW_UNBOUND");
+    expect(w).toMatchObject({ kind: "opaque-var", complete: true });
+    expect(w?.locations).toEqual([path.join(OPAQUE_VAR_DIR, "$HALTER_PW_UNBOUND")]);
+    expect(a.paths).toContain(path.join(OPAQUE_VAR_DIR, "$HALTER_PW_UNBOUND"));
+  }, 15000);
+
+  it("a base the cd chain cannot resolve: kind unknown-cwd, location the marker", async () => {
+    const a = await analyzeCommand("cd $HALTER_PW_UNBOUND && cat ./x", CWD);
+    const w = a.words.find((x) => x.locations.some((l) => l.includes(UNKNOWN_CWD_MARKER)));
+    expect(w).toMatchObject({ text: "./x", kind: "unknown-cwd" });
+  }, 15000);
+
+  it("a bound variable names its concrete place", async () => {
+    const a = await analyzeCommand(`f=${U}/x; cat $f`, CWD);
+    const hit = a.words.find((w) => w.locations.includes(canon(`${U}/x`)));
+    expect(hit?.kind).toBe("exact");
+    // 2a mints this merge from the location — the TOKEN is known inside
+    // var-resolution and rides out with the reference work (§9 step 3).
+    expect(hit?.text).toBe(canon(`${U}/x`));
+  }, 15000);
+});
+
+describe("dirsOfLocations — the folder an answer sits in, written once", () => {
+  it("a directory names itself; a file or a non-existent path names its parent", async () => {
+    const dirs = await dirsOfLocations([
+      pathWord(`${TREE}/dir`, [`${TREE}/dir`]),
+      pathWord(`${TREE}/file.txt`, [`${TREE}/file.txt`]),
+      pathWord(`${TREE}/gone.txt`, [`${TREE}/gone.txt`]),
+    ]);
+    // the dir itself, and TREE twice over (the parent of the file and of the
+    // path that does not exist) — deduped, sorted.
+    expect(dirs).toEqual([TREE, `${TREE}/dir`]);
+  });
+
+  it("a marker location keeps its marker — a stat would degrade it", async () => {
+    expect(await dirsOfLocations([pathWord("./x", [`${UNKNOWN_CWD_MARKER}/./x`])]))
+      .toEqual([UNKNOWN_CWD_MARKER]);
+  });
+
+  it("an unbound token keeps the static prefix its own text pins", async () => {
+    // The marker carries the token AS TYPED (`path.join(OPAQUE_VAR_DIR, raw)`),
+    // so a `~/…` token keeps its prefix and pins a real dir — the corpus case
+    // `<unresolved-var>/~/.pi/agent/extensions/$e/*.ts` (unresolved.jsonl).
+    const tok = `~/${path.basename(TREE)}/sub/$f`;
+    expect(await dirsOfLocations([pathWord(tok, [path.join(OPAQUE_VAR_DIR, tok)])]))
+      .toEqual([`${TREE}/sub`]);
+    // No static prefix → the bare sentinel (the prompt shows the token instead).
+    expect(await dirsOfLocations([pathWord("$f", [path.join(OPAQUE_VAR_DIR, "$f")])]))
+      .toEqual([OPAQUE_VAR_DIR]);
+    // Known gap (unchanged from the function this replaced): an ABSOLUTE token
+    // arrives with its leading `/` eaten by the join, so its prefix reads
+    // relative and pins nothing. Filed with the reference work (§9 step 3).
+    expect(await dirsOfLocations([pathWord(`${TREE}/sub/$f`, [path.join(OPAQUE_VAR_DIR, `${TREE}/sub/$f`)])]))
+      .toEqual([OPAQUE_VAR_DIR]);
+  });
+
+  it("`only` answers for the locations a bar selected — and dedupes, and sorts", async () => {
+    const words = [
+      pathWord(`${TREE}/dir`, [`${TREE}/dir`]),
+      pathWord(`${TREE}/file.txt`, [`${TREE}/file.txt`]),
+      pathWord(`${TREE}/gone.txt`, [`${TREE}/gone.txt`]),
+    ];
+    expect(await dirsOfLocations(words, [`${TREE}/file.txt`, `${TREE}/dir`]))
+      .toEqual([TREE, `${TREE}/dir`].sort());
+    expect(await dirsOfLocations([
+      pathWord("a", [`${TREE}/dir`]),
+      pathWord("b", [`${TREE}/dir`]),
+    ])).toEqual([`${TREE}/dir`]);
+  });
+});

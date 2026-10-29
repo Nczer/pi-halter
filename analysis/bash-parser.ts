@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { allowedReadPaths, allowedWritePaths, pathAwareCommands, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, codeBodiesWrite, type CodeBody } from "../config";
 import { resolvePathReal } from "./path-analysis";
+import { pathWord, type PathWord } from "./path-word";
 import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandTilde, expandHomeToken, expandHomeLiterals, under } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
 import { resolveDelegatedTokens } from "./wrapper-unwrap";
@@ -1955,7 +1956,7 @@ const SUBST_IN_TEXT_RE = /\$\(|`/;
 
 /** Scan script body text for path-like literals, resolved like any other
  *  extracted path (SAFE_SYSTEM_PATHS filter + dedup apply downstream). */
-function bodyPaths(text: string, cwd: string, out: string[], hop?: (written: string, resolved: string) => void): void {
+function bodyPaths(text: string, cwd: string, out: PathWord[], hop?: (written: string, resolved: string) => void): void {
   for (const m of text.matchAll(BODY_PATH_RE)) {
     const raw = m[0];
     const idx = m.index ?? 0;
@@ -1966,7 +1967,7 @@ function bodyPaths(text: string, cwd: string, out: string[], hop?: (written: str
     }
     const resolved = resolvePathReal(expandTilde(raw), cwd);
     hop?.(raw, resolved);
-    out.push(resolved);
+    out.push(pathWord(raw, [resolved]));
   }
 }
 
@@ -2081,6 +2082,10 @@ export async function parseCommand(
   cwd: string,
 ): Promise<{
   segments: BashSegment[];
+  /** The path WORDS this command names (analysis/path-word) — the single
+   *  producer of every path list the floor reads. `paths` below is the flat
+   *  location view over it. */
+  words: PathWord[];
   paths: string[];
   /** The subset of `paths` the command WRITES (G3) — see analysis/write-roles.
    *  Checked against the write allow set alone; a read grant never covers it. */
@@ -2102,7 +2107,7 @@ export async function parseCommand(
 }> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], paths: [], writePaths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [], obscuredArgv0: [], heredocStrippedCommand: command };
+  if (!tree) return { segments: [], words: [], paths: [], writePaths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [], obscuredArgv0: [], heredocStrippedCommand: command };
 
   try {
     // Check for ERROR nodes in the AST (malformed bash)
@@ -2131,7 +2136,7 @@ export async function parseCommand(
 
     // Extract paths and opaque refs from command nodes
     const commandNodes = collectCommandNodes(tree.rootNode);
-    const allPaths: string[] = [];
+    const words: PathWord[] = [];
     // Write-target operands (G3). Every entry is also in allPaths — the write
     // bar is a stricter question about the SAME locations, never a second
     // resolution path that could drift from the read bar.
@@ -2173,13 +2178,14 @@ export async function parseCommand(
     const scanBody = (text: string, cmdNode: TSNode | null, verb: string | null, hop = true): void => {
       const si = cmdNode ? segMap.get(cmdNode.id) ?? -1 : -1;
       if (si >= 0 && verb && SHELL_INTERPRETERS.has(verb)) shellBodyBySegment.add(si);
-      const sink: string[] = [];
+      const sink: PathWord[] = [];
       bodyPaths(text, cwd, sink, hop ? recordHop : undefined);
-      allPaths.push(...sink);
+      words.push(...sink);
       if (si < 0 || sink.length === 0) return;
+      const sinkLocs = sink.flatMap((w) => w.locations);
       const list = bodyPathsBySegment.get(si);
-      if (list) list.push(...sink);
-      else bodyPathsBySegment.set(si, sink);
+      if (list) list.push(...sinkLocs);
+      else bodyPathsBySegment.set(si, sinkLocs);
     };
 
     for (const cmdNode of commandNodes) {
@@ -2288,7 +2294,7 @@ export async function parseCommand(
         if (classifyArgv0(argv0Word, cwd) === "qualified") {
           const resolved = resolvePathReal(expandTilde(argv0Word), cwd);
           recordHop(argv0Word, resolved);
-          allPaths.push(resolved);
+          words.push(pathWord(argv0Word, [resolved]));
         }
       }
 
@@ -2372,7 +2378,7 @@ export async function parseCommand(
             const expanded = hasExpansion ? expandHomeToken(expandTilde(resolveArg)) : expandTilde(resolveArg);
             const resolvedArg = resolvePathReal(expanded, cwd);
             recordHop(resolveArg, resolvedArg);
-            allPaths.push(resolvedArg);
+            words.push(pathWord(resolveArg, [resolvedArg]));
             if (writeIdx.has(ai)) allWrites.push(resolvedArg);
           }
         }
@@ -2414,7 +2420,7 @@ export async function parseCommand(
               const expanded = hasExpansion ? expandHomeToken(expandTilde(target)) : expandTilde(target);
               const resolvedTarget = resolvePathReal(expanded, cwd);
               recordHop(target, resolvedTarget);
-              allPaths.push(resolvedTarget);
+              words.push(pathWord(target, [resolvedTarget]));
               allWrites.push(resolvedTarget); // -o/--output is a write by definition
             }
           }
@@ -2435,7 +2441,7 @@ export async function parseCommand(
           const expanded = hasExpansion ? expandHomeToken(expandTilde(m[2])) : expandTilde(m[2]);
           const resolvedTarget = resolvePathReal(expanded, cwd);
           recordHop(m[2], resolvedTarget);
-          allPaths.push(resolvedTarget);
+          words.push(pathWord(m[2], [resolvedTarget]));
           if (m[1] === "of" || m[1] === "converse") allWrites.push(resolvedTarget);
         }
       }
@@ -2500,7 +2506,7 @@ export async function parseCommand(
     collectHeredocBodies(tree.rootNode);
 
     // Extract redirect paths
-    const redirectPaths: string[] = [];
+    const redirectPaths: PathWord[] = [];
     // `>`/`>>`/`<>`/`&>`/`>|` write the destination; `<` reads it. `>|` is the
     // noclobber-forcing form — same effect on the file. fd duplication
     // (`2>&1`) names no file — its target is not a path candidate anyway.
@@ -2523,7 +2529,7 @@ export async function parseCommand(
             const expanded = hasExpansion ? expandHomeToken(expandTilde(p)) : expandTilde(p);
             const resolvedP = resolvePathReal(expanded, cwd);
             recordHop(p, resolvedP);
-            redirectPaths.push(resolvedP);
+            redirectPaths.push(pathWord(p, [resolvedP]));
             if (writesHere) allWrites.push(resolvedP);
           } else if (hasExpansion) {
             // `> $X` — write destination only knowable at runtime → opaque ref.
@@ -2538,7 +2544,7 @@ export async function parseCommand(
       }
     };
     extractRedirects(tree.rootNode);
-    allPaths.push(...redirectPaths);
+    words.push(...redirectPaths);
 
     // A write-capable code body writes what its text names: the interpreter,
     // not the shell, touches those files, so the write bar has to see them too
@@ -2554,14 +2560,21 @@ export async function parseCommand(
       if (codeBodiesWrite(bodies, shellBodyBySegment.has(si))) allWrites.push(...fromBodies);
     }
 
-    // Deduplicate, filter safe system paths
+    // Deduplicate, filter safe system paths. The screen runs on LOCATIONS (that
+    // is what the bars compare), so a word naming only places some earlier word
+    // already named leaves nothing behind — one stop per place, and the record
+    // that survives is the one the prompt and a confirmation key on.
     const seen = new Set<string>();
-    const paths = allPaths.filter(p => {
-      if (SAFE_SYSTEM_PATHS.has(p)) return false;
-      if (seen.has(p)) return false;
-      seen.add(p);
-      return true;
-    });
+    const kept: PathWord[] = [];
+    for (const w of words) {
+      const locations = w.locations.filter((p) => {
+        if (SAFE_SYSTEM_PATHS.has(p) || seen.has(p)) return false;
+        seen.add(p);
+        return true;
+      });
+      if (locations.length > 0) kept.push({ ...w, locations });
+    }
+    const paths = kept.flatMap((w) => w.locations);
     // Same filter, so writePaths ⊆ paths by construction. Set first: a target
     // can reach allWrites twice (the generic operand mint and a command's own
     // flag-value block, e.g. `sort -o FILE`).
@@ -2571,7 +2584,7 @@ export async function parseCommand(
       const seg = segments[si];
       if (seg) seg.codeBodies = bodies;
     }
-    return { segments, paths, writePaths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0, heredocStrippedCommand: stripHeredocBodyText(tree.rootNode, command) };
+    return { segments, words: kept, paths, writePaths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0, heredocStrippedCommand: stripHeredocBodyText(tree.rootNode, command) };
   } finally {
     subshellCache = null;
     tree.delete();
