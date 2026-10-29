@@ -514,9 +514,9 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     const entries = judgeLines();
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({
-      kind: "diff", mode: "dspat", model: "llama-cpp/qwen",
+      kind: "diff", mode: "dspat", cwd: "/Users/u/project", model: "llama-cpp/qwen",
       cmd: "rm -rf /tmp/x", s1: "approve/low", s2: "approve/high",
-    });
+    }); // cwd: the base a relative word resolves against — replay needs it
     expect(entries[1]).toMatchObject({ s1: "approve/medium", s2: "deny/medium" });
     expect(new Date(entries[0].ts).toString()).not.toBe("Invalid Date");
   });
@@ -527,7 +527,7 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     logJudgeInfra(bashPd, "manual", 1, "no-tool-call", "llama-cpp/qwen", "no-tool-call");
     const entries = judgeLines();
     expect(entries.map((e) => e.error)).toEqual(["call-failed", "model-unresolved", "no-tool-call"]);
-    expect(entries[0]).toMatchObject({ kind: "infra", mode: "dspa", stage: 2, cmd: "rm -rf /tmp/x" });
+    expect(entries[0]).toMatchObject({ kind: "infra", mode: "dspa", cwd: "/Users/u/project", stage: 2, cmd: "rm -rf /tmp/x" });
     expect(entries[1].model).toBeUndefined();
     // The message rides along (detail) — a class alone says which rule fired,
     // detail says why.
@@ -572,6 +572,7 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     );
     const [e] = judgeLines();
     expect(e.kind).toBe("paths");
+    expect(e.cwd).toBe(cwd); // every judge row carries its base, as unresolved.jsonl does
     expect(e.floorMisses).toEqual(["/never/seen"]);
     expect(e.contextMisses).toEqual(["/Users/u/sessions/x.jsonl"]);
   });

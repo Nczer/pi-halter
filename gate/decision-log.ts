@@ -428,6 +428,11 @@ export interface JudgeLogEntry {
   kind: "diff" | "infra" | "paths";
   /** The regime that produced the signal. */
   mode: JudgeLogMode;
+  /** The working dir the command ran in — the base a relative word resolves
+   *  against. `logUnresolved` wrote this from the start; the judge ledger did
+   *  not, so replaying judge.jsonl anchored its rows to the harness cwd and
+   *  resolved relative words against the wrong base. */
+  cwd?: string;
   /** The judge model (absent when the failure preceded model resolution). */
   model?: string;
   /** The operation (command / file path / tool label), truncated; `cmdCut`
@@ -538,6 +543,7 @@ export function logJudgeDiff(
   logJudge({
     kind: "diff",
     mode,
+    cwd: "cwd" in pd ? pd.cwd : undefined,
     model: v2.model,
     cmd: judgeCmdOf(pd),
     s1: `${v1.approve}/${v1.risk}`,
@@ -580,6 +586,7 @@ export function logJudgePaths(
   logJudge({
     kind: "paths",
     mode,
+    cwd: pd.cwd,
     model: verdict.model,
     cmd: judgeCmdOf(pd),
     floorPaths: f.floorPaths,
@@ -606,7 +613,16 @@ export function logJudgeInfra(
   model?: string,
   detail?: string,
 ): void {
-  logJudge({ kind: "infra", mode, stage, error, cmd: judgeCmdOf(pd), model, detail });
+  logJudge({
+    kind: "infra",
+    mode,
+    cwd: "cwd" in pd ? pd.cwd : undefined,
+    stage,
+    error,
+    cmd: judgeCmdOf(pd),
+    model,
+    detail,
+  });
 }
 
 /**
@@ -628,7 +644,16 @@ export function logResolverInfra(
   model?: string,
   detail?: string,
 ): void {
-  logJudge({ kind: "infra", mode, stage: 0, error, cmd: judgeCmdOf(pd), model, detail });
+  logJudge({
+    kind: "infra",
+    mode,
+    cwd: "cwd" in pd ? pd.cwd : undefined,
+    stage: 0,
+    error,
+    cmd: judgeCmdOf(pd),
+    model,
+    detail,
+  });
 }
 
 // The one-line prompt summary lives in prompt-builder (summarizePrompt);
