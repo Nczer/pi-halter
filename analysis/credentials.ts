@@ -37,6 +37,7 @@ import fs from "node:fs";
 import { warnPaths } from "../config";
 import { logGlobVerifyError } from "../config/logging";
 import { expandTilde, under } from "./path-util";
+import { braceVariants } from "./brace";
 import { tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import {
   isPathWarnedResolved,
@@ -450,72 +451,15 @@ export function checkBareRelativeTokens(
  * compiled into a near-universal wildcard and "matched" a credential name.
  */
 
-/** Cap on `{a,b}` variants expanded from one component, above which the token is unverifiable. */
+/** Cap on `{a,b}` variants expanded from one token, above which it is unverifiable. */
 const BRACE_VARIANT_CAP = 64;
 /** Sentinel: the component spells a glob that cannot be translated (see globComponentName). */
 const GLOB_UNTRANSLATABLE = "\u0000";
 
-/** Index of the `}` closing the `{` at `start` (nesting + `\` honoured), or -1 when unbalanced. */
-function findBraceClose(text: string, start: number): number {
-  let depth = 0;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i]!;
-    if (c === "\\") { i++; continue; }
-    if (c === "{") depth++;
-    else if (c === "}" && --depth === 0) return i;
-  }
-  return -1;
-}
-
-/** Split a brace group's body at its top-level commas. */
-function braceAlternatives(body: string): string[] {
-  const alts: string[] = [""];
-  let depth = 0;
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i]!;
-    if (c === "\\") {
-      alts[alts.length - 1] += c + (body[i + 1] ?? "");
-      i++;
-      continue;
-    }
-    if (c === "," && depth === 0) { alts.push(""); continue; }
-    if (c === "{") depth++;
-    else if (c === "}") depth = Math.max(0, depth - 1);
-    alts[alts.length - 1] += c;
-  }
-  return alts;
-}
-
-/**
- * Expand `{a,b}` alternation in one path component into the names it spells.
- * A brace group WITHOUT a top-level comma is not alternation — `{2,4}` is a
- * regex quantifier, `{a}` a literal, an unbalanced `{` literal text — and
- * stays literal characters. Returns null when the form cannot be expanded
- * statically (nesting past 4 levels, or more than BRACE_VARIANT_CAP variants).
- */
-function braceVariants(comp: string, depth = 0): string[] | null {
-  if (depth > 4) return null;
-  let prefix = "";
-  for (let i = 0; i < comp.length; i++) {
-    const c = comp[i]!;
-    if (c === "\\") { prefix += c + (comp[i + 1] ?? ""); i++; continue; }
-    if (c !== "{") { prefix += c; continue; }
-    const close = findBraceClose(comp, i);
-    const alts = close < 0 ? null : braceAlternatives(comp.slice(i + 1, close));
-    if (!alts || alts.length < 2) { prefix += "{"; continue; } // literal brace group
-    const tail = braceVariants(comp.slice(close + 1), depth + 1);
-    if (tail === null) return null;
-    const out: string[] = [];
-    for (const alt of alts) {
-      for (const t of tail) {
-        out.push(prefix + alt + t);
-        if (out.length > BRACE_VARIANT_CAP) return null;
-      }
-    }
-    return out;
-  }
-  return [prefix];
-}
+// The brace arithmetic itself lives in analysis/brace.ts, shared with the
+// location model, which opens the same groups to get the WORDS a token names.
+// The scan calls it with its own, wider limits: a false negative here is a
+// secret read, so it casts past the floor's caps.
 
 /** Index of the `]` closing the `[` at `start` (bash rules), or -1 when unterminated. */
 function classEndIndex(text: string, start: number): number {
@@ -579,7 +523,7 @@ function globToRegexSource(v: string): string | null {
  * section comment above.
  */
 function globComponentName(comp: string): string | null {
-  const variants = braceVariants(comp);
+  const variants = braceVariants(comp, BRACE_VARIANT_CAP, 4);
   if (variants === null) return GLOB_UNTRANSLATABLE;
   for (const variant of variants) {
     const skeleton = variant.replace(/\[[^\]]*\]/g, "").replace(/[*?]/g, "");

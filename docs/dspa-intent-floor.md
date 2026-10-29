@@ -842,7 +842,7 @@ Still open from the same command, deliberately unbuilt:
   `chrt`, `taskset`): unmeasured, so unjoined. Each is a table edit plus a
   replay diff, not a new seam.
 
-### Decided 2026-10-26 in the location-model grill (unbuilt)
+### Decided 2026-10-26 in the location-model grill (step 1 → 3.45.0, step 2 → 3.47.0; L5–L6 unbuilt)
 
 Goal of that grill: ONE record per path word in the command text, so the floor
 stops re-deriving structure from strings. Measured on 3.44.1: 15
@@ -946,7 +946,7 @@ harness that used to be rebuilt per round from scratch. It moved one line over
 the recorded corpus (4400 tests, suite and structural ones green). Not done by
 step 1: the record itself, group opening under L2's caps, L5, L6.
 
-### Decided 2026-10-29 in the step-2 grill (unbuilt)
+### Decided 2026-10-29 in the step-2 grill (built in 3.47.0, deviations named below)
 
 Grill of L1–L3 before building. Where a decision settles an L-point, it is named.
 
@@ -1032,6 +1032,67 @@ yield `outsidePaths` and 12 `outsideDirs` and **0 yield any write fact**, becaus
 their `cd` base (`/Volumes/…`) does not exist here, which is the §9 "a `cd` base
 that does not exist on disk yields no outside fact" gap. So the macOS shapes enter
 the proof as fixtures, not as rows.
+
+**Step 2 built (3.47.0 — two commits: `11ac5f2`, then the group opening).**
+`analysis/path-word.ts` is the single producer of every path list; `paths`,
+`prompt.outsidePaths/outsideDirs/outsideWritePaths/outsideWriteDirs` and the
+ledger fields are views over `words: PathWord[]`. Group opening lives in
+`analysis/brace.ts`: `BRACE_WORD_CAP` 16, `BRACE_NEST_MAX` 3, and `braceVariants`
+walks the TEXT rather than splitting on `/` and recurses into branches — so
+`{a,{b,c}}` yields three words, a group spanning a level (`{a/b,c}`) opens, and a
+word that comes back opened never still carries a group inside one of its names.
+The credential scan shares that walk with its own wider limits (cap 64, depth 4 —
+it only gains names to test). S5 as decided: a group the caps refuse, and a range,
+carries `locations: []` plus an `anchor` (the static prefix, in real-disk form);
+`barLocations(words)` is the view the bars test — places, or the anchor when there
+are none — and `paths` is the same view, so the flat list and the bar view cannot
+drift. `BRACE_META_RE` and both dir filters are deleted; `dirsOfLocations` answers
+a location whose own text still carries a group at its static prefix, which is the
+shape that made 3.44.0's grant dead.
+
+Deviations from the decisions, named rather than absorbed:
+
+- **S2's role field did not land.** The record carries kind, anchor, locations and
+  completeness; the read/write role still lives in `analysis/write-roles.ts`,
+  keyed by index into the location list. Nothing here changed which paths are
+  write paths, but the record is not yet the whole answer and a caller still
+  joins two lists by position.
+- **S4 is not built.** The prompt still lists PLACES, not the word as typed, so a
+  four-branch group prints four rows and there is no `+N more`. Filed below.
+- **S5's anchor landed in commit 2, not in 2a.** 2a's records had no anchor field;
+  its replay diff stayed empty exactly as S6 required, and the anchor arrived with
+  the opening that needs it.
+- **"Is this word openable" is a quote test on the node's raw text, not a node
+  type test.** tree-sitter lexes an unquoted `/x/{a,b}` as a `concatenation`, so a
+  type test would have refused every group. Mixed quoting (`x"{a,b}"`) is not
+  opened — the fail-closed side of a call I chose not to guess.
+- **The stale-cwd re-resolve (`reResolveCwdDependentWords`) does not open braces.**
+  It has no node, so it cannot tell a quoted word from an unquoted one. Such a
+  word keeps its braces as one location; `dirsOfLocations` answers it at its static
+  prefix, so the stop still fires and the grant still binds. Coarse, not wrong;
+  L6's marker work is where it gets fixed.
+
+Proof (S6 pass 2, merged corpus): probes are now 50 and the run is 1187 commands.
+The before/after diff moves **5 recorded rows, all brace-shaped** — e.g. `cp
+…/web/{tokens,components,app}.css web/` goes from one brace-carried string to the
+three real names — with 0 decision flips, 0 rows lost and no non-brace row moved.
+4458 tests green, `tsc --noEmit` inside the suite.
+
+**S7 built with one addition the decision did not predict.** The tree moved to
+`/var/tmp/floor-replay-probes`, but the move alone still showed no write fact: a
+write UNDER the cwd is cwd-granted, and every probe shared one cwd — the tree's
+own root. So 6 probes now run from `deep/nested` and touch the tree beside them.
+From there the write side answers: `tee $D/{a,b}/log` offers one write dir per
+branch, `cp $D/{a,b}/x $D/deep/z` separates the read branches from the write
+target, and the refused 17-name group offers the tree — its anchor — as its write
+dir.
+
+**Filed from step 2 (the visible half, display-only, no decision code changes).**
+S4's prompt shape: name the word AS TYPED and put the deduped FOLDERS of the
+outside places in the Always options — `web/{tokens,components,app}.css` offers
+one folder, not three — with a `+N more` marker for long groups (the row economy
+§7 already uses). Group opening made the place list longer before it made it
+truer, so this is the follow-up of this release line, not of step 3.
 
 ### Known gaps opened by the egress split (filed 2026-10-19, step 2b)
 

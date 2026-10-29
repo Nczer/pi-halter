@@ -1,5 +1,54 @@
 # Changelog
 
+## 3.47.0 — 2026-10-29
+**A brace group is now the places it names: `ls ~/{a,b}` says two folders, and
+the Always option is a folder the next run can match.**
+
+- **What the operator saw.** A command with a brace group stopped over a path that
+  is not a place. `ls ~/{Applications,apps,bin,.local/bin}` was asked about
+  `$HOME/{Applications,apps,bin,.local/bin}` as one string, and
+  `cp …/web/{tokens,components,app}.css web/` named one path no run produces. The
+  worse half was the answer offered for it: an Always option whose folder was cut
+  out of the middle of the group — `$HOME/{Applications,apps,bin,.local` — which
+  went into the session READ bar and could never bind, so the same command stopped
+  on every run. 3.44.0 stopped minting that dir, which kept the stop honest but
+  left the command with no option that could ever work.
+- **Why it happened.** Every path list in the analysis was a `string[]`, produced
+  independently at 13 sites, and each consumer re-derived structure from the
+  string where it used it: dirnames were cut at the last slash, "is this inside
+  that" was written five ways, and a `{a,b}` token stayed one token all the way
+  into the prompt and the grant.
+- **The fix, in two commits.** (1) The unit is the WORD: `analysis/path-word.ts`
+  mints one record per path word — the text as typed, its kind (exact, wildcard,
+  group, range, unbound variable, unknown base), the locations it can become,
+  whether that set is complete, and its ANCHOR folder for the case where it names
+  no place. Every list the gate, the prompt and the ledgers read is a view over
+  those records (`barLocations`), never a second producer; `resolvePathsToDirs`
+  and `opaqueStaticPrefixDir` are deleted. (2) A group OPENS into the words it
+  spells (`analysis/brace.ts`): at most 16 names and 3 levels of nesting per
+  token, recursing into branches, so `{a,{b,c}}` names three places, `{a/b,c}`
+  spans a level, and `AB8673GP10{1,3,4}*.pdf` becomes one wildcard word per
+  branch, each naming a real folder an approval can remember. Past the caps, or
+  for a range like `{1..200}`, the record names no place and carries its anchor
+  instead: the stop still fires, and the option is the folder the whole group sits
+  in — which the next run matches. The credential path scan now shares that brace
+  walk instead of carrying its own copy.
+- **What was retired.** The `BRACE_META_RE` dir filter and the dead-grant rule
+  that needed it (3.44.0): a dir string with braces in it can no longer be
+  produced, so there is nothing left to filter.
+- **What got louder, on purpose.** The prompt lists places, so a group of N names
+  now lists N rows instead of one. Naming the WORD and offering its deduped
+  folders is filed as the display half of this step (§9).
+- **The proof.** The frozen merged corpus plus probes replayed through the floor:
+  1187 commands. The before/after signature diff moves 5 recorded rows, every one
+  brace-shaped (`cp …/web/{tokens,components,app}.css web/` goes from one
+  brace-carried string to the three real names), with no decision flip and no lost
+  row. The probe tree moved to `/var/tmp` — `/tmp` is in BOTH bars, so a probe
+  there could never show a write fact — and 6 probes also run from a subfolder,
+  because a write under the cwd is cwd-granted: from there, a group's per-branch
+  write dirs and a refused group's anchor dir appear for the first time. Suite:
+  4458 tests, with `tsc --noEmit` inside it.
+
 ## 3.46.0 — 2026-10-28
 **A detached launch named no program: the judge packet carried no script, and the
 floor scored its own blind report as a miss.**

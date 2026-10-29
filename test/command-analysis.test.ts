@@ -667,39 +667,68 @@ describe("outsideDirs: unbound-token locations are not grantable", () => {
   });
 });
 
-describe("outsideDirs: a brace-alternation dir is never a grant (3.44.0)", () => {
-  // unresolved.jsonl 2026-10-25T15:04:48: `ls ~/{Applications,apps,bin,.local/bin}`
-  // is ONE token to the parser, so its dirname cut inside the group and yielded
-  // `$HOME/{Applications,apps,bin,.local` — text no shell can produce.
-  // The intent pass minted it into the session READ bar (the row's
-  // `grantedDirs`) while the four real dirs got nothing, so the command
-  // stopped again on every run: a grant that can never bind is not
-  // convergence. Refusing it is the fail-closed half — the stop still fires,
-  // because needsPathApproval/needsWriteApproval come from the PATH sets, not
-  // the dir sets. Expanding an alternation into its real dirs is the other
-  // half, and that is a floor-model change, not a filter: not in scope.
+describe("outsideDirs: a brace group is asked at a folder a run can match (3.44.0 → 2b)", () => {
+  // unresolved.jsonl 2026-08-… era: `ls ~/{Applications,apps,bin,.local/bin}` is
+  // ONE token to the parser, so its dirname cut inside the group and yielded
+  // `$HOME/{Applications,apps,bin,.local` — text no shell can produce. The intent
+  // pass minted it into the session READ bar while the four real dirs got
+  // nothing, so the command stopped again on every run: a grant that can never
+  // bind is not convergence. 3.44.0 answered that by REFUSING any dir with a
+  // brace in it — which kept the stop firing but left the command with no option
+  // that could ever work. Step 2b fixes the model instead: the group opens into
+  // the names it spells, and a group the caps refuse offers the folder every
+  // expansion must sit under. A brace-carved dir is now unproducible by
+  // construction, so the filter is gone; these pins keep the shape honest.
   const bar = {
     isInsideAllowedDir: () => false,
     isInsideAllowedWriteDir: () => false,
   };
 
-  it("a group spanning `/` yields no dir grant, and the read still stops", async () => {
+  it("a group spanning `/` opens into its branches, and the dirs are the real ones", async () => {
     const a = await analyzeCommand(`ls ~/{Applications,apps,bin,.local/bin}`, cwd, bar);
+    expect(a.paths).toEqual([
+      canon(`${home}/Applications`), canon(`${home}/apps`),
+      canon(`${home}/bin`), canon(`${home}/.local/bin`),
+    ]);
     expect(a.prompt.outsideDirs!.filter((d) => d.includes("{"))).toEqual([]);
     expect(a.prompt.outsidePaths!.length).toBeGreaterThan(0);
     expect(a.prompt.needsPathApproval).toBe(true);
   });
 
-  it("a dir that IS an alternation is not a grant either", async () => {
+  it("two groups in one word open across both — four places, no brace text", async () => {
     const a = await analyzeCommand(`ls ${home}/halt-pfx-{a,b}/{c,d}/f`, cwd, bar);
-    expect(a.prompt.outsideDirs!.filter((d) => d.includes("{"))).toEqual([]);
+    expect(a.paths).toEqual([
+      canon(`${home}/halt-pfx-a/c/f`), canon(`${home}/halt-pfx-a/d/f`),
+      canon(`${home}/halt-pfx-b/c/f`), canon(`${home}/halt-pfx-b/d/f`),
+    ]);
+    expect(a.prompt.outsideDirs).toEqual([
+      canon(`${home}/halt-pfx-a/c`), canon(`${home}/halt-pfx-a/d`),
+      canon(`${home}/halt-pfx-b/c`), canon(`${home}/halt-pfx-b/d`),
+    ]);
+    expect(a.prompt.needsPathApproval).toBe(true);
+  });
+
+  it("a group the caps refuse names no place, stops, and offers the folder it sits in", async () => {
+    const many = `{${Array.from({ length: 17 }, (_, i) => `n${i}`).join(",")}}`;
+    const a = await analyzeCommand(`ls ${home}/${many}`, cwd, bar);
+    expect(a.paths).toEqual([canon(home)]); // the anchor, not the typed token
+    expect(a.prompt.outsideDirs).toEqual([canon(home)]);
+    expect(a.prompt.needsPathApproval).toBe(true);
+  });
+
+  it("a range is asked at its folder too — it names no place either", async () => {
+    const a = await analyzeCommand(`ls ${home}/{1..200}`, cwd, bar);
+    expect(a.paths).toEqual([canon(home)]);
+    expect(a.prompt.outsideDirs).toEqual([canon(home)]);
     expect(a.prompt.needsPathApproval).toBe(true);
   });
 
   it("no over-refusal: a brace suffix below the dirname keeps the real dir", async () => {
-    // `/home/u/pfx-{a,b}.conf` → the brace group sits in the BASENAME, so the
-    // dirname is a real location the shell can produce. That grant stays live.
+    // `/home/u/pfx-{a,b}.conf` opens into two names in ONE folder, so the grant
+    // is that folder — the case 3.44.0's filter had to special-case is now just
+    // an ordinary two-branch group.
     const a = await analyzeCommand(`cat ${home}/halt-pfx-{a,b}.conf`, cwd, bar);
+    expect(a.paths).toEqual([canon(`${home}/halt-pfx-a.conf`), canon(`${home}/halt-pfx-b.conf`)]);
     expect(a.prompt.outsideDirs).toContain(home);
     expect(a.prompt.needsPathApproval).toBe(true);
   });

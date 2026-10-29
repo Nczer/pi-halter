@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseCommand } from "../analysis/bash-parser";
 import { analyzeCommand } from "../analysis/command-analysis";
 import {
+  barLocations,
   dirsOfLocations,
   kindOfWord,
   locationsOf,
@@ -52,6 +53,10 @@ async function oneWord(cmd: string): Promise<PathWord> {
   expect(words.map((w) => w.text)).toEqual([expect.any(String)]);
   return words[0];
 }
+
+/** `{n0,n1,…,n<count-1>}` — a group with `count` names, for the caps. */
+const names = (count: number): string =>
+  `{${Array.from({ length: count }, (_, i) => `n${i}`).join(",")}}`;
 
 describe("kindOfWord — how the text names its location", () => {
   it("a literal word with a literal location is exact", () => {
@@ -132,18 +137,47 @@ describe("the words a command names (parseCommand)", () => {
     expect(w.locations).toEqual([canon(`${U}/*.md`)]);
   });
 
-  it("a brace group is one word today — opened by the next step (§9 S3)", async () => {
+  it("a brace group opens into one record naming one place per branch (§9 S3/S5)", async () => {
     const w = await oneWord(`ls ${U}/{a,b}`);
-    expect(w).toMatchObject({ text: `${U}/{a,b}`, kind: "group", complete: false });
-    // The single location is the literal string, NOT a place a run can produce.
-    // It keeps forcing the stop; the group's real dirs are the step-2b work.
-    expect(w.locations).toEqual([canon(`${U}/{a,b}`)]);
+    expect(w).toMatchObject({ text: `${U}/{a,b}`, kind: "group", complete: true });
+    // The locations are the places a run can produce, never the typed string.
+    expect(w.locations).toEqual([canon(`${U}/a`), canon(`${U}/b`)]);
+    expect(w.anchor).toBeUndefined();
   });
 
-  it("a brace range is a range, not a set of 200 locations", async () => {
+  it("a group can span a level, nest inside a branch, and sit beside another", async () => {
+    expect((await oneWord(`ls ${U}/{a/b,c}`)).locations)
+      .toEqual([canon(`${U}/a/b`), canon(`${U}/c`)]);
+    expect((await oneWord(`ls ${U}/{a,{b,c}}`)).locations)
+      .toEqual([canon(`${U}/a`), canon(`${U}/b`), canon(`${U}/c`)]);
+    expect((await oneWord(`ls ${U}/{a,b}/{c,d}`)).locations)
+      .toEqual([canon(`${U}/a/c`), canon(`${U}/a/d`), canon(`${U}/b/c`), canon(`${U}/b/d`)]);
+  });
+
+  it("a branch that still globs opens, and the word is not complete", async () => {
+    const w = await oneWord(`ls ${U}/{a,b}/*.md`);
+    expect(w).toMatchObject({ kind: "group", complete: false });
+    expect(w.locations).toEqual([canon(`${U}/a/*.md`), canon(`${U}/b/*.md`)]);
+  });
+
+  it("braces inside quotes are part of the name — nothing opens", async () => {
+    const w = await oneWord(`cat '${U}/{a,b}/x'`);
+    expect(w).toMatchObject({ text: `${U}/{a,b}/x`, kind: "exact", complete: true });
+    expect(w.locations).toEqual([canon(`${U}/{a,b}/x`)]);
+  });
+
+  it("a group past the caps names no place and anchors on its folder", async () => {
+    const w = await oneWord(`ls ${U}/${names(17)}`);
+    expect(w).toMatchObject({ text: `${U}/${names(17)}`, kind: "group", complete: false });
+    expect(w.locations).toEqual([]);
+    expect(w.anchor).toBe(canon(U));
+  });
+
+  it("a brace range names no place and anchors on its folder", async () => {
     const w = await oneWord(`ls ${U}/{1..200}`);
     expect(w).toMatchObject({ text: `${U}/{1..200}`, kind: "range", complete: false });
-    expect(w.locations).toHaveLength(1);
+    expect(w.locations).toEqual([]);
+    expect(w.anchor).toBe(canon(U));
   });
 
   it("`sort -o` and `dd if=/of=` name their operands as words", async () => {
@@ -176,7 +210,7 @@ describe("the words a command names (parseCommand)", () => {
   it("`paths` is the flat view over the records, never an independent list", async () => {
     const cmd = `cat ${U}/a ${U}/*.md ~/{a,b} ./rel 2>${U}/err`;
     const r = await parseCommand(cmd, CWD);
-    expect(r.paths).toEqual(locationsOf(r.words));
+    expect(r.paths).toEqual(barLocations(r.words));
     expect(r.writePaths.every((p) => r.paths.includes(p))).toBe(true);
   });
 });
@@ -204,6 +238,15 @@ describe("the words the floor's own derivations mint (analyzeCommand)", () => {
     // var-resolution and rides out with the reference work (§9 step 3).
     expect(hit?.text).toBe(canon(`${U}/x`));
   }, 15000);
+});
+
+describe("barLocations — the view a bar tests", () => {
+  it("a word's places, or its anchor when it names none, or nothing", () => {
+    const opened = pathWord(`${U}/{a,b}`, [`${U}/a`, `${U}/b`], "opened");
+    const refused = { ...pathWord(`${U}/{1..200}`, [], "range"), anchor: U };
+    const screened = pathWord("$f", []);
+    expect(barLocations([opened, refused, screened])).toEqual([`${U}/a`, `${U}/b`, U]);
+  });
 });
 
 describe("dirsOfLocations — the folder an answer sits in, written once", () => {
@@ -238,6 +281,25 @@ describe("dirsOfLocations — the folder an answer sits in, written once", () =>
     // relative and pins nothing. Filed with the reference work (§9 step 3).
     expect(await dirsOfLocations([pathWord(`${TREE}/sub/$f`, [path.join(OPAQUE_VAR_DIR, `${TREE}/sub/$f`)])]))
       .toEqual([OPAQUE_VAR_DIR]);
+  });
+
+  it("an opened group is asked at each branch — the folders the run really touches", async () => {
+    const w = pathWord(`${TREE}/{dir,sub}`, [`${TREE}/dir`, `${TREE}/sub`], "opened");
+    expect(await dirsOfLocations([w])).toEqual([`${TREE}/dir`, `${TREE}/sub`]);
+  });
+
+  it("a location carrying an unopened group answers at its static prefix, never inside the group", async () => {
+    // 3.44.0's dead grant: `ls ~/{Applications,apps,bin,.local/bin}` offered
+    // `$HOME/{Applications,apps,bin,.local` as an Always option no run could
+    // match. The quoted word keeps its braces, so the answer is the folder the
+    // whole group sits in — which is what the next run's bar can match.
+    const w = pathWord(`${TREE}/{a,b}/x`, [`${TREE}/{a,b}/x`], "quoted");
+    expect(await dirsOfLocations([w])).toEqual([TREE]);
+  });
+
+  it("a word the parser refused to open is asked at its anchor", async () => {
+    const w: PathWord = { ...pathWord(`${TREE}/${names(17)}`, [], "tooMany"), anchor: TREE };
+    expect(await dirsOfLocations([w])).toEqual([TREE]);
   });
 
   it("`only` answers for the locations a bar selected — and dedupes, and sorts", async () => {

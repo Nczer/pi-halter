@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { allowedReadPaths, allowedWritePaths, pathAwareCommands, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, codeBodiesWrite, type CodeBody } from "../config";
 import { resolvePathReal } from "./path-analysis";
-import { pathWord, type PathWord } from "./path-word";
+import { pathWord, mintWord, barLocations, type PathWord } from "./path-word";
 import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandTilde, expandHomeToken, expandHomeLiterals, under } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
 import { resolveDelegatedTokens } from "./wrapper-unwrap";
@@ -2155,6 +2155,39 @@ export async function parseCommand(
       if (!hopSeen.has(key)) { hopSeen.add(key); hops.push({ written, resolved }); }
     };
 
+    /**
+     * Mint the record for one shell WORD into `into`, and report to the bar
+     * lists whatever it names: a `{a,b}` group opens into one location per
+     * branch (docs/dspa-intent-floor.md L2); a group past the caps, or a range,
+     * names no place and reports the folder every expansion sits in (S5) — so
+     * the stop still fires and the grant it offers is one the next run matches.
+     *
+     * `quotedBraces`: the raw word text carries a quote, so at least part of it
+     * is quoted and the shell would not expand the braces for us
+     * (`cat '{a,b}'` opens nothing, and a word that mixes quoting
+     * (`x"{a,b}"`) is not worth guessing per brace — not opening is the
+     * fail-closed side). A word with a runtime expansion is outside the static
+     * word model already.
+     */
+    const mintArgWord = (
+      into: PathWord[],
+      text: string,
+      node: TSNode,
+      hasExpansion: boolean,
+      isWrite = false,
+    ): void => {
+      const word = mintWord(
+        text,
+        (t) => resolvePathReal(hasExpansion ? expandHomeToken(expandTilde(t)) : expandTilde(t), cwd),
+        { quotedBraces: /["']/.test(node.text), dynamic: hasExpansion },
+      );
+      for (const p of word.locations.length ? word.locations : word.anchor ? [word.anchor] : []) {
+        recordHop(text, p);
+        if (isWrite) allWrites.push(p);
+      }
+      into.push(word);
+    };
+
     // Code bodies, attached to the segment that runs them (segMap is the
     // command-node → segment-index map the segment builder filled). The write
     // decision is made from body text in cwd-tracking, so the text has to
@@ -2292,9 +2325,7 @@ export async function parseCommand(
       // semantics — see analysis/argv0-path.
       if (argv0Word && argv0Node && !nodeHasRuntimeExpansion(argv0Node)) {
         if (classifyArgv0(argv0Word, cwd) === "qualified") {
-          const resolved = resolvePathReal(expandTilde(argv0Word), cwd);
-          recordHop(argv0Word, resolved);
-          words.push(pathWord(argv0Word, [resolved]));
+          mintArgWord(words, argv0Word, argv0Node, false);
         }
       }
 
@@ -2375,11 +2406,7 @@ export async function parseCommand(
             const resolveArg = arg.startsWith("-") && arg.includes("=")
               ? arg.slice(arg.indexOf("=") + 1)
               : arg;
-            const expanded = hasExpansion ? expandHomeToken(expandTilde(resolveArg)) : expandTilde(resolveArg);
-            const resolvedArg = resolvePathReal(expanded, cwd);
-            recordHop(resolveArg, resolvedArg);
-            words.push(pathWord(resolveArg, [resolvedArg]));
-            if (writeIdx.has(ai)) allWrites.push(resolvedArg);
+            mintArgWord(words, resolveArg, argNode, hasExpansion, writeIdx.has(ai));
           }
         }
       }
@@ -2417,11 +2444,7 @@ export async function parseCommand(
               : null;
             if (ref) opaque.push(ref);
             else {
-              const expanded = hasExpansion ? expandHomeToken(expandTilde(target)) : expandTilde(target);
-              const resolvedTarget = resolvePathReal(expanded, cwd);
-              recordHop(target, resolvedTarget);
-              words.push(pathWord(target, [resolvedTarget]));
-              allWrites.push(resolvedTarget); // -o/--output is a write by definition
+              mintArgWord(words, target, targetNode, hasExpansion, true); // -o/--output is a write by definition
             }
           }
         }
@@ -2438,11 +2461,7 @@ export async function parseCommand(
           if (!m || m[2] === "" || m[2] === "-") continue;
           const targetNode = args[i].node;
           const hasExpansion = nodeHasRuntimeExpansion(targetNode);
-          const expanded = hasExpansion ? expandHomeToken(expandTilde(m[2])) : expandTilde(m[2]);
-          const resolvedTarget = resolvePathReal(expanded, cwd);
-          recordHop(m[2], resolvedTarget);
-          words.push(pathWord(m[2], [resolvedTarget]));
-          if (m[1] === "of" || m[1] === "converse") allWrites.push(resolvedTarget);
+          mintArgWord(words, m[2], targetNode, hasExpansion, m[1] === "of" || m[1] === "converse");
         }
       }
     }
@@ -2526,11 +2545,7 @@ export async function parseCommand(
           if (isMultiLineLiteralText(p)) continue; // script/data body, not a path
           const hasExpansion = nodeHasRuntimeExpansion(pNode);
           if (isPathCandidate(p, hasExpansion)) {
-            const expanded = hasExpansion ? expandHomeToken(expandTilde(p)) : expandTilde(p);
-            const resolvedP = resolvePathReal(expanded, cwd);
-            recordHop(p, resolvedP);
-            redirectPaths.push(pathWord(p, [resolvedP]));
-            if (writesHere) allWrites.push(resolvedP);
+            mintArgWord(redirectPaths, p, pNode, hasExpansion, writesHere);
           } else if (hasExpansion) {
             // `> $X` — write destination only knowable at runtime → opaque ref.
             const ref = opaqueRef(node, p, cwd, segMap.get(node.id) ?? -1, segments);
@@ -2572,9 +2587,19 @@ export async function parseCommand(
         seen.add(p);
         return true;
       });
-      if (locations.length > 0) kept.push({ ...w, locations });
+      // A word whose every location was screened or deduped named a place some
+      // other word already named — it goes, as before. A word that named no
+      // place ON PURPOSE (a group past the caps, a range) stays on its anchor:
+      // that folder is what forces the stop, and it is screened and deduped like
+      // any other place (docs/dspa-intent-floor.md S5).
+      let anchor = w.anchor;
+      if (!locations.length) {
+        if (!anchor || w.locations.length || SAFE_SYSTEM_PATHS.has(anchor) || seen.has(anchor)) anchor = undefined;
+        else seen.add(anchor);
+      }
+      if (locations.length || anchor) kept.push({ ...w, locations, anchor });
     }
-    const paths = kept.flatMap((w) => w.locations);
+    const paths = barLocations(kept);
     // Same filter, so writePaths ⊆ paths by construction. Set first: a target
     // can reach allWrites twice (the generic operand mint and a command's own
     // flag-value block, e.g. `sort -o FILE`).

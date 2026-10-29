@@ -7,7 +7,7 @@ import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./v
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
 import { hasRelativePath, getOutsideCwdPaths, getOutsideWritePaths } from "./path-analysis";
-import { dirsOfLocations, locationsOf, pathWord, type PathWord } from "./path-word";
+import { dirsOfLocations, barLocations, pathWord, type PathWord } from "./path-word";
 import { classifyStageArgv0 } from "./argv0-path";
 import { assessDeletes, type DeleteScale } from "./delete-scale";
 import { checkCommandForCredentialPaths } from "./credentials";
@@ -186,11 +186,6 @@ const UNKNOWN_BASE_CWD = "/";
 
 /** Nested `$(…)` depth cap (same shape as the tmux payload recursion). */
 const SUBST_MAX_DEPTH = 3;
-
-/** Brace metacharacters in a derived dir: what the shell EXPANDS, not a name
- *  (same reading as analysis/delete-scale.ts's `[*?[{]`). See the filters in
- *  `analyzeCommand` for why a dir carrying one is never a grant. */
-const BRACE_META_RE = /[{}]/;
 
 /**
  * Analyze command-substitution and process-substitution BODIES (G5).
@@ -374,7 +369,10 @@ function threadCwdPaths(
       break;
     }
     for (let i = words.length - 1; i >= 0; i--) {
-      if (words[i].locations.length === 0) words.splice(i, 1);
+      // A record with no location is not necessarily empty: a brace group the
+      // caps refuse names no place on purpose and carries its anchor (S5).
+      const w = words[i];
+      if (!w.locations.length && !w.anchor) words.splice(i, 1);
     }
     const wi = writePaths?.indexOf(s) ?? -1;
     if (writePaths && wi !== -1) writePaths.splice(wi, 1);
@@ -692,7 +690,7 @@ export async function analyzeCommand(
   let symlinkHops: PathHop[] | undefined;
   if (options?.isInsideAllowedDir) {
     const op = getOutsideCwdPaths(
-      locationsOf(words).filter((p) => !unresolvedRawTokens.has(p)),
+      barLocations(words).filter((p) => !unresolvedRawTokens.has(p)),
       cwd,
       options.isInsideAllowedDir,
     );
@@ -713,18 +711,17 @@ export async function analyzeCommand(
       // off, not a location the operator meant. The stop still fires: the
       // approval comes from the PATH set, and the path itself is displayed.
       if (d === "/") return false;
-      // A dir whose own text carries a brace is not a location the shell can
-      // produce (3.44.0, unresolved.jsonl 2026-10-25T15:04:48): `ls
-      // ~/{Applications,apps,bin,.local/bin}` is ONE token to the parser, so
-      // its dirname cut inside the group and yielded
-      // `$HOME/{Applications,apps,bin,.local` — which the intent pass
-      // then put in the session READ bar while the four real dirs got nothing.
-      // Same shape as a dir that is itself an alternation (`/etc/{a,b}`).
-      // Refusing it is the fail-closed half of the dead-grant rule below: the
-      // stop still fires (the path set is untouched), only the grant that
-      // could never bind goes away. Expanding the alternation into its real
-      // dirs is the other half, and it is a floor-model change, not a filter.
-      if (BRACE_META_RE.test(d)) return false;
+      // A brace group is opened where the text allows it (analysis/brace.ts),
+      // and where it is not, no dir cut inside the group can reach this list:
+      // a refused group is asked at its ANCHOR (docs/dspa-intent-floor.md S5),
+      // and a location whose own text still carries braces — quoted, or behind
+      // a runtime expansion — is answered at its static prefix
+      // (analysis/path-word). This is the 3.44.0 dead grant it replaced
+      // (unresolved.jsonl 2026-10-25T15:04:48): `ls
+      // ~/{Applications,apps,bin,.local/bin}` is ONE token to the parser, so its
+      // dirname cut inside the group and yielded
+      // `$HOME/{Applications,apps,bin,.local` — which the intent pass then put
+      // in the session READ bar while the four real dirs got nothing.
       // A directory backed ONLY by unresolved-var marker paths is the static
       // prefix of an unbound token (e.g. ~/.pi/agent/extensions from
       // <unresolved-var>/~/.pi/agent/extensions/$e/*.ts). The marker keeps
@@ -752,9 +749,9 @@ export async function analyzeCommand(
       if (d === OPAQUE_VAR_DIR) return false;
       if (d === UNKNOWN_CWD_MARKER) return true;
       if (d === "/") return false; // same as the read tier: no session-wide write
-      // Same dead-grant rule as the read tier: an "Always: write" for
-      // `/home/x/{a,b` would never match the next run of `rm -rf ~/{a,b}`.
-      if (BRACE_META_RE.test(d)) return false;
+      // Same dead-grant rule as the read tier, same answer: an unopenable write
+      // group is asked at its anchor, so `rm -rf ~/{a,b}` offers `$HOME` (which
+      // the next run matches) rather than `$HOME/{a,b`, which no run could.
       return ow.some((p) => !isUnresolvedPath(p) && under(p, d));
     });
     needsWriteApproval = ow.length > 0;
@@ -788,7 +785,7 @@ export async function analyzeCommand(
     stageArgv0Qualified,
     runOptionSegmentIndices,
     ungrantableRunFormSegmentIndices,
-    paths: locationsOf(words),
+    paths: barLocations(words),
     words,
     writePaths: [...new Set(writePaths)],
     hasParseError,

@@ -44,12 +44,23 @@ const LOG_DIR = process.env.FLOOR_LOG || path.join(HERE, "..", ".log");
 const OUT = process.env.FLOOR_OUT || "";
 
 /**
- * Probes for the seams step 1 moved, on a fixed tree under /tmp: one word per
- * top-level folder (the root case), brace groups at the leaf, mid-word and
- * nested, globs, unbound vars and command substitutions, relative words, a
- * symlink and a symlink-plus-escape, the root delete and its `..` twin.
+ * Probes for the seams the location model moves, on a fixed tree under
+ * /var/tmp: one word per top-level folder (the root case), brace groups at the
+ * leaf, mid-word, nested and refused, globs, unbound vars and command
+ * substitutions, relative words, a symlink and a symlink-plus-escape, the root
+ * delete and its `..` twin.
+ *
+ * The tree is NOT under /tmp (S7): `allowedReadPaths` and `allowedWritePaths`
+ * both carry /tmp (config/path-rules.ts), so a probe tree there never stopped
+ * for anything and the seam the probes exist to watch was invisible. /var/tmp
+ * is in neither bar on either host (macOS canonicalises it to
+ * /private/var/tmp, which the probes therefore spell differently — allowed in
+ * the replay diff). The rows that DO want a bar hit (`cat /tmp/{a,b}/x`) say so
+ * by spelling /tmp themselves.
  */
-const SYNTH_CWD = "/tmp/floor-replay-probes";
+const SYNTH_CWD = "/var/tmp/floor-replay-probes";
+/** A group past BRACE_WORD_CAP (16): the parser must refuse to open it. */
+const MANY_NAMES = `{${Array.from({ length: 17 }, (_, i) => `n${i}`).join(",")}}`;
 const SYNTH: string[] = [
   "ls /optfoo && ls /opt",
   "rm -rf /",
@@ -59,6 +70,16 @@ const SYNTH: string[] = [
   "cat /tmp/{a,b}/x",
   `ls ${SYNTH_CWD}/{a,b}/x > ${SYNTH_CWD}/{c,d}/y`,
   `ls ${SYNTH_CWD}/{a,b}/{c,d}`,
+  `ls ${SYNTH_CWD}/{a,{b,c}}`,
+  `ls ${SYNTH_CWD}/{a,{b,{c,{d,e}}}}`,
+  `ls ${SYNTH_CWD}/{a,}`,
+  `ls ${SYNTH_CWD}/${MANY_NAMES}`,
+  `ls ${SYNTH_CWD}/{1..200}`,
+  `ls ${SYNTH_CWD}/AB8673GP10{1,3,4,5,6,7,8}*.pdf`,
+  `cat "${SYNTH_CWD}/{dir,sub}/x"`,
+  `ls $FOO/{a,b}`,
+  `ls "${SYNTH_CWD}/deep nested"`,
+  `cat "${SYNTH_CWD}/Ndr'T7/x"`,
   `tee ${SYNTH_CWD}/{a,b}/log`,
   `rm -rf ${SYNTH_CWD}/{a,b}`,
   "ls $FOO/*",
@@ -87,9 +108,28 @@ const SYNTH: string[] = [
   `ln -s ${SYNTH_CWD}/deep ${SYNTH_CWD}/other/l`,
 ];
 
+/**
+ * The same tree, seen from a cwd that does NOT contain the words being written.
+ * A write under the cwd is cwd-granted, so with one cwd for every probe the
+ * write side of S3/S5 never surfaces a fact — which is what the 3.45.0 corpus
+ * audit called invisible. These rows run in `deep/nested` and touch the tree
+ * beside it, and /var/tmp is in neither bar (S7), so the write dirs they offer
+ * are the model's real answer.
+ */
+const SYNTH_OTHER_CWD = path.join(SYNTH_CWD, "deep", "nested");
+const SYNTH_ELSEWHERE: string[] = [
+  `tee ${SYNTH_CWD}/{a,b}/log`,
+  `rm -rf ${SYNTH_CWD}/{a,b}`,
+  `rm -rf ${SYNTH_CWD}/${MANY_NAMES}`,
+  `echo hi > ${SYNTH_CWD}/{c,d}/y`,
+  `cp ${SYNTH_CWD}/{a,b}/x ${SYNTH_CWD}/deep/z`,
+  `sed -i 's/a/b/' ${SYNTH_CWD}/other/f.txt`,
+];
+
 function ensureProbeTree(): void {
   fs.mkdirSync(path.join(SYNTH_CWD, "deep", "nested"), { recursive: true });
   fs.mkdirSync(path.join(SYNTH_CWD, "other"), { recursive: true });
+  fs.mkdirSync(path.join(SYNTH_CWD, "Ndr'T7"), { recursive: true });
   const leaf = path.join(SYNTH_CWD, "deep", "a");
   if (!fs.existsSync(leaf)) fs.writeFileSync(leaf, "a\n");
   const link = path.join(SYNTH_CWD, "link");
@@ -187,7 +227,11 @@ async function signature(cmd: string, cwd: string): Promise<string> {
 
 describe("corpus replay — the floor answers every recorded command", () => {
   ensureProbeTree();
-  const rows = [...ledgerRows(), ...SYNTH.map((cmd) => ({ cmd, cwd: SYNTH_CWD }))];
+  const rows = [
+    ...ledgerRows(),
+    ...SYNTH.map((cmd) => ({ cmd, cwd: SYNTH_CWD })),
+    ...SYNTH_ELSEWHERE.map((cmd) => ({ cmd, cwd: SYNTH_OTHER_CWD })),
+  ];
 
   it("no ledger or probe command makes the path model throw", async () => {
     // A ledger whose command field the reader does not name reads as zero rows,
@@ -209,7 +253,7 @@ describe("corpus replay — the floor answers every recorded command", () => {
       // replayed, so a corpus that changed between passes shows up as this line
       // instead of looking like a moved stop.
       out.unshift(
-        `# corpus=${corpusFiles.join(",") || "none"} probes=${SYNTH.length} commands=${rows.length}`,
+        `# corpus=${corpusFiles.join(",") || "none"} probes=${SYNTH.length + SYNTH_ELSEWHERE.length} commands=${rows.length}`,
       );
       fs.writeFileSync(OUT, out.join("\n") + "\n");
     }
