@@ -939,12 +939,99 @@ the split the replay forced — where a file SITS is still its parent, because t
 file prompt has a designed case for a file directly under `/`; only what an
 approval REMEMBERS refuses the root. Deleted: `isChildOf`, `isInsideCwd`,
 `isSentinel`, two re-export shims, and the inline marker-filter chains. The proof
-is now a standing test, `test/floor-replay.test.ts` (frozen ledger rows + 37
+is now a standing test, `test/floor-replay.test.ts` (frozen ledger rows + 34
 probes for the moved seams): it asserts no recorded command makes the path model
 throw, and it writes the signature file the before/after diff reads — the
 harness that used to be rebuilt per round from scratch. It moved one line over
 the recorded corpus (4400 tests, suite and structural ones green). Not done by
 step 1: the record itself, group opening under L2's caps, L5, L6.
+
+### Decided 2026-10-29 in the step-2 grill (unbuilt)
+
+Grill of L1–L3 before building. Where a decision settles an L-point, it is named.
+
+- **S1 — the record replaces `paths: string[]`.** `CommandAnalysis` carries
+  `words: PathWord[]` and the string lists the gate, the prompt and the ledgers
+  read (`paths`, `prompt.outsidePaths/outsideDirs/outsideWritePaths/outsideWriteDirs`)
+  become VIEWS derived from the records. A parallel-metadata design was rejected:
+  it would leave the 13 `paths.push` sites in `analysis/command-analysis.ts`
+  (plus `resolvePathsToDirs` and `opaqueStaticPrefixDir`) as competing producers,
+  which is the drift L1 exists to remove. No shims: `resolvePathsToDirs` and
+  `opaqueStaticPrefixDir` are deleted in this step, their answers coming from the
+  record's anchor and kind.
+- **S2 — one record per WORD, places inside it (L1).** A record carries the word
+  as typed, its kind (exact / wildcard / group / dynamic ref / under an unknown
+  base), its read-or-write role, its anchor folder, and `locations: string[]`
+  plus `complete: boolean`. Role, kind, anchor and the confirmation key belong to
+  the word; copying them per expansion re-creates the disagreement class. Code
+  that needs one place at a time loops `locations`; code that prints one line per
+  place flattens.
+- **S3 — a group opens even under a glob.** `AB8673GP10{1,3,4,5,6,7,8}*.pdf`
+  (Mac ledger, 2026-10-29) becomes 7 wildcard words, each still ending in `*`,
+  so each names a real folder up to its last part and an approval can remember
+  that folder. Refusing the combination (today's behavior: the word names no
+  location at all) was rejected as losing information the text already carries.
+- **S4 — the prompt shows the WORD; Always offers the FOLDERS.** A stop names the
+  word as typed (it is what the operator recognizes and what a confirmation keys
+  on); the grant options carry the deduped real folders of the OUTSIDE places —
+  `web/{tokens,components,app}.css` offers one folder, not three. Long groups get
+  a `+N more` marker, the row-economy style §7 already uses. Decided consequence,
+  not a decision: a word stops if ANY place is outside the bar, and the stop names
+  only the outside places.
+- **S5 — an unopenable word mints no fake path.** Past L2's caps (16 places, 3
+  levels of nesting) or for a range like `{1..200}`, the record has NO places:
+  kind + anchor (`staticPrefixOf`, so `~/{Applications,apps,bin}` anchors at
+  `$HOME`) + the text for display. The brace-cut string
+  (`$HOME/{Applications,apps,bin,.local`) stops being minted as a path anywhere,
+  which retires the `BRACE_META_RE` dir filter and the dead-grant rule that
+  needed it — and starts L6's display-only demotion early rather than waiting for
+  step 3.
+- **S6 — two commits, two replay passes, one release.** Pass 1 (records only,
+  groups not yet opened): the before/after signature diff must be EMPTY — that is
+  the proof nothing was lost. Pass 2 (S3/S5 group opening): the diff is expected
+  to move brace-shaped words only. One mixed diff would let a lost path hide
+  inside the intended moves.
+- **S7 — probe fixtures move to `/var/tmp/floor-replay-probes`.** The current tree
+  sits in `/tmp`, and `/tmp` is in BOTH bars (`config/path-rules.ts`
+  `allowedReadPaths`/`allowedWritePaths`), so no probe there can ever show a
+  write-bar move — the reason the 3.45.0 corpus audit called the write direction
+  invisible. `/var/tmp` is in neither bar. Some fixtures copy the ledger's own
+  spellings (a folder with spaces, an apostrophe like `Ndr'T7`, the brace×glob of
+  S3) so quoting is tested, not only braces.
+- **S8 — `$()` value evaluation is NOT step 2.** Step 2 moves only what the text
+  already says. Binding a `$(ls …)`/`$(basename …)` value means evaluating
+  something and proving it (§4's fabrication guards apply), and it plugs into the
+  record's kind field — which step 2 creates. It is the next step, with its own
+  probes from the real shapes: `F=$(ls "$D"/DL/AB8673DL376*.pdf)` then `"$F"`,
+  `b=$(basename "$f")`, `for i in $(seq 1 21)`.
+
+**Ledger defects found while auditing the corpus for step 2 (2026-10-29, 3.46.0,**
+**merged Linux + macOS ledgers).** Fixed before step 2, because step 2's proof
+reads a merged corpus:
+
+- `logJudge` wrote no `cwd` while `logUnresolved` does, so `floor-replay`'s reader
+  fell back to `process.cwd()` and replayed 32 macOS judge rows against the wrong
+  base (relative words anchored to the repo dir).
+- `test/repo-hygiene.test.ts` is blind to the macOS home spelling: its pattern is
+  `(?:home/|~)<user>` and it reads the CURRENT host's username, so a `/Users/…`
+  path quoted from the macOS ledger into a fixture passed the gate silently.
+  Filed for step 3: the ledger's 1000-char cap cost 16 of 54 unique macOS rows
+  (all heredoc bodies) — row economy vs fidelity is a decision of its own (§7).
+
+**Corpus audit for step 2 (measured 2026-10-29 on 3.46.0, HEAD `e4d9f42`)** —
+`FLOOR_LOG=/tmp/corpus-merged`: `decisions 1065 (+80 cut), judge 34 (+14),
+mac-judge 19 (+13 cut), mac-unresolved 19 (+3 cut), unresolved 0 (+3), probes 34,
+commands 1171`; 938 replay as prompt, 233 auto-allow, 0 block. 632 commands give
+non-empty `outsidePaths`, 623 non-empty `outsideDirs`, 186 carry ≥2 path words
+(tilde 388, glob 273, `$VAR` 95, `..` 31). **Write-side is still thin: 7 commands
+with `outsideWriteDirs`, 8 with `needsWriteApproval`** — the write direction of
+S3/S5 stays probe-owned (hence S7). The macOS rows add the two shape families the
+Linux ledger had none of — a brace×glob loop in-list (S3) and `$()`-derived path
+values (S8) — but they are inert as replay rows on Linux: of their 38 commands, 16
+yield `outsidePaths` and 12 `outsideDirs` and **0 yield any write fact**, because
+their `cd` base (`/Volumes/…`) does not exist here, which is the §9 "a `cd` base
+that does not exist on disk yields no outside fact" gap. So the macOS shapes enter
+the proof as fixtures, not as rows.
 
 ### Known gaps opened by the egress split (filed 2026-10-19, step 2b)
 

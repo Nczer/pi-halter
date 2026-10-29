@@ -101,7 +101,7 @@ be a location the gate had never been able to see.**
   (relative, marker, not-in-real-disk-form); `rememberedDirOf` per word kind,
   including the 3.44.0 dead-grant shape and the root. `test/floor-replay.test.ts`
   (new, 1): the standing corpus replay — every command the ledgers recorded plus
-  37 probes aimed at each seam the refactor moved — asserting no recorded command
+  34 probes aimed at each seam the refactor moved — asserting no recorded command
   makes the path model throw, and writing the canonical location signature the
   before/after diff reads. Run against a baseline captured by stashing this
   change, over the frozen ledger rows (the running gate logs its own commands,
