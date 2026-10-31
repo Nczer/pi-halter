@@ -10,10 +10,16 @@ const trustedScriptDirs: string[] = [
   path.join(os.homedir(), ".pi", "agent", "skills"),
 ];
 
-/** Packages allowed in `uv run --with` for trusted scripts (supply chain defense). */
+/** Packages allowed in `uv run --with` for trusted scripts (supply chain defense).
+ *  Every name here was checked at the time it was added: `numpy` (NumFOCUS, requested by
+ *  skills/), `zxing-cpp` (the PyPI name of the upstream zxing-cpp/zxing-cpp project's own
+ *  binding — verified via its PyPI project_urls against the GitHub repo, Apache-2.0, no
+ *  runtime deps, prebuilt abi3 wheel so nothing is compiled locally). `pdfplumber` is
+ *  deliberately absent and stays the test fixture for an untrusted package. */
 const TRUSTED_PACKAGES = new Set([
   "anthropic", "defusedxml", "lxml", "markitdown", "mcp",
-  "openpyxl", "pandas", "pillow", "pymupdf", "pypdf", "reportlab", "xlrd",
+  "numpy", "openpyxl", "pandas", "pillow", "pymupdf", "pypdf", "reportlab",
+  "xlrd", "zxing-cpp",
 ]);
 
 /**
