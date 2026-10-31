@@ -238,17 +238,21 @@ function buildBashPacket(input: JudgmentBashInput): string {
   const parts: string[] = [];
 
   // ── Command (full text — heredoc bodies ARE the write content, D11) ──
-  parts.push(
-    "## Command",
-    `cwd:  ${input.cwd}`,
-    `base: ${input.cwd}`,
-  );
+  // 2026-10-31 packet audit: with no cd there is ONE base, and printing it on
+  // two lines says the same thing twice to a model that pays for every line.
+  parts.push("## Command");
   if (input.effectiveBase) {
     // D21: the judge sees the base the command actually operates under
     // (radius). Grant state is never shown — a small model latched on
     // "write: NOT granted" and denied legitimate bounded writes; scope
     // enforcement is the floor's job (read bar, D18 write bar, D19).
-    parts.push(`effective base: ${input.effectiveBase} (after cd)`);
+    parts.push(
+      `cwd:  ${input.cwd}`,
+      `base: ${input.cwd}`,
+      `effective base: ${input.effectiveBase} (after cd)`,
+    );
+  } else {
+    parts.push(`cwd/base: ${input.cwd}`);
   }
   parts.push(
     `$ ${input.command}`,
@@ -259,9 +263,13 @@ function buildBashPacket(input: JudgmentBashInput): string {
   const lines: string[] = ["## Static analysis (halter)"];
   const segs = input.segments.slice(0, SEGMENTS_MAX);
   lines.push(`segments: ${input.segments.length}${input.segments.length > segs.length ? " (showing first " + segs.length + ")" : ""}`);
-  for (const [i, seg] of segs.entries()) {
-    const s = headCut(seg.trim(), SEGMENT_MAX_CHARS);
-    lines.push(`  ${i + 1}. ${s.text}${s.cut ? " …" : ""}`);
+  // A single stage that IS the whole command repeats the `$` line above verbatim;
+  // the count still says the parse made one stage, which is the information.
+  if (!(segs.length === 1 && segs[0].trim() === input.command.trim())) {
+    for (const [i, seg] of segs.entries()) {
+      const s = headCut(seg.trim(), SEGMENT_MAX_CHARS);
+      lines.push(`  ${i + 1}. ${s.text}${s.cut ? " …" : ""}`);
+    }
   }
   const reasons = input.riskReasons.slice(0, REASONS_MAX);
   const sev = input.severity ? `${input.severity} — ` : "";
