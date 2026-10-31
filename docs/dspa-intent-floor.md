@@ -788,6 +788,13 @@ Still fail-open / invisible to the floor:
 - The download-and-execute bar cannot tell a payload from a data response: `curl
   https://api.io/x | python3 -c 'json.load(sys.stdin)'` stops absolutely. Only
   loopback locality is exempt (`isLoopbackEgress`); that boundary is deliberate.
+- A program FILE's TEXT is never read: `sed -f x.sed`, `awk -f prog.awk` (and the
+  glued `-fprog.awk`) stop on the FLAG, but neither the floor nor the judge ever
+  opens the file, so the ruling is on the flag alone. Deliberate — decided
+  2026-10-31 while adding the awk program rules: keep it stop-only like sed's,
+  rather than widen the shared operand scan for a rare form. The inline forms are
+  NOT blind (`-e`/`--source`, `s///e`, awk's program argument): their text rides
+  in the command and is pattern-checked.
 
 ### Filed 2026-10-26 from the same corpus (both decided the same day — L2 and L5 below)
 
