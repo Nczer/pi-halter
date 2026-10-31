@@ -89,6 +89,17 @@ describe("findExecutedScript", () => {
     expect(findExecutedScript(await analyze("node x.mts"), tmp)?.path)
       .toBe(path.join(tmp, "x.mts"));
   });
+
+  it("a script operand behind the value of an unknown flag is still found", async () => {
+    // 2026-10-31 probe: `node --import jiti/register job.mts` identified no
+    // script — `jiti/register` is the value of a flag halter has no arity for,
+    // so it became the first positional and the scan stopped there. Every
+    // consumer of that one scan (packet payload, D19 escalation, trust) saw null.
+    fs.writeFileSync(path.join(tmp, "job.mts"), "console.log('behind a flag value')\n");
+    const s = findExecutedScript(await analyze("node --import jiti/register job.mts"), tmp);
+    expect(s?.path).toBe(path.join(tmp, "job.mts"));
+    expect(s?.content).toContain("behind a flag value");
+  });
 });
 
 // 2026-10-14 judge.jsonl + unresolved.jsonl: every WRAPPED run identified no

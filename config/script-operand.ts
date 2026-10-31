@@ -195,7 +195,17 @@ function scanOperands(
       script = { token: t, index: j };
       break;
     }
-    break; // a non-script operand ends the scan (`python3 -m x`, `cat data`)
+    // A non-script operand ends the scan (`cat data`, `python3 -m x`). Not so
+    // for a RUNNER, or for a path-like direct exec: there the token is usually
+    // the VALUE of an option whose arity the tables do not know
+    // (`node --import jiti/register job.mts`, `ruby -I lib job.rb`,
+    // `…/.bin/vite-node --flag x /tmp/x.mts`), and the file the run loads sits
+    // later — breaking here left the packet with no payload and the judge
+    // ruling on a bare `node …` (2026-10-31 probe: an .mts operand after
+    // `--import jiti/register` was never identified). `first` (the trust
+    // operand) stays the first positional either way.
+    if (isRunner(verb) || launcher) continue;
+    break;
   }
   if (!first && !script) return null;
   return { first, script, wrappers };
