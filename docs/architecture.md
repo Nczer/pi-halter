@@ -275,7 +275,9 @@ operand ROLES — `WRITE_ALL` (`rm`, `mkdir`, `touch`, `chmod`, gzip/xz: the ver
 mutates what it names), `WRITE_LAST` (`mv cp install split ln`: the last operand
 is the destination — `ln` deliberately LAST, not ALL, because its first operand
 is a name the link points at and is never written), `WRITE_FIRST` (`zip patch`),
-`WRITE_IN_PLACE` (`sed perl`, decided by the in-place flag) — plus per-command
+`IN_PLACE_TEST` (`sed`, `perl`, `awk`: a per-command predicate over the flags —
+awk needs the two-token `-i inplace`, since single-token `-i` is gawk's
+`--include`) — plus per-command
 flag tables for the destinations that hide in flags (`tar -f`/`--file`,
 `cp -t`, `sort -o`, `dd of=`, `find -fprint`), the flag-that-switches-the-verb
 form (`find -delete` ⇒ every walked directory), and `tarWrites()` for tar's

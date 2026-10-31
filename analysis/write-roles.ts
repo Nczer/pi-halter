@@ -48,9 +48,18 @@ const WRITE_FIRST = new Set(["zip", "patch"]);
  *  `sed 's/a/b/' f` reads f, `sed -i 's/a/b/' f` rewrites it. The same
  *  per-token test analysis/cwd-tracking uses for the base flag, so the two
  *  layers cannot disagree about whether a `sed` invocation edits. */
-const WRITE_IN_PLACE = new Set(["sed", "perl"]);
 const SED_IN_PLACE_RE = /^-[a-bd-gj-zA-Z]*i[^\s/]*$/;
 const PERL_IN_PLACE_RE = /^-[a-bd-zA-Z]*i[^\s/]*$/;
+
+/** Command → "does this invocation rewrite the files it names?" gawk names its
+ *  in-place extension in a SEPARATE token (`-i inplace`) or spells it long
+ *  (`--in-place`); bare `-i` is gawk's `--include` (a library FILE), so a
+ *  one-token test would read `awk -i lib.awk f` as an edit. */
+const IN_PLACE_TEST: Record<string, (args: string[]) => boolean> = {
+  sed: (args) => args.some((a) => SED_IN_PLACE_RE.test(a) || a.startsWith("--in-place")),
+  perl: (args) => args.some((a) => PERL_IN_PLACE_RE.test(a)),
+  awk: (args) => args.some((a, i) => (a === "-i" && args[i + 1] === "inplace") || /^--in-place\b/.test(a)),
+};
 
 /** Flags whose VALUE is a write target, per command — a flag is never
  *  write-flagged across the board (`sort -o FILE` writes, `grep -o` prints).
@@ -114,10 +123,7 @@ export function writeOperandIndices(
   const targetDirGiven = TARGET_DIR_FLAGS.some((f) => args.includes(f) || args.some((a) => a.startsWith(`${f}=`)));
   const last = WRITE_LAST.has(cmd) && !targetDirGiven;
   const first = WRITE_FIRST.has(cmd);
-  const inPlace = WRITE_IN_PLACE.has(cmd)
-    && args.some((a) => (cmd === "sed"
-      ? SED_IN_PLACE_RE.test(a) || a.startsWith("--in-place")
-      : PERL_IN_PLACE_RE.test(a)));
+  const inPlace = IN_PLACE_TEST[cmd]?.(args) ?? false;
   const tarArchive = cmd === "tar" ? tarWrites(args) : false;
   if (!all && !last && !first && !inPlace && !flags && !tarArchive) return out;
 
@@ -138,6 +144,9 @@ export function writeOperandIndices(
       continue;
     }
     if (skipArgs.has(i) || /^\d+$/.test(a)) continue;
+    // gawk's program FILE (`-f prog.awk`) is an input the parser keeps
+    // path-checked; `-i inplace` rewrites the DATA operands, never the program.
+    if (cmd === "awk" && i > 0 && /^(?:-f|--file)$/.test(args[i - 1])) continue;
     positionals.push(i);
   }
   if (all || inPlace) positionals.forEach((i) => out.add(i));

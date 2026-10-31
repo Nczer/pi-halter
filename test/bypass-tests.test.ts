@@ -424,7 +424,7 @@ describe("MEDIUM: perl combined flag evasion", () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// 🟡 MEDIUM: awk -i — in-place extension missed
+// 🟡 MEDIUM: awk -i — gawk's in-place extension
 // ──────────────────────────────────────────────────────────────────────
 describe("MEDIUM: awk in-place", () => {
   it("awk -i inplace → prompts (gawk in-place extension)", async () => {
@@ -433,10 +433,17 @@ describe("MEDIUM: awk in-place", () => {
     expect(d.kind).not.toBe("auto-allow");
   });
 
-  it("awk '{print}' → prompts (awk not in allowlist, prompts by design)", async () => {
+  it("awk -i inplace '{print}' file.txt → no signature grant offered", async () => {
+    const store = createStore();
+    const d = await decide({ type: "bash", command: "awk -i inplace '{print}' file.txt", cwd }, store);
+    expect(d.kind).toBe("prompt");
+    if (d.kind === "prompt" && d.promptData.type === "bash") expect(d.promptData.signatures).toEqual([]);
+  });
+
+  it("awk '{print}' file.txt → auto-allow (awk is allowlisted; the program guard covers the rest)", async () => {
     const store = createStore();
     const d = await decide({ type: "bash", command: "awk '{print}' file.txt", cwd }, store);
-    expect(d.kind).toBe("prompt");
+    expect(d.kind).toBe("auto-allow");
   });
 });
 

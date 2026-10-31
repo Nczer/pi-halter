@@ -35,6 +35,7 @@ const ALLOW_TABLE: readonly AllowEntry[] = [
   ["join"], ["comm"], ["paste"], ["column"], ["seq"],
   // Text transform (safe stdout — guarded by dangerous flag checks)
   ["sed", "-i edits files in place"],
+  ["awk", "-i inplace rewrites files; the program body can run commands (system, CMD | getline), read files (getline < F) and write them (print > F); -f takes the program from a file — ToolEvaluator guards every form"],
   ["perl", "program body runs arbitrary code (-i in-place edits) — ToolEvaluator flags every invocation"],
   // Hashing / binary inspection
   ["md5sum"], ["sha1sum"], ["sha256sum"], ["sha512sum"], ["cksum"],
@@ -146,6 +147,21 @@ export const dangerousSedFlags = /(?<![\w./-])-[a-bd-gj-zA-Z]*i[^\s/]*(?:\s|$)|(
 
 /** Flags that make `perl` dangerous (in-place editing via -i, optional suffix). */
 export const dangerousPerlFlags = /(?<![\w./-])-[a-bd-zA-Z]*i[^\s/]*(?:\s|$)/;
+
+/** The awk family: one program-vs-file grammar under three program names. Only
+ *  plain `awk` is on the allow table; the guard covers every spelling so a
+ *  grant for one cannot cover a form the others would also accept. */
+export const awkVariants = new Set(["awk", "gawk", "mawk"]);
+
+/**
+ * Flags that make `awk` dangerous (gawk's in-place extension). The extension is
+ * named in a SEPARATE token (`-i inplace`) or spelled long (`--in-place`,
+ * `--in-place=inplace`); bare `-i` is gawk's `--include`, which loads a library
+ * FILE and is caught by the program-file rule instead. The lookbehind keeps a
+ * `-i` inside a path or a program string out of the match (see dangerousSedFlags
+ * for the same trap).
+ */
+export const dangerousAwkFlags = /(?<![\w./-])-i\s+inplace\b|(?<![\w./-])--in-place\b/;
 
 /** Command + subcommand pairs that are always safe (read-only, no side effects). */
 const allowedBashSubcommands = new Set([
@@ -816,6 +832,10 @@ const WRITE_HANDLERS: Array<{ match: (cmd: string) => boolean; evaluate: (cmd: s
   { match: (c) => ALWAYS_WRITE.has(c), evaluate: () => true },
   { match: (c) => ALWAYS_WRITE_ARCHIVE_PKG.has(c), evaluate: () => true },
   { match: (c) => c === "sed", evaluate: (_, ctx) => dangerousSedFlags.test(ctx) },
+  // awk rewrites its operands only by flag; its PROGRAM-side writes (`print > F`,
+  // `getline < F`) name no operand at all and are the risk layer's job
+  // (analysis/evaluators/tool-evaluator).
+  { match: (c) => awkVariants.has(c), evaluate: (_, ctx) => dangerousAwkFlags.test(ctx) },
   { match: (c) => c === "tee", evaluate: (_, ctx) => TEE_WRITE_RE.test(ctx) },
   { match: (c) => c === "sort", evaluate: (_, ctx) => SORT_OUTPUT_RE.test(ctx) },
   // An interpreter is write-capable on the evidence of its code, not on the

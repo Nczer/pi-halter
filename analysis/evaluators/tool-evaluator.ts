@@ -7,9 +7,9 @@ import {
   isRgPreWrite,
   stripQuotedStrings,
 } from "../segment-helpers";
-import { dangerousFindFlags } from "../../config/bash-patterns";
+import { dangerousFindFlags, dangerousAwkFlags, awkVariants } from "../../config/bash-patterns";
 import { tokenizeSegment } from "../tokenizer";
-import { sedScriptArgIndices } from "../bash-parser";
+import { sedScriptArgIndices, awkProgramArgIndices } from "../bash-parser";
 
 /**
  * sed -f / --file: the script comes from a FILE, which can contain `s///e`
@@ -18,7 +18,7 @@ import { sedScriptArgIndices } from "../bash-parser";
  * `-f` may sit in a flag cluster (last letter, value follows); long forms are
  * --file / --file=script.
  */
-const SED_SCRIPT_FILE_FLAG_RE = /^(?:-[a-zA-Z]*f|--file(?:=\S+)?)$/;
+const SED_SCRIPT_FILE_FLAG_RE = /^(?:-[a-zA-Z]*f\S*|--file(?:=\S+)?)$/;
 
 /**
  * The sed `e` flag on an s command executes the replacement text as a shell
@@ -53,6 +53,45 @@ function hasSedExecCommand(segment: string): boolean {
   return false;
 }
 
+/**
+ * awk's program FILE flags: the program comes from a file, whose text can
+ * `system()`, `getline < F` and `print > F` — none of it visible on the command
+ * line. The sibling of SED_SCRIPT_FILE_FLAG_RE; the program FILE itself stays
+ * path-checked (the parser keeps it an operand), but its CONTENT is unread.
+ */
+const AWK_PROGRAM_FILE_FLAG_RE = /^(?:-f\S*|--file(?:=\S+)?)$/;
+
+/** `system(CMD)` runs a shell command; `CMD | getline` runs CMD and reads its
+ *  output. Both are exec whatever the rest of the program does. */
+const AWK_EXEC_RE = /\bsystem\s*\(|\|\s*getline\b/;
+
+/**
+ * A program that opens files by name: `getline [var] [()] < F` reads a file the
+ * operand scan never sees (a credential path included), and `print`/`printf …
+ * > F` / `>> F` writes one. awk's own grammar decides what an arrow after an
+ * output statement means: UNPARENTHESISED it is redirection (`print x > 5` writes
+ * a file named 5), and a comparison is written with parentheses — so the bare
+ * filter `$3 > 0.5` and `print ($1 > "a")` stay read-only, and `>=` is one token
+ * so `print x >= 5` is a comparison too. The target class excludes an arrow that
+ * ends the statement (`print >` alone cannot write anything).
+ */
+const AWK_IO_RE = /\bgetline\b[^|;()]*\s<[^=]|(?:print|printf)\b[^;()]*?(?:>>(?!=)|>(?!=))\s*[^\s;)]/;
+
+/** The program TEXTS an awk invocation hands the interpreter, by the parser's own
+ *  grammar (`-e`/`--source` values, `--source=CODE`, the bare program). `-f` /
+ *  `--file` indices name a program FILE, not text — the file rule covers them. */
+function awkProgramTexts(segment: string): string[] {
+  const args = tokenizeSegment(segment).slice(1);
+  const out: string[] = [];
+  for (const idx of awkProgramArgIndices(args)) {
+    let p = args[idx] ?? "";
+    if (p.startsWith("--source=")) p = p.slice("--source=".length);
+    else if (p.startsWith("-")) continue;
+    if (p) out.push(p);
+  }
+  return out;
+}
+
 /** Read-only interpreter invocation: `python3 --version` / `node --help`. */
 function isVersionOnly(rest: string[]): boolean {
   return rest.length === 1 && (rest[0] === "--version" || rest[0] === "--help");
@@ -81,6 +120,11 @@ const TOOL_HANDLERS: Array<{ match: (seg: ToolSegment) => boolean; reason: strin
   { match: (s) => s.firstWord === "rg" && isRgPreWrite(s.text), reason: "rg --pre with write operation" },
   { match: (s) => s.firstWord === "sed" && tokenizeSegment(s.text).slice(1).some(t => SED_SCRIPT_FILE_FLAG_RE.test(t)), reason: "sed -f (script file can execute commands and write files)" },
   { match: (s) => s.firstWord === "sed" && hasSedExecCommand(s.text), reason: "sed s///e (executes replacement as a shell command)" },
+  // awk is on the allow table, so its exec/write forms must be visible without
+  // the table (mirrors the sed rules above — same flag-vs-program split).
+  { match: (s) => awkVariants.has(s.firstWord) && dangerousAwkFlags.test(stripQuotedStrings(s.text)), reason: "awk -i inplace (rewrites the file in place)" },
+  { match: (s) => awkVariants.has(s.firstWord) && tokenizeSegment(s.text).slice(1).some(t => AWK_PROGRAM_FILE_FLAG_RE.test(t)), reason: "awk -f (program file can run commands and write files)" },
+  { match: (s) => awkVariants.has(s.firstWord) && awkProgramTexts(s.text).some(p => AWK_EXEC_RE.test(p) || AWK_IO_RE.test(p)), reason: "awk program runs a command or opens files (system, CMD | getline, getline < F, print > F)" },
   { match: (s) => ["curl", "wget"].includes(s.firstWord) && s.ops.includes("|"), reason: "curl/wget piped (possible remote code execution)" },
   { match: (s) => s.firstWord === "kubectl" && s.rest[0] === "delete", reason: "kubectl delete (resource deletion)" },
   { match: (s) => s.firstWord === "terraform" && s.rest[0] === "destroy", reason: "terraform destroy (infrastructure teardown)" },

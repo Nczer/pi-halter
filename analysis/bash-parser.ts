@@ -1727,7 +1727,7 @@ function searchPatternArgIndices(cmdName: string, args: string[]): Set<number> {
  * file. Two-token flags (-F / --field-separator, -v / --assign, -W) consume a
  * value that is never the program.
  */
-function awkProgramArgIndices(args: string[]): Set<number> {
+export function awkProgramArgIndices(args: string[]): Set<number> {
   const idxs = new Set<number>();
   let programFixed = false;
   for (let i = 0; i < args.length; i++) {

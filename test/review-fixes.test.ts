@@ -65,6 +65,93 @@ describe("A1: find -ok/-okdir and quoted -exec command", () => {
   });
 });
 
+describe("A2b: awk program body and program file", () => {
+  it("awk 'BEGIN{system(\"id\")}' file → prompt (program runs a command)", async () => {
+    const d = await bash(`awk 'BEGIN{system("id")}' file`);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("gawk 'BEGIN{\"id\" | getline l}' file → prompt (command through getline)", async () => {
+    const d = await bash(`gawk 'BEGIN{"id" | getline l}' file`);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("mawk 'BEGIN{getline l < \"/etc/passwd\"}' → prompt (program opens a file)", async () => {
+    const d = await bash(`mawk 'BEGIN{getline l < "/etc/passwd"}'`);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("awk '{print > \"/tmp/x\"}' file → prompt (output redirect)", async () => {
+    const d = await bash(`awk '{print > "/tmp/x"}' file`);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("awk -f prog.awk file → prompt (program file is unreviewed code)", async () => {
+    const d = await bash("awk -f prog.awk file");
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("awk -fprog.awk file → prompt (glued short form)", async () => {
+    const d = await bash("awk -fprog.awk file");
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("awk --file=/tmp/p.awk file → prompt (long form)", async () => {
+    const d = await bash("awk --file=/tmp/p.awk file");
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("awk --source='BEGIN{system(\"id\")}' file → prompt (inline program form)", async () => {
+    const d = await bash(`awk --source='BEGIN{system("id")}' file`);
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("control: awk --source '{print}' f.txt → auto-allow (inline program, read-only)", async () => {
+    const d = await bash(`awk --source '{print}' f.txt`);
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("awk -i inplace '{print}' file → prompt (gawk in-place rewrite)", async () => {
+    const d = await bash("awk -i inplace '{print}' file");
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("awk --in-place '{print}' file → prompt (long form)", async () => {
+    const d = await bash("awk --in-place '{print}' file");
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("control: awk 'NR>=1&&NR<=5' README.md → auto-allow (read-only program)", async () => {
+    const d = await bash("awk 'NR>=1&&NR<=5' README.md");
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: awk -F: '$1 > 1200 && $1 < 2600' f.txt → auto-allow (> is a comparison)", async () => {
+    const d = await bash(`awk -F: '$1 > 1200 && $1 < 2600' f.txt`);
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: awk '$1 >= 5 {print}' f.txt → auto-allow", async () => {
+    const d = await bash(`awk '$1 >= 5 {print}' f.txt`);
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: awk -v l=$L 'NR>=l' data.txt → auto-allow (-v is input data)", async () => {
+    const d = await bash(`awk -v l=$L 'NR>=l' data.txt`);
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: awk 'BEGIN{print ($1 > \"a\")}' f.txt → auto-allow (parenthesised comparison)", async () => {
+    const d = await bash(`awk 'BEGIN{print ($1 > "a")}' f.txt`);
+    expect(d.kind).toBe("auto-allow");
+  });
+
+  it("control: awk -i lib.awk '{print}' f.txt → auto-allow (gawk --include, not in-place)", async () => {
+    const d = await bash("awk -i lib.awk '{print}' f.txt");
+    expect(d.kind).toBe("auto-allow");
+  });
+});
+
 describe("A2: sed script file / s///e", () => {
   it("sed -f /tmp/evil.sed file → prompt", async () => {
     const d = await bash("sed -f /tmp/evil.sed file");
@@ -73,6 +160,11 @@ describe("A2: sed script file / s///e", () => {
 
   it("sed --file=/tmp/x file → prompt (long form)", async () => {
     const d = await bash("sed --file=/tmp/x file");
+    expect(d.kind).toBe("prompt");
+  });
+
+  it("sed -fprog.sed file → prompt (glued short form)", async () => {
+    const d = await bash("sed -fprog.sed file");
     expect(d.kind).toBe("prompt");
   });
 
