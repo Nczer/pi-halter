@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.48.0 — 2026-10-31
+**A plain `awk` filter costs no approval, and an `awk` that can write or run
+something can no longer be waved through by an Always grant.**
+
+- **What the operator saw.** Reading two columns — `awk -F: '$1 > 1200' f.txt` —
+  asked for approval on every run, because `awk` was never in the allow table. And
+  the same missing entry hid the worse half: an Always grant on the bare `awk`
+  signature matched any awk, so `awk '{print > "/etc/x"}'` and
+  `awk 'BEGIN{system("rm -rf …")}'` were approvable once and free afterwards. The
+  program body, which is where all of awk's power is, was never looked at.
+- **Why it happened.** The tables treated awk as a read-only text tool. Its program
+  is code: `system()`, `"cmd" | getline`, `getline < F`, `print > F`, and gawk's
+  `-i inplace` rewrite. Only the in-place flag was modelled, and only in the
+  write-role table, so it never reached the risk layer that decides grants. sed had
+  already been through this (script file, `s///e`); awk had not.
+- **The fix, in three layers like sed.** A risk rule per form in the tool evaluator
+  (`system(`/pipe-getline/getline-from-file/output-redirect, plus `-f`, glued
+  `-fFILE`, `--file[=]`, `--in-place`, `-i inplace`, and the inline `-e`/`--source`
+  program text), which makes the segment dangerous, which blocks table auto-allow,
+  blocks a signature grant, and hides the Always option; the write-role table now
+  decides in-place per command with a predicate (`IN_PLACE_TEST`, awk included) so
+  `awk -i inplace /etc/hostname` reports the write it does; and plain `awk` joined
+  the allow table, which is only safe because the guard runs first.
+- **Two operand misses from the same probe.** `sed -fprog.sed` (glued short form)
+  was not recognised as a script-file flag, and a script operand sitting behind the
+  value of a flag halter has no arity for — `node --import jiti/register job.mts`
+  — ended the operand scan, so the judge was shown no payload at all (and the
+  escalation that reads a script's text saw none either).
+
 ## 3.47.0 — 2026-10-29
 **A brace group is now the places it names: `ls ~/{a,b}` says two folders, and
 the Always option is a folder the next run can match.**
