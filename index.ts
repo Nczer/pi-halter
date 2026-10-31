@@ -70,16 +70,12 @@ export default async function halterExtension(pi: ExtensionAPI) {
   // /dspat are session-scoped by design. Counters stay session-scoped even
   // when the mode persists — they are session-health stats.
   pi.on("session_start", async (_event, ctx) => {
-    if (readPersistedMode() === "dspa" && !isDspaActive()) {
-      applyMode(ctx, "dspa");
-      if (ctx.hasUI) {
-        try {
-          ctx.ui.notify("DSPA ON (restored from settings) — /dspa to toggle", "info");
-        } catch {
-          /* toast must never break startup */
-        }
-      }
-    }
+    // No notify: the restored mode is already visible in the footer status row
+    // (`» DSPA`, ui/widget.ts), and pi keeps ONE status line for every
+    // extension (showStatus rewrites the tail), so a startup notify here would
+    // erase the other extension's startup report — the line belongs to
+    // llama-link's model report.
+    if (readPersistedMode() === "dspa" && !isDspaActive()) applyMode(ctx, "dspa");
   });
 
   // ── Session shutdown ──

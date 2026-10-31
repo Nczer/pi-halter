@@ -164,7 +164,10 @@ describe("dspa persistence (settings-ext.json, halter.mode)", () => {
     const ctx = makeCtx();
     await startSession(ctx);
     expect(isDspaActive()).toBe(true);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("DSPA ON"), "info");
+    // No startup notify: pi keeps one status line for every extension, and the
+    // mode is already reported in the footer status row (`» DSPA` — covered in
+    // widget.test.ts, where judgeStatus is valid).
+    expect(ctx.ui.notify).not.toHaveBeenCalled();
   });
 
   it("/dspa off clears the persisted startup mode", async () => {
