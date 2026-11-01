@@ -72,9 +72,9 @@ the fall-through (`gate/fallthrough.ts`), mirroring D19's inverted shape
 a miss stop from the same verdict):
 
 1. `checkDspaGate` gains **typed** miss facts instead of only a prose reason:
-   `misses: [{ kind: "unresolved" | "outside-path" | "base-write", token,
-   role: "read" | "write" }]` on `DspaGateResult`. The prose reason stays for
-   the prompt.
+   `misses: [{ kind: "unresolved" | "outside-path" | "base-write" | "body-write",
+   token, role: "read" | "write" }]` on `DspaGateResult`. The prose reason stays for
+   the prompt. (`body-write` is 3.49.0 — see the 3.49.0 build note.)
 2. `tryDspaAutoAllow`: for a stop whose stops are ALL miss-class, run stage 2
    (its `paths`/`writes` are the only report; stage 1 never reports paths —
    `judge/judge.ts:191-197`) and evaluate the guards (§4). All guards pass +
@@ -757,6 +757,51 @@ untouched — no verdict writes to the tiers. What moves the tier is a STOP the
 floor or the cascade already raised, and the bar still moves only when the
 operator clicks; the grant stays session-scoped and never learned.
 
+### 3.49.0 build note (2026-11-01): the write bar stopped judging payload writes
+
+Ledger audit, window 2026-10-24 → 2026-11-01T07:00Z (757 decision rows, 35 judge
+rows). Three defects, each decided in the grill before building.
+
+**F#1 — §4.1's write-role test swallowed the judged half of every payload write.**
+It keyed on the miss's `role`, and the parse's `writePaths` cannot tell an OPERAND
+write from one it read out of a code body's TEXT — so `python3 -c "open('/x/db','w')"`
+met D-g's absolute rule and no judge was ever asked. Measured: 4 of the 7
+`write outside base (…)` / `touches paths outside base (…); writes …` stops in the
+window came from a `-c`/heredoc payload (an image crop under `/mnt/Ndr/Download`, a
+GGUF header in `~/Strata-data/models`, a `POST /models/load` body, an edit inside
+`~/.pi/agent/extensions/`); none reached a judge.
+
+Built: `parseCommand` reports the ORIGIN as well as the location —
+`bodyWritePaths` = the writes ONLY a body names (a location the operand structure
+also named stays an operand write, the stronger evidence) — carried onto
+`CommandAnalysis`, and the gate turns it into the new miss kind `body-write`,
+exempt from §4.1 like `base-write`. Two things stay absolute, both deliberate:
+a write the command's own shape minted (`> f`, `tee f`, `sed -i f`) — the sentinel
+that drops the whole miss set is now `operandWriteOutside`, not `writeOpDirs.length`;
+and a write at a dir the operator made quiet for READING only (`~/.pi`, a
+`halter.readDirs` entry) — `config/path-rules.ts` already states that a read grant
+never makes writes judgeable, and the grill kept pi's own settings and extensions
+out of what intent may clear. Enforcement did not move: it is still D19's
+`writeOutsideStop(pd, store, v2.writes)` on both fall-through paths. e2e
+(`test/intent-floor.test.ts`): a judge that names the write is stopped by its own
+report (`guard: reported write outside the write bar`), and the `unresolved.jsonl`
+row carries `missKind: "body-write"`.
+
+**F#3/#4 — the ledger blamed the judge for locations the command itself named.**
+`judgePathReport` puts a path in `contextMisses` when the floor's `floorPaths` did
+not carry it, i.e. it reads "the judge mentioned a place the parse never saw".
+Measured: 26 `contextMiss` entries in the window, 7 of them carrying their text
+verbatim in the command — 4 `/mnt/Ndr/Download/Untitled.jpg` rows (the payload
+assigned the path to a variable before opening it, so the parse never minted it)
+and 2 rows that were simply the base a `cd` had set. Built: `JudgePathFloor`
+receives the command text (`commandText`, fed from `pd.command`) and a candidate
+path that appears in it verbatim goes to `floorMisses` — only a pure
+session-context echo stays `contextMisses`; and `analysis.effectiveCwds` join the
+floor set (ledger-only, deduped) so a `cd` base is no longer reported as a blind
+spot, an unresolvable `cd` still is. Only the verbatim test shipped: the "relative
+form under a known dir" branch the audit proposed is provably dead — anything under
+a dir already in the floor set is covered by that set.
+
 ## 9. Out of scope here
 
 The unbuilt grill items G8–G11/G13 from the ledger round (loop in-list taint
@@ -1164,3 +1209,26 @@ Not defects, by design: unknown-command args are not path-extracted
 floorMisses are not defects); `$(dirname $P)/..` is correct fail-closed; an
 absolute static part stays opaque (the pinned-embedded branch was dropped as
 unevidenced scope creep — fail-closed).
+
+### Filed 2026-11-01 from the three-ledger audit (found, not built)
+
+- **A body's RELATIVE paths are never minted at all.** The code-body extractor only
+  threads absolute-looking strings (`~/x` counts), so `python3 -c "open('f','w')"`
+  names NO location: with a `cd D &&` in front the base-write proxy covers the stop,
+  without one the floor sees nothing. Probed 2026-11-01:
+  `open("out.json","w")`, `open("sub/out.json","w")` → `paths: []`;
+  `open("/x/out.json","w")`, `open("~/x/out.json","w")` → the location. Pre-existing
+  (unchanged by 3.49.0); it caps how far the `body-write` miss can reach.
+- **`git push --force` also matches `--force-with-lease`** — `config/dangerous-patterns.ts:52`
+  (`/\bgit\s+push\s+.*--force\b/i`), so the safer spelling is labelled
+  `"git push --force"` and sits on the absolute bar. Not a false positive in the
+  dangerous sense (it is still a force push), but the label mis-states the risk the
+  operator is asked about. Ledger: 1 row.
+- **An unresolved token can never converge** — `unresolved.jsonl` shows the same token
+  (`~/Strata-data/models`) with `n=10` and no path to an allow: a write-shaped stop
+  whose dir was never granted, prompting identically every run. The convergence is an
+  operator click (`halter.readDirs` for a read-quiet dir, or `Always (paths)` for the
+  write tier), not code; recorded so the row is not mined as a parser gap.
+- **Manual-mode auto-allow rows are thin** — 399 of 404 `kind: auto-allow` rows carry
+  `reason: null` and no `mode`, so the ledger cannot answer "which rule allowed this".
+  A ledger-shape gap (`gate/decision-log.ts`), not a gate defect.

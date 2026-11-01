@@ -497,9 +497,11 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
    **bar** is absolute — no verdict clears it: credential paths, non-loopback
    egress, full-filesystem scans, untrusted fetchable run forms, `[Absolute]`
    dangerous-pattern entries, delete reach past the temp zone, and any WRITE
-   at a location outside the write bar. A **miss** is a location the parse
+   at a location outside the write bar (3.49.0: a write the command's own SHAPE puts
+   there — a write only a code body's TEXT names is a `body-write` miss instead, and
+   D19's bar on the judge's report still holds). A **miss** is a location the parse
    cannot name: `checkDspaGate` returns typed `misses[]` (`kind: unresolved |
-   outside-path | base-write`, the `token`, its statically knowable `prefix`
+   outside-path | base-write | body-write`, the `token`, its statically knowable `prefix`
    — 3.41.0: `""` when nothing about the location is static — its operand
    `role`, `confirmedPrior` for the ledger), and
    `tryIntentOverMiss` in `gate/fallthrough.ts` runs stage 2 over them. If

@@ -1,5 +1,51 @@
 # Changelog
 
+## 3.49.0 — 2026-11-01
+**A script payload's own write now reaches the judge, and the ledger stops blaming
+the judge for what the command itself said.**
+
+- **Payload writes landed in the floor's wrong drawer.** A `-c`/heredoc payload that
+  opens a file (`python3 -c "open('/data/x','w')"`) was classified as a write OPERAND,
+  and D-g's rule — a write outside the write bar is never intent-eligible — meant no
+  judge was ever asked about it. Ledger (2026-10-24 → 11-01T07:00Z, 757 decision rows,
+  35 judge rows): 4 of the 7 write/out-of-bar floor stops were a payload's own write
+  (an image crop under `/mnt/Ndr/Download`, a GGUF header in `~/Strata-data/models`, a
+  `POST /models/load` body, an edit under `~/.pi/agent/extensions/`); none reached a
+  judge. `parseCommand` now reports WHICH EVIDENCE made a location a write
+  (`bodyWritePaths` — a write only a body's text names), and the gate mints a new miss
+  kind, `body-write`, exempt from §4.1 like the base-write proxy. What did not move: a
+  write the command's own shape minted (`> f`, `tee f`, `sed -i f`) still drops the whole
+  miss set; a write into a dir that is quiet for READING only (`~/.pi`, a
+  `halter.readDirs` entry) stays absolute, because a read grant never makes writes
+  judgeable; and D19 still stops the command on what the judge itself reports writing
+  (e2e: `guard: reported write outside the write bar`, row carries `missKind:
+  "body-write"`).
+- **A run form's option scan stops at its command word.** `npx tsc --noEmit -p
+  tsconfig.json` was named `npx tsconfig.json` — tsc's own `-p` read as npx's package
+  flag — and a package that does not exist cannot be granted, so the stop recurred: same
+  command, next day (ledger rows 663 → 823), with one judge-waved run in between, which
+  is what an ungrantable name forces. npm's docs give the rule: via the `npx` binary all
+  options precede the positional; `npm exec` accepts them after. The scan now cuts at the
+  first positional for every family except `npm exec`/`npm x`, where a later `--package`
+  names a SECOND package — `npm exec foo@latest bar --package=@npmcli/foo` names both
+  instead of trusting one. 7 untrusted-package stops in the window, 1 of them this
+  misparse.
+- **The ledger stopped blaming the judge for locations the command named.**
+  `contextMisses` means "the judge mentioned a place the parse never saw": 26 such
+  entries in the window, 7 of them verbatim in the command text — 4 rows of
+  `/mnt/Ndr/Download/Untitled.jpg` (the payload assigned the path to a variable before
+  opening it, so the parse never minted it) and 2 rows that were simply the base a `cd`
+  had set. A candidate path that appears in the command text now lands in `floorMisses`,
+  and the command's own bases (`analysis.effectiveCwds`) join `floorPaths` — a `cd` base
+  is no longer a blind spot, an unresolvable `cd` still is. Ledger-only: no bar moved.
+- What this does NOT fix, filed in `docs/dspa-intent-floor.md`: a body's RELATIVE paths
+  are still never minted (`open("f","w")` names no location), so
+  `cd D && python3 -c "open('f','w')"` is covered only by the base-write proxy;
+  `git push --force` also matches `--force-with-lease` and labels it `git push --force`;
+  one `unresolved.jsonl` token needs an operator click (`halter.readDirs`), not code; and
+  399 of 404 manual auto-allow rows carry `reason: null`, so the ledger cannot say which
+  rule allowed them.
+
 ## 3.48.1 — 2026-10-31
 **The packet stopped saying the same thing twice: 280 characters where it said 356.**
 
