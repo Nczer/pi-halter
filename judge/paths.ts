@@ -161,14 +161,17 @@ export interface JudgePathReport {
   /** The model's touched paths, sanitized, uncapped (omitted when empty). */
   paths?: string[];
   /** Judge-reported paths not covered by the floor's knowledge — the
-   *  floor's blind spots. Uncapped (3.44.1): this list is the row's evidence
-   *  (omitted when empty). */
+   *  floor's blind spots, including locations whose text the command carried
+   *  and the parse did not mint (3.49.0). Uncapped (3.44.1): this list is the
+   *  row's evidence (omitted when empty). */
   floorMisses?: string[];
   /** Misses that are only a STAGE-2 CONTEXT ECHO: the path is named in the
    *  Session context section (an earlier tool call's target, a path the user
-   *  mentioned, a granted dir), so the judge had it in view without this
-   *  operation reaching it (omitted when empty). Kept, never suppressed —
-   *  the bleed rate is what makes the prompt fix measurable. */
+   *  mentioned, a granted dir) AND the command text never carried it, so the
+   *  judge had it in view without this operation reaching it (omitted when
+   *  empty). Kept, never suppressed — the bleed rate is what makes the prompt
+   *  fix measurable. A location the command's own text names belongs to
+   *  `floorMisses` (3.49.0). */
   contextMisses?: string[];
   /** 3.43.0: the judge reports a WRITE at a location the floor DID derive,
    *  and the floor's write-role set does not cover it — the floor got the
@@ -197,6 +200,11 @@ export interface JudgePathFloor {
    *  `sed -i f`, `cp a d`, `mkdir d`, `> f`). Absent = no role comparison
    *  (the write set is what makes a role disagreement observable at all). */
   floorWritePaths?: string[];
+  /** 3.49.0: the command as the operator typed it, code bodies included
+   *  (`pd.command`). What makes the miss SPLIT honest: a location the command
+   *  text itself names was available to the floor, so the row blames the
+   *  floor, not the judge's Session context. */
+  commandText?: string;
 }
 
 /**
@@ -236,10 +244,23 @@ export function judgePathReport(
   // so the row stays a floorMiss even when the path is named in the Session
   // context section. Re-classifying it as context bleed hid a parser gap
   // (observed 2026-10-18T03:02:28, the sweep.sh row).
+  //
+  // The other half of the same rule (3.49.0): a location whose TEXT the command
+  // itself carries is not a context echo either. The Session context section
+  // only explains a path the operation never mentioned; when the command's own
+  // text — a code body's literal path, an operand the parse ignores — carries
+  // the location, the row's owner is the floor, which had it in view and did not
+  // mint it. Measured on the 26 contextMiss entries of the 2026-10-31 window: 7
+  // carried their text in the command (a payload's `'/mnt/Ndr/Download/…jpg'`
+  // string, the base a `cd` set), and each blamed the judge for a floor gap.
+  const namedInCommand = (p: string): boolean =>
+    floor.commandText !== undefined && floor.commandText.includes(p);
   const contextMisses =
     floorConcrete.length === 0
       ? []
-      : misses.filter((p) => inContext.some((c) => under(p, c) || under(c, p)));
+      : misses.filter(
+          (p) => !namedInCommand(p) && inContext.some((c) => under(p, c) || under(c, p)),
+        );
   const floorMisses = misses.filter((p) => !contextMisses.includes(p));
   const r: JudgePathReport = { paths };
   if (floorMisses.length > 0) r.floorMisses = floorMisses;
@@ -332,17 +353,24 @@ export function judgePathLogFields(
   // a blind spot (2026-09-30 judge.jsonl floorMiss on a trusted skill
   // script). Ledger-only — see executedScriptPaths for why this stays out
   // of analysis.paths.
-  const floorPaths = [
+  const floorPaths = [...new Set([
     ...analysis.paths,
     ...(analysis.prompt.outsidePaths ?? []),
     ...executedScriptPaths(analysis, pd.cwd),
-  ];
+    // The bases the command itself set. A `cd` is knowledge: for `cd <dir> &&
+    // git push` the judge reporting that directory is not a blind spot
+    // (2026-10-31 ledger: the base a `cd` had set was logged as
+    // `MISS: <that same base>`). Ledger-only, like `executedScriptPaths` — the
+    // gate's coverage questions keep asking about operands, not the shell's cwd.
+    ...analysis.effectiveCwds.filter((c): c is string => c !== null),
+  ])];
   const r = judgePathReport(reported, {
     cwd: pd.cwd,
     floorPaths,
     confirmedDirs,
     contextPaths: ctx ? sessionContextPaths(ctx, store) : undefined,
     floorWritePaths: analysis.writePaths,
+    commandText: pd.command,
   }, writes);
   // The economy cap lives HERE, at the row-writing site, and a cut row says so
   // — a silent cut hides a real blind spot (2026-10-26 judge.jsonl row: 12

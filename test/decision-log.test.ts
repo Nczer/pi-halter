@@ -651,7 +651,8 @@ describe("judge ledger (logJudge, on by default, D17)", () => {
     expect(pathsRow.judgePaths).toHaveLength(8);
     expect(pathsRow.judgePathsMore).toBe(4);
     expect(pathsRow.floorPaths).toHaveLength(8);
-    expect(pathsRow.floorPathsMore).toBe(4);
+    // 12 operands + the base the command runs in (3.49.0) — 13 to store 8.
+    expect(pathsRow.floorPathsMore).toBe(5);
     // The disagreement lists are uncapped (3.44.1): the cap rule applies to the
     // SETS above, and a cut miss list would hide the finding the row exists for.
     expect(pathsRow.floorMisses).toHaveLength(12);

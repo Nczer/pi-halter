@@ -1160,7 +1160,9 @@ describe("D17 — always-on judge ledger (judge.jsonl)", () => {
     expect(pathsLine).toEqual(
       expect.objectContaining({
         mode: "dspa",
-        floorPaths: ["/Users/u/project/target"],
+        // The base joins the floor set too (3.49.0): the folder the segments
+        // run in is knowledge the floor has.
+        floorPaths: ["/Users/u/project/target", "/Users/u/project"],
         judgePaths: ["/Users/u/project/target", canon("/etc/hostname")],
         floorMisses: [canon("/etc/hostname")],
       }),

@@ -1,7 +1,7 @@
 /**
  * judge-paths.ts (D13) — sanitizing the stage-2 judge's path report and
- * cross-checking it against the floor's own knowledge. Pure functions, no
- * model, no disk.
+ * cross-checking it against the floor's own knowledge. Pure functions plus one
+ * row-level test through judgePathLogFields; no model, no disk.
  */
 import { describe, expect, it } from "vitest";
 import os from "node:os";
@@ -11,8 +11,10 @@ import { canon } from "./canon";
 import {
   sanitizeJudgePaths,
   judgePathReport,
+  judgePathLogFields,
   type JudgePathFloor,
 } from "../judge/paths";
+import { createStore } from "../gate/store";
 import { OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER } from "../analysis/path-util";
 
 const cwd = "/Users/u/project";
@@ -139,6 +141,37 @@ describe("judgePathReport", () => {
     expect(r.contextMisses).toEqual(["/seen/in/context"]);
   });
 
+  it("3.49.0: a miss whose TEXT the command carries is the floor's, not a context echo", () => {
+    // judge.jsonl 2026-10-31: `uv run … python - <<PY` bodies held the literal
+    // `'/mnt/Ndr/Download/Untitled.jpg'`; the floor never minted it (the body
+    // assigned it to a variable first), and the row blamed the Session context.
+    // 7 of 26 miss entries in the window were like this.
+    const floor: JudgePathFloor = {
+      cwd,
+      floorPaths: [`${cwd}/scan.py`],
+      contextPaths: ["/mnt/Ndr/Download"],
+      commandText: "uv run python - <<'PY'\nImage.open('/mnt/Ndr/Download/Untitled.jpg')\nPY",
+    };
+    const r = judgePathReport(["/mnt/Ndr/Download/Untitled.jpg"], floor);
+    expect(r.floorMisses).toEqual(["/mnt/Ndr/Download/Untitled.jpg"]);
+    expect(r.contextMisses).toBeUndefined();
+    // Without the command text the split stays what it was (the field is opt-in).
+    const { commandText: _gone, ...noText } = floor;
+    expect(judgePathReport(["/mnt/Ndr/Download/Untitled.jpg"], noText).contextMisses)
+      .toEqual(["/mnt/Ndr/Download/Untitled.jpg"]);
+  });
+
+  it("a location the command never mentions still reads as context bleed", () => {
+    const r = judgePathReport(["/mnt/Ndr/Download/Untitled.jpg"], {
+      cwd,
+      floorPaths: [`${cwd}/scan.py`],
+      contextPaths: ["/mnt/Ndr/Download"],
+      commandText: "uv run python - <<'PY'\nImage.open(p)\nPY",
+    });
+    expect(r.contextMisses).toEqual(["/mnt/Ndr/Download/Untitled.jpg"]);
+    expect(r.floorMisses).toBeUndefined();
+  });
+
   it("§4.4: with no concrete floor path the row stays a floorMiss, never context bleed", () => {
     // The floor named nothing of its own, so it cannot have been out-of-date
     // about a path it never derived — calling this context bleed hid a parser
@@ -158,6 +191,34 @@ describe("judgePathReport", () => {
       floorPaths: [`${OPAQUE_VAR_DIR}/a`],
     });
     expect(r.floorMisses).toEqual(["/a"]);
+  });
+
+  it("the base a `cd` set is floor knowledge — no miss for the folder itself (3.49.0)", () => {
+    // The 2026-10-31 ledger: `cd <dir> && git fetch --all && git push` logged
+    // `MISS: <that same base>` — the floor ran every later segment there, but
+    // its knowledge set carried only operands, so the judge's honest report of
+    // the folder read as a blind spot.
+    const base = "/Users/u/Strata";
+    const row = (cwds: (string | null)[]) => ({
+      type: "bash",
+      command: `cd ${base} && git fetch --all && git push`,
+      cwd: "/Users/u/project",
+      analysis: {
+        paths: [],
+        writePaths: [],
+        segments: [`cd ${base}`, "git fetch --all", "git push"],
+        effectiveCwds: cwds,
+        prompt: { unresolved: [], outsidePaths: [] },
+      },
+    });
+    const f = judgePathLogFields(row(["/Users/u/project", base, base]) as never, createStore(), [base]);
+    expect(f.floorMisses).toBeUndefined();
+    expect(f.contextMisses).toBeUndefined();
+    expect(f.floorPaths).toContain(base);
+    // A `cd` that never resolved stays a real blind spot: an unresolvable base
+    // is null in effectiveCwds, so nothing joins the floor set.
+    const blind = judgePathLogFields(row(["/Users/u/project", null, null]) as never, createStore(), [base]);
+    expect(blind.floorMisses).toEqual([base]);
   });
 
   it("a judge path reaching the floor's path through a symlink is covered (resolved both sides)", () => {
