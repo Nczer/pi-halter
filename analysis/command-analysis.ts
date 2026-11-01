@@ -115,6 +115,11 @@ export interface CommandAnalysis {
    *  decision layer checks it against the WRITE allow set alone (a READ grant
    *  never satisfies a write). */
   writePaths: string[];
+  /** The subset of `writePaths` whose write role comes from a CODE BODY's text
+   *  rather than an operand position (see parseCommand). The dspa floor uses it
+   *  to keep D-g's absolute write rule for operands only (3.49.0,
+   *  docs/dspa-intent-floor.md §4.1). */
+  bodyWritePaths: string[];
   /** Detailed safety verdict. */
   safety: SafetyVerdict;
   /** Detailed risk assessment from token-based and regex-based analysis. */
@@ -788,6 +793,9 @@ export async function analyzeCommand(
     paths: barLocations(words),
     words,
     writePaths: [...new Set(writePaths)],
+    // Kept a subset of the FINAL `writePaths`: threading can drop or re-mint a
+    // target, so the filter runs here rather than at the parse site.
+    bodyWritePaths: parseResult.bodyWritePaths.filter((p) => writePaths.includes(p)),
     hasParseError,
     safety: {
       // canBeAutoAllowed requires the payload's TOP-LEVEL bar too: a session

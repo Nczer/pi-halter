@@ -2090,6 +2090,14 @@ export async function parseCommand(
   /** The subset of `paths` the command WRITES (G3) — see analysis/write-roles.
    *  Checked against the write allow set alone; a read grant never covers it. */
   writePaths: string[];
+  /** The subset of `writePaths` whose WRITE role comes from a CODE BODY's text
+   *  (`python3 -c 'open("/x","w")'`, a heredoc), not from an operand position
+   *  the shell parses. Same location, weaker evidence: the floor read the
+   *  effect out of text it does not interpret, so the floor may hand it to the
+   *  intent pass instead of stopping on it (docs/dspa-intent-floor.md §4.1,
+   *  3.49.0). A location that is ALSO an operand write is not here — the
+   *  operand is the stronger evidence. */
+  bodyWritePaths: string[];
   opaque: OpaqueRef[];
   assignments: ShellAssignment[];
   hasParseError: boolean;
@@ -2107,7 +2115,7 @@ export async function parseCommand(
 }> {
   const parser = await getParser();
   const tree = parser.parse(command);
-  if (!tree) return { segments: [], words: [], paths: [], writePaths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [], obscuredArgv0: [], heredocStrippedCommand: command };
+  if (!tree) return { segments: [], words: [], paths: [], writePaths: [], bodyWritePaths: [], opaque: [], assignments: [], hasParseError: false, hops: [], unsets: [], obscuredArgv0: [], heredocStrippedCommand: command };
 
   try {
     // Check for ERROR nodes in the AST (malformed bash)
@@ -2141,6 +2149,9 @@ export async function parseCommand(
     // bar is a stricter question about the SAME locations, never a second
     // resolution path that could drift from the read bar.
     const allWrites: string[] = [];
+    /** The subset of `allWrites` minted only by a code body's text — see the
+     *  return field `bodyWritePaths` for why the origin matters. */
+    const bodyWrites: string[] = [];
     const obscuredArgv0: string[] = [];
     const opaque: OpaqueRef[] = [];
     // Symlink hops (written ≠ resolved) for prompt display. Dot-prefixed
@@ -2569,10 +2580,17 @@ export async function parseCommand(
     // check (seg.codeBodies, config.codeBodiesWrite) still covers that.
     // Runs BEFORE the dedup filter below, so a folded write survives the same
     // seen/SAFE_SYSTEM_PATHS screen as every other operand.
+    // 3.49.0 also splits the ORIGIN: everything minted so far came from the
+    // shell's own operand structure, so a location the bodies name AS WELL is
+    // still an operand write (the stronger evidence, `… && rm /x` next to a
+    // payload that mentions `/x`).
+    const operandWrites = new Set(allWrites);
     for (const [si, bodies] of bodiesBySegment) {
       const fromBodies = bodyPathsBySegment.get(si);
       if (!fromBodies?.length) continue;
-      if (codeBodiesWrite(bodies, shellBodyBySegment.has(si))) allWrites.push(...fromBodies);
+      if (!codeBodiesWrite(bodies, shellBodyBySegment.has(si))) continue;
+      allWrites.push(...fromBodies);
+      for (const p of fromBodies) if (!operandWrites.has(p)) bodyWrites.push(p);
     }
 
     // Deduplicate, filter safe system paths. The screen runs on LOCATIONS (that
@@ -2604,12 +2622,15 @@ export async function parseCommand(
     // can reach allWrites twice (the generic operand mint and a command's own
     // flag-value block, e.g. `sort -o FILE`).
     const writePaths = [...new Set(allWrites)].filter(p => seen.has(p));
+    // Body-only writes under the same screen: one the operand structure ALSO
+    // named is an operand write, one the dedup filter dropped is no write at all.
+    const bodyWritePaths = [...new Set(bodyWrites)].filter(p => writePaths.includes(p));
 
     for (const [si, bodies] of bodiesBySegment) {
       const seg = segments[si];
       if (seg) seg.codeBodies = bodies;
     }
-    return { segments, words: kept, paths, writePaths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0, heredocStrippedCommand: stripHeredocBodyText(tree.rootNode, command) };
+    return { segments, words: kept, paths, writePaths, bodyWritePaths, opaque, assignments, hasParseError, hops, unsets, obscuredArgv0, heredocStrippedCommand: stripHeredocBodyText(tree.rootNode, command) };
   } finally {
     subshellCache = null;
     tree.delete();

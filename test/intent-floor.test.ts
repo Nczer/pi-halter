@@ -258,11 +258,33 @@ describe("intent guards (§4)", () => {
     expect(intentGuardFaults(ssh, [canon("/Users/u/.ssh/id_rsa")]).join()).toContain("credential class");
   });
 
-  it("§4.1: a WRITE role never rides a miss (D-g), while the base-write proxy may", async () => {
+  it("§4.1: a WRITE role never rides a miss (D-g), while the two proxies may", async () => {
     const w = await facts("echo hi > /Users/u/out/$D/f");
     expect(intentGuardFaults(w, [canon("/Users/u/out/f")]).join()).toContain("write effect at an unnamed location");
     const b = await facts("cd /etc && sed -i 's/a/b/' hosts");
     expect(intentGuardFaults(b.filter((f) => f.kind === "base-write"), [canon("/etc/hosts")])).toEqual([]);
+    // 3.49.0: the other proxy is a location only a body's TEXT names. Nothing
+    // sits in a write operand slot, so §4.1 does not refuse the intent pass;
+    // D19's bar on the judge's own `writes` report is what holds the line.
+    const p = await facts(`python3 -c "open('/Users/u/probe-target/out.json', 'w').write('{}')"`);
+    expect(p.map((f) => f.kind)).toEqual(["body-write"]);
+    expect(intentGuardFaults(p, [canon("/Users/u/probe-target/out.json")])).toEqual([]);
+  });
+
+  it("e2e: a payload write reaches stage 2, and its own write report stops it (D19)", async () => {
+    // The shape the floor used to refuse without asking anyone — now a
+    // `body-write` miss. The judge names the location, so §4.2 is satisfied,
+    // and reports it as a WRITE, so D19's bar keeps the stop: the bar never
+    // moved, only the question did.
+    const t = canon("/Users/u/probe-target/out.json");
+    await run(
+      `python3 -c "open('${t}', 'w').write('{}')"`,
+      null,
+      verdict({ approve: "approve", risk: "low", paths: [t], writes: [t] }),
+    );
+    expect(promptFlow.showPrompt).toHaveBeenCalledTimes(1);
+    expect(String(unres()[0].guard)).toContain("reported write outside the write bar");
+    expect(unres()[0]).toMatchObject({ missKind: "body-write", outcome: "intent-declined" });
   });
 });
 

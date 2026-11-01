@@ -151,9 +151,11 @@ export type DspaGateResult =
  */
 export interface MissFact {
   /** What kind of unknown location: an unbound/opaque reference the parse
-   *  could not resolve, a concrete path outside the read bar, or the
-   *  re-based dir a body (heredoc, `-c`) writes — the D18 proxy. */
-  kind: "unresolved" | "outside-path" | "base-write";
+   *  could not resolve, a concrete path outside the read bar, the re-based dir
+   *  a body (heredoc, `-c`) writes — the D18 proxy — or a write location that
+   *  exists only in a body's TEXT (`open('/var/lib/x/db','w')` in a `-c`
+   *  payload), which the parse threaded but no operand ever named (3.49.0). */
+  kind: "unresolved" | "outside-path" | "base-write" | "body-write";
   /** The location text as the parse saw it (`/proc/$EP/io`, the concrete
    *  outside path, the base dir). */
   token: string;
@@ -786,9 +788,13 @@ export function intentGuardFaults(
     // truncate/`find -delete`/`xargs rm` shapes are already absolute stops
     // from §6 D-c — this is the redirect/move half of the same rule. D-g
     // generalizes it: a CONCRETE out-of-bar write operand is never relaxable
-    // either, so only the D-h base-write proxy (nothing written yet — the
-    // floor stops on the new base itself) may go to intent.
-    if (m.role === "write" && m.kind !== "base-write") {
+    // either, so only the two PROXY kinds go to intent: the D-h base-write
+    // proxy (nothing written yet — the floor stops on the new base itself,
+    // which the operator already granted) and a write location read out of a
+    // body's own TEXT, which no operand ever put in a write slot (3.49.0).
+    // Both are judged on the body's content, and D19 holds the write bar
+    // against the paths the judge reports.
+    if (m.role === "write" && m.kind !== "base-write" && m.kind !== "body-write") {
       faults.push(`write effect at an unnamed location (${m.token})`);
       continue;
     }
@@ -1066,10 +1072,23 @@ export async function checkDspaGate(
     if (!insideManualWriteBar(store, base, pd.cwd) && !baseOut.includes(base)) baseOut.push(base);
   }
   const writeOpDirs: string[] = [];
+  // Which out-of-bar writes came from a BODY's text rather than from an
+  // operand position (analysis/bash-parser `bodyWritePaths`): those are
+  // misses, not D-g operands — the parse threaded the location, but the
+  // command's shape never put it in a write slot, so the two-stage judge can
+  // be asked about it and D19 holds the write bar against its report.
+  // A write the parse read out of an operand, or a write into a dir the
+  // operator made quiet for READING only (`~/.pi`, a `halter.readDirs`
+  // entry — a read grant never makes writes judgeable), stays absolute.
+  const bodyWrites = new Set(analysis.bodyWritePaths ?? []);
+  const bodyWriteOps: string[] = [];
+  let operandWriteOutside = false;
   for (const p of analysis.writePaths ?? []) {
     if (outsideExempt.has(p) || p.includes("$") || p.includes("`")) continue;
     if (p.startsWith(OPAQUE_VAR_DIR) || p.startsWith(UNKNOWN_CWD_MARKER)) continue;
     if ((!isUnresolvedPath(p) && under(p, normBase)) || insideManualWriteBar(store, p, pd.cwd)) continue;
+    if (bodyWrites.has(p) && !isAllowedReadPath(p)) bodyWriteOps.push(p);
+    else operandWriteOutside = true;
     const dir = rememberedDirOf(p);
     writeOpDirs.push(dir === "" ? p : dir); // the stop still names the word itself
   }
@@ -1156,7 +1175,7 @@ export async function checkDspaGate(
     );
   const outsideFacts = (paths: string[]): MissFact[] =>
     [...new Set(paths)].map((p) => ({
-      kind: "outside-path",
+      kind: bodyWrites.has(p) ? "body-write" : "outside-path",
       token: p,
       prefix: anchorOf(p),
       role: writeRoleAt(p) ? "write" : "read",
@@ -1198,7 +1217,7 @@ export async function checkDspaGate(
   // land in-bar, so a token with nothing static about it is judged on what it
   // ACTUALLY points at instead of prompting every run. What still drops the
   // whole set is a concrete out-of-bar WRITE operand (D-g: the write bar is
-  // absolute, intent never relaxes it).
+  // absolute, intent never relaxes it) — or a write into a read-quiet dir.
   const withMisses = (facts: MissFact[]) => {
     // The same location can arrive twice (a concrete ref and its resolution);
     // one fact per location keeps the guard report and the ledger honest.
@@ -1210,7 +1229,7 @@ export async function checkDspaGate(
       seen.add(k);
       all.push(f);
     }
-    if (writeOpDirs.length > 0) return {};
+    if (operandWriteOutside) return {};
     return { misses: all };
   };
   for (const p of outside) {
@@ -1287,13 +1306,18 @@ export async function checkDspaGate(
     };
   }
   if (writeOutside.length > 0) {
+    // Only the two proxy kinds may ride on intent here: the base a body
+    // writes (D-h) and a location that exists only in a body's text (3.49.0).
+    // A concrete out-of-bar write operand still stops absolutely (D-g), and so
+    // does a write into a dir that is quiet for reading only.
+    const proxyFacts = [...outsideFacts(bodyWriteOps), ...baseFacts];
     return {
       ok: false,
       reason: `write outside base (${writeOutside.slice(0, 2).join(", ")})`,
       advisory: true,
       writeOutside,
-      ...(writeOpDirs.length === 0 && baseFacts.length > 0 && !baseFacts.some((f) => f.prefix === "")
-        ? { misses: baseFacts }
+      ...(!operandWriteOutside && proxyFacts.length > 0 && !proxyFacts.some((f) => f.prefix === "")
+        ? { misses: proxyFacts }
         : {}),
     };
   }

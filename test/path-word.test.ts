@@ -213,6 +213,44 @@ describe("the words a command names (parseCommand)", () => {
     expect(r.paths).toEqual(barLocations(r.words));
     expect(r.writePaths.every((p) => r.paths.includes(p))).toBe(true);
   });
+
+  it("`bodyWritePaths` says WHICH EVIDENCE made a location a write", async () => {
+    // `writePaths` answers WHERE is written; this says the only evidence is a
+    // code body's own text — what the intent floor uses to keep D-g's
+    // absolute write rule for OPERANDS only (docs/dspa-intent-floor.md §4.1).
+    const payload = await parseCommand(`python3 -c 'import json; open("${U}/out.json", "w").write("{}")'`, CWD);
+    expect(payload.writePaths).toContain(canon(`${U}/out.json`));
+    expect(payload.bodyWritePaths).toEqual([canon(`${U}/out.json`)]);
+
+    // An operand slot is the other kind of evidence — the shell's own shape
+    // named the write, so the floor keeps it absolute.
+    for (const cmd of [`echo hi > ${U}/out.json`, `echo hi | tee ${U}/out.json`, `sed -i s/a/b/ ${U}/out.json`]) {
+      const r = await parseCommand(cmd, CWD);
+      expect(r.writePaths, cmd).toContain(canon(`${U}/out.json`));
+      expect(r.bodyWritePaths, cmd).toEqual([]);
+    }
+
+    // Both kinds at one location: the operand wins — a payload cannot make a
+    // stop the command's own shape minted relaxable.
+    const both = await parseCommand(`python3 -c 'open("${U}/out.json", "w")' > ${U}/out.json`, CWD);
+    expect(both.bodyWritePaths).toEqual([]);
+
+    // A relative payload path is never minted at all — the body extractor
+    // threads absolute-looking strings only. Filed gap: the base-write proxy
+    // is what covers `cd D && python3 -c "open('f','w')"`.
+    for (const cmd of [`python3 -c 'open("out.json", "w")'`, `python3 -c 'open("sub/out.json", "w")'`]) {
+      const r = await parseCommand(cmd, CWD);
+      expect(r.paths, cmd).toEqual([]);
+      expect(r.bodyWritePaths, cmd).toEqual([]);
+    }
+    // `~/…` is threaded, because it names a place without a cwd to resolve.
+    const tilde = await parseCommand(`python3 -c 'open("~/halter-tilde-probe/out.json", "w")'`, CWD);
+    expect(tilde.bodyWritePaths).toEqual([canon(path.join(os.homedir(), "halter-tilde-probe", "out.json"))]);
+
+    // A body the floor does not interpret (sh) mints no write paths at all.
+    const sh = await parseCommand(`sh -c 'echo hi > ${U}/out.json'`, CWD);
+    expect(sh.bodyWritePaths).toEqual([]);
+  });
 });
 
 describe("the words the floor's own derivations mint (analyzeCommand)", () => {

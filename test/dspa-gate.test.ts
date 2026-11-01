@@ -1655,6 +1655,116 @@ describe("D-d: write operands face the write bar, not the read bar", () => {
   });
 });
 
+// ── a code body's OWN write is a miss, not a D-g write operand (3.49.0) ──
+//
+// docs/dspa-intent-floor.md §4.1. The parse threads a `-c`/heredoc payload's
+// write location, but no operand slot ever named it — `open('/x/db','w')` sits
+// in Python's argument list, not in a shell write position. Counting that as a
+// write OPERAND made the floor deaf to the whole judged half: it was the
+// biggest intent-eligible shape in the ledger (12 stops in one week, e.g.
+// `python3 - <<EOF … with open('/mnt/Ndr/Download/Untitled.jpg','wb')`), and
+// not one of them reached a judge. The WRITE BAR is untouched: the stop still
+// carries `writeOutside`, and D19 stops the command on whatever the two-stage
+// judge reports writing.
+
+describe("a code body's own write names a miss, not an absolute write operand", () => {
+  const OUT = "/Users/u/probe-target"; // outside both bars, not a credential name
+  const AGENT = path.join(os.homedir(), ".pi", "agent"); // read-quiet, no write grant
+
+  it("a `-c` payload write carries a body-write miss and keeps the write-bar stop", async () => {
+    const r = await checkDspaGate(bashPd(`python3 -c "import json; open('${OUT}/out.json', 'w').write('{}')"`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.misses).toEqual([
+        expect.objectContaining({ kind: "body-write", role: "write", token: `${OUT}/out.json` }),
+      ]);
+      expect(r.writeOutside).toContain(OUT);
+      expect(r.advisory).toBe(true);
+    }
+  });
+
+  it("a heredoc payload write behaves the same", async () => {
+    const r = await checkDspaGate(
+      bashPd(`python3 - <<'EOF'\nwith open("${OUT}/out.json", "w") as f:\n    f.write("{}")\nEOF`),
+      store,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect((r.misses ?? []).map((m) => m.kind)).toContain("body-write");
+      expect(r.writeOutside).toContain(OUT);
+    }
+  });
+
+  it("a payload write under a re-based base reports both proxies", async () => {
+    // The base is the D-h proxy, the payload's own path the new one.
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-bodywrite-")));
+    try {
+      const r = await checkDspaGate(bashPd(`cd ${dir} && python3 -c "open('out.json', 'w').write('{}')"`), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        // A RELATIVE path inside a body is never minted (analysis/bash-parser
+        // threads absolute-looking strings only), so the base proxy is all
+        // the floor has for this shape — the gap the D-h proxy exists for.
+        expect((r.misses ?? []).map((m) => m.kind)).toEqual(["base-write"]);
+      }
+      const abs = await checkDspaGate(
+        bashPd(`cd ${dir} && python3 -c "open('${dir}/out.json', 'w').write('{}')"`),
+        store,
+      );
+      expect(abs.ok).toBe(false);
+      if (!abs.ok) {
+        expect((abs.misses ?? []).map((m) => m.kind).sort()).toEqual(["base-write", "body-write"]);
+        expect(abs.misses?.find((m) => m.kind === "body-write")?.token).toBe(path.join(dir, "out.json"));
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an operand write in the same command keeps the stop absolute", async () => {
+    // The payload cannot relax a stop the command's own shape minted: `> f`
+    // and `tee f` are write operands, and a write operand outside the write
+    // bar is the one shape D-g never hands to intent (docs §4.1).
+    for (const c of [
+      `python3 -c "open('${OUT}/out.json', 'w')" > ${OUT}/log`,
+      `python3 -c "open('${OUT}/out.json', 'w')" | tee ${OUT}/log`,
+      `echo hi > ${OUT}/log`,
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) expect(r.misses, c).toBeUndefined();
+    }
+  });
+
+  it("a payload write into a read-quiet dir is never a miss", async () => {
+    // `~/.pi` is read-allowed so skills and extensions load; a read grant
+    // never makes writes judgeable (config/path-rules.ts, the `readDirs`
+    // boundaries), so a payload editing pi's own config keeps G3's stop.
+    for (const target of [
+      path.join(AGENT, "settings.json"),
+      path.join(AGENT, "extensions", "pwned.ts"),
+    ]) {
+      const c = `python3 -c "open('${target}', 'w')"`;
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(false);
+      if (!r.ok) {
+        expect(r.misses, c).toBeUndefined();
+        expect(r.writeOutside, c).toContain(path.dirname(target));
+      }
+    }
+  });
+
+  it("a payload write inside the working set passes as before", async () => {
+    for (const c of [
+      `python3 -c "open('out.json', 'w').write('{}')"`,
+      `python3 -c "open('sub/out.json', 'w').write('{}')"`,
+    ]) {
+      const r = await checkDspaGate(bashPd(c), store);
+      expect(r.ok, c).toBe(true);
+    }
+  });
+});
+
 // ── D-b: the pattern tables split into ABSOLUTE bars and CLASS names ───────
 //
 // docs/dspa-intent-floor.md §6 D-b. Every entry names a class; only the

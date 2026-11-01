@@ -349,7 +349,7 @@ export interface UnresolvedLogEntry {
   /** The prompt outcome ("yes" | "no" | "always" | "alwaysPaths" | …); "auto-allow" for auto-allowed. */
   decision?: string;
   /** Intent rows only: the miss class as the floor classified it. */
-  missKind?: "unresolved" | "outside-path" | "base-write";
+  missKind?: "unresolved" | "outside-path" | "base-write" | "body-write";
   /** Intent rows only: why a decline happened (guard fault / verdict / write bar). */
   guard?: string;
   /** Intent rows only: the report paths that ANSWERED this token — exactly
