@@ -361,12 +361,30 @@ export function stripPkgVersion(pkg: string): string {
 }
 
 /**
+ * The one family whose OWN options keep being parsed after the first
+ * positional word. npm's CLI doc for `npx`: "When run via the `npx` binary,
+ * all flags and options must be set prior to any positional arguments" — a
+ * flag after the package/command word is an argument of the executed command,
+ * which is why `npx tsc --noEmit -p tsconfig.json` passes `-p tsconfig.json`
+ * to tsc and fetches only `tsc`. `npm exec` is the documented exception ("a
+ * double-hyphen `--` flag can be used to suppress npm's parsing of switches",
+ * and `npm exec foo bar --package=@npmcli/foo` still resolves BOTH), so the
+ * select-flag scan keeps running there — naming an unmodelled position rather
+ * than guessing it (G7: `npm exec foo --package=evil`).
+ */
+const OPTS_AFTER_POSITIONAL = new Set(["npm"]);
+
+/**
  * The packages a fetchable run form fetches, or null: not a fetch form, a
  * local form (`npm run …`), or no package token at all. Flags are skipped
  * EXCEPT the package-select flags, whose values ARE the fetch set; `K=V` env
  * prefixes are skipped and version pins stripped so trust keys are bare
  * package names. Only TOP-LEVEL segments are checked (indirection like
  * `out=$(npx foo)` stays judge-only by design).
+ *
+ * The scan ends where the runner's own options end: at the first positional
+ * word for every family but `npm` (`OPTS_AFTER_POSITIONAL`), so a
+ * package-select flag belonging to the fetched command names nothing.
  *
  * The package token is kept VERBATIM as the trust key: npm scoped names are
  * case-sensitive (`@org/tool` and `@Org/Tool` are different packages), so a
@@ -389,10 +407,22 @@ export function fetchFormScan(first: string, words: string[]): FetchFormScan | n
   // forms (`npx`) put the package first.
   let subSeen = forms === "all";
   let cmdWord: string | undefined;
+  // A select flag appearing AFTER the positional word: for `npm exec` that adds
+  // a fetched package on top of the positional (which had already resolved as
+  // the package spec), so the positional joins the set too.
+  let selectAfterPositional = false;
+  let dashDash = false;
   for (let i = 1; i < words.length; i++) {
     const w = words[i];
+    if (cmdWord !== undefined && !OPTS_AFTER_POSITIONAL.has(first)) break;
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+    if (w === "--") {
+      // After `--` everything, options included, is the command's argv.
+      dashDash = true;
+      continue;
+    }
     if (w.startsWith("-")) {
+      if (dashDash) continue;
       const eq = w.indexOf("=");
       // Short flags are case-sensitive (`uvx -P` is not `-p`); long ones fold.
       const flag = eq === -1 ? w : w.slice(0, eq);
@@ -404,6 +434,7 @@ export function fetchFormScan(first: string, words: string[]): FetchFormScan | n
         continue;
       }
       const v = eq === -1 ? words[++i] : w.slice(eq + 1);
+      if (cmdWord !== undefined) selectAfterPositional = true;
       // No value at all (end of command, or the next token is another flag):
       // nothing is selected, and nothing can be vouched for it.
       if (v === undefined || v.startsWith("-") || OPAQUE_PKG_VALUE_RE.test(v)) opaque = true;
@@ -424,7 +455,9 @@ export function fetchFormScan(first: string, words: string[]): FetchFormScan | n
     }
     if (cmdWord === undefined) cmdWord = w;
   }
-  if (cmdWord !== undefined && pkgs.length === 0) pkgs.push(stripPkgVersion(cmdWord));
+  if (cmdWord !== undefined && (pkgs.length === 0 || selectAfterPositional)) {
+    pkgs.unshift(stripPkgVersion(cmdWord));
+  }
   if (pkgs.length === 0 && !opaque) return null;
   return { pkgs, opaque };
 }

@@ -55,6 +55,28 @@ describe("fetchFormScan — the fetch set, not the first word after the flags", 
     expect(fetchFormScan("npx", 'npx -p "$PKG" tsc'.split(" "))).toMatchObject({ opaque: true });
     expect(fetchFormScan("npx", ["npx", "-p"])).toMatchObject({ pkgs: [], opaque: true });
   });
+
+  it("a package flag after the command word belongs to that command, not the runner", () => {
+    // 2026-10-31 decisions.jsonl (`npx tsc --noEmit -p tsconfig.json`): the run
+    // was named `npx tsconfig.json` — tsc's own `-p` read as npx's package
+    // selector — so the grant learned for `tsc` could never cover it. npm's doc:
+    // "When run via the `npx` binary, all flags and options must be set prior
+    // to any positional arguments."
+    expect(fetchFormScan("npx", "npx tsc --noEmit -p tsconfig.json".split(" "))).toEqual({ pkgs: ["tsc"], opaque: false });
+    expect(fetchFormScan("npx", "npx tsc -p evil".split(" "))).toEqual({ pkgs: ["tsc"], opaque: false });
+    expect(fetchFormScan("bunx", "bunx tsc -p tsconfig.json".split(" "))).toEqual({ pkgs: ["tsc"], opaque: false });
+    expect(fetchFormScan("pnpm", "pnpm dlx tsc -p evil".split(" "))).toEqual({ pkgs: ["tsc"], opaque: false });
+    expect(fetchFormScan("uvx", "uvx ruff check --from evil".split(" "))).toEqual({ pkgs: ["ruff"], opaque: false });
+    // The flag still works where it is legal: before the positional.
+    expect(fetchFormScan("npx", "npx -p typescript tsc --noEmit".split(" "))).toEqual({ pkgs: ["typescript"], opaque: false });
+    // `npm exec` is the exception, so BOTH packages get named — the positional
+    // had already resolved as a package spec before npm parsed the flag.
+    expect(fetchFormScan("npm", "npm exec tsc --package=evil".split(" "))).toEqual({ pkgs: ["tsc", "evil"], opaque: false });
+    expect(fetchFormScan("npm", "npm exec foo@latest bar --package=@npmcli/foo".split(" ")))
+      .toEqual({ pkgs: ["foo", "@npmcli/foo"], opaque: false });
+    // …and `--`, the documented way to stop npm's own parsing, stops it.
+    expect(fetchFormScan("npm", "npm exec -- foo --package=evil".split(" "))).toEqual({ pkgs: ["foo"], opaque: false });
+  });
 });
 
 // ── uv's option table: closed world, unknown is never benign ──
