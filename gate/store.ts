@@ -1,6 +1,12 @@
 import { PROMPT_WARNING_THRESHOLD, ABORT_REMEMBER_MS } from "../config";
 import { isPositionalRef, under, isUnresolvedPath } from "../analysis/path-util";
 
+/**
+ * A grant made only of inline env assignments (`FOO=1`, `A=1 B=2`): it names
+ * no program, so it can never prefix-cover one (see hasAllowedBashPrefix).
+ */
+const ASSIGNMENT_ONLY_RE = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s*)+$/;
+
 // ── Allow rules ──
 
 /** Structured rules for what to auto-allow on "always" confirmation. */
@@ -140,7 +146,13 @@ export function createStore(nowFn = Date.now): Store {
     },
     hasAllowedBashPrefix(s) {
       for (const allowed of bashSigs) {
-        if (s.startsWith(allowed + " ")) return true;
+        if (!s.startsWith(allowed + " ")) continue;
+        // An assignment-only grant (`FOO=1`) names no program: the whole
+        // point of the inline-assignment identity is that the program is
+        // part of it, so such a grant must never prefix-cover a command
+        // behind that assignment (`FOO=1 rm -rf`). 3.50.0.
+        if (ASSIGNMENT_ONLY_RE.test(allowed)) continue;
+        return true;
       }
       return false;
     },

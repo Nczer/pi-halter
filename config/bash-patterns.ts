@@ -462,43 +462,6 @@ export function fetchFormScan(first: string, words: string[]): FetchFormScan | n
   return { pkgs, opaque };
 }
 
-/**
- * The package a fetchable run form segment names, or null: not a fetch form,
- * a local form (`npm run …`), or no package token. Flags and `K=V` env
- * prefixes are skipped; version pins are stripped so trust keys are bare
- * package names. Only TOP-LEVEL segments are checked (indirection like
- * `out=$(npx foo)` stays judge-only by design).
- *
- * The package token is kept VERBATIM as the trust key: npm scoped names are
- * case-sensitive (`@org/tool` and `@Org/Tool` are different packages), so a
- * trust grant for one must not cover the other. Lowercasing is used only to
- * match the SUBCOMMAND of set forms (`npm run` vs `npm RUN` — git/npm treat
- * subcommands case-insensitively in practice, and the set is lowercase).
- */
-export function fetchFormPackage(first: string, words: string[]): string | null {
-  const forms = FETCH_PKG_FORMS[first];
-  if (!forms) return null;
-  let i = 1;
-  let sub: string | undefined;
-  let subLower: string | undefined;
-  for (; i < words.length; i++) {
-    const w = words[i];
-    if (w.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
-    sub = w;
-    subLower = w.toLowerCase();
-    break;
-  }
-  if (forms === "all") {
-    return sub ? stripPkgVersion(sub) : null;
-  }
-  if (!subLower || !forms.has(subLower)) return null;
-  for (let j = i + 1; j < words.length; j++) {
-    const w = words[j];
-    if (w.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
-    return stripPkgVersion(w);
-  }
-  return null;
-}
 
 /** Leading inline env-assignment prefix (`FOO=bar cmd`) on raw words.
  *  One pair of surrounding quotes is ignored (`"FOO=bar" cmd` is the same). */

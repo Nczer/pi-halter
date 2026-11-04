@@ -109,7 +109,12 @@ The five principles, from the header of `test/cases.test.ts`:
   in cwd that resolves outside it.
 - *Every time* (no "Always" offered, principle 5): write redirects anywhere;
   write commands not in the allowlist; code execution; destructive or remote
-  git (any `git push`, `git rm`, `git clean -f`, `git reset --hard`, ...).
+  git (any `git push`, `git rm`, `git clean -f`, `git reset --hard`, the
+  local-history verbs — `checkout -- .`, `restore`, `stash drop/clear`,
+  `branch`/`tag -d`, `update-ref -d`, `worktree remove`, `filter-branch`,
+  `prune` — the code-execution flags `--exec-path` and `--config-env` with an
+  exec-capable key, and a `-C`/`--git-dir`/`--work-tree` value or write
+  destination outside the working set; `test/git-guard.test.ts`).
 - *Unresolvable*: opaque refs (`<unresolved-var>`), unknown base
   (`<unresolved-cwd>`), or base access (a path-aware segment with no target of
   its own after a `cd` names the cd's destination base as the location to
@@ -196,6 +201,30 @@ delegation) covers it, and that vetting runs on the enclosing segment, never on
 the payload: `find . -exec git push \;` used to be approved by `find`'s entry and
 again by `git`'s, and vetted by neither.
 
+### The program is read once, past the spelling (3.50.0)
+
+The verb-keyed layer — allow table, danger patterns, evaluators, signatures,
+grants — reads ONE word per segment (`getFirstWord`): the shell's command word,
+dequoted (`"cat"`, `$'cat'`), unescaped (`\cat`) and past an inline environment
+assignment (`FOO=1 cat`). Wrappers stay in place (`timeout cat` answers
+`timeout`; the delegated command is the unwrapper's separate answer, above).
+Reading the raw first whitespace word made three spellings of one program name
+no program at all: `FOO=1 rm -rf`, `"rm" -rf` and `\rm -rf` carried no
+`[Pattern] rm`, so the prompt offered an Always for a recursive forced delete,
+and the identity minted from that click (`foo=1`, `__str__ -rf`, `\rm -rf`)
+prefix-covered a different program behind the same spelling. The parser's
+command name goes through the same dequoting/unescaping, so the operand model
+sees `"cat" /etc/passwd` as cat and mints the file — the read bar applies.
+
+An inline assignment is part of the invocation (it decides `PATH`, `LD_PRELOAD`,
+locale), so it is part of the signature (`FOO=1 ls`) and the command is
+prompt-first: the allow table, wrapper delegation and the prefix rule refuse it
+— only an exact, assignment-aware grant can approve the spelling (`FOO=1 ls`
+covers `FOO=1 ls -la`; an assignment-only grant `FOO=1` covers nothing). The
+trusted-script and trusted-package paths still auto-allow behind an assignment
+(`DEBUG=1 python3 ~/.pi/agent/skills/x.py`, `FOO=bar npx tsc`): they vouch for
+the program, not for the table. Pinned by `test/command-position.test.ts`.
+
 ### argv0 location semantics
 
 `ls` and `~/Downloads/ls` are the same word to a basename lookup, which is how
@@ -216,9 +245,10 @@ class answers every consumer (the per-consumer patching lesson again):
   wrapper chain, so it is the delegated word that gets minted — and the word is
   read case-true, because a path resolves by case where a table key does not;
 - the signature names that path instead of collapsing it: `nice bin/ls` is
-  `nice bin/ls`, not `nice ls`, and an env-assignment prefix that hides argv0
-  (`FOO=/tmp/x /tmp/y`) gets the program appended to the identity. A grant that
-  names a program the command did not run is not a grant;
+  `nice bin/ls`, not `nice ls`, and an inline env assignment that hides argv0
+  (`FOO=/tmp/x /tmp/y`) keeps the program in the identity — for EVERY form,
+  path-qualified, system or bare (`FOO=1 ls` → `FOO=1 ls`; 3.50.0). A grant
+  that names a program the command did not run is not a grant;
 - the fast path (`FastAllow`) refuses to cover it, the stage is grant-bound like
   a `./` token (exact, base-bound signature grant only — never a basename), it
   is excluded from the safe-sub auto-allow, it is never `isSimple`, and the
@@ -868,6 +898,11 @@ analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           dir / path-qualified, per stage and base),
                           write-roles (which operands of a path-aware command
                           it WRITES: the closed role + flag table),
+                          brace (opening a `{a,b}` word into its alternants),
+                          delete-scale (delete shape + capped reach count),
+                          path-util (the one containment verb `under`, markers,
+                          `staticPrefixOf`, `rememberedDirOf`),
+                          path-word (the per-word location record),
                           command-analysis,
                           risk-analyzer, obfuscation,
                           tmux (command model: the one shared parse —

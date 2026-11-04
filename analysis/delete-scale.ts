@@ -117,8 +117,9 @@ export function escapesAboveBase(resolved: string, base: string): boolean {
   return resolved !== base && resolved !== "/" && under(base, resolved);
 }
 
-/** Strip one pair of matching quotes (the tokenizer already removed most). */
-function unquote(t: string): string {
+/** Strip one pair of matching quotes (the tokenizer already removed most).
+ *  The one quote-strip helper: gate/dspa-gate.ts imports it as `cleanToken`. */
+export function unquote(t: string): string {
   if (t.length >= 2 && t[0] === t[t.length - 1] && (t[0] === '"' || t[0] === "'")) return t.slice(1, -1);
   return t;
 }

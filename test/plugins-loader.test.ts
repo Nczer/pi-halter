@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadPlugins, setLoadedPlugins } from "../plugins/loader";
+import { loadPlugins, setLoadedPlugins, getPluginLoadError } from "../plugins/loader";
 import { handleTool } from "../handlers/tool";
 import { store } from "../gate/store";
 
@@ -37,6 +37,18 @@ describe("plugin loader", () => {
     expect(thrower?.state).toBe("ok"); // valid contract — throws only at call time
 
     expect(slots.has("noplugin")).toBe(false);
+  });
+
+  it("an unreadable extensions root is a load error, never a silent empty map", async () => {
+    // The scan cannot prove which tools are gated: handlers/tool.ts blocks
+    // instead of passing every gated tool through ungated (3.50.0).
+    const missing = path.join(FIXTURE_ROOT, "does-not-exist");
+    const slots = await loadPlugins(missing);
+    expect(slots.size).toBe(0);
+    expect(getPluginLoadError()).toBeTruthy();
+    // A later successful scan clears it.
+    await loadPlugins(FIXTURE_ROOT);
+    expect(getPluginLoadError()).toBeNull();
   });
 
   it("marks broken plugins, keyed fail-closed (sniffed name, else ext dir)", async () => {

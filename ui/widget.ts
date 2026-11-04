@@ -135,11 +135,6 @@ const STATUS_BUDGET = 120; // visible chars, terminal-independent
 // old build's widgets are cleared again exactly when they could be stale.
 let legacyWidgetsCleared = false;
 
-/** Test seam: re-arm the legacy-widget clear (fresh module state). */
-export function resetLegacyWidgets(): void {
-  legacyWidgetsCleared = false;
-}
-
 export function updateStatus(ctx: ExtensionContext): void {
   const theme = ctx.ui.theme;
   const bashItems = [...store.listAllowedBash()];

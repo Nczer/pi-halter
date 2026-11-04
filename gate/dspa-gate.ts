@@ -92,7 +92,7 @@ import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
 import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
 import { getDelegatedCommand, segmentFetchPackage, segmentFetchOptionsOk } from "../analysis/segment-helpers";
-import { operativeTokens, staticRootOf } from "../analysis/delete-scale";
+import { operativeTokens, staticRootOf, unquote as cleanToken } from "../analysis/delete-scale";
 import { tokenizeSegment, splitOnPipe } from "../analysis/tokenizer";
 import {
   NETWORK_COMMANDS,
@@ -1377,14 +1377,6 @@ function isRmSegment(seg: string): boolean {
 
 const SELF_WRITE_CMDS = new Set(["tee", "touch", "mkdir"]);
 
-/** Strip one pair of matching quotes from a raw token. */
-function cleanToken(t: string): string {
-  if (t.length >= 2 && ((t[0] === '"' && t.endsWith('"')) || (t[0] === "'" && t.endsWith("'")))) {
-    return t.slice(1, -1);
-  }
-  return t;
-}
-
 /** /dev/* targets are not real writes (>/dev/null, /dev/stderr, …). */
 function isDevNullish(resolved: string): boolean {
   return resolved === "/dev" || resolved.startsWith("/dev/");
@@ -1466,9 +1458,6 @@ function checkRmTargets(
             const selfWritten = writtenBefore.has(resolved);
             if (!st.isDirectory() && !st.isFile() && !selfWritten) {
               return { reason: `rm -r target is not a file or directory (${a.slice(0, 60)})`, exempt: new Set() };
-            }
-            if (!st.isDirectory() && !st.isFile() && selfWritten) {
-              /* self-written: trust the earlier segment */
             }
           } catch {
             /* doesn't exist — nothing to delete */

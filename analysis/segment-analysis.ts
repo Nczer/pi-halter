@@ -4,17 +4,20 @@ import {
   dangerousCommandPatterns,
   dangerousContextPatterns,
   isTrustedScriptCommand,
+  skipEnvPrefixes,
   wrapperCommands,
   SHELL_INTERPRETERS,
   SCRIPT_INTERPRETERS,
 } from "../config";
 import type { BashSegment } from "./bash-parser";
 import { isFirstTokenRelativePath } from "./path-analysis";
+import { tokenizeSegment } from "./tokenizer";
 import { classifyStageArgv0 } from "./argv0-path";
 import {
   containsCommandSubstitution,
   getFirstWord,
   getDelegatedCommand,
+  hasInlineAssignment,
   splitPipeline,
   hasWriteRedirect,
   isGitDangerous,
@@ -240,7 +243,9 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
       const stage = stages[i];
       const stageTokens = stage.trim().split(/\s+/);
       const stageFirst = stageTokens[0];
-      const stageCmd = path.basename(stageFirst.toLowerCase());
+      // The program the shell runs: dequoted/unescaped and past any inline
+      // env assignment (`FOO=1 rm …` is an rm stage, `"rm"` is rm).
+      const stageCmd = getFirstWord(stage);
 
       if (PIPELINE_RELATIVE_RE1.test(stageFirst) || PIPELINE_RELATIVE_RE2.test(stageFirst)) {
         allStagesSimple = false;
@@ -308,7 +313,11 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
   // `python3 --version` / `node --help` / `uv --version`: sole argument is a
   // read-only flag — no -c, no script file, nothing executes. These commands
   // are NOT in the allowlist, so isSimple below must grant the exemption too.
-  const versionOnlyRest = trimmed.split(/\s+/).slice(1);
+  // Count the words BEFORE the program so an inline assignment does not
+  // turn `FOO=1 python3 --version` into a script execution (the assignment is
+  // part of the invocation, not an argument).
+  const versionWords = tokenizeSegment(trimmed);
+  const versionOnlyRest = versionWords.slice(skipEnvPrefixes(versionWords) + 1);
   const isVersionOnlyInvocation = /^(?:python[\d.]*|node|uv)$/.test(firstWord)
     && versionOnlyRest.length === 1 && (versionOnlyRest[0] === "--version" || versionOnlyRest[0] === "--help");
   const isTrusted = isTrustedScriptCommand(segment, cwd);
@@ -391,7 +400,13 @@ export async function analyzeSegment(seg: BashSegment, cwd: string, cwdKnown = t
     // to name the exact form at this base (G4).
     isSimple = false;
   } else {
-    isSimple = (isAllowedCommand(firstWord) || isVersionOnlyInvocation) && !hasDanger
+    // An inline env assignment makes the environment part of the command
+    // (PATH decides which binary runs, LD_PRELOAD what it loads): never a
+    // table auto-allow. The prompt still offers the exact assignment-aware
+    // grant (decide/bash-rules.ts), so the spelling can be approved in one
+    // click without becoming a wildcard.
+    isSimple = !hasInlineAssignment(segment)
+      && (isAllowedCommand(firstWord) || isVersionOnlyInvocation) && !hasDanger
       && !(delegated && !isAllowedCommand(delegated.cmd))
       && !(wrapperCommands.has(firstWord) && isWrapperRunningRelativePath(segment))
       && allStagesSimple;

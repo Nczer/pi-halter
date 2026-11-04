@@ -1,5 +1,5 @@
 import { ABORT_REMEMBER_MS, isAllowedCommand, isSafeSubcommand, unconditionallySafeCommands } from "../config";
-import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes, segmentFetchPackage, segmentFetchOptionsOk } from "../analysis/segment-helpers";
+import { containsCommandSubstitution, getDelegatedCommand, getFirstWord, stripQuotedStrings, hasTerminalEscape, echoInterpretsEscapes, segmentFetchPackage, segmentFetchOptionsOk, hasInlineAssignment } from "../analysis/segment-helpers";
 import { CREDENTIAL_SCAN_RE, checkBareRelativeTokens } from "../analysis/credentials";
 import { hasRelativePath } from "../analysis/path-analysis";
 import { classifyStageArgv0 } from "../analysis/argv0-path";
@@ -30,6 +30,12 @@ export const RetryLoopRule: BashRule = (req, store) => {
  * Auto-allows trivial commands without needing full tree-sitter analysis.
  */
 export const FastAllowRule: BashRule = (req) => {
+  // An inline env assignment is not the program, and it decides the
+  // environment the program runs in (`PATH=/tmp/evil ls` runs a different
+  // binary; `LD_PRELOAD=… ls` loads foreign code). The table cannot vouch for
+  // it: hand the whole invocation to the full pipeline, where the risk layer
+  // reads the program and the prompt can grant the exact spelling.
+  if (hasInlineAssignment(req.command)) return null;
   const COMPOUND_RE = /\$\(|`|&&|\|\||[|;&<>\n\r]/;
   // Strip quoted strings so operators inside arguments (e.g. echo "a|b", grep "=>") don't
   // falsely trigger the compound check. Unquoted $(...) is preserved as __CMD_SUBST__.
@@ -213,6 +219,18 @@ export const SafetyRule: BashRule = (_req, store, analysis?: CommandAnalysis) =>
           && segmentFetchOptionsOk(stageText, analysis.effectiveCwds[segIdx] ?? null)) return true;
     }
     if (ungrantableRunDepSet.has(segIdx)) return false;
+    // An inline assignment is part of the invocation's environment (see
+    // FastAllowRule's note): no table entry, no delegation fallback and no
+    // PREFIX grant may vouch for it — `FOO=1 ls` must never cover
+    // `FOO=1 rm -rf`. Only the exact, assignment-aware identity can be
+    // approved, and that is what getCommandSignature mints and the prompt
+    // offers.
+    if (hasInlineAssignment(stageText)) {
+      // Exact identity first, then the normal flag-omission prefix rule —
+      // `foo=1 ls` covers `FOO=1 ls -la`, while an assignment-only grant
+      // (`foo=1`) covers nothing (gate/store.ts refuses the prefix).
+      return store.hasAllowedBash(sig) || store.hasAllowedBashPrefix(sig);
+    }
     // Relative-path stages (./node_modules/.bin/npm test) must never inherit
     // grants for the bare command name — a repo-shipped executable named npm/pip
     // would otherwise inherit session-wide `npm *` grants. The ONLY approval

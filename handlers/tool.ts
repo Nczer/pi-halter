@@ -2,7 +2,7 @@ import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-
 import type {ToolRequest} from "../decide/types";
 import { gate, rejectTool } from "../gate/gate";
 import { store } from "../gate/store";
-import { getLoadedPlugins } from "../plugins/loader";
+import { getLoadedPlugins, getPluginLoadError } from "../plugins/loader";
 import type { ToolGateRequest } from "../plugins/types";
 
 /**
@@ -19,6 +19,17 @@ export async function handleTool(
   event: ToolCallEvent,
   ctx: ExtensionContext,
 ) {
+  // The plugin scan could not read the extensions root: which tools are gated
+  // is unknown, so a pass-through would be an unverifiable allow. Block and
+  // say why (the invariant is fail-closed per tool, plugins/loader.ts).
+  const loadError = getPluginLoadError();
+  if (loadError) {
+    return {
+      block: true,
+      reason: `[Permission Policy] halter could not read the extensions root — plugin gating is unavailable, so tool calls are blocked (fail closed): ${loadError.slice(0, 200)}. Fix the directory and /reload.`,
+    };
+  }
+
   const name = typeof event.toolName === "string" ? event.toolName : null;
   if (!name) return;
 

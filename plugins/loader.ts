@@ -61,10 +61,15 @@ function sniffName(file: string): string | undefined {
 export async function loadPlugins(root?: string): Promise<Map<string, PluginSlot>> {
   const base = root ?? extensionsRoot();
   const slots = new Map<string, PluginSlot>();
+  loadError = null;
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(base, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    // Fail CLOSED at the seam that decides which tools are gated: with no
+    // listing we cannot prove any plugin exists, and a silent empty map would
+    // let every gated tool through ungated (handlers/tool.ts blocks them).
+    loadError = err instanceof Error ? err.message : String(err);
     return slots;
   }
   for (const entry of entries) {
@@ -88,9 +93,16 @@ export async function loadPlugins(root?: string): Promise<Map<string, PluginSlot
 // from here (avoids threading the map through every call site).
 
 let loaded: Map<string, PluginSlot> = new Map();
+/** Why the plugin scan could not read the extensions root, if it could not. */
+let loadError: string | null = null;
 
 export function setLoadedPlugins(slots: Map<string, PluginSlot>): void {
   loaded = slots;
+}
+
+/** The plugin scan's failure (unreadable extensions root), or null. */
+export function getPluginLoadError(): string | null {
+  return loadError;
 }
 
 export function getLoadedPlugins(): Map<string, PluginSlot> {

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { wrapperCommands } from "../config";
+import { skipEnvPrefixes, wrapperCommands } from "../config";
 
 /**
  * The command position of a word list: the ONE unwrapper for shell prefixes
@@ -87,16 +87,30 @@ export const MAX_UNWRAP_HOPS = 4;
  * can see whether the program is path-qualified (`bin/ls`, `/tmp/evil/git`).
  */
 export function commandPositionWord(words: string[]): {
+  /** The program word the shell would exec first, dequoted and with its
+   *  word-boundary backslash escapes removed (`\cat` → `cat`): this is the
+   *  word the closed tables are keyed on, and the word a grant must name. */
   word: string;
+  /** Absolute index of `word` in the caller's `words`. */
   index: number;
   lookup: boolean;
   capped: boolean;
+  /** The inline env assignments (`FOO=1 ls`) the shell skips before the
+   *  command. They are part of the invocation (they decide the environment
+   *  the program runs in: PATH, LD_PRELOAD, …), so an identity that omits
+   *  them names a command the user did not approve. */
+  assignments: string[];
 } {
-  let skip = 0;
-  while (skip < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[skip])) skip++;
-  const res = resolveDelegatedTokens(words.slice(skip));
-  if (res) return { word: words[skip + res.index] ?? "", index: skip + res.index, lookup: res.lookup, capped: res.capped };
-  return { word: words[skip] ?? "", index: skip, lookup: false, capped: false };
+  const skip = skipEnvPrefixes(words);
+  const res = resolveDelegatedTokens(words);
+  const index = res ? res.index : skip;
+  return {
+    word: (words[index] ?? "").replace(/^\\+/, ""),
+    index,
+    lookup: res?.lookup ?? false,
+    capped: res?.capped ?? false,
+    assignments: words.slice(0, skip),
+  };
 }
 
 /**
@@ -160,7 +174,11 @@ function unwrapOneHop(words: string[], from: number): { index: number; lookup: b
  * chain is too deep to name a program.
  */
 export function resolveDelegatedTokens(words: string[]): DelegatedResolution | null {
-  let index = 0;
+  // Inline env assignments precede the command word (`FOO=1 env …`): the
+  // shell skips them, so the unwrapper must too or the assignment reads as
+  // the program (and every verb-keyed rule misses the command underneath).
+  const start = skipEnvPrefixes(words);
+  let index = start;
   let lookup = false;
   for (let hop = 0; hop <= MAX_UNWRAP_HOPS; hop++) {
     const step = unwrapOneHop(words, index);
@@ -169,7 +187,7 @@ export function resolveDelegatedTokens(words: string[]): DelegatedResolution | n
     lookup = lookup || step.lookup;
     if (hop === MAX_UNWRAP_HOPS) return { cmd: "", index, lookup, capped: true };
   }
-  if (index === 0) return null;
+  if (index === start) return null;
   const word = words[index] ?? "";
   if (!word || word.startsWith("-") || word === "__STR__" || word === "__CMD_SUBST__") return null;
   return { cmd: path.basename(word.toLowerCase()), index, lookup, capped: false };

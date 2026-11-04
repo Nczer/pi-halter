@@ -4,7 +4,7 @@ A halter for pi tool calls. Intercepts `bash` and `read`/`write`/`edit` calls, a
 
 ## Features
 
-- **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.); prompts for credential paths (`.ssh`, `.gnupg`, `.env`, `.aws`, …) with a very-high-risk warning — even via `cat`/`grep`
+- **Bash commands** — auto-allows simple read-only commands (`ls`, `grep`, `find`, etc.); prompts for dangerous operations (`rm`, `sudo`, `curl | bash`, etc.); prompts for credential paths (`.ssh`, `.gnupg`, `.env`, `.aws`, …) with a very-high-risk warning — even via `cat`/`grep`. The program is read past its spelling (`"rm"`, `\rm`, `FOO=1 rm` all run rm): quoting or escaping a command name never hides it from the danger tables, and an inline env assignment is prompt-first with its own exact grant (`FOO=1 ls`) — never a wildcard
 - **File access** — auto-allows reads inside cwd, trusted paths, and nonexistent paths (a read can only ENOENT — nothing can leak); prompts for paths outside cwd and credential names (`.env`, `.ssh`, etc.)
 - **Opaque path resolution** — tokens static analysis cannot bind (`$VAR`, `$(…)`, globs over unknown bases) are listed as unresolved in the prompt; with the judge enabled it suggests concrete dirs, and a user-confirmed suggestion becomes a binding deterministic resolution (the token stops prompting)
 - **Tool plugins** — any tool ext that ships `<ext>/halter/index.ts` is gated: the plugin classifies calls as `exec` (script payload → judge/dspa), `file` (target path → outside-cwd warning), or `consent` (per-kind session consent); discovery calls pass ungated; a broken plugin blocks its tool fail-closed

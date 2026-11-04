@@ -52,9 +52,15 @@ export function resolvePathReal(inputPath: string, cwd: string): string {
   const memoized = realPathMemo.get(resolved);
   if (memoized !== undefined) return memoized;
   let found: string | null = null;
+  // True when `found` was assembled from the deepest EXISTING parent instead
+  // of a realpath of the target itself. Such an answer is only valid until the
+  // leaf appears: a path that is a plain file now can be a symlink to outside
+  // the bar a moment later, so it is not memoized (see the cache note below).
+  let approximated = false;
   try {
     found = fs.realpathSync(resolved);
   } catch {
+    approximated = true;
     // Path doesn't exist — walk up to find the deepest existing parent,
     // resolve it (catches symlinks in parent directories), then re-append
     // the remaining components.
@@ -71,8 +77,14 @@ export function resolvePathReal(inputPath: string, cwd: string): string {
     }
   }
   const result = found ?? resolved; // no existing parent (e.g. /tmp/new/sub/file) — as-is
-  if (realPathMemo.size >= REAL_PATH_MEMO_MAX) realPathMemo.clear();
-  realPathMemo.set(resolved, result);
+  // Only a realpath of the target itself is memoized: it is stable for the
+  // session's purposes. An assembled answer is re-derived on every call, so a
+  // leaf created as a symlink later in the session (the TOCTOU this gate
+  // exists to notice) is seen the next time it is asked about (3.50.0).
+  if (!approximated) {
+    if (realPathMemo.size >= REAL_PATH_MEMO_MAX) realPathMemo.clear();
+    realPathMemo.set(resolved, result);
+  }
   return result;
 }
 

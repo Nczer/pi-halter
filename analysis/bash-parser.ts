@@ -899,18 +899,18 @@ function commandNameNode(node: TSNode): TSNode | null {
 function getCommandNameWord(node: TSNode): string | null {
   const n = commandNameNode(node);
   if (!n) return null;
-  return n.parent?.type === "command_name" ? n.text : resolveNodeText(n);
+  return resolveNodeText(n);
 }
 
 /** Get the command name from a command AST node. */
 function getCommandName(node: TSNode): string | null {
   const n = commandNameNode(node);
   if (!n) return null;
-  // A command_name child is read raw (tree-sitter already worded it); a
-  // word-like child goes through the dequoting/escape walk.
-  return n.parent?.type === "command_name"
-    ? n.text.toLowerCase()
-    : resolveNodeText(n).toLowerCase();
+  // The shell value of the word, never the raw node text: `"cat"`, `$'cat'`
+  // and `\cat` all run cat, and a raw read made them unknown programs — not
+  // path-aware, so `"cat" /etc/passwd` minted no operand and the read bar
+  // never saw the file (3.50.0).
+  return resolveNodeText(n).toLowerCase();
 }
 
 /** An assignment value that is not a statically known program name. */

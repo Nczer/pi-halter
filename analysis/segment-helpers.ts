@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isFirstTokenRelativePath } from "./path-analysis";
 import type { BashSegment } from "./bash-parser";
-import { isWriteOperation, isAllowedCommand, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, fetchFormScan, type FetchFormScan, uvRunFlags, uvFetchFormOk, resolveDepSource, type UvRunDep, type UvRunOption, type UvRunFlags } from "../config";
+import { isWriteOperation, isAllowedCommand, PACKAGE_MANAGERS, unconditionallySafeCommands, wrapperCommands, GIT_GLOBAL_FLAGS, skipEnvPrefixes, fetchFormScan, type FetchFormScan, uvRunFlags, uvFetchFormOk, resolveDepSource, type UvRunDep, type UvRunOption, type UvRunFlags } from "../config";
 import { splitIntoSegments, splitOnPipe, tokenizeSegment, tokenizeSegmentQuoted } from "./tokenizer";
 import { resolveDelegatedTokens, skipWrapperArg, commandPositionWord } from "./wrapper-unwrap";
 import { classifyArgv0 } from "./argv0-path";
@@ -190,9 +190,33 @@ export function echoInterpretsEscapes(segment: string): boolean {
   return false;
 }
 
+/**
+ * The program a segment runs first, in the form the closed tables are keyed
+ * on: inline env assignments skipped (`FOO=1 ls` runs ls), quotes removed
+ * (`"cat"`, `$'cat'`), word-boundary backslashes stripped (`\cat`), basename,
+ * lowercased. WRAPPERS ARE NOT UNWRAPPED — `timeout cat` answers `timeout`,
+ * which is the word the allow table and the pattern tables must judge; the
+ * delegated command is `getEffectiveCommand`'s / `getDelegatedCommand`'s
+ * question. One reading for every verb-keyed consumer: reading the raw first
+ * whitespace word let `FOO=1 rm -rf`, `"rm" -rf` and `\rm -rf` name no
+ * program at all (no `[Pattern] rm`, so an Always was offered for a recursive
+ * forced delete, and a grant minted from one spelling covered another).
+ */
 export function getFirstWord(segment: string): string {
-  const word = segment.trim().split(/\s+/)[0].toLowerCase();
-  return path.basename(word);
+  const words = tokenizeSegment(segment);
+  const word = (words[skipEnvPrefixes(words)] ?? "").replace(/^\\+/, "");
+  return path.basename(word.toLowerCase());
+}
+
+/**
+ * True when the segment leads with an inline env assignment (`FOO=1 cmd`).
+ * Such an invocation carries an environment the closed tables cannot vouch
+ * for (PATH decides which binary runs; LD_PRELOAD decides what it loads), so
+ * the table, the delegation rule and the prefix-grant rule all refuse it —
+ * only the exact, assignment-aware signature grant can approve the spelling.
+ */
+export function hasInlineAssignment(segment: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokenizeSegment(segment)[0] ?? "");
 }
 
 /**
@@ -232,9 +256,10 @@ export function getEffectiveCommand(segment: string): string {
   const words = tokenizeSegment(segment);
   const res = resolveDelegatedTokens(words);
   if (res && !res.capped) return res.cmd;
-  // Non-delegating segment: effective command is the first word itself
-  // (same as pre-wrapper-resolution behavior, incl. leading-backslash forms).
-  const word = words[0] ?? "";
+  // Non-delegating segment: the program is the first word after the inline
+  // assignments (`FOO=1 rm` runs rm), dequoted by the tokenizer and with
+  // word-boundary backslashes removed (`\rm` runs rm).
+  const word = (words[skipEnvPrefixes(words)] ?? "").replace(/^\\+/, "");
   return path.basename(word.toLowerCase());
 }
 
@@ -443,32 +468,40 @@ export function getCommandSignature(segment: string, base?: string | null): stri
     .replace(SIG_REDIRECT_RE, "")
     .replace(SIG_INPUT_RE, "")
     .trim();
+  // The COMMAND POSITION is read from dequoted words: `"rm"`, `$'rm'` and
+  // `\rm` all run rm, and an inline `FOO=1` is not the program. The
+  // marker-stripped view stays for the ARGUMENT identity below (a quoted
+  // argument must not contribute flags or a subcommand).
+  const words = tokenizeSegment(cleaned);
+  const assignments = words.slice(0, skipEnvPrefixes(words));
+  // The environment prefix is part of the invocation (`PATH=…` decides which
+  // binary runs, `LD_PRELOAD=…` what it loads), so it is part of the identity —
+  // and a grant can only ever cover the same prefix. Lowercased like every
+  // other identity part (the signature is a table key, not a path).
+  const prefix = assignments.length > 0 ? `${assignments.join(" ").toLowerCase()} ` : "";
+  const programWord = (words[assignments.length] ?? "").replace(/^\\+/, "");
+  const programName = path.basename(programWord.toLowerCase());
+  if (!programName) return prefix.trim();
   const tokens = stripQuotedStrings(cleaned).split(/\s+/);
-  const cmd = tokens[0].toLowerCase();
-
-  const cmdBase = path.basename(cmd);
+  const cmdBase = programName;
   // G4: when the command position names a program BY PATH (`bin/ls`,
   // `./node_modules/.bin/npm`, `nice bin/ls`), that location is part of the
-  // identity. The wrapper branch below collapses the delegate to a basename and
-  // an env-assignment prefix (`FOO=/tmp/x /tmp/y`) hides argv0 entirely — either
-  // way the grant that comes back names a program this command did not run.
-  const pos = commandPositionWord(tokens);
+  // identity. A qualified program is named by its path AS WRITTEN — folding a
+  // path's case folds two different files into one grant — while everything
+  // else keeps the folded name the closed sets are keyed on.
+  const pos = commandPositionWord(words);
   const qualWord = pos.word.includes("/") && !pos.lookup && !pos.capped
     && classifyArgv0(pos.word, base ?? null) === "qualified" ? pos.word : null;
-  // The head of the identity. A qualified program is named by its path AS
-  // WRITTEN — case-folding a path folds two different files into one grant —
-  // while everything else keeps the folded name the closed sets are keyed on.
-  const head = qualWord !== null && pos.index === 0 ? qualWord : cmd;
   // Wrapper/prefix transparency: a wrapped command's signature must name the
   // delegated command, so an "Always" grant on `timeout curl` can't cover
   // `timeout ssh`, and a bare `timeout` grant covers nothing wrapped at all.
-  const deleg = resolveDelegatedTokens(tokens);
+  const deleg = resolveDelegatedTokens(words);
   if (deleg?.capped) {
     // Past the unwrap cap the chain names no program. The signature is the
-    // wrapper alone — never a program name a grant could not see — and the
-    // parser has already marked the command position obscured, so this segment
-    // is not auto-allowable regardless of what is granted.
-    return cmdBase;
+    // first program word alone — never a program name a grant could not see —
+    // and the parser has already marked the command position obscured, so this
+    // segment is not auto-allowable regardless of what is granted.
+    return `${prefix}${cmdBase}`;
   }
   if (deleg && !deleg.lookup) {
     // A wrapped `uv run` keeps its dependency set in the signature: the wrapper
@@ -484,8 +517,8 @@ export function getCommandSignature(segment: string, base?: string | null): stri
     // runner's tail in the signature: the grant has to name the command that
     // actually runs. Its first word is the delegated name already rendered.
     const runnerTail = inner ? inner.runner.split(/\s+/).slice(1) : [];
-    if (inner === null) return `${cmdBase} ${name}`;
-    return [cmdBase, name, ...runnerTail, ...inner.items].join(" ");
+    if (inner === null) return `${prefix}${cmdBase} ${name}`;
+    return prefix + [cmdBase, name, ...runnerTail, ...inner.items].join(" ");
   }
 
   // uv's run forms name their ENTIRE install set (registry deps, local
@@ -496,8 +529,10 @@ export function getCommandSignature(segment: string, base?: string | null): stri
   // grant for an interpreter that is a filesystem location and never named it.
   // The option-aware signature is the grant's identity; see uvRunSignature.
   if (cmdBase === "uv" || cmdBase === "uvx") {
+    // uvRunFlags skips the inline assignments itself, so the dependency
+    // identity survives `FOO=1 uv run …` (the prefix above keeps it honest).
     const runSig = uvRunSignature(firstCmd, base);
-    if (runSig !== null) return runSig;
+    if (runSig !== null) return `${prefix}${runSig}`;
   }
 
   // Package managers: include subcommand for granular control
@@ -506,22 +541,24 @@ export function getCommandSignature(segment: string, base?: string | null): stri
   if (PACKAGE_MANAGERS.has(cmdBase)) {
     // Find the subcommand: first non-flag token, skipping values of flags that
     // consume the next token (--prefix /x). Inline values (--prefix=/x) are
-    // part of the flag token and skipped with it.
-    for (let i = 1; i < tokens.length; i++) {
+    // part of the flag token and skipped with it. The scan starts after the
+    // command words (an inline assignment is itself a token).
+    for (let i = assignments.length + 1; i < tokens.length; i++) {
       const t = tokens[i];
       if (t.startsWith("-")) {
         if (PM_VALUE_FLAGS.has(t) && !t.includes("=")) i++; // skip the flag's value
         continue;
       }
-      return `${qualWord ?? cmdBase} ${t}`;
+      return `${prefix}${qualWord ?? cmdBase} ${t}`;
     }
-    return qualWord ?? cmdBase; // e.g. "npm" with only flags
+    return `${prefix}${qualWord ?? cmdBase}`; // e.g. "npm" with only flags
   }
 
   const flags = tokens.slice(1).filter(t => t.startsWith("-")).sort();
-  // An env-assignment prefix hides argv0 (`FOO=/tmp/x /tmp/y`): name the
-  // program next to the assignment so the grant says what it approves.
-  const named = qualWord !== null && pos.index > 0 ? `${head} ${qualWord}` : head;
+  // A qualified program is named by its path (case-true); a system-dir path
+  // keeps its written form (`/usr/bin/ls`); a bare name folds to the key form.
+  const head = qualWord ?? (programWord.includes("/") ? programWord : cmdBase);
+  const named = `${prefix}${head}`;
   return flags.length === 0 ? named : `${named} ${flags.join(" ")}`;
 }
 
@@ -580,12 +617,32 @@ const GIT_CLEAN_FLAGS_RE = /-[a-z]*[fdx][a-z]*/;
  *   - core.sshCommand=… → run instead of ssh
  *   - core.fsmonitor=…  → run on every refresh (unconditional)
  *   - core.askpass=…    → run to prompt for credentials
+ *   - core.hooksPath=…  → run hooks from a directory outside the repo
  */
-const GIT_DANGEROUS_CONFIG_RE = /^(?:alias\.[^=]+=!|credential\.helper=!|diff\.external=|filter\.[^=]+\.(?:clean|smudge)=|pager\.[^=]+=|interactive\.diffFilter=|sequence\.editor=|core\.(?:pager|editor|sshCommand|fsmonitor|askpass)=)/;
+const GIT_DANGEROUS_CONFIG_RE = /^(?:alias\.[^=]+=!|credential\.helper=!|diff\.external=|filter\.[^=]+\.(?:clean|smudge)=|pager\.[^=]+=|interactive\.diffFilter=|sequence\.editor=|core\.(?:pager|editor|sshCommand|fsmonitor|askpass|hooksPath)=)/;
 
 /** True if a `-c`/`--config` value configures git to execute a command. */
 function isDangerousGitConfigValue(value: string | undefined): boolean {
   return value !== undefined && GIT_DANGEROUS_CONFIG_RE.test(value);
+}
+
+/**
+ * `--config-env=<key>=<ENVAR>` is `-c key=$ENVAR` with the value read from the
+ * environment — the same exec vectors (`core.fsmonitor`, `core.pager`, …), and
+ * `alias.*` is unreadable here (the env value may start with `!`), so every
+ * alias key is treated as dangerous. Only the KEY is visible, which is why the
+ * key is what gets tested.
+ */
+function dangerousConfigEnvKey(key: string): boolean {
+  if (/^alias\./.test(key)) return true;
+  return GIT_DANGEROUS_CONFIG_RE.test(`${key}=`);
+}
+
+/** The key of a `--config-env` value (`key=ENVAR`), or undefined when malformed. */
+function configEnvKey(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const eq = value.indexOf("=");
+  return eq > 0 ? value.slice(0, eq) : undefined;
 }
 
 /** True if a git global arg (plus its value token) carries dangerous inline config. */
@@ -593,6 +650,14 @@ function hasDangerousInlineConfig(arg: string, next: string | undefined): boolea
   if (arg === "-c" || arg === "--config") return isDangerousGitConfigValue(next);
   if (arg.startsWith("-c") && !arg.startsWith("-C") && arg.includes("=")) return isDangerousGitConfigValue(arg.slice(2));
   if (arg.startsWith("--config=")) return isDangerousGitConfigValue(arg.slice("--config=".length));
+  if (arg === "--config-env") {
+    const key = configEnvKey(next);
+    return key === undefined ? true : dangerousConfigEnvKey(key);
+  }
+  if (arg.startsWith("--config-env=")) {
+    const key = configEnvKey(arg.slice("--config-env=".length));
+    return key === undefined ? true : dangerousConfigEnvKey(key);
+  }
   return false;
 }
 
@@ -628,6 +693,13 @@ function isGitConfigWrite(subArgs: string[]): boolean {
   return subArgs.slice(keyIdx + 1).some(a => !GIT_CONFIG_READ_TAIL_FLAGS.has(a));
 }
 
+/** `git checkout`/`switch` flags (or operands) that discard uncommitted work:
+ *  -f/--force, --discard-changes, -p/--patch (interactive hunk selection),
+ *  and a path operand (`--`, `.`, `..`, anything with a slash — resolving a
+ *  bare filename that is also a branch is git's own ambiguity, not ours). */
+const GIT_DISCARD_FLAG_RE = /^(?:-f|--force|--discard-changes|-p|--patch)$|^-[a-zA-Z]*f[a-zA-Z]*$/;
+const isGitPathOperand = (x: string): boolean => x === "--" || x === "." || x === ".." || x.includes("/");
+
 const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => boolean }> = [
   { match: (sub) => sub === "rm" },
   { match: (sub, a) => sub === "clean" && a.some(x => GIT_CLEAN_FLAGS_RE.test(x)) },
@@ -635,21 +707,37 @@ const GIT_DANGER_HANDLERS: Array<{ match: (sub: string, subArgs: string[]) => bo
   // ANY push writes to the remote ("any write = prompt"). Force variants
   // additionally rewrite history — GitEvaluator reports those as high.
   { match: (sub) => sub === "push" },
-  { match: (sub, a) => sub === "reflog" && a.includes("expire") },
+  { match: (sub, a) => sub === "reflog" && a.some(x => x === "expire" || x === "delete") },
   { match: (sub, a) => sub === "gc" && a.some(x => x.startsWith("--prune")) },
   { match: (sub, a) => sub === "config" && isGitConfigWrite(a) },
+  // Local-history destruction (3.50.0): verbs and flags that throw away
+  // commits, stashes, tags or uncommitted work. The remote-write list above
+  // never covered these, so `git checkout -- .`, `git stash clear`, `git
+  // branch -D` and `git update-ref -d` auto-allowed through the table.
+  { match: (sub, a) => (sub === "checkout" || sub === "switch") && a.some(x => GIT_DISCARD_FLAG_RE.test(x) || isGitPathOperand(x)) },
+  { match: (sub) => sub === "restore" },
+  { match: (sub, a) => sub === "branch" && a.some(x => x === "--delete" || x === "--force" || /^-[a-zA-Z]*[dDf]/.test(x)) },
+  { match: (sub, a) => sub === "tag" && a.some(x => x === "--delete" || x === "--force" || /^-[a-zA-Z]*[df]/.test(x)) },
+  { match: (sub, a) => sub === "stash" && a.some(x => x === "drop" || x === "clear") },
+  { match: (sub, a) => sub === "worktree" && a[0] === "remove" },
+  { match: (sub) => sub === "update-ref" || sub === "filter-branch" || sub === "replace" || sub === "prune" },
 ];
 
 /**
  * Resolve the git subcommand, skipping the global flags that may precede it
- * (-c value, -C value, --git-dir value, --work-tree value, --flag=value, and
- * bare global flags like --no-pager). `git -C dir push` → { sub: "push" } —
- * the -C dir is a location, not the subcommand.
+ * (-c value, -C value, --git-dir value, --work-tree value, --config-env value,
+ * --exec-path value, --flag=value, attached -C<dir>, and bare global flags like
+ * --no-pager). `git -C dir push` → { sub: "push" } — the -C dir is a location,
+ * not the subcommand. Inline env assignments are skipped first (`FOO=1 git …`).
  */
 export function parseGitSubcommand(segment: string): { sub: string; subArgs: string[] } | null {
-  const args = tokenizeSegment(segment);
-  if (args.length < 2) return null;
-  let subIdx = 1;
+  return parseGitSubcommandWords(tokenizeSegment(segment));
+}
+
+function parseGitSubcommandWords(args: string[]): { sub: string; subArgs: string[] } | null {
+  const start = skipEnvPrefixes(args);
+  if (args.length < start + 2) return null;
+  let subIdx = start + 1;
   while (subIdx < args.length) {
     const arg = args[subIdx];
     if (GIT_GLOBAL_FLAGS.has(arg)) {
@@ -660,11 +748,15 @@ export function parseGitSubcommand(segment: string): { sub: string; subArgs: str
       subIdx++;
       continue;
     }
+    // --exec-path / --config-env may carry their value in the next token.
+    if (arg === "--exec-path" || arg === "--config-env") { subIdx += 2; continue; }
     // --flag=value form (e.g., --git-dir=x)
     if (arg.startsWith("--") && arg.includes("=")) {
       subIdx++;
       continue;
     }
+    // Attached short values: -C<dir>, -c<name=value> (git accepts both).
+    if (/^-[cC].+/.test(arg)) { subIdx++; continue; }
     break;
   }
   if (subIdx >= args.length) return null;
@@ -674,12 +766,14 @@ export function parseGitSubcommand(segment: string): { sub: string; subArgs: str
 /**
  * Check if a git command is dangerous.
  * Used by segment-analysis.ts (pipeline loop) and GitEvaluator.
- * Skips global flags to find the actual subcommand.
+ * Skips inline env assignments and global flags to find the actual subcommand.
  */
 export function isGitDangerous(segment: string): boolean {
   // Quote-aware tokenization: `git -c "alias.st=!rm /tmp/x" st` must be seen
   // as -c + one value token, not split on the space inside the quotes.
-  const args = tokenizeSegment(segment);
+  const words = tokenizeSegment(segment);
+  const start = skipEnvPrefixes(words);
+  const args = words.slice(start);
   if (args.length < 2) return false;
 
   // Inline config that executes code is dangerous regardless of subcommand —
@@ -687,9 +781,13 @@ export function isGitDangerous(segment: string): boolean {
   // flagging it is the safe direction).
   for (let i = 1; i < args.length; i++) {
     if (hasDangerousInlineConfig(args[i], args[i + 1])) return true;
+    // `--exec-path` decides which `git-<sub>` binary runs: the bare form only
+    // prints the path (harmless), a value — inline or in the next token — sets
+    // it and is arbitrary code execution.
+    if (args[i].startsWith("--exec-path=") || (args[i] === "--exec-path" && args[i + 1] !== undefined)) return true;
   }
 
-  const parsed = parseGitSubcommand(segment);
+  const parsed = parseGitSubcommandWords(args);
   if (!parsed) return false;
   return GIT_DANGER_HANDLERS.some(h => h.match(parsed.sub, parsed.subArgs));
 }

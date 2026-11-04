@@ -11,7 +11,7 @@ import { dirsOfLocations, barLocations, pathWord, type PathWord } from "./path-w
 import { classifyStageArgv0 } from "./argv0-path";
 import { assessDeletes, type DeleteScale } from "./delete-scale";
 import { checkCommandForCredentialPaths } from "./credentials";
-import { getCommandSignature, getFirstWord, STARTS_WITH_REDIRECT_RE, segmentNamesRunOptions, segmentRunFormUngrantable, segmentStages } from "./segment-helpers";
+import { getCommandSignature, getFirstWord, hasInlineAssignment, STARTS_WITH_REDIRECT_RE, segmentNamesRunOptions, segmentRunFormUngrantable, segmentStages } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
 
 /** Safety verdict for a shell command. */
@@ -674,6 +674,14 @@ export async function analyzeCommand(
     if (STARTS_WITH_REDIRECT_RE.test(segmentTexts[i].trim())) continue;
     for (let j = 0; j < stageTexts[i].length; j++) {
       const st = stageTexts[i][j];
+      // An inline env assignment is never table-allowable (decide/bash-rules
+      // refuses it), so the stage is non-allowlisted by construction — the
+      // prompt must offer the exact assignment-aware identity, or the
+      // spelling would prompt forever with nothing to approve.
+      if (hasInlineAssignment(st)) {
+        nonAllowlistedStages.push([i, j]);
+        continue;
+      }
       if (isSafeSubcommand(st) || isAllowedCommand(getFirstWord(st))) continue;
       nonAllowlistedStages.push([i, j]);
     }
