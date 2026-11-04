@@ -1,5 +1,90 @@
 # Changelog
 
+## 3.50.0 — 2026-11-04
+**The program is read past its spelling — and a grant names it.**
+
+- **Three spellings of one program named no program at all.** The verb-keyed
+  layer (allow table, `dangerousCommandPatterns`, evaluators, signature,
+  grants) read the first whitespace word of the segment text. `FOO=1 rm -rf x`,
+  `"rm" -rf x` and `\rm -rf x` therefore carried no `[Pattern] rm` and no
+  recursive/forced reason, so the prompt offered an **Always** where principle
+  5 forbids one — and the identity minted from that click was the assignment or
+  the quote marker (`foo=1 -rf`, `__str__ -rf`, `\rm -rf`). Because grants
+  prefix-match, the click then covered a different program behind the same
+  prefix, verified end to end: a grant stored from `FOO=1 ls` auto-allowed
+  `FOO=1 git push` and `FOO=1 python3 -c 'os.system("id")'`; one from
+  `"git" push` auto-allowed `"rm" -rf /tmp/x`, `"npm" install lodash` and
+  `"cat" /etc/passwd` (the last one also skipped the read bar: the parser's
+  command-name node was read RAW, so a quoted/escaped name was not a
+  path-aware command and never minted its operands).
+  - One reading of the command position now: `getFirstWord` dequotes
+    (`tokenizeSegment`), strips word-boundary backslashes, skips inline
+    assignments and folds the basename — wrappers stay in place (`timeout cat`
+    answers `timeout`), delegation stays the unwrapper's question.
+    `resolveDelegatedTokens`/`commandPositionWord`/`getEffectiveCommand`/
+    `getCommandSignature` all start past the assignments, and the parser's
+    `getCommandName`/`getCommandNameWord` use the resolved word (quote removal,
+    escape removal), so `"cat" /etc/passwd` mints `/etc/passwd`.
+  - Signatures name the program always: `FOO=1 ls` → `FOO=1 ls`,
+    `FOO=1 /bin/ls -la` → `FOO=1 /bin/ls -la`, `"cat"` → `cat`,
+    `\cat` → `cat`; the qualified/wrapper/package/uv identities are unchanged
+    (`nice bin/ls`, `npm test`, `uv run --with pandas`, and the pre-existing
+    `FOO=/tmp/x /tmp/y`).
+  - An inline assignment is prompt-first: `FastAllow` bails, `isSimple` is
+    false, and `isStageApproved` accepts only the exact assignment-aware grant
+    (prefix-cover for its own flag variants; an assignment-only grant such as
+    `FOO=1` now covers nothing anywhere — `gate/store.hasAllowedBashPrefix`
+    refuses a grant whose every word is an assignment). The trusted-script and
+    trusted-package paths keep working behind an assignment
+    (`DEBUG=1 python3 ~/.pi/agent/skills/x.py`, `FOO=bar npx tsc` — evaluated
+    after the table refusal, so D8/D10 are untouched).
+  - Tests: `test/command-position.test.ts` (the three spellings, the grant
+    round trips incl. the old `__str__`/`foo=1` collisions, the parser's path
+    minting, and the trusted-script/package controls).
+- **The git guard covered a hand-written subset of git's grammar.** Verified
+  auto-allows before this release: `git --exec-path=/tmp/evil status`
+  (arbitrary code via the subcommand binary), `git --config-env=core.fsmonitor=EVIL
+  status` (same exec vectors as `-c`, which was caught), `git checkout -- .`,
+  `git checkout -f main`, `git restore .`, `git stash drop/clear`,
+  `git branch -D`, `git tag -d`, `git update-ref -d`, `git worktree remove
+  --force`, and `git -C ~/Downloads/x init` (a write outside cwd no parser
+  operand ever named — git is not path-aware and `-C` is navigation).
+  - `--exec-path` and `--config-env` are danger forms now (the config-env KEY
+    decides; `alias.*` is exec-capable because its env value may start with
+    `!`), `core.hooksPath` joined the exec-capable keys, and the local-history
+    verbs/flags above are handlers (`checkout`/`switch` only for a discard flag
+    or a path operand — `git checkout main` stays allowed).
+  - `analysis/evaluators/git-evaluator.ts` checks git's location surface
+    against the config bar: `-C`/`--git-dir`/`--work-tree` values, `clone`
+    positionals (a local source is a read, the destination a write), `init`,
+    `worktree add`, `archive -o`, `bundle create`. A location outside the
+    working set (or a computed value) is a danger reason → prompt.
+  - Tests: `test/git-guard.test.ts` (18 destructive rows, 14 preserved
+    auto-allows, the exec flags, the benign `--exec-path` print and
+    `--config-env=user.name`, the location rows inside/outside cwd, and the
+    assignment/quoted/escaped spellings).
+- **Smaller fixes.** `plugins/loader.ts` recorded no failure when the
+  extensions root could not be listed, so the empty map let every gated tool
+  through ungated; `handlers/tool.ts` now blocks with the reason (fail closed)
+  and a later successful scan clears it (`test/plugins-loader.test.ts`).
+  `resolvePathReal` no longer memoizes an answer assembled from the deepest
+  existing parent — a leaf that does not exist yet can become a symlink later
+  in the session, and the stale entry answered the bar from the past. Dead code
+  removed (`fetchFormPackage`, `resetLegacyWidgets`, an empty `rm -r` branch);
+  `cleanToken`/`unquote` are one function.
+- **Not changed, deliberately.** Bare-name table keys stay case-folded
+  (`LS`, `GIT status`) — the table is a lookup key, and exploiting it needs a
+  case-variant binary that is itself a gated write or a PATH change.
+  `env ls` still prompts (env sets `LD_PRELOAD`; no static fallback), and
+  `nice FOO=1 ls` correctly names `foo=1` as the program (nice execs that word,
+  not ls). `git clone https://…` still auto-allows in manual (the dev flow;
+  /dspa's floor keeps `git clone` opaque). A `git -C <outside>` whose dir is a
+  SESSION read grant still prompts (the evaluator sees the config bar only —
+  a false prompt, never a false allow). `handlers/file.ts`'s `editWillApply`
+  still mirrors pi's edit matcher (unchanged coupling; the pass-through is
+  only for edits pi is guaranteed to reject).
+
+
 ## 3.49.0 — 2026-11-01
 **A script payload's own write now reaches the judge, and the ledger stops blaming
 the judge for what the command itself said.**
