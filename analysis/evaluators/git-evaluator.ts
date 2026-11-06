@@ -3,6 +3,7 @@ import { EvaluationBuilder } from "./builder";
 import { EvalCache, EvaluatorResult, RiskEvaluator } from "./types";
 import { getFirstWord, isGitDangerous, parseGitSubcommand } from "../segment-helpers";
 import { skipEnvPrefixes } from "../../config";
+import { GIT_FORCE_LEASE_REASON_TAIL, GIT_FORCE_REASON_TAIL } from "../../config/dangerous-patterns";
 import { tokenizeSegment } from "../tokenizer";
 import { expandTilde } from "../path-util";
 import { getOutsideCwdPaths, resolvePathReal } from "../path-analysis";
@@ -120,7 +121,10 @@ export const GitEvaluator: RiskEvaluator = {
       const parsed = parseGitSubcommand(segment);
       const sub = parsed?.sub ?? "?";
       const subArgs = parsed?.subArgs ?? [];
-      const forcePush = sub === "push" && (subArgs.includes("--force") || subArgs.includes("--force-with-lease") || subArgs.includes("-f"));
+      const forceFlag =
+        sub === "push"
+          ? subArgs.filter((a) => a === "--force" || a === "--force-with-lease" || a === "-f").at(-1) ?? null
+          : null;
       // A code-execution global flag is the reason when it is the reason: the
       // subcommand itself may be a read (`--exec-path` turns `status` into
       // "run /tmp/evil/git-status").
@@ -131,7 +135,7 @@ export const GitEvaluator: RiskEvaluator = {
       const reason =
         execFlag ? `git ${execFlag.split("=")[0]} (runs a program the command names)`
         : sub === "reset" ? `git reset --hard (discards uncommitted changes)`
-        : sub === "push" ? (forcePush ? `git push --force (rewrites remote history)` : `git push (writes to remote)`)
+        : sub === "push" ? (forceFlag ? `git push ${forceFlag}${forceFlag === "--force-with-lease" ? GIT_FORCE_LEASE_REASON_TAIL : GIT_FORCE_REASON_TAIL}` : `git push (writes to remote)`)
         : sub === "clean" ? `git clean -fdx (deletes untracked files)`
         : sub === "rm" ? `git rm (removes files from working tree)`
         : sub === "reflog" ? `git reflog expire (removes recovery history)`
@@ -144,7 +148,7 @@ export const GitEvaluator: RiskEvaluator = {
         : `git ${sub} (dangerous)`;
       // Destructive git ops are high; a plain (non-force) push is a normal
       // remote write — medium, still dangerous.
-      if (sub === "push" && !forcePush) b.danger(reason); else b.high(reason);
+      if (sub === "push" && !forceFlag) b.danger(reason); else b.high(reason);
     }
 
     // Locations the command names outside the working set (the parser mints

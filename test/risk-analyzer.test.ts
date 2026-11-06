@@ -62,6 +62,25 @@ describe("analyzeRisk", () => {
     expect(risk.reasons.some(r => r.includes("git push --force"))).toBe(true);
   });
 
+  it("names the force form the command used (filed 2026-11-01)", async () => {
+    // One pattern used to match both force forms, so the guarded form prompted
+    // with the blind form's words. The label is the user's only cue about which
+    // overwrite they are approving, and `git push -f` must read as `-f`.
+    const lease = await analyze("git push --force-with-lease origin main");
+    expect(lease.severity).toBe("high");
+    expect(lease.reasons.some((r) => r.includes("git push --force-with-lease"))).toBe(true);
+    expect(lease.reasons.some((r) => /git push --force(?!-with-lease)/.test(r))).toBe(false);
+    expect(lease.reasons.some((r) => r.includes("unless the remote moved"))).toBe(true);
+
+    const short = await analyze("git push -f origin main");
+    expect(short.reasons.some((r) => r.includes("git push -f"))).toBe(true);
+    expect(short.reasons.some((r) => r.includes("--force-with-lease"))).toBe(false);
+
+    // The blind form keeps the plain wording — no lease promise attached.
+    const plain = await analyze("git push --force origin main");
+    expect(plain.reasons.some((r) => r.includes("unless the remote moved"))).toBe(false);
+  });
+
   it("git -C <dir> push: subcommand resolved past the -C flag (medium, not high)", async () => {
     const risk = await analyze("git -C /tmp/repo push");
     expect(risk.dangerous).toBe(true);

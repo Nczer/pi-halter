@@ -39,6 +39,14 @@ export const dangerousCommandPatterns: { pattern: RegExp; label: string; absolut
   { pattern: /^systemctl$/i, label: "systemctl (service management)" },
 ];
 
+/** The two force-push wordings, shared by the absolute bar (here) and the risk
+ *  layer's reason line (analysis/evaluators/git-evaluator.ts) so a prompt cannot
+ *  describe the guarded form with the blind form's words. The tail is the part
+ *  after the flag, because the risk layer names the flag the command used
+ *  (`--force`, `--force-with-lease`, `-f`). */
+export const GIT_FORCE_REASON_TAIL = " (rewrites remote history)";
+export const GIT_FORCE_LEASE_REASON_TAIL = " (rewrites remote history unless the remote moved since you fetched)";
+
 /** Context-dependent patterns — tested against the full segment text (need flags/args context). */
 export const dangerousContextPatterns: { pattern: RegExp; label: string; absolute?: boolean }[] = [
   { pattern: /\b(?:apt|yum|dnf|pip|npm|uv)\s+install\b/i, label: "package install" },
@@ -49,7 +57,16 @@ export const dangerousContextPatterns: { pattern: RegExp; label: string; absolut
   { pattern: /\bperl\b.*\s-[a-bd-zA-Z]*i[^\s/]*(?:\s|$)/i, label: "perl -i (in-place file modification)" },
   { pattern: /\bsed\b.*\s-[a-bd-gj-zA-Z]*i[^\s/]*(?:\s|$)/i, label: "sed -i (in-place file modification)" },
   { pattern: /\bsed\s+--in-place\b/i, label: "sed --in-place (in-place file modification)" },
-  { pattern: /\bgit\s+push\s+.*--force\b/i, label: "git push --force", absolute: true },
+  // The two force forms are NOT the same risk and the prompt must not claim
+  // otherwise: `--force` overwrites whatever is on the remote, `--force-with-lease`
+  // refuses unless the remote still matches the local view. One pattern matched
+  // both and labelled the guarded form as a blind overwrite (filed 2026-11-01,
+  // from the ledger: `git push --force-with-lease` prompted as
+  // "git push --force"). Both stay absolute — rewriting a shared remote is the
+  // user's call either way. `git push -f` is NOT covered here (the short form is
+  // dangerous but not absolute) — Filed 2026-11-06.
+  { pattern: /\bgit\s+push\s+.*--force(?!-with-lease)\b/i, label: `git push --force${GIT_FORCE_REASON_TAIL}`, absolute: true },
+  { pattern: /\bgit\s+push\s+.*--force-with-lease\b/i, label: `git push --force-with-lease${GIT_FORCE_LEASE_REASON_TAIL}`, absolute: true },
   { pattern: /\bgit\s+reset\s+.*--hard\b/i, label: "git reset --hard", absolute: true },
   // The flag cluster must be matched as a cluster: `.*-[fdx]\b` never fires on
   // the common `-fdx` (after `-f` the following `d` breaks the word boundary and
