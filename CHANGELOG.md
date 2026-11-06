@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.51.0 — 2026-11-06
+**A prompt says which force it means, and a cut ledger row admits it.**
+
+- **`--force-with-lease` was prompted as `--force`.** One absolute-bar pattern
+  (`/\bgit\s+push\s+.*--force\b/i`) matched both spellings, so the guarded form —
+  which refuses unless the remote still matches the local fetch — was labelled
+  `"git push --force"`, a blind overwrite, in the prompt that asked the operator to
+  approve it. Filed 2026-11-01 from the ledger (1 row). The bar is two patterns now,
+  and the risk layer names the flag the command used: `git push --force-with-lease
+  (rewrites remote history unless the remote moved since you fetched)`,
+  `git push --force (rewrites remote history)`, `-f` named too. `[Git]` and
+  `[Absolute]` share the two exported tails, so the wording cannot drift apart again.
+  What did not move: both forms stay absolute — rewriting a shared remote is the
+  user's call either way — and `git push -f` stays dangerous-but-judged rather than
+  barred, an asymmetry now filed (docs/dspa-intent-floor.md, 2026-11-06).
+- **A cut `target` was an unmarked cut.** `MAX_TARGET_LEN` sliced long commands out
+  of `decisions.jsonl` with no marker while the judge and unresolved ledgers have
+  carried `cmdCut` since 3.44.0. In the 2026-11-06 audit window 50 of 810 decision
+  rows were cut, and two of them were replayed as if whole — a heredoc body sliced
+  mid-way turns into segments, the exact artefact `cmdCut` exists to warn about.
+  Rows now carry `targetCut: true` (`jq 'select(.targetCut)'`).
+- **The egress evidence slot was audited and stands.** The catch-all triggers per
+  segment but reads the RAW command, so an address inside one segment's heredoc body
+  is attributed to a later segment's unknown command. All 15 `network egress
+  (http…)` rows in the window: 7 are a download a script the command runs does right
+  then, 8 are bodies the same command then ran with `node`, 0 are the document shape a
+  narrowing would clear. **Decided: keep stopping** — an address in code the command
+  runs now is a destination (D-a, exfil is not intent-verifiable) — and two tests pin
+  the behaviour so a future narrowing is a deliberate act, not a silent one. The same
+  audit filed the opposite hole (a body piped to an allowlisted `bash` never reaches
+  the trigger), `BODY_PATH_RE` minting `/v1/status` as a path, and the `-f` gap above.
+
 ## 3.50.0 — 2026-11-04
 **The program is read past its spelling — and a grant names it.**
 
