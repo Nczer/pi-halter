@@ -237,11 +237,21 @@ describe("decision log", () => {
     expect(fileEntry).toMatchObject({ tool: "file", target: "/etc/passwd", cwd: tmp });
   });
 
-  it("truncates long bash commands", async () => {
+  it("truncates long bash commands and marks the cut", async () => {
     const cmd = "echo " + "x".repeat(2000);
     await gate({ type: "bash", command: cmd, cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
     const [entry] = lines(logFile);
     expect(entry.target.length).toBeLessThanOrEqual(1000);
+    // A replay must be able to distrust a row whose command is incomplete —
+    // 50 of the 810 rows in the 2026-11-06 ledger were cut in silence.
+    expect(entry.targetCut).toBe(true);
+  });
+
+  it("marks no cut on a whole command", async () => {
+    await gate({ type: "bash", command: "ls -la", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject);
+    const [entry] = lines(logFile);
+    expect(entry.target).toBe("ls -la");
+    expect(entry.targetCut).toBeUndefined();
   });
 
   it("HALTER_DECISION_LOG=off writes nothing", async () => {

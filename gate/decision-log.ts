@@ -192,8 +192,13 @@ export interface DecisionLogEntry {
 
   /** Block reason, or a one-line summary of why a prompt was needed; null for auto-allow. */
   reason: string | null;
-  /** Bash command (truncated), or file path. */
+  /** Bash command (truncated — see `targetCut`), file path, or tool label. */
   target: string;
+  /** True when `target` was cut at MAX_TARGET_LEN. Same economy marker the
+   *  other two ledgers carry (`cmdCut`, 3.44.0): a replay must be able to
+   *  distrust a row whose operation is incomplete, and 50 of the 810 rows in
+   *  the 2026-11-06 ledger were cut in silence. */
+  targetCut?: boolean;
   /**
    * File prompt only: the directory the prompt offers to grant — the
    * resolved path's containing dir (the outside-cwd primary grant and the
@@ -267,6 +272,7 @@ export function logDecision(
     const file = resolveLogPath();
     if (!file) return;
 
+    const target = targetOf(request);
     const entry: DecisionLogEntry = {
       ts: new Date().toISOString(),
       tool: request.type,
@@ -282,13 +288,16 @@ export function logDecision(
           : decision.kind === "prompt"
             ? summarizePrompt(decision)
             : decision.reason ?? null, // auto-allow: /dspa audit reason, else null
-      target: targetOf(request).slice(0, MAX_TARGET_LEN),
+      target: target.slice(0, MAX_TARGET_LEN),
       promptDir:
         decision.kind === "prompt" && decision.promptData.type === "file"
           ? promptDirOf(decision.promptData)
           : undefined,
       cwd: "cwd" in request ? request.cwd : undefined,
     };
+    // Log economy, with the marker: the ledger is mineable by eye and by replay,
+    // and a cut command must not be replayed as if it were whole.
+    if (target.length > MAX_TARGET_LEN) entry.targetCut = true;
     const line = JSON.stringify(entry) + "\n";
     appendJsonl(file, line);
   } catch {
