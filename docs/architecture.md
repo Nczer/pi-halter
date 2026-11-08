@@ -28,6 +28,7 @@ Decision rationale for the judge regimes lives in `docs/dspa-redesign.md`; per-c
 
 ```
 pi tool call
+  → gate/script-budget.ts  volume bound on scripted (nested) calls, ahead of the gate
   → handlers/        validate, build request, call gate()
   → gate/gate.ts     orchestrate (below)
       → decide/      engine → policy → bash rules / file policy → analysis/
@@ -38,7 +39,9 @@ pi tool call
 ```
 
 1. **Handler** (`handlers/`) builds a `PermissionRequest` (bash, file, or
-   plugin-classified tool) and calls `gate()`. Handlers add no policy.
+   plugin-classified tool) and calls `gate()`. Handlers add no policy. The one
+   check that runs before them is the scripted-call budget (below): a call past
+   its script's ceiling never reaches a policy or the judge.
 2. **Gate** (`gate/gate.ts`) decides, applies the dspa regime conversions and
    auto-allow attempt, writes the decision log line, then routes: auto-allow
    returns silently; block returns the reason; prompt goes to the prompt flow;
@@ -789,6 +792,38 @@ which is why `?`/`[` syntax is rejected at validation and a broken slot is
 reported (`handlers/tool.ts` names the pattern in the block reason). The loader
 scans the extensions root at halter load.
 
+## Scripted-call budget
+
+A codemode script's calls are ordinary tool calls: pi runs them through the
+agent tool pipeline and marks them with `parentToolCallId`, so each one is
+gated on its own merits by the paths above. Gating does not bound VOLUME. A
+script's loop is unbounded, and the model sees nothing until the script
+returns — so `while (…)` over `tools.bash()` is an unbounded number of prompts,
+judge calls (seconds each), and side effects.
+
+`gate/script-budget.ts` bounds that per SCRIPT: nested calls of the surface
+halter evaluates (`bash`, `read`, `write`, `edit`, anything a plugin gates) count
+against `MAX_GATED_CALLS_PER_SCRIPT`, keyed by `parentToolCallId`; the call past
+the ceiling is blocked fail-fast, ahead of `gate()`, so cost and blast radius
+stop there. The script keeps running and later gated calls block cheaply, and
+the block reason states the ceiling and what to do instead (return what you
+have, split the work). The model's own calls are never counted — a turn carries
+few of them, and they are declared, not looped.
+
+Properties worth naming: it is a RATE LIMITER, not a safety boundary (it bounds
+how much one script may attempt, never what one call may do); a budget block is
+returned in the call's error text and never reaches `gate()`, so the decision
+log records nothing for it (the ledger is a record of gate decisions — look for
+the ceiling text in the script's result instead); nested ids are
+read defensively, so a harness that does not set `parentToolCallId` simply gets
+no budget while the per-call gate stays intact; usage is cleared at
+`session_start`/`session_shutdown` and the key map is capped (oldest evicted);
+`/dsp` bypasses it with every other check.
+
+The other thing a script makes possible — many dialogs at once — is already
+handled: every halter interaction goes through `ui/ui-lock.ts`, so concurrent
+scripted calls queue instead of opening two prompts.
+
 ## Session state and observability
 
 - **Store** (`gate/store.ts`): session-scoped grants (signatures, paths,
@@ -874,6 +909,7 @@ gate/
   conversions.ts          D3/D11 auto-allow → prompt probes (file writes,
                           bash script payloads)
   dspa-gate.ts            the deterministic hard floor + manual bar
+  script-budget.ts        per-script ceiling on nested (scripted) gated calls
   store.ts                session grants + confirmed resolutions + aborts
   decision-log.ts         JSONL logs (decisions + unresolved)
 judge/

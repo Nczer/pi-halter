@@ -11,6 +11,7 @@ import { isLedgerLogEnabled, setLedgerLogEnabled } from "./config/logging";
 import {readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, JudgeSettings} from "./judge/judge";
 import {judgeStatus} from "./judge/verdict";
 import { store } from "./gate/store";
+import { checkScriptBudget, resetScriptBudget } from "./gate/script-budget";
 import { withUILock } from "./ui/ui-lock";
 import { registerAllowedReadDirs } from "./config";
 import { readConfigReadDirs } from "./halter-settings";
@@ -76,11 +77,13 @@ export default async function halterExtension(pi: ExtensionAPI) {
     // erase the other extension's startup report — the line belongs to
     // llama-link's model report.
     if (readPersistedMode() === "dspa" && !isDspaActive()) applyMode(ctx, "dspa");
+    resetScriptBudget();
   });
 
   // ── Session shutdown ──
   pi.on("session_shutdown", async (_event, ctx) => {
     store.reset();
+    resetScriptBudget();
     setDspActive(false);
     resetDspat();
     resetDspa();
@@ -284,6 +287,11 @@ export default async function halterExtension(pi: ExtensionAPI) {
     if (isDspActive()) return;
 
     try {
+      // Volume bound, ahead of the gate: one script may loop unbounded, and a
+      // call past its script's budget must never reach the judge (gate/script-budget.ts).
+      const budget = checkScriptBudget(event);
+      if (budget) return budget;
+
       return await handleBash(event, ctx)
         ?? await handleFile(event, ctx)
         ?? await handleTool(event, ctx);

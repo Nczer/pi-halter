@@ -17,6 +17,7 @@ const handlersMock = vi.hoisted(() => ({
 vi.mock("../handlers", () => handlersMock);
 
 import halterExtension from "../index";
+import { MAX_GATED_CALLS_PER_SCRIPT, resetScriptBudget } from "../gate/script-budget";
 
 /** Minimal ExtensionAPI stub capturing registered event handlers. */
 function makePi() {
@@ -85,5 +86,54 @@ describe("tool_call fail-closed boundary", () => {
     await halterExtension(api as never);
     const handler = (events.get("tool_call") as ToolCallHandler[])[0];
     expect(await handler(event, {})).toBeUndefined();
+  });
+});
+
+/**
+ * The scripted-call budget is wired AHEAD of the handlers (gate/script-budget.ts):
+ * a call past its script's ceiling must never reach a policy or the judge, so
+ * the handler mocks below must stay untouched.
+ */
+describe("tool_call — scripted-call budget position", () => {
+  const scripted = { ...event, toolCallId: "t1/7", parentToolCallId: "t1" };
+
+  beforeEach(() => {
+    resetScriptBudget();
+    for (const fn of Object.values(handlersMock)) {
+      fn.mockReset();
+      fn.mockResolvedValue(undefined);
+    }
+  });
+
+  it("a scripted call inside the budget still goes to the gate", async () => {
+    const { api, events } = makePi();
+    await halterExtension(api as never);
+    const handler = (events.get("tool_call") as ToolCallHandler[])[0];
+    expect(await handler(scripted, {})).toBeUndefined();
+    expect(handlersMock.handleBash).toHaveBeenCalledTimes(1);
+  });
+
+  it("a scripted call past the budget blocks without reaching the gate", async () => {
+    const { api, events } = makePi();
+    await halterExtension(api as never);
+    const handler = (events.get("tool_call") as ToolCallHandler[])[0];
+    for (let i = 0; i < MAX_GATED_CALLS_PER_SCRIPT; i++) {
+      await handler(scripted, {});
+    }
+    handlersMock.handleBash.mockClear();
+    const result = (await handler(scripted, {})) as { block?: boolean; reason?: string };
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toMatch(new RegExp(`at most ${MAX_GATED_CALLS_PER_SCRIPT} gated tool calls`));
+    expect(handlersMock.handleBash).not.toHaveBeenCalled();
+  });
+
+  it("the model's own calls are never counted", async () => {
+    const { api, events } = makePi();
+    await halterExtension(api as never);
+    const handler = (events.get("tool_call") as ToolCallHandler[])[0];
+    for (let i = 0; i < MAX_GATED_CALLS_PER_SCRIPT + 5; i++) {
+      await handler(event, {});
+    }
+    expect(handlersMock.handleBash).toHaveBeenCalledTimes(MAX_GATED_CALLS_PER_SCRIPT + 5);
   });
 });
