@@ -2,16 +2,17 @@ import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-
 import type {ToolRequest} from "../decide/types";
 import { gate, rejectTool } from "../gate/gate";
 import { store } from "../gate/store";
-import { getLoadedPlugins, getPluginLoadError } from "../plugins/loader";
+import { findLoadedSlot, getPluginLoadError } from "../plugins/loader";
 import type { ToolGateRequest } from "../plugins/types";
 
 /**
  * Handle plugin-gated tool calls. Dispatch is by tool NAME against the
- * loaded plugin slots (plugins/loader.ts) — a tool is gated IFF its ext
- * ships a <ext>/halter plugin. Fail-closed at both seams:
- *  - a BROKEN plugin (import/contract failure) blocks every call to its
- *    tool — the tool name is known (name must equal the ext dir), so the
- *    gate can never degrade to pass-through;
+ * loaded plugin slots (plugins/loader.ts) — exact first, then a glob slot —
+ * so one plugin can gate a whole namespace (an MCP server's tools). A tool is
+ * gated IFF its ext ships a <ext>/halter plugin. Fail-closed at both seams:
+ *  - a BROKEN plugin (import/contract failure) blocks every call it can name —
+ *    its dispatch key (`name`, or the `match` glob) is sniffed from the file,
+ *    so the gate can never degrade to pass-through;
  *  - a plugin that THROWS in buildRequest blocks the call with the error.
  * A null classification passes ungated (discovery actions, status).
  */
@@ -33,13 +34,18 @@ export async function handleTool(
   const name = typeof event.toolName === "string" ? event.toolName : null;
   if (!name) return;
 
-  const slot = getLoadedPlugins().get(name);
-  if (!slot) return; // no plugin — not halter's surface
+  // Exact slot first, then a glob slot (one plugin gating a namespace, e.g. an
+  // MCP server). The slot is named by its DISPATCH KEY — a broken glob plugin
+  // must be fixable from the message, so say which key matched, not just the tool.
+  const hit = findLoadedSlot(name);
+  if (!hit) return; // no plugin — not halter's surface
+  const slot = hit.slot;
+  const byGlob = hit.key !== name;
 
   if (slot.state === "broken") {
     return {
       block: true,
-      reason: `[Permission Policy] halter plugin for '${name}' failed to load (${slot.error}) — blocked (fail closed). Fix the plugin and /reload.`,
+      reason: `[Permission Policy] halter plugin for '${name}'${byGlob ? ` (gated by the pattern '${hit.key}')` : ""} failed to load (${slot.error}) — blocked (fail closed). Fix the plugin and /reload.`,
     };
   }
 
@@ -50,7 +56,7 @@ export async function handleTool(
     const msg = err instanceof Error ? err.message : String(err);
     return {
       block: true,
-      reason: `[Permission Policy] halter plugin '${name}' threw while classifying the call — blocked (fail closed): ${msg.slice(0, 200)}`,
+      reason: `[Permission Policy] halter plugin '${name}'${byGlob ? ` (pattern '${hit.key}')` : ""} threw while classifying the call — blocked (fail closed): ${msg.slice(0, 200)}`,
     };
   }
   if (!req) return; // pass (discovery/status)

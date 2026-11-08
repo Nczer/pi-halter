@@ -738,7 +738,11 @@ a file directly under `/`.
 ## Tool plugin contract
 
 A tool extension opts in by shipping `<ext>/halter/index.ts` that default-exports
-a plugin (`plugins/types.ts`). `buildRequest(event, ctx)` classifies each
+a plugin (`plugins/types.ts`). The plugin gates one tool (`name`) or a whole
+namespace (`match`, a `*` glob such as `mcp__blender__*` — one plugin for one
+MCP server); dispatch is exact key first, then the first matching glob in sorted
+order, and the plugin must not gate the whole tool surface (`match` needs a
+literal prefix or validate() rejects it). `buildRequest(event, ctx)` classifies each
 call, and the KIND SELECTS THE PATH — two families (content-classes):
 
 Content-judge (judgeable — the /dspa cascade can auto-allow):
@@ -772,12 +776,18 @@ stay separate per kind (a read consent can never cover exec).
 `null` returns the call ungated (discovery calls).
 
 Grants: `<tool>` = whole tool (the "Always" on exec/file prompts);
-`<tool>:kind:<k>` = one consent or egress kind. `exec`/`egress` are
+`<tool>:kind:<k>` = one consent or egress kind. Keys are the CONCRETE tool name
+in both directions (rule generation and lookup), so a `match` plugin grants per
+VERB, never per namespace. `exec`/`egress` are
 judgeable under dspa; `file`/`consent` are never auto-allowed (session
 grants cover them). Fail-closed: a plugin that fails to import or violates
-the contract blocks ALL calls to its tool; the loader recovers the tool name
-from the plugin file's `name:` literal. The loader scans the extensions root
-at halter load.
+the contract blocks ALL calls to its tool; the loader recovers the dispatch key
+from the plugin file's `match:` literal, else `name:`, else the ext directory
+name. A glob plugin that is broken this way only blocks what its sniffed pattern
+can still name — the one case where a namespace can be left partially ungated,
+which is why `?`/`[` syntax is rejected at validation and a broken slot is
+reported (`handlers/tool.ts` names the pattern in the block reason). The loader
+scans the extensions root at halter load.
 
 ## Session state and observability
 

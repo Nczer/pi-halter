@@ -54,8 +54,22 @@ export type ToolGateRequest =
  * classification and the tool's payload building share one source of truth.
  */
 export interface HalterPlugin {
-  /** The tool name this plugin gates (the dispatch key; loader-enforced non-empty). */
+  /** The tool name this plugin gates (the dispatch key; loader-enforced non-empty).
+   *  With `match` set, this is the plugin's IDENTITY (messages, fail-closed sniffing);
+   *  `match` is what dispatches. */
   name: string;
+  /**
+   * Optional glob over tool NAMES — one plugin for a whole namespace, e.g. the
+   * tools of an MCP server (`match: "mcp__blender__*"`). `*` matches any
+   * characters, the same rule pi uses for `toolExposure`, and the value must be
+   * DATA (a string, never a predicate) so the loader can still scope a
+   * fail-closed block for a plugin that fails to import (plugins/loader.ts).
+   * Dispatch: an exact `name` slot always wins over a pattern; among patterns
+   * the first in sorted-key order matches. Grants are unaffected: they key on
+   * the CONCRETE tool name (decide/rule-generator.ts), so gating a namespace
+   * per-server still grants per-verb.
+   */
+  match?: string;
   /**
    * @param event the tool call (name + args).
    * @param ctx the session context the classifier may READ (e.g. `ctx.model`

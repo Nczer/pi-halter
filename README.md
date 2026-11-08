@@ -73,7 +73,22 @@ export default {
 ```
 
 The loader scans the extensions root at halter load and keys slots by the
-GATED TOOL's name. The plugin only CLASSIFIES — prompts, grants, judge, dspa,
+GATED TOOL's name — or by `match`, a glob covering a whole namespace (an MCP
+server's verbs, a multi-verb ext) so one plugin gates them all:
+
+```ts
+export default {
+  name: "blender-mcp", // identity: what a plugin error names
+  match: "mcp__blender__*", // dispatch key: every verb of one MCP server
+  buildRequest: (event) => /* split on the verb: event.toolName.split("__").pop() */ null,
+};
+```
+
+An exact key beats a pattern; among patterns the first in sorted order matches.
+`*` is the only wildcard, and the pattern must carry a literal prefix — a
+wildcard-only `match` gates every tool, so the loader rejects it. Grants keep
+keying on the CONCRETE tool name, so an "Always" on one verb never covers
+another. The plugin only CLASSIFIES — prompts, grants, judge, dspa,
 decision log, and widget all live in the core. Grant scopes, payload identity,
 dspa applicability, and the fail-closed rules:
 [docs/architecture.md → Tool plugin contract](docs/architecture.md#tool-plugin-contract).

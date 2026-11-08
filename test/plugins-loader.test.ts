@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadPlugins, setLoadedPlugins, getPluginLoadError } from "../plugins/loader";
+import { loadPlugins, setLoadedPlugins, getPluginLoadError, globToRegExp, isGlobKey } from "../plugins/loader";
 import { handleTool } from "../handlers/tool";
 import { store } from "../gate/store";
 
@@ -9,6 +9,13 @@ const FIXTURE_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
   "plugins",
+);
+// Separate root: holds a plugin whose dispatch key is `*` — loaded there so it
+// cannot swallow the tool names the tests above use.
+const GLOBERR_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures",
+  "plugins-globerr",
 );
 
 function fakeCtx() {
@@ -67,6 +74,80 @@ describe("plugin loader", () => {
     const noname = slots.get("noname");
     expect(noname?.state).toBe("broken");
     if (noname?.state === "broken") expect(noname.error).toContain("non-empty string");
+  });
+});
+
+describe("glob (namespace) slots", () => {
+  it("keys a glob plugin by its `match`, not its name or ext dir", async () => {
+    const slots = await loadPlugins(FIXTURE_ROOT);
+    expect(slots.get("fakeglob__*")?.state).toBe("ok");
+    expect(slots.has("globhost")).toBe(false); // the plugin's name is not a slot
+  });
+
+  it("rejects glob syntax beyond `*` (`?`), keyed fail-closed by the sniffed match", async () => {
+    const slots = await loadPlugins(FIXTURE_ROOT);
+    const bad = slots.get("fake?bad__*");
+    expect(bad?.state).toBe("broken");
+    if (bad?.state === "broken") expect(bad.error).toContain("wildcard");
+  });
+
+  it("rejects a wildcard-only `match` (it would gate every tool)", async () => {
+    const slots = await loadPlugins(GLOBERR_ROOT);
+    const wild = slots.get("*");
+    expect(wild?.state).toBe("broken");
+    if (wild?.state === "broken") expect(wild.error).toContain("namespace");
+  });
+
+  it("globToRegExp: `*` spans anything, everything else is literal", () => {
+    const re = globToRegExp("mcp__blender__*");
+    expect(re.test("mcp__blender__get_scene"));
+    expect(re.test("mcp__blender__")); // `*` matches the empty string too
+    expect(re.test("mcp__other__x")).toBe(false);
+    expect(isGlobKey("mcp__blender__*")).toBe(true);
+    expect(isGlobKey("bash")).toBe(false);
+    // regex metacharacters in the literal part stay literal
+    expect(globToRegExp("a+b*").test("axb")).toBe(false);
+    expect(globToRegExp("a+b*").test("a+b")).toBe(true);
+  });
+});
+
+describe("handleTool dispatch — glob slots", () => {
+  beforeEach(() => store.reset());
+
+  it("routes any verb in the namespace through the gate", async () => {
+    setLoadedPlugins(await loadPlugins(FIXTURE_ROOT));
+    const r = await handleTool(fakeEvent("fakeglob__anything"), fakeCtx());
+    expect(r).toBeDefined();
+    if (!r) throw new Error("expected block");
+    expect(r.reason).toContain("no UI"); // the glob plugin's exec request reached the gate
+  });
+
+  it("prefers an exact slot over a glob covering the same name", async () => {
+    setLoadedPlugins(await loadPlugins(FIXTURE_ROOT));
+    // globexact gates `fakeglob__exact` and classifies null → pass, even though
+    // globexec's `fakeglob__*` also matches it.
+    expect(await handleTool(fakeEvent("fakeglob__exact"), fakeCtx())).toBeUndefined();
+  });
+
+  it("blocks a concrete verb whose glob plugin failed to load, naming the pattern", async () => {
+    setLoadedPlugins(await loadPlugins(FIXTURE_ROOT));
+    const r = await handleTool(fakeEvent("fakebroken__read"), fakeCtx());
+    expect(r).toBeDefined();
+    if (!r) throw new Error("expected block");
+    expect(r.reason).toContain("failed to load");
+    expect(r.reason).toContain("fakebroken__*"); // fixable from the message alone
+  });
+
+  it("a rejected wildcard-only pattern still blocks (fail closed, key `*`)", async () => {
+    setLoadedPlugins(await loadPlugins(GLOBERR_ROOT));
+    try {
+      const r = await handleTool(fakeEvent("bash"), fakeCtx());
+      expect(r).toBeDefined();
+      if (!r) throw new Error("expected block");
+      expect(r.reason).toContain("failed to load");
+    } finally {
+      setLoadedPlugins(await loadPlugins(FIXTURE_ROOT)); // do not leak the `*` slot
+    }
   });
 });
 
