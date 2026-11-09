@@ -1954,12 +1954,41 @@ const JS_REGEX_LITERAL_RE = /^\/([^/]+)\/[dgimsuvy]+(?:\.[A-Za-z_$][\w$]*)?$/;
  *  unquoted ones arrive as their own node and are recursed into). */
 const SUBST_IN_TEXT_RE = /\$\(|`/;
 
+/** Quotes whose literal may hold a path with spaces. */
+const BODY_QUOTES = new Set(["'", '"', "`"]);
+
+/**
+ * Extend a quote-adjacent body path across the spaces INSIDE that literal
+ * (2026-11-09 unresolved ledger). `BODY_PATH_RE` is whitespace-stopped, so a
+ * Python/JS string such as
+ * `'/Users/u/Library/Mobile Documents/…/PTA_Contractor Submission
+ * Schedule_updated.xlsx'` minted `/Users/u/Library/Mobile` — a location
+ * that does not exist and that no judge report can ever answer, because the
+ * §4.2 guard matches on a `/` boundary (`anchorAnswer`): one truncated body
+ * path was a permanent false prompt. The continuation must still look like a
+ * path — it starts with a space and carries a `/` — so prose after a path
+ * (`"/var/lib/x for details"`) stays a single token, unchanged.
+ */
+function extendQuotedBodyPath(text: string, start: number, raw: string): string {
+  const quote = start > 0 ? text[start - 1] : "";
+  if (!BODY_QUOTES.has(quote)) return raw;
+  const from = start + raw.length;
+  if (text[from] !== " " && text[from] !== "\t") return raw;
+  let close = from;
+  while (close < text.length && text[close] !== quote && text[close] !== "\n") close++;
+  if (text[close] !== quote) return raw; // the literal itself is unterminated
+  const tail = text.slice(from, close);
+  if (!/^[ \t][\w.~\s/-]*$/.test(tail)) return raw; // not a path continuation
+  if (!/\//.test(tail) || /[ \t]$/.test(tail)) return raw; // prose after a path
+  return raw + tail;
+}
+
 /** Scan script body text for path-like literals, resolved like any other
  *  extracted path (SAFE_SYSTEM_PATHS filter + dedup apply downstream). */
 function bodyPaths(text: string, cwd: string, out: PathWord[], hop?: (written: string, resolved: string) => void): void {
   for (const m of text.matchAll(BODY_PATH_RE)) {
-    const raw = m[0];
     const idx = m.index ?? 0;
+    const raw = extendQuotedBodyPath(text, idx, m[0]);
     const prev = idx > 0 ? text[idx - 1] : "";
     if (prev !== "'" && prev !== '"' && prev !== "`") {
       const rm = JS_REGEX_LITERAL_RE.exec(raw);

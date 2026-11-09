@@ -597,7 +597,7 @@ describe("judge call", () => {
     expect(r.reason).toContain('text="I have a question');
   });
 
-  it("does not retry a timeout or a transport error — the same request buys the same wait", async () => {
+  it("does not retry a timeout — the same request buys the same wait", async () => {
     const aborted: CapturedCall[] = [];
     const t = await judge({ ...baseInput, command: "ls a" }, {
       ...baseOpts,
@@ -607,14 +607,39 @@ describe("judge call", () => {
     expect(t.failReason).toBe("timeout");
     expect(aborted.length).toBe(1);
     expect(t.attempts).toBeUndefined();
+  });
+
+  it("retries a transport error once — a provider hiccup is not a verdict (2026-11-09)", async () => {
+    // The operator watched sub-second `call-failed` rows succeed the moment
+    // the prompt's "Judge again" re-ran the call, which falsifies the old
+    // "the same request buys the same answer" rule for this class.
+    const calls: CapturedCall[] = [];
+    let n = 0;
+    const r = await judge({ ...baseInput, command: "ls b" }, {
+      ...baseOpts,
+      uncached: true,
+      stream: fixedStream(
+        () => (++n === 1 ? assistantMsg([], "error", "boom") : toolCallReply(VERDICT)),
+        calls,
+      ),
+    });
+    expect(calls.length).toBe(2);
+    expect(r.attempts).toBe(2);
+    expect(r.failReason).toBeUndefined();
+    expect(r.approve).toBe("approve");
+  });
+
+  it("a transport error that repeats keeps the fail-safe defer and says attempts=2", async () => {
     const failed: CapturedCall[] = [];
-    const c = await judge({ ...baseInput, command: "ls b" }, {
+    const c = await judge({ ...baseInput, command: "ls c" }, {
       ...baseOpts,
       uncached: true,
       stream: fixedStream(() => assistantMsg([], "error", "boom"), failed),
     });
+    expect(failed.length).toBe(2);
     expect(c.failReason).toBe("call-failed");
-    expect(failed.length).toBe(1);
+    expect(c.attempts).toBe(2);
+    expect(c.reason).toContain("attempts=2");
   });
 
   it("accepts a boolean approve — the shape a local model sends (2026-09-20 judge log)", async () => {

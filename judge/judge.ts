@@ -534,18 +534,25 @@ function enumMember(v: unknown, members: ReadonlySet<string>): string | null {
  * a real verdict — which is then LRU-cached (keyed on model + operation
  * bytes, so re-prompted or edited operations never reuse a stale verdict).
  *
- * One retry for a reply that arrived but carried no usable verdict
- * (`no-tool-call` / `bad-args` / `truncated`). Those three are what sampling
- * variance produces at temperature 1 — the 2026-10-16 wire replay got 88/88
- * valid calls from the SAME packet, prompt, schema and sampling that produced
- * a logged failure, so the second sample is worth the ~0.5s it costs. A
- * timeout, transport error or unresolved model is NOT retried: the same
- * request would buy the same answer at double the wait. Failures are never
- * cached, so the retry is a real second call.
+ * One retry, after `JUDGE_RETRY_DELAY_MS`, for a failure a fresh call can
+ * plausibly fix: a reply that arrived but carried no usable verdict
+ * (`no-tool-call` / `bad-args` / `truncated`) and a transport error
+ * (`call-failed`). The sampling three are what temperature 1 produces — the
+ * 2026-10-16 wire replay got 88/88 valid calls from the SAME packet, prompt,
+ * schema and sampling that produced a logged failure, so the second sample is
+ * worth the ~0.5s it costs. `call-failed` joined them 2026-11-09: the operator
+ * watched sub-second failures that succeeded the moment the prompt's `Judge
+ * again` re-ran the call, so a provider hiccup is not the same request buying
+ * the same answer. A timeout, unresolved model or failed auth resolution is
+ * still NOT retried (the request would buy the same wait). The pause matters
+ * for both classes: a server that just wrote a long reply (or refused one)
+ * needs a moment before the next request is queued behind the same work.
+ * Failures are never cached, so the retry is a real second call.
  */
 export async function judge(input: JudgmentInput, opts: JudgeOptions): Promise<JudgeResult> {
   const first = await judgeOnce(input, opts);
   if (!first.failReason || !RETRYABLE_FAILS.has(first.failReason)) return first;
+  await new Promise((resolve) => setTimeout(resolve, JUDGE_RETRY_DELAY_MS));
   // The retry gets the response cap the whole judge call had LEFT, not a
   // fresh one: without this, two slow attempts cost twice JUDGE_RESPONSE_CAP_MS
   // before the operator sees a prompt. The 1500ms floor keeps a retry
@@ -562,7 +569,13 @@ const RETRYABLE_FAILS: ReadonlySet<JudgeFailReason> = new Set([
   "no-tool-call",
   "bad-args",
   "truncated",
+  "call-failed",
 ]);
+
+/** Pause before the one retry. Slow enough for a busy/just-finished model
+ *  server to accept the next request, short enough that a dead endpoint only
+ *  costs a third of a second before the fail-safe prompt (2026-11-09). */
+export const JUDGE_RETRY_DELAY_MS = 300;
 
 /** Reply text the failure diagnostic keeps, per part. */
 const DIAG_HEAD_CHARS = 90;

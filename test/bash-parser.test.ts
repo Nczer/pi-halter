@@ -192,6 +192,22 @@ describe("parseCommand: paths", () => {
     expect(r.paths).not.toContain("/.cache/a/b.txt");
   });
 
+  it("keeps a quoted body path's spaces — a truncated token could never be answered (2026-11-09 ledger)", async () => {
+    // The body scan stops at whitespace, so the path inside a Python string
+    // minted `/srv/app` — a location that does not exist and that no judge
+    // report can answer (the §4.2 anchor matches on a `/` boundary), i.e. a
+    // permanent dspa false prompt on the same command.
+    const r = await parseCommand(
+      "python3 -c \"\nfor f in ['/srv/app data/PTA Schedule_updated.xlsx']:\n    print(f)\n\"", cwd);
+    expect(r.paths).toContain(realPath("/srv/app data/PTA Schedule_updated.xlsx"));
+    expect(r.paths).not.toContain("/srv/app");
+    // Prose after a path (no `/` in the continuation) is not a path: the
+    // token stays the truncated literal, exactly as before.
+    const prose = await parseCommand("python3 -c \"\nprint('/srv/app/x for details')\n\"", cwd);
+    expect(prose.paths).toContain(realPath("/srv/app/x"));
+    expect(prose.paths).not.toContain("/srv/app/x for details");
+  });
+
   it("heredoc body noise is not a path (URLs, single-segment tokens)", async () => {
     const r = await parseCommand(
       "python3 - << 'EOF'\nprint('http://x.io/y/z')\nprint(a / b)\nEOF", cwd);

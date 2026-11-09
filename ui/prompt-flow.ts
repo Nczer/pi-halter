@@ -388,10 +388,22 @@ export async function showPrompt(
   /** Unresolved-token log (decision-log.logUnresolved): what the resolver
    * suggested, what the user decided, whether it was confirmed. Runs on
    * every outcome (the persistedTokens set is final by then — the grants
-   * happened in the callbacks, the in-bar confirms above). */
+   * happened in the callbacks, the in-bar confirms above).
+   *
+   * A MISS stop's tokens already have their fate in the ledger: the intent
+   * pass writes one `intent-declined` row per miss fact (§7, the more
+   * specific tag). Writing the generic `gate-stop` row for the same token as
+   * well made ONE decision read as two events (2026-11-09 ledger: rows
+   * 44→45, 74→75) and opened every convergence view with a token that never
+   * moved. The skip is keyed on the miss list the fall-through carries, so a
+   * token the intent pass never logged still gets its row. */
   if (pd.type === "bash" && pd.unresolved?.length) {
     const gateStop = dspa && !dspa.gate.ok;
+    const intentLogged = new Set(
+      (dspa && !dspa.gate.ok ? dspa.gate.misses ?? [] : []).map((m) => m.token),
+    );
     for (const u of pd.unresolved) {
+      if (intentLogged.has(u.token)) continue;
       logUnresolved({
         cmd: pd.command,
         cwd: pd.cwd,

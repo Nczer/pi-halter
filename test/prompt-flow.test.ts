@@ -605,3 +605,79 @@ describe("resolution persistence", () => {
     expect(store.getConfirmedResolution("/y/$f/f")).toEqual([OUT_BAR]);
   });
 });
+
+// ── Unresolved ledger: one row per token, not two ──────────────────────
+
+describe("unresolved ledger on a dspa miss stop", () => {
+  const logFile = path.join(os.tmpdir(), `halter-prompt-flow-unres-${process.pid}.jsonl`);
+  const rows = (): Array<Record<string, unknown>> =>
+    fs.existsSync(logFile)
+      ? fs.readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+      : [];
+  const MISS = "/x/$e/f";
+
+  beforeEach(() => {
+    fs.rmSync(logFile, { force: true });
+    process.env.HALTER_UNRESOLVED_LOG = logFile;
+  });
+  afterEach(() => {
+    delete process.env.HALTER_UNRESOLVED_LOG;
+    fs.rmSync(logFile, { force: true });
+  });
+
+  /** A miss stop: the fall-through carries the facts the intent pass already
+   *  logged (`intent-declined`, one row per miss). */
+  function missStop(): DspaFallthrough {
+    return {
+      gate: {
+        ok: false,
+        reason: `runtime location unresolvable (${MISS})`,
+        misses: [{ kind: "unresolved", token: MISS, prefix: "", role: "read", confirmedPrior: false }],
+      },
+      verdict: null,
+      stage: null,
+    };
+  }
+
+  function decision(): Decision {
+    return {
+      kind: "prompt",
+      promptData: {
+        type: "bash",
+        command: "cat /x/$e/f /y/$f/f",
+        cwd: "/home/user/project",
+        outsideDirs: ["/x/$e", "/y/$f"],
+        segments: ["cat /x/$e/f /y/$f/f"],
+        signatures: ["cat"],
+        relativeToolIds: [],
+        nonAllowedSegmentIndices: [0],
+        riskDangerous: false,
+        riskSeverity: null,
+        riskReasons: [],
+        hasUnsafePattern: false,
+        credentialRule: null,
+        needsCommandApproval: false,
+        needsPathApproval: true,
+        unresolved: [
+          { token: MISS, reason: "var" },
+          { token: "/y/$f/f", reason: "var" },
+        ],
+      },
+    };
+  }
+
+  it("the intent row stands alone — the miss token gets no second gate-stop row (2026-11-09)", async () => {
+    // Rows 44→45 and 74→75 in the live ledger: one decided stop read as two
+    // events, and the convergence view opened with a token that never moved.
+    await showPrompt(decision(), ctx, createStore(), missStop());
+    expect(rows().map((r) => [r.token, r.outcome])).toEqual([["/y/$f/f", "gate-stop"]]);
+  });
+
+  it("without a miss list every token still gets its prompt row", async () => {
+    // A bare stop (no intent pass ran) keeps the generic rows: nothing else
+    // records those tokens.
+    const bare: DspaFallthrough = { gate: { ok: false, reason: "network egress (https://x.y/z)" }, verdict: null, stage: null };
+    await showPrompt(decision(), ctx, createStore(), bare);
+    expect(rows().map((r) => r.outcome)).toEqual(["gate-stop", "gate-stop"]);
+  });
+});

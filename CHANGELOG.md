@@ -1,5 +1,54 @@
 # Changelog
 
+## 3.52.0 — 2026-11-09
+**A transport failure gets a second sample — and two ledger defects stop lying.**
+
+- **`call-failed` joins the retry set.** The rule was "a timeout, transport
+  error or unresolved model is NOT retried: the same request would buy the same
+  answer at double the wait". True for a timeout and a missing model, false for
+  a provider hiccup: filed 2026-11-09 from a live session — sub-second
+  `call-failed` rows whose prompt succeeded the moment the operator selected
+  `Judge again`, which re-ran the call. A failure that returns in 0.5 s is not
+  the same request, it is a different request. The retry now pauses
+  `JUDGE_RETRY_DELAY_MS` (300 ms) before the second sample, for EVERY retryable
+  class (`no-tool-call` / `bad-args` / `truncated` included): after a long reply
+  or a refusal the server needs a moment before the next request is not queued
+  behind the same work. `timeout` / `model-unresolved` / `auth-failed` still do
+  not retry.
+- **A body path with a space is ONE location, not a truncated one.** The body
+  scan stops at whitespace, so the string
+  `'/Users/u/Library/Mobile Documents/…/PTA_Contractor Submission
+  Schedule_updated.xlsx'` inside a `python -c` payload minted
+  `/Users/u/Library/Mobile`. That prefix can never be answered — the §4.2
+  anchor matches a reported path on a `/` boundary — so the command stopped on
+  the floor and prompted on EVERY run (2026-11-09 unresolved ledger, 1 row).
+  `bodyPaths` now extends a quote-adjacent match across the spaces inside that
+  literal when the continuation still carries a `/`; prose after a path
+  (`"/var/lib/x for details"`) is unchanged.
+- **One stop, one ledger row.** A miss stop's token was written TWICE: the
+  intent pass logged `intent-declined` (the more specific tag, §7) and the
+  prompt logged the generic `gate-stop` for the same token — so one decided
+  stop read as two events (2026-11-09: rows 44→45, 74→75) and every
+  convergence view opened with a token that never moved. The prompt now skips
+  the generic row for any token the fall-through's miss list already carries;
+  a bare stop (no misses, nothing else recorded them) keeps its rows.
+- **Tests.** `test/judge.test.ts` splits the old no-retry case: a transport
+  error now retries once (a landing second sample approves with `attempts=2` and
+  no prompt), a repeating one keeps the fail-safe defer and says `attempts=2`;
+  the timeout half is unchanged (one call, no `attempts`). The judge ledger's
+  `call-failed` detail now ends `attempts=2`, like the sampling classes
+  (`test/judge-prompt.test.ts`). `test/bash-parser.test.ts` pins the quoted
+  space path against the truncated form and the prose control;
+  `test/prompt-flow.test.ts` pins one row for the miss token and both rows for
+  a bare stop.
+- **Not changed.** The retry still spends the response cap the first attempt
+  left (`max(1500, capMs − latency)`), so two attempts can never double the
+  60 s cap; failures stay uncached (the retry is a real second call); a
+  `timeout` stays single-sample. A path literal with a space that has no
+  further `/` after it (`'/tmp/My File.txt'` — minted `/tmp/My`) and a
+  double-quoted ARGUMENT's text split at spaces (`sed "s/a /b /")` minting
+  `/`) stay as they are: different minting sites, not this defect.
+
 ## 3.51.0 — 2026-11-06
 **A prompt says which force it means, and a cut ledger row admits it.**
 
