@@ -1237,7 +1237,113 @@ a follow-up (evaluators and case rows read the techniques list today).
 **Still open after this rule:** variable-held *flags* under a literal verb
 that is off the closed set (rule 4's shape with `$V` arguments), and gap B.
 
-Suite 4047.
+### D24. A `cd` target held by a literal assignment resolves (spec, 2026-11-10 — NOT implemented)
+
+**Evidence.** Session `2026-11-10T05-39-13-167Z_01a1c3f7…` (OCR work), 220
+bash calls through `tools/replay.mts` floor-only with the session's grants
+modelled (`--read-dir <corpus> --read-dir /tmp/ocr-ab --write-dir /tmp/ocr-ab`):
+70 auto-allow / 150 prompt. 15 stops read `runtime working directory
+unresolvable (cd target not statically knowable)`, and every one is the shape
+`C="<literal path>" ; cd "$C" || exit 1 …`. Two spellings of one directory, one
+grant set, a synthetic session each: `C=/tmp/cdtest; cd "$C" || exit 1; rg foo
+V1.txt` → PROMPT (that stop) against `cd /tmp/cdtest; rg foo V1.txt` →
+AUTO-ALLOW. The operands are not the problem — `C="…/corpus"; cat "$C/V1.txt"`
+resolves through `analysis/var-resolution.ts` in the same shape. Only the cwd
+thread refuses to read the table: `analysis/cwd-tracking.ts` bails at the
+expansion guard (``if (/[?*[\]$`]/.test(homeTarget)) return { kind: "unknown" }``,
+~168) and nothing before it consults `analysis.assignments`, even though
+`trackEffectiveCwd`/`cdBaseBounds` already receive it (for `homeReassigned` and
+the loop-cd in-list).
+
+**Why this is the worst stop class in the floor — three failures at once.**
+
+- **Unjudgeable.** Only a miss stop may be intent-cleared
+  (`gate/fallthrough.ts:462-466`), and this one DOES carry a miss
+  (`gate/dspa-gate.ts:1256`, `withMisses([unresolvedFact(token, p)])` with
+  `token === null` for a cwd marker), so intent engages and can only come back
+  empty: `resolveUnresolvedPaths()` asks about the command's real `pd.unresolved`
+  tokens and `<unresolved-cwd>` is not one of them, so the answer map is always
+  empty → the guard faults `unanchored location unanswerable (<unresolved-cwd>)`
+  (`gate/dspa-gate.ts:821`); a floor-only replay of the synthetic case shows it
+  as `guard: "no verdict"` with the miss carried
+  (`token: "<unresolved-cwd>", prefix: ""`). Its anchor is
+  `""` because the marker is not absolute
+  (`staticPrefixOf("<unresolved-cwd>/V1.txt") === ""`).
+- **Ungrantable.** The marker names no directory, so the prompt has nothing to
+  offer as "Always (paths)" and no dir grant can ever cover it.
+- **Misleading.** `cdBaseBounds` returns `unbounded: true` and the packet's base
+  line reports the session cwd — for these 15 commands both the judge and the
+  user read a base the command never ran in.
+
+`docs/dspa-intent-floor.md:53` still states this stop "carries none [no miss],
+so it never reaches intent". It carries one; the table's practical outcome is
+unchanged because the miss is unanswerable.
+
+**The rule.** In `analysis/cwd-tracking.ts`'s `resolveCdTarget`: fold the target
+when the token is exactly `$NAME` / `${NAME}` and the command's own text proves
+the value, then hand the folded string to the **existing** literal pipeline
+(`expandHomeToken` → expansion guard → `expandTilde` → `path.resolve` →
+`fs.statSync().isDirectory()` → `thread` / `unchanged`). "Proves" = the
+`provableArgv0Name` invariants (D23 rule 1), already written for the same
+question in the argv0 position: assigned exactly once among the assignments
+visible to the segment (pre-fork bound), value literal
+(`NON_LITERAL_VALUE_RE` = ``[$`{}*?[\]\\]``), quote pair stripped, non-empty.
+Extract that core as one helper (name + segments + assignments + segIdx →
+value | null; the node→text step stays at the argv0 site) so there is ONE
+definition, as D23 demanded of the fetch-form scan.
+
+**Closed set, v1 = the bare form only.** Measured here: 14/15 bare, 1
+`cd "$C/corpus-patches"`, 0 `${NAME:-literal}`. Stays `unknown`, exactly as
+today: glued `$C/sub`, `${NAME:-default}`, loop-bound names (`seg.loopCdInList`
+keeps its own path), `cd -`, any value carrying an expansion or glob, any name
+assigned twice. A naive substitution that skips the proof step leaves the glued
+form unbounded (1/15) and is not the rule.
+
+Signature: `resolveCdTarget(seg, cwd, homeFixed, ctx?)` with
+`ctx = { assignments, segments, segIdx }` — both call sites (`cdBaseBounds:222`,
+`trackEffectiveCwd:287`) already iterate with an index, so the plumbing is two
+lines. `homeFixed` keeps precedence: a reassigned `HOME` still disables static
+`$HOME`.
+
+**Why the bound argument survives.** `cdBaseBounds` says the base is the session
+cwd or "the target of a LITERAL cd that existed when the gate stat'd it". A
+folded target passes the same `statSync`, so it is a literal cd with a proof
+step in front — the sentence gains a word, the candidate set gains nothing.
+Fail-closed is inherited unchanged: nothing re-narrows after an unresolvable cd,
+so a fold that misfires leaves the old `unknown`/`unbounded` verdict standing
+for the rest of the command.
+
+**Second site, one lookup.** `unresolvedFact` (`gate/dspa-gate.ts:1197-1214`)
+anchors a miss with `staticPrefixOf(t)` on raw text. `$C/V$v.txt` is not
+absolute, so the anchor is `""` even though `C` is a literal assignment in the
+same command — and an unanchored miss is answered ONLY by the path resolver
+(§4.2), so each such token (16 in this session) burns a resolver call and can
+never be covered by a dir grant. Fold the leading `$NAME` with the same helper
+before cutting and take `prefix` from the folded string: the miss is anchored,
+reports the real prefix, is grantable by "Always (paths)", and skips the
+resolver round-trip. `$v` stays dynamic — the miss stays a miss, only nameable
+now. Deliberate difference from the cd rule: this site has no segment index for
+the token, so it demands the name assigned exactly once in the WHOLE command
+(stricter than visibility). `miss.token` is untouched — it is the resolver's key
+and the ledger's dedup key.
+
+**Accepted tightening.** Anchoring changes how the guard filters an answer
+(`anchorAnswer`, `gate/dspa-gate.ts:757-758` requires a reported path under
+`miss.prefix`) — sound, because the prefix comes from the command's own text,
+but it is a behavior change for tokens that prompt today, so the tests cover the
+anchor and not only the fold.
+
+**Counterfactual.** Same 15 commands, same grants, fold only the cd target: 15
+hard stops → 0, 8 gate-ok (judgeable). No command becomes an auto-allow from the
+fold alone; what changes is that "unjudgeable and ungrantable" becomes "ordinary
+gate path".
+
+**Tests** (`test/cwd-threading.test.ts`): parity — the folded verdict equals the
+typed-literal verdict; refuse — assigned twice, assigned after the cd, assigned
+only inside a `( )` that died, value with `$`/glob/empty, `cd -`, loop-cd, glued
+tail; the `HOME`-reassigned interlock; `cdBaseBounds` for a folded cd (bounded,
+candidates = {session cwd, folded target}); anchor — `$C/V$v.txt` → prefix is
+`C`'s directory while `$v` stays dynamic.
 
 ## 4. Phasing
 
