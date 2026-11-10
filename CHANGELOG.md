@@ -1,5 +1,41 @@
 # Changelog
 
+## 3.52.1 — 2026-11-10
+**An intent-declined row carries the decision — and an OpenCode judge call routes again.**
+
+- The dspa intent pass no longer writes `unresolved.jsonl` at stop time. The
+  prompt writes that token's row after the click, so `outcome:
+  "intent-declined"` and the operator's `decision` (yes / no / always /
+  alwaysPaths / alwaysFile) are one event. 3.52.0 had already collapsed the
+  stop-time row and the prompt's generic `gate-stop` row into one — but it
+  kept the half without the click, so an allowed command read as declined.
+  `persisted` on the deferred row is honest too: true when the click stored a
+  resolution (the field used to be false on every intent row).
+- The row data — the failing guard and the §4.2 match set per token — is
+  computed at stop time from the same report the guard used and carried on
+  `DspaFallthrough.missLedger`; `logMissDecision` writes it in prompt-flow.
+  A prompt that fails before an answer writes nothing (no decision, no row).
+- **The judge and the path resolver now send OpenCode's routing headers.**
+  pi-ai does NOT derive them from `options.sessionId`; the coding agent's
+  stream wrapper adds `x-opencode-session` / `x-opencode-client`, and a
+  direct pi-ai call (which both of these are) skipped that wrapper — so on
+  `opencode` / `opencode-go` every judge and resolver call failed with
+  `400 MissingSessionID` and the prompt fell through bare. `judgeAttributionHeaders`
+  merges what pi's wrapper would, once, at both call sites (found by the new
+  replay probe on a live session).
+- **`tools/replay.mts`** — replay a session's own bash and codemode calls
+  through the real dspa decision with a chosen judge model. Defaults to the
+  current session (`PI_SESSION_FILE`) and to a **floor-only pass** (no model,
+  milliseconds per session); `--judge` runs the real decision, `--pick 3,7-9`
+  selects calls from the floor pass, `--dedupe`/`--filter`/`--limit` narrow the
+  set, and `--judge-limit N` caps model calls (local models are 1–2 concurrent
+  and seconds per call). `--packet` prints the judge input; `--carry` shows
+  learned grants; `--judge-log FILE` keeps diagnostics without touching the
+  real ledgers.
+- §7 (docs/dspa-intent-floor.md), the ledger field docs and the architecture
+  summary updated; the prompt-flow test pins one row per miss token with its
+  decision (including a miss the prompt's unresolved list never names).
+
 ## 3.52.0 — 2026-11-09
 **A transport failure gets a second sample — and two ledger defects stop lying.**
 

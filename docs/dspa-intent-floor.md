@@ -298,7 +298,8 @@ the intent route (§3) is the one that trades determinism for friction.
   the path set, not the dir set); expanding an alternation into its real dirs
   is a floor-model change and stays unbuilt (§9).
 - `outcome: "intent-declined"` — the guard set or the verdict kept the stop,
-  and the operator was prompted.
+  the operator was prompted, and the row is written AFTER that prompt with
+  their answer (`decision`: yes / no / always / alwaysPaths / alwaysFile).
   Built (steps 4–5): both outcomes exist with `missKind` (the class the floor
   assigned), `guard` (what decided — guard fault, verdict, write bar, or no
   verdict), `judgePaths` (the §4.2 match set for THAT token — what the judge
@@ -306,9 +307,12 @@ the intent route (§3) is the one that trades determinism for friction.
   decline whose `guard` names the reason), and `confirmedPrior` (a confirmed
   resolution already covered the location — the operator had vouched for this
   place before intent was asked; `persisted` is the other half, a confirmation
-  stored by THIS run, which an intent row never has). One sanitized report per
-  attempt feeds the guard and the rows, so a row cannot disagree with the
-  decision it records.
+  stored by THIS run — on a declined row, true when the click stored one).
+  One sanitized report per attempt feeds the guard and the rows, so a row
+  cannot disagree with the decision it records. The row is deferred, not
+  duplicated: a prompt that fails before an answer writes nothing (there was
+  no decision). The prompt's generic `gate-stop` row skips a token the miss
+  ledger already covers, so the deferred row is that token's only line.
 - **Row economy is marked, never silent (3.44.0).** `judgePaths` in a row is
   sliced to 8 and the row carries `judgePathsMore` for the remainder; `cmd` is
   sliced to 1000 and carries `cmdCut`. The slice is a ROW concern only — the

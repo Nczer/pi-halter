@@ -546,7 +546,8 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
    `unresolved.jsonl` row per token (`outcome: intent-allowed`, carrying
    `judgePaths` and `confirmedPrior`). Any guard or verdict fails → the
    prompt as before, carrying the verdict (`outcome: intent-declined`, with
-   the failing guard). A destructive effect never rides on a miss (§4.1); one
+   the failing guard; the row is written AFTER the prompt, so it also carries
+   the operator's `decision`). A destructive effect never rides on a miss (§4.1); one
    concrete out-of-bar write makes the whole stop a bar.
 
    Every floor stop that reaches the prompt is **advisory** (D16): the judge
@@ -854,10 +855,11 @@ scripted calls queue instead of opening two prompts.
 - **Unresolved log** (`.log/unresolved.jsonl`, on by default): the fate of
   each unbound token (outcome — `prompted` / `gate-stop` / `auto-allowed` /
   `intent-allowed` / `intent-declined`; intent rows also carry the miss kind,
-  the failing guard, the judge's reported paths and `confirmedPrior`;
-  LLM suggestion, user decision, whether it
-  became a confirmed resolution). Convergence is the token flipping from
-  `prompted` to `auto-allowed`.
+  the failing guard, the judge's reported paths and `confirmedPrior`; a
+  declined row is written after the prompt, so it carries the operator's
+  `decision` and the `persisted` it produced; LLM suggestion, user decision,
+  whether it became a confirmed resolution). Convergence is the token flipping
+  from `prompted` to `auto-allowed`.
 - **Judge ledger** (`.log/judge.jsonl`, on by default, D17): signal-only
   judge diagnostics — stage-2 tightenings over stateless stage 1 (`diff` — a
   stage-2 loosening is the expected direction, not a line), stage

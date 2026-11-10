@@ -32,7 +32,7 @@ import { stream } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {BashPromptData} from "../decide/types";
-import {JUDGE_RESPONSE_CAP_MS, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeRequestModel, judgeSessionId, judgeToolChoice, replyDiag, JudgeStreamFn, JudgeSettings} from "./judge";
+import {JUDGE_RESPONSE_CAP_MS, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeAttributionHeaders, judgeRequestModel, judgeSessionId, judgeToolChoice, replyDiag, JudgeStreamFn, JudgeSettings} from "./judge";
 import {logResolverInfra} from "../gate/decision-log";
 import {isDspaActive} from "../modes/dspa-mode";
 import {isDspatActive} from "../modes/dspat-mode";
@@ -177,14 +177,17 @@ export async function resolveUnresolvedPaths(
     // saturated model fails fast) plus a hard cap on the whole response.
     const firstTokenTimer = setTimeout(() => controller.abort(), timeoutMs);
     const capTimer = setTimeout(() => controller.abort(), JUDGE_RESPONSE_CAP_MS);
+    const sessionId = judgeSessionId(ctx);
+    const requestModel = judgeRequestModel(model, auth);
+    const attribution = judgeAttributionHeaders(requestModel, sessionId);
     const streamOptions: Record<string, unknown> = {
       signal: controller.signal,
       apiKey: auth.apiKey,
-      headers: auth.headers,
+      // OpenCode routes on the attribution headers carrying this id (pi's
+      // stream wrapper adds them; a direct pi-ai call does not).
+      headers: attribution ? { ...attribution, ...auth.headers } : auth.headers,
       env: auth.env,
-      // OpenCode requires x-opencode-session; pi-ai derives it from this id
-      // (see judgeSessionId).
-      sessionId: judgeSessionId(ctx),
+      sessionId,
       // Same forced call as judge(): the tool is the only channel, so a
       // prose reply buys nothing (it yields no resolutions either way).
       toolChoice: judgeToolChoice(model),
@@ -194,7 +197,7 @@ export async function resolveUnresolvedPaths(
         // The auth resolution's endpoint override goes on the model (see
         // judgeRequestModel) — the resolver and the verdict stages must hit the
         // same endpoint, or one fails while the other works.
-        judgeRequestModel(model, auth),
+        requestModel,
         {
           systemPrompt: RESOLVE_SYSTEM_PROMPT,
           tools: [RESOLVE_TOOL],

@@ -63,6 +63,7 @@ vi.mock("../decide/rule-generator", () => ({
 
 import { showPrompt } from "../ui/prompt-flow";
 import type { DspaFallthrough } from "../gate/fallthrough";
+import type { MissFact } from "../gate/dspa-gate";
 import { createStore } from "../gate/store";
 import { setDspatActive, resetDspat } from "../modes/dspat-mode";
 import { getDspaStats } from "../modes/dspa-mode";
@@ -615,6 +616,7 @@ describe("unresolved ledger on a dspa miss stop", () => {
       ? fs.readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
       : [];
   const MISS = "/x/$e/f";
+  const MISS_FACT: MissFact = { kind: "unresolved", token: MISS, prefix: "", role: "read", confirmedPrior: false };
 
   beforeEach(() => {
     fs.rmSync(logFile, { force: true });
@@ -625,17 +627,19 @@ describe("unresolved ledger on a dspa miss stop", () => {
     fs.rmSync(logFile, { force: true });
   });
 
-  /** A miss stop: the fall-through carries the facts the intent pass already
-   *  logged (`intent-declined`, one row per miss). */
-  function missStop(): DspaFallthrough {
+  /** A miss stop: the fall-through carries the row data prompt-flow writes
+   *  AFTER the click (the intent pass no longer writes at stop time). */
+  function missStop(extra: MissFact[] = []): DspaFallthrough {
+    const misses = [MISS_FACT, ...extra];
     return {
-      gate: {
-        ok: false,
-        reason: `runtime location unresolvable (${MISS})`,
-        misses: [{ kind: "unresolved", token: MISS, prefix: "", role: "read", confirmedPrior: false }],
-      },
+      gate: { ok: false, reason: `runtime location unresolvable (${MISS})`, misses },
       verdict: null,
       stage: null,
+      missLedger: {
+        misses,
+        guard: `unanchored location unanswerable (${MISS})`,
+        answered: new Map([[MISS, ["/home/user/project/notes.md"]]]),
+      },
     };
   }
 
@@ -666,11 +670,46 @@ describe("unresolved ledger on a dspa miss stop", () => {
     };
   }
 
-  it("the intent row stands alone — the miss token gets no second gate-stop row (2026-11-09)", async () => {
-    // Rows 44→45 and 74→75 in the live ledger: one decided stop read as two
-    // events, and the convergence view opened with a token that never moved.
+  it("writes ONE intent-declined row per miss token, carrying the click (2026-11-10)", async () => {
+    // Rows 44→45 and 74→75 in the old live ledger: one decided stop read as
+    // two events. Before 3.52.1 the surviving row was written at stop time,
+    // so it could not name the operator's answer; now the row waits for it.
     await showPrompt(decision(), ctx, createStore(), missStop());
-    expect(rows().map((r) => [r.token, r.outcome])).toEqual([["/y/$f/f", "gate-stop"]]);
+    const r = rows();
+    expect(r.map((x) => [x.token, x.outcome, x.decision])).toEqual([
+      ["/y/$f/f", "gate-stop", "yes"],
+      [MISS, "intent-declined", "yes"],
+    ]);
+    // The deferred row carries the guard and the §4.2 match set computed at
+    // stop time from the same report the guard used.
+    expect(r.find((x) => x.token === MISS)).toMatchObject({
+      guard: `unanchored location unanswerable (${MISS})`,
+      judgePaths: ["/home/user/project/notes.md"],
+      persisted: false,
+    });
+  });
+
+  it("the deferred row records a resolution the click stored", async () => {
+    resolverMock.mockResolvedValue(new Map([[MISS, ["/home/user/project/sub"]]]));
+    await showPrompt(decision(), ctx, createStore(), missStop());
+    // `yes` confirms only all-in-bar resolutions; this one is under the cwd.
+    expect(rows().find((x) => x.token === MISS)).toMatchObject({ decision: "yes", persisted: true });
+  });
+
+  it("writes a row for a miss the prompt's unresolved list never names", async () => {
+    // outside-path / base-write facts are not in promptData.unresolved — the
+    // generic loop cannot log them, so the deferred writer must.
+    const outside: MissFact = { kind: "outside-path", token: "/x/outside", prefix: "/x/outside", role: "read", confirmedPrior: false };
+    await showPrompt(decision(), ctx, createStore(), missStop([outside]));
+    expect(rows().filter((x) => x.outcome === "intent-declined").map((x) => x.token).sort()).toEqual(
+      [MISS, "/x/outside"].sort(),
+    );
+  });
+
+  it("writes nothing when the prompt fails before an answer", async () => {
+    promptSpy.mockRejectedValue(new Error("ui gone"));
+    await expect(showPrompt(decision(), ctx, createStore(), missStop())).rejects.toThrow("ui gone");
+    expect(rows()).toEqual([]);
   });
 
   it("without a miss list every token still gets its prompt row", async () => {

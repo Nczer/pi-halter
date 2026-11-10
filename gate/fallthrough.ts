@@ -20,13 +20,29 @@ import { findExecutedScript } from "../analysis/script-payload";
 import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, answeredMissPaths, intentGuardFaults, makeManualBar, type DspaGateResult, type MissAnswers, type MissFact } from "./dspa-gate";
 import { resolveUnresolvedPaths } from "../judge/path-resolver";
 import { sanitizeJudgePaths, JUDGE_PATHS_MAX } from "../judge/paths";
-import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus} from "../judge/verdict";
+import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus, type JudgePromptDeps} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
 import { pdTargetLabel } from "../ui/prompt-builder";
 import { shortenHomePath } from "../ui/path-display";
 import { RuleGenerator } from "../decide/rule-generator";
 import { recordDspaAutoAllowed, recordDspaStop, updateDspaWidget, type DspaStopKind } from "../modes/dspa-mode";
 import type {JudgeResult} from "../judge/judge";
+
+/**
+ * The intent-declined row's deferred context (§7): the intent pass stops
+ * BEFORE the prompt, but the row cannot be written until the operator answers
+ * — the intent outcome and the click are ONE event. The §4.2 match set is
+ * computed at stop time from the same report the guard used, so the row
+ * cannot disagree with the decision it records.
+ */
+export interface MissLedger {
+  /** The facts the guard kept (one row each). */
+  misses: MissFact[];
+  /** The guard fault / verdict sentence that kept the stop. */
+  guard: string;
+  /** token → the §4.2 match set the guard accepted (the row's `judgePaths`). */
+  answered: Map<string, string[]>;
+}
 
 /**
  * Carried into showPrompt when /dspa declined to auto-allow, so the
@@ -44,6 +60,9 @@ export interface DspaFallthrough {
    *  intent pass produced none but stage 1 did — the ledger tag needs it,
    *  because "stage 2 fails while the server is up" is otherwise unmeasurable. */
   judgeFail?: string;
+  /** Intent-declined only: the row data prompt-flow writes after the click
+   *  (see MissLedger). Absent on every other stop. */
+  missLedger?: MissLedger;
 }
 
 /**
@@ -129,7 +148,7 @@ export function dspaAutoAllowed(
     // The intent path logs its own line per unknown location (§7) — the more
     // specific outcome tag replaces the generic one, and D-f's no-toggle
     // promise depends on these rows being in the ledger.
-    logIntentMisses(pd, misses, "intent-allowed", undefined, reported ?? [], answers, learnedDirs);
+    logIntentAllowed(pd, misses, reported ?? [], answers, learnedDirs);
   } else if (pd.type === "bash" && pd.unresolved?.length) {
     for (const u of pd.unresolved) {
       const confirmed = store.getConfirmedResolution(u.token);
@@ -154,50 +173,93 @@ export function dspaAutoAllowed(
 }
 
 /**
- * One convergence-ledger line per unknown location an intent verdict was
- * asked about (§7, docs/dspa-intent-floor.md): `intent-allowed` is a stop the
- * verdict cleared, `intent-declined` a guard or verdict that kept it. The
- * manual path's rows stay unchanged, so the deterministic fix work keeps a
+ * One convergence-ledger line for a miss fact (§7, docs/dspa-intent-floor.md).
+ * Two callers: the intent-ALLOWED path (written at once — there is no prompt)
+ * and the deferred intent-DECLINED path (written after the click). The match
+ * set is uncapped in the guard (3.44.0 — a cap there hid answers and produced
+ * false stops); the ROW slices to the ledger economy cap and records the
+ * remainder, so a truncated row is visible when mined.
+ */
+function logMissRow(
+  pd: PromptData,
+  m: MissFact,
+  answered: string[],
+  row: {
+    outcome: "intent-allowed" | "intent-declined";
+    guard?: string;
+    decision?: string;
+    persisted: boolean;
+    learnedDirs?: string[];
+  },
+): void {
+  if (pd.type !== "bash") return;
+  const shown = answered.slice(0, JUDGE_PATHS_MAX);
+  logUnresolved({
+    cmd: pd.command,
+    cwd: pd.cwd,
+    token: m.token,
+    persisted: row.persisted,
+    outcome: row.outcome,
+    decision: row.decision,
+    missKind: m.kind,
+    guard: row.guard,
+    ...(shown.length > 0
+      ? {
+          judgePaths: shown,
+          ...(answered.length > shown.length
+            ? { judgePathsMore: answered.length - shown.length }
+            : {}),
+        }
+      : {}),
+    ...(row.learnedDirs && row.learnedDirs.length > 0 ? { grantedDirs: row.learnedDirs } : {}),
+    confirmedPrior: m.confirmedPrior,
+  });
+}
+
+/**
+ * One convergence-ledger line per unknown location an intent verdict CLEARED
+ * (§7): written at once, because no prompt follows. `decision: "auto-allow"`.
+ * The manual path's rows stay unchanged, so the deterministic fix work keeps a
  * live corpus; these rows are how a bad class shows up without a toggle (D-f).
  */
-function logIntentMisses(
+function logIntentAllowed(
   pd: PromptData,
   misses: MissFact[],
-  outcome: "intent-allowed" | "intent-declined",
-  guard: string | undefined,
   reported: string[],
   answers: MissAnswers = {},
   learnedDirs?: string[],
 ): void {
   if (pd.type !== "bash") return;
   for (const m of misses) {
-    // The row carries the evidence the decision turned on: which reported
-    // paths answered THIS token (§4.2's match set, §7 `judgePaths`) and
-    // whether the operator had already confirmed this location. The match set
-    // is uncapped in the guard (3.44.0 — a cap there hid answers and produced
-    // false stops); the ROW slices to the ledger economy cap and records the
-    // remainder, so a truncated row is visible when mined.
-    const answered = answeredMissPaths(m, reported, answers);
-    const shown = answered.slice(0, JUDGE_PATHS_MAX);
-    logUnresolved({
-      cmd: pd.command,
-      cwd: pd.cwd,
-      token: m.token,
+    logMissRow(pd, m, answeredMissPaths(m, reported, answers), {
+      outcome: "intent-allowed",
+      decision: "auto-allow",
       persisted: false,
-      outcome,
-      decision: outcome === "intent-allowed" ? "auto-allow" : undefined,
-      missKind: m.kind,
-      guard,
-      ...(shown.length > 0
-        ? {
-            judgePaths: shown,
-            ...(answered.length > shown.length
-              ? { judgePathsMore: answered.length - shown.length }
-              : {}),
-          }
-        : {}),
-      ...(learnedDirs && learnedDirs.length > 0 ? { grantedDirs: learnedDirs } : {}),
-      confirmedPrior: m.confirmedPrior,
+      learnedDirs,
+    });
+  }
+}
+
+/**
+ * The deferred half of an intent-declined row (§7): the intent pass stopped
+ * BEFORE the prompt, so prompt-flow writes the row now, with the operator's
+ * answer (`decision`). One row per miss fact — outside-path and base-write
+ * facts ride along too; they are not in promptData.unresolved, so the prompt's
+ * generic loop never sees them. A prompt that fails before an answer writes
+ * nothing: no decision, no row.
+ */
+export function logMissDecision(
+  pd: PromptData,
+  ledger: MissLedger,
+  decision: string,
+  persisted: ReadonlySet<string>,
+): void {
+  for (const m of ledger.misses) {
+    logMissRow(pd, m, ledger.answered.get(m.token) ?? [], {
+      outcome: "intent-declined",
+      guard: ledger.guard,
+      decision,
+      persisted: persisted.has(m.token),
     });
   }
 }
@@ -275,13 +337,15 @@ async function tryIntentOverMiss(
   ctx: ExtensionContext,
   store: Store,
   gateResult: DspaGateResult,
+  /** Tool seam: the judge/resolver settings override a replay supplies. */
+  deps: JudgePromptDeps = {},
 ): Promise<{ autoAllowed: boolean; fallthrough: DspaFallthrough }> {
   const misses = gateResult.ok ? [] : gateResult.misses ?? [];
   // The §4.2 answer set, shared by the guard and the ledger rows so a row
   // cannot disagree with the decision it records (§7 `judgePaths`). The bar is
   // the floor's own read bar — an unanchored miss clears only into it.
   const answers: MissAnswers = { inBar: makeManualBar(store, pd.cwd) };
-  const o2 = await getStage2Outcome(pd, ctx, store);
+  const o2 = await getStage2Outcome(pd, ctx, store, deps);
   const v2 = o2.verdict;
   logJudgeDiff(pd, "dspa", null, v2);
   // One sanitized report serves both the §4.2 guard and the ledger rows, so a
@@ -297,10 +361,26 @@ async function tryIntentOverMiss(
     verdict: JudgeResult | null,
     bucket: DspaStopKind,
   ): { autoAllowed: false; fallthrough: DspaFallthrough } => {
-    logIntentMisses(pd, misses, "intent-declined", why, reported, answers);
+    // The row waits for the operator's answer (prompt-flow): the intent
+    // pass's outcome and the click are ONE event (§7). Compute the §4.2 match
+    // set here, from the same report the guard used, so the deferred row
+    // cannot disagree with the decision it records. The misses ride the
+    // fall-through too: a reported-write stop replaces `gate` (wStop), so
+    // `gate.misses` cannot be the source.
+    const answered = new Map(
+      misses.map((m) => [m.token, answeredMissPaths(m, reported, answers)]),
+    );
     recordDspaStop(bucket, verdict?.model ?? o2.model ?? null);
     updateDspaWidget(ctx);
-    return { autoAllowed: false, fallthrough: { gate, verdict, stage: verdict ? 2 : null } };
+    return {
+      autoAllowed: false,
+      fallthrough: {
+        gate,
+        verdict,
+        stage: verdict ? 2 : null,
+        ...(misses.length > 0 ? { missLedger: { misses, guard: why, answered } } : {}),
+      },
+    };
   };
   // Any judge failure resolves to the prompt — never an allow.
   if (!v2) return stop("no verdict", gateResult, null, "gate");
@@ -325,7 +405,7 @@ async function tryIntentOverMiss(
   // prompt's own resolution uses, so a decline that reaches the prompt pays
   // ONE wire call, not two.
   if (misses.some((m) => m.prefix === "")) {
-    const r = await resolveUnresolvedPaths(pd, ctx);
+    const r = await resolveUnresolvedPaths(pd, ctx, deps);
     if (r) answers.resolved = r;
   }
   const faults = intentGuardFaults(misses, reported, answers);
@@ -371,6 +451,10 @@ export async function tryDspaAutoAllow(
   decision: Extract<Decision, { kind: "prompt" }>,
   ctx: ExtensionContext,
   store: Store,
+  /** Tool seam (tools/replay.mts): a settings override for the judge stages.
+   *  Production passes nothing; the stage functions' own default reads the
+   *  settings file. */
+  deps: JudgePromptDeps = {},
 ): Promise<{ autoAllowed: boolean; fallthrough: DspaFallthrough }> {
   const pd = decision.promptData;
   const gateResult = await checkDspaGate(pd, store);
@@ -380,7 +464,7 @@ export async function tryDspaAutoAllow(
     // Only a bash command can carry misses (every miss site is in the bash
     // path analysis), hence the type guard alongside.
     if (pd.type === "bash" && gateResult.misses?.length) {
-      return await tryIntentOverMiss(request, pd, ctx, store, gateResult);
+      return await tryIntentOverMiss(request, pd, ctx, store, gateResult, deps);
     }
     // D16 (docs/dspa-redesign.md): EVERY floor stop is advisory — the
     // judge still runs and its verdict renders in the prompt as input to
@@ -391,10 +475,10 @@ export async function tryDspaAutoAllow(
     // stop — no judge call — is the defensive fallback below; the gate
     // currently never emits one.)
     if (gateResult.advisory) {
-      const v1 = await getJudgeVerdict(pd, ctx, store);
+      const v1 = await getJudgeVerdict(pd, ctx, store, deps);
       const v2 = v1 && v1.approve === "approve"
         ? null
-        : await getStage2Verdict(pd, ctx, store);
+        : await getStage2Verdict(pd, ctx, store, deps);
       // Judge-self disagreement is still logged (the judge ran, whatever
       // the floor's stop) — but NO paths line: the floor stopped the
       // command, so the miss never ran through the floor. The ledger
@@ -428,7 +512,7 @@ export async function tryDspaAutoAllow(
     pd.type === "bash" && pd.analysis != null &&
     findExecutedScript(pd.analysis, pd.cwd) !== null;
   // Stage 1 — stateless (the packet's static analysis is the whole input).
-  const o1 = skipStage1 ? null : await getStage1Outcome(pd, ctx, store);
+  const o1 = skipStage1 ? null : await getStage1Outcome(pd, ctx, store, deps);
   const v1 = o1?.verdict ?? null;
   // D19: a file script OUTSIDE the working set never auto-allows here —
   // its writes surface only in the stage-2 report, which the write bar
@@ -439,7 +523,7 @@ export async function tryDspaAutoAllow(
     return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v1, stage: 1 } };
   }
   // Stage 2 — intent pass (session context, uncached, final verdict).
-  const o2 = await getStage2Outcome(pd, ctx, store);
+  const o2 = await getStage2Outcome(pd, ctx, store, deps);
   const v2 = o2.verdict;
   logJudgeDiff(pd, "dspa", v1, v2);
   // D19: the deterministic write bar on the judge's FRESH write report —

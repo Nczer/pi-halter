@@ -351,11 +351,13 @@ export interface UnresolvedLogEntry {
    * passed because the token's resolution was already confirmed;
    * `intent-allowed` / `intent-declined` (docs/dspa-intent-floor.md §7) —
    * a miss stop whose unknown location went to the intent pass: cleared,
-   * or kept by a guard / verdict. These rows are the mining corpus for
-   * locations the parser still cannot name.
+   * or kept by a guard / verdict (the declined row is written AFTER the
+   * prompt, so it carries the operator's `decision`). These rows are the
+   * mining corpus for locations the parser still cannot name.
    */
   outcome: "prompted" | "gate-stop" | "auto-allowed" | "intent-allowed" | "intent-declined";
-  /** The prompt outcome ("yes" | "no" | "always" | "alwaysPaths" | …); "auto-allow" for auto-allowed. */
+  /** The prompt outcome ("yes" | "no" | "always" | "alwaysPaths" | …);
+   *  "auto-allow" for an auto-allowed or intent-allowed row. */
   decision?: string;
   /** Intent rows only: the miss class as the floor classified it. */
   missKind?: "unresolved" | "outside-path" | "base-write" | "body-write";
@@ -368,7 +370,8 @@ export interface UnresolvedLogEntry {
   judgePaths?: string[];
   /** Intent rows only: a confirmed resolution (an earlier user grant, this
    *  session) already covered this location. `persisted` is the OTHER half —
-   *  a confirmation stored by THIS run, which an intent row never has. */
+   *  a confirmation stored by THIS run's decision (true on a declined row
+   *  when the click stored one). */
   confirmedPrior?: boolean;
   /**
    * Intent-allowed rows only (docs/dspa-intent-floor.md §8 3.42 build notes): the session

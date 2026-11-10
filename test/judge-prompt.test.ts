@@ -56,7 +56,7 @@ const VERDICT = {
 
 interface CapturedCall {
   context: Context;
-  options: { signal?: AbortSignal; apiKey?: string; toolChoice?: string; sessionId?: string } | undefined;
+  options: { signal?: AbortSignal; apiKey?: string; toolChoice?: string; sessionId?: string; headers?: Record<string, string> } | undefined;
 }
 
 /** Fake stream: pushes start → toolcall_start → done (or error, matching
@@ -172,6 +172,33 @@ describe("getJudgeVerdict", () => {
     });
     expect(r).toBeNull();
     expect(calls).toHaveLength(0);
+  });
+
+  it("OpenCode gets the routing headers from the session id, merged under the auth headers", async () => {
+    // pi's stream wrapper adds these; a direct pi-ai call (the judge) must add
+    // them itself, or OpenCode rejects it with 400 MissingSessionID.
+    const calls: CapturedCall[] = [];
+    const oc = { ...fakeModel(), provider: "opencode-go", baseUrl: "https://opencode.ai/zen/go/v1" } as Model<any>;
+    const { ctx } = makeCtx(oc);
+    const r = await getJudgeVerdict(makePd("ls opencode-routing", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    expect(r?.approve).toBe("approve");
+    expect(calls[0].options?.headers).toMatchObject({
+      "x-opencode-session": "sess-42",
+      "x-opencode-client": "pi",
+    });
+  });
+
+  it("a non-OpenCode provider gets no routing header", async () => {
+    const calls: CapturedCall[] = [];
+    const { ctx } = makeCtx(fakeModel());
+    await getJudgeVerdict(makePd("ls plain-provider", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    expect(calls[0].options?.headers).toBeUndefined();
   });
 
   it("valid verdict → explanation; widget shown then cleared; call forced", async () => {

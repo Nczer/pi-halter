@@ -13,6 +13,7 @@ import type {JudgeResult} from "../judge/judge";
 import { makeManualBar } from "../gate/dspa-gate";
 import { isPositionalRef } from "../analysis/path-util";
 import type { DspaFallthrough } from "../gate/fallthrough";
+import { logMissDecision } from "../gate/fallthrough";
 import { logJudgeDiff, logJudgePaths, logUnresolved } from "../gate/decision-log";
 
 /** Result of showing a permission prompt to the user. */
@@ -385,23 +386,25 @@ export async function showPrompt(
 
   const rejected = result === "no" || (typeof result === "object" && result.kind === "no");
 
+  const chosen = typeof result === "string" ? result : "no";
+
   /** Unresolved-token log (decision-log.logUnresolved): what the resolver
    * suggested, what the user decided, whether it was confirmed. Runs on
    * every outcome (the persistedTokens set is final by then — the grants
    * happened in the callbacks, the in-bar confirms above).
    *
-   * A MISS stop's tokens already have their fate in the ledger: the intent
-   * pass writes one `intent-declined` row per miss fact (§7, the more
-   * specific tag). Writing the generic `gate-stop` row for the same token as
-   * well made ONE decision read as two events (2026-11-09 ledger: rows
-   * 44→45, 74→75) and opened every convergence view with a token that never
-   * moved. The skip is keyed on the miss list the fall-through carries, so a
-   * token the intent pass never logged still gets its row. */
+   * A MISS stop's tokens are written by logMissDecision below (`intent-declined`,
+   * the more specific tag) AFTER the click: the intent pass's outcome and the
+   * operator's answer are one event, so the row is deferred rather than
+   * duplicated. Before 3.52.1 the intent row was written at stop time, and the
+   * generic `gate-stop` row — the only one carrying the click — was skipped as
+   * a duplicate (2026-11-09 ledger: rows 44→45, 74→75), leaving an allowed
+   * command logged as declined. The skip here is keyed on the miss ledger the
+   * fall-through carries; a token the intent pass never logged still gets its
+   * generic row. */
   if (pd.type === "bash" && pd.unresolved?.length) {
     const gateStop = dspa && !dspa.gate.ok;
-    const intentLogged = new Set(
-      (dspa && !dspa.gate.ok ? dspa.gate.misses ?? [] : []).map((m) => m.token),
-    );
+    const intentLogged = new Set((dspa?.missLedger?.misses ?? []).map((m) => m.token));
     for (const u of pd.unresolved) {
       if (intentLogged.has(u.token)) continue;
       logUnresolved({
@@ -411,9 +414,15 @@ export async function showPrompt(
         llm: resolutions?.get(u.token),
         persisted: persistedTokens.has(u.token),
         outcome: gateStop ? "gate-stop" : "prompted",
-        decision: typeof result === "string" ? result : "no",
+        decision: chosen,
       });
     }
+  }
+  // The deferred half of an intent-declined row: one line per miss fact, with
+  // the click. Outside the loop above — outside-path / base-write facts never
+  // appear in promptData.unresolved.
+  if (pd.type === "bash" && dspa?.missLedger) {
+    logMissDecision(pd, dspa.missLedger, chosen, persistedTokens);
   }
 
   if (rejected) {

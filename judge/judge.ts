@@ -355,11 +355,10 @@ export interface JudgeAuth {
 /**
  * The session id to put on a judge call. Required, not cosmetic:
  * OpenCode/OpenCode Go rejects a request with no `x-opencode-session`
- * (HTTP 400 MissingSessionID), and pi-ai derives that header from
- * `options.sessionId` (providers/opencode-headers.ts). pi's own calls get it
- * from the agent loop's request builder; the judge calls pi-ai directly, so
- * it has to supply the id itself. pi reuses its session id for the same
- * reason — one session, one routing key.
+ * (HTTP 400 MissingSessionID). pi-ai does not add the routing headers by
+ * itself — the coding agent's stream wrapper does — so the judge supplies
+ * both the id and, via `judgeAttributionHeaders`, the headers that carry it.
+ * pi reuses its session id for the same reason — one session, one routing key.
  */
 export function judgeSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string | undefined {
   try {
@@ -367,6 +366,29 @@ export function judgeSessionId(ctx: Pick<ExtensionContext, "sessionManager">): s
   } catch {
     return undefined; // no id available: the call goes out without one
   }
+}
+
+/**
+ * The provider attribution headers pi puts on every model call (the coding
+ * agent's `mergeProviderAttributionHeaders`): OpenCode routes a request on
+ * `n` and needs the client marker. pi-ai does NOT derive these from
+ * `options.sessionId` — the SDK's stream wrapper adds them — so a call site
+ * that streams to pi-ai directly (the judge and the path resolver) must add
+ * them itself, or OpenCode rejects the call with 400 MissingSessionID.
+ */
+export function judgeAttributionHeaders(
+  model: Model<any>,
+  sessionId: string | undefined,
+): ProviderHeaders | undefined {
+  if (!sessionId) return undefined;
+  if (
+    model.provider !== "opencode" &&
+    model.provider !== "opencode-go" &&
+    !(model.baseUrl ?? "").includes("opencode.ai")
+  ) {
+    return undefined;
+  }
+  return { "x-opencode-session": sessionId, "x-opencode-client": "pi" };
 }
 
 /** Resolve auth for a model; null = auth failed (no call is made). */

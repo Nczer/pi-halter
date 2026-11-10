@@ -26,7 +26,7 @@ import { analyzeCommand } from "../analysis/command-analysis";
 import { findExecutedScript } from "../analysis/script-payload";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { expandTilde } from "../analysis/path-util";
-import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeRequestModel, judgeSessionId, JudgeStreamFn, JudgeResult, JudgeSettings, JudgeFailReason} from "./judge";
+import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeAttributionHeaders, judgeRequestModel, judgeSessionId, JudgeStreamFn, JudgeResult, JudgeSettings, JudgeFailReason} from "./judge";
 import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
 import { isDspaActive, setDspaJudging } from "../modes/dspa-mode";
@@ -59,7 +59,7 @@ const STAGE2_TIMEOUT_FACTOR = 3;
  * decided on; file maps straight from the prompt data (writes/edits carry
  * the new content, fenced as untrusted).
  */
-async function buildJudgmentInput(
+export async function buildJudgmentInput(
   pd: PromptData,
   store: Store,
 ): Promise<JudgmentInput> {
@@ -261,17 +261,24 @@ async function runJudgeStage(
 
     let result: JudgeResult;
     try {
+      // One routing key and one model for the whole call: OpenCode needs the
+      // attribution headers carrying the session id (pi's stream wrapper adds
+      // them; a direct pi-ai call does not), and the auth's endpoint override
+      // goes on the model.
+      const sessionId = judgeSessionId(ctx);
+      const requestModel = judgeRequestModel(model, auth);
+      const attribution = judgeAttributionHeaders(requestModel, sessionId);
       result = await judge(input, {
         // The endpoint override the auth resolution carries goes on the model
         // (pi assembles its requests the same way); `env` is provider-scoped
         // request config. Both were dropped before 3.40.2, so a custom-provider
         // judge call could hit the catalog endpoint instead of the configured one.
-        model: judgeRequestModel(model, auth),
+        model: requestModel,
         stream: deps.stream ?? stream,
         apiKey: auth.apiKey,
-        headers: auth.headers,
+        headers: attribution ? { ...attribution, ...auth.headers } : auth.headers,
         env: auth.env,
-        sessionId: judgeSessionId(ctx),
+        sessionId,
         timeoutMs: stage === 2 ? Math.round(settings.timeoutMs * STAGE2_TIMEOUT_FACTOR) : settings.timeoutMs,
         thinking: settings.thinking,
         systemPrompt: stage === 2 ? JUDGE_STAGE2_SYSTEM_PROMPT : undefined,

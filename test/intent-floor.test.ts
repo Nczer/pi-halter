@@ -36,9 +36,21 @@ vi.mock("../judge/verdict", async (importOriginal) => {
     judgeStatus: vi.fn(() => ({ state: "ok", modelLabel: "test/model (session)", reason: null })),
   };
 });
-vi.mock("../ui/prompt-flow", () => ({
-  showPrompt: vi.fn(async () => ({ allowed: true })),
-}));
+vi.mock("../ui/prompt-flow", async () => {
+  // The intent-declined row is written by prompt-flow AFTER the click (the
+  // stop carries `missLedger`), so the mock answers the prompt and writes the
+  // deferred row exactly as the real flow does — one row per miss, with the
+  // decision.
+  const { logMissDecision } = await import("../gate/fallthrough");
+  return {
+    showPrompt: vi.fn(async (decision: any, _ctx: any, _store: any, dspa?: any) => {
+      if (decision?.promptData?.type === "bash" && dspa?.missLedger) {
+        logMissDecision(decision.promptData, dspa.missLedger, "yes", new Set());
+      }
+      return { allowed: true };
+    }),
+  };
+});
 // 3.41: the intent pass asks the path resolver for the tokens it has no
 // static anchor for (§4.2 amendment). Mocked here so the test names the
 // answer instead of the wire, and so the ask itself is observable.
