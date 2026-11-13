@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.52.2 — 2026-11-13
+**The judge packet stops restating its defaults, and two operator-facing prompt shapes lose repeated facts.**
+
+- **Packet defaults are omitted** (`judge/packet.ts`): no `risk flags: none`, no
+  `obfuscation: no | parse error: no`, no `## Notes` remote-content line, and a
+  single-segment command prints only `segments: 1` (the `$` line above is the
+  segment). The rule those lines carried moved into the stage-1 system prompt —
+  "Absent digest lines mean none; a URL is a name, not evidence of what it
+  serves" — and stage 2 inherits it. Measured over this session's 40 judged
+  packets: −79 chars/call (73,256 → 70,400 c over the 36 shared commands); the
+  system prompt grows 81 chars, so the net is ≈0 token/call uncached and −20
+  with prefix caching. Noise removal, not a cost win — the call count remains
+  the lever (2026-10-31 measurement).
+- **File prompts are one line of body** (`ui/prompt-builder.ts`): the path
+  alone; the `Path:` label and the `⚠️ outside cwd` suffix went (the title
+  already says "outside cwd"). The tool file gate keeps its suffix — its title
+  carries no location — but drops the label.
+- **The dspa fall-through title drops ledger vocabulary** (`ui/prompt-flow.ts`):
+  `dangerous: [Tool] python (script execution)` renders as
+  `python (script execution)`; the body's risk lines already state it. The
+  `— advisory (floor stop stands)` note is unchanged (D16 names it).
+- **Rescore** — the 2026-08-22 16-case matrix was never committed, so a
+  10-trap + 6-benign set was rebuilt from the judge rules and run twice on
+  `opencode-go/deepseek-v4.1-flash` (stage 1, thinking low): 16/16 both times
+  (traps 10/10, benign 6/6). Suite 4,546.
+
 ## 3.52.1 — 2026-11-10
 **An intent-declined row carries the decision — and an OpenCode judge call routes again.**
 

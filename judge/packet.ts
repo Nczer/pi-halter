@@ -234,7 +234,6 @@ function buildToolPacket(input: JudgmentToolInput): string {
 }
 
 function buildBashPacket(input: JudgmentBashInput): string {
-  const notes: string[] = [];
   const parts: string[] = [];
 
   // ── Command (full text — heredoc bodies ARE the write content, D11) ──
@@ -263,22 +262,29 @@ function buildBashPacket(input: JudgmentBashInput): string {
   const lines: string[] = ["## Static analysis (halter)"];
   const segs = input.segments.slice(0, SEGMENTS_MAX);
   lines.push(`segments: ${input.segments.length}${input.segments.length > segs.length ? " (showing first " + segs.length + ")" : ""}`);
-  // A single stage that IS the whole command repeats the `$` line above verbatim;
-  // the count still says the parse made one stage, which is the information.
-  if (!(segs.length === 1 && segs[0].trim() === input.command.trim())) {
+  // One stage, one command: the `$` line above already carries it — the count
+  // says the parse made a single stage, and a head-cut echo adds nothing.
+  if (segs.length > 1) {
     for (const [i, seg] of segs.entries()) {
       const s = headCut(seg.trim(), SEGMENT_MAX_CHARS);
       lines.push(`  ${i + 1}. ${s.text}${s.cut ? " …" : ""}`);
     }
   }
+  // Defaults are omitted (one line in the system prompt says so): a packet
+  // that prints "none"/"no" on every call pays for the same words twice —
+  // once in its own body, once in the rule that tells the model what they mean.
   const reasons = input.riskReasons.slice(0, REASONS_MAX);
-  const sev = input.severity ? `${input.severity} — ` : "";
-  lines.push(
-    `risk flags: ${sev}${reasons.length > 0 ? reasons.join("; ") + (input.riskReasons.length > REASONS_MAX ? " (…)" : "") : "none"}`,
-  );
-  lines.push(
-    `obfuscation: ${input.hasUnsafePattern ? "yes (unsafe patterns present)" : "no"} | parse error: ${input.hasParseError ? "yes" : "no"}`,
-  );
+  if (reasons.length > 0) {
+    const sev = input.severity ? `${input.severity} — ` : "";
+    lines.push(`risk flags: ${sev}${reasons.join("; ")}${input.riskReasons.length > REASONS_MAX ? " (…)" : ""}`);
+  }
+  if (input.hasUnsafePattern || input.hasParseError) {
+    const flags = [
+      input.hasUnsafePattern ? "obfuscation: yes (unsafe patterns present)" : "",
+      input.hasParseError ? "parse error: yes" : "",
+    ].filter(Boolean);
+    lines.push(flags.join(" | "));
+  }
   lines.push(`network: ${detectNetwork(input)}`);
   // The registry packages a `uv run --with` form fetches at run time, marked
   // with the operator's allowlist verdict (config/trusted-scripts.ts). The
@@ -335,14 +341,6 @@ function buildBashPacket(input: JudgmentBashInput): string {
       : "untrusted";
     parts.push(`## Script: ${input.script.path} (${trustNote})`, fence, content, fence, "");
   }
-
-  // ── Notes ──
-  if (detectNetwork(input) !== "none") {
-    notes.push(
-      "Remote content is not fetchable: URLs and hostnames are names, not evidence of what they serve.",
-    );
-  }
-  if (notes.length > 0) parts.push("## Notes", ...notes.map((n) => `- ${n}`), "");
 
   return parts.join("\n");
 }

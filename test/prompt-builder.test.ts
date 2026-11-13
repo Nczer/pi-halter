@@ -550,12 +550,12 @@ describe("file body content", () => {
   });
 
   it("shows outside cwd warning with emoji", () => {
-    const prompt = buildPrompt(fileDecision({ action: "Write", outsideDir: "/etc", isWriteOp: true, resolved: "/etc/config.conf" }));
+    const prompt = buildPrompt(fileDecision({ action: "Write", outsideDir: "/etc", isWriteOp: true, filePath: "/etc/config.conf", resolved: "/etc/config.conf" }));
     expect(prompt.title).toContain("⚠");
     expect(prompt.title).toContain("outside cwd");
-    // Flag rides the path line — the dir is the path prefix, not re-listed.
-    expect(prompt.body).toContain("⚠️ outside cwd");
-    expect(prompt.body).not.toContain("outside cwd: ");
+    // The title carries the warning; the body is the path alone (the label
+    // and the repeated flag were the same fact three times).
+    expect(prompt.body.trim()).toBe("/etc/config.conf");
   });
 
   it("shows symlink hint", () => {
@@ -604,7 +604,7 @@ describe("file labels and tier2", () => {
   });
 
   it("alwaysLabel shows write path for outside cwd write", () => {
-    const prompt = buildPrompt(fileDecision({ action: "Write", outsideDir: "/etc", isWriteOp: true, resolved: "/etc/config.conf" }));
+    const prompt = buildPrompt(fileDecision({ action: "Write", outsideDir: "/etc", isWriteOp: true, filePath: "/etc/config.conf", resolved: "/etc/config.conf" }));
     expect(prompt.alwaysLabel).toBe("Write /etc/*");
   });
 

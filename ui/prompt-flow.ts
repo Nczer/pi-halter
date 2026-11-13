@@ -16,6 +16,19 @@ import type { DspaFallthrough } from "../gate/fallthrough";
 import { logMissDecision } from "../gate/fallthrough";
 import { logJudgeDiff, logJudgePaths, logUnresolved } from "../gate/decision-log";
 
+/**
+ * The floor reason doubles as a ledger sentence: it carries source tags
+ * (`[Tool]`, `[Pattern]`, …) and the `dangerous:` bucket word that mean
+ * nothing to the operator, and the body's risk lines already state the
+ * same facts without them. The title keeps the reason's substance.
+ */
+function titleReason(reason: string): string {
+  return reason
+    .replace(/^dangerous:\s*/, "")
+    .replace(/\[[A-Za-z/]+\]\s*/g, "")
+    .trim();
+}
+
 /** Result of showing a permission prompt to the user. */
 interface PromptFlowResult {
   /** User confirmed (yes or always). */
@@ -129,7 +142,7 @@ export async function showPrompt(
     if (!dspa.gate.ok) {
       prompt = {
         ...prompt,
-        title: `🚧 DSPA: ${dspa.gate.reason}`,
+        title: `🚧 DSPA: ${titleReason(dspa.gate.reason)}`,
       };
       if (dspa.verdict) {
         // D10: untrusted-package stop — the judge ran anyway; its verdict is

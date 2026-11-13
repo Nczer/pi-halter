@@ -481,7 +481,9 @@ function buildFilePrompt(
     const kept = broaderPaths.filter((b) => !covered(b.dir));
     return {
       title: action,
-      body: `Path:\n  ${filePath}${warnLine}${symlinkLine}${existsNote}\n`,
+      // Bare path: the title names the action and the parenthetical flags
+      // carry the warnings. `Path:` + a second line said the same thing.
+      body: `${filePath}${warnLine}${symlinkLine}${existsNote}\n`,
       tier2Everything: {
         title: `Confirm Always Allow`,
         body: `${scopeNote}\n  ${resolved}`,
@@ -540,10 +542,10 @@ function buildFilePrompt(
 
   return {
     title: `\u26a0\ufe0f ${action} outside cwd`,
-    // The flag rides the path line as a suffix — the dir itself is the path
-    // prefix (and the Always (path) option shows it globbed), so a separate
-    // "⚠️ outside cwd: <dir>" line was pure duplication.
-    body: `Path:\n  ${filePath} \u26a0\ufe0f outside cwd${warnLine}${symlinkLine}${existsNote}\n`,
+    // The title already says "outside cwd"; repeating it on the path line (and
+    // the `Path:` label above it) was the same fact three times in a dialog
+    // that blocks the screen. The path alone is the missing part.
+    body: `${filePath}${warnLine}${symlinkLine}${existsNote}\n`,
     tier2Everything: {
       title: `Confirm Always Allow`,
       body: `"Always Yes" will ${scope}:\n  ${outsideDirGlob}`,
@@ -636,7 +638,7 @@ function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
     const existsNote = data.exists
       ? `\n\u2139\ufe0f file exists — the tool will overwrite it`
       : "";
-    body += `\nPath:\n  ${target}${outside}${existsNote}`;
+    body += `\n${target}${outside}${existsNote}`;
     if (note) body += `\n\u26a0\ufe0f ${note}`;
   }
 

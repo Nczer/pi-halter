@@ -318,7 +318,9 @@ describe("/dspa fall-through", () => {
     const dspa: DspaFallthrough = { gate: { ok: false, reason: "dangerous: rm" }, verdict: null, stage: null };
     await showPrompt(bashDecision(), ctx, store, dspa);
     // The floor stop is the title now — it leads the prompt; the body scrolls.
-    expect(shownPrompt().title).toBe("🚧 DSPA: dangerous: rm");
+    // The ledger's `dangerous:` bucket word and source tags are stripped for
+    // the operator (2026-11-13).
+    expect(shownPrompt().title).toBe("🚧 DSPA: rm");
     expect(shownPrompt().body).not.toContain("Judge invalid");
   });
 

@@ -659,8 +659,11 @@ pandas (on the operator's package allowlist), …`; 3.30.0, max 8 named) —
 `network: yes (uv)` alone left the judge guessing about a supply-chain
 question config already answered; file writes carry the full new
 content, edits the after-edit view (replaced regions ±10 lines, line numbers).
-Only the digest sections head-cut (24 segments at ≤120 chars, 10 risk
-reasons, 20 paths); tool packets carry the plugin's argsPreview verbatim
+Default digest lines are omitted (2026-11-13): a packet prints `risk flags`,
+`obfuscation`/`parse error`, and the remote-content note only when they are
+non-default; the system prompt states that absence means the default. Only the
+digest sections head-cut (24 segments at ≤120 chars, 10 risk reasons, 20
+paths); tool packets carry the plugin's argsPreview verbatim
 (the plugin caps its own previews, e.g. joplin). No conversation history
 reaches stage 1. Stage 2 adds a reasoning-blind session context: the user's
 last messages (4 / 3000 chars, head-truncated) plus a 10-line tool-call

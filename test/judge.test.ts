@@ -133,8 +133,11 @@ describe("judgment packet", () => {
     // 2026-10-31 packet audit: one stage that IS the whole command is not
     // printed twice — the count carries the information, the echo does not.
     expect(p.split("ls -la target/release").length - 1).toBe(1);
-    expect(p).toContain("risk flags: none");
-    expect(p).toContain("obfuscation: no");
+    // 2026-11-13: defaults are omitted from the packet (the system prompt
+    // states what an absent line means).
+    expect(p).not.toContain("risk flags:");
+    expect(p).not.toContain("obfuscation:");
+    expect(p).not.toContain("parse error:");
     expect(p).toContain("network: none");
     expect(p).toContain("/mnt/Ndr/Projects/foo/target/release (inside)");
   });
@@ -180,7 +183,9 @@ describe("judgment packet", () => {
     expect(p).toContain("network: yes (curl, https://example.io/x)");
     expect(p).toContain("obfuscation: yes (unsafe patterns present)");
     expect(p).toContain("[Risk] pipe operator (chained commands)");
-    expect(p).toContain("Remote content is not fetchable");
+    // The remote-content rule is a standing system-prompt rule, not a
+    // per-packet note (2026-11-13).
+    expect(p).not.toContain("Remote content is not fetchable");
   });
 
   it("annotates package-manager and git-remote commands as network (gate's definition)", () => {
@@ -373,7 +378,7 @@ describe("judgment packet", () => {
 
     const none = buildJudgmentPacket(baseInput);
     expect(none).not.toContain("effective base:");
-    expect(none).toContain("risk flags: none");
+    expect(none).not.toContain("risk flags:");
   });
 });
 
@@ -1111,6 +1116,11 @@ describe("judge prompt — tool-call discipline (2026-10-04 ledger: 3 of 7 stage
   it("no channel to the operator: a missing-information packet is a defer, not a question", () => {
     expect(JUDGE_SYSTEM_PROMPT).toContain("no way to reach the operator");
     expect(JUDGE_SYSTEM_PROMPT).toContain('reason "missing information"');
+  });
+
+  it("absent digest lines mean the default, and remote content is never fetchable", () => {
+    expect(JUDGE_SYSTEM_PROMPT).toContain("Absent digest lines mean none");
+    expect(JUDGE_SYSTEM_PROMPT).toContain("a URL is a name, not evidence of what it serves");
   });
 
   it("stage 2: session-context paths are not paths of the operation", () => {
