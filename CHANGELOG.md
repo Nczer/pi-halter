@@ -1,5 +1,63 @@
 # Changelog
 
+## 3.53.0 — 2026-11-14
+**Four location holes the round-7 ledger audit opened close: a folderless judge report, an argv0 the `cd` never moved, git's silent operands, and `tar -C` outside extract mode.**
+
+Round-7 ledger audit; the gaps it deliberately left are filed in
+`docs/dspa-redesign.md` §7. Replay over one frozen 1,597-command corpus (both
+passes on the same copy): **43 rows moved, 0 decision-kind flips** — 20 are the
+argv0 re-base naming the interpreter's real folder in a prompt that was already
+firing, 1 is a `git -C` bare-repo read, the rest are path-set-only. `tar` moves
+nothing because the corpus has no `tar … -C` row, and the report join cannot
+move a floor replay at all (the replay runs the floor, not the judge): both are
+proven by unit tests, not by this diff.
+
+- **A folderless report word joins every folder the command visited, and the two
+  bars read that join in opposite directions** (`judge/paths.ts`, `reportBases` /
+  `reportJoins`; §4.2 amendment in `docs/dspa-intent-floor.md`). A `make` run
+  after `cd repo` comes back from the judge as `build/out.o` — no folder,
+  because compiler output names are relative. Resolved against the parse-time cwd
+  alone, it became a location in the folder the command had left, silently: the
+  row then showed a path the judge never reported, which is how a whole class of
+  join questions was written off as judge noise. The D19 write bar admits the call
+  only if NO join falls outside (a guessed location must be safe under every
+  reading); the §4.2/fallthrough answer accepts if ANY join names the missed
+  location (a read needs one witness). A join is our guess, never the judge's
+  claim, so it never enters `floorMisses`/`roleFloorMisses`, and the word that
+  carried no folder is named on the judge row as `relativeReports`
+  (`gate/decision-log.ts`) beside every candidate in `judgePaths`.
+- **The floor re-bases a relative program word like every other form it
+  re-bases** (`analysis/cwd-tracking.ts`, `isCwdRelativeWord`, shared by
+  `analysis/bash-parser.ts`'s hop guard). `classifyArgv0` calls any `/`-bearing
+  program word qualified and the parser mints its location (G4) — against the
+  SESSION cwd, and nothing re-resolved it. So `cd ~/work && .venv/bin/python x`
+  was modeled as `<session cwd>/.venv/bin/python`, a folder the command never
+  ran in, and counted as inside the base. The dotless relative form was already
+  the rule for `./`/`../` operands; it was missing at the argv0 position only.
+- **git mints the operands its subcommand states outright**
+  (`config/bash-patterns.ts`, `gitOperandRoles`, consumed by the parser and by
+  `baseWriteAccess` in `analysis/cwd-tracking.ts`). git stayed off
+  `pathAwareCommands` because its arguments are revisions and refs — the cost of
+  that was total silence, so `git apply /var/x.patch`, an out-of-folder patch
+  read, auto-allowed with no location in the packet (the 11-10 ledger row that
+  reported `/tmp/halter-mac.patch` as a floor blind spot was this gap, not judge
+  noise). Minted now: the repository named by `-C DIR`/`--work-tree[=DIR]` — a
+  WRITE for `apply`/`am`, a read for every other subcommand — and the files the
+  subcommand is told to read (apply/am's positional patch or mailbox, `commit`'s
+  `-F`/`--file`/`-t`/`--template` message). Measured unchanged: `git status`,
+  `log`, `diff`, `checkout`, `commit -m` mint nothing, so no existing prompt
+  moves; positional pathspecs (`git add src/x.c`) stay unminted (Gap R7-C), as do
+  bare-relative operands, which would resolve against the wrong folder and, being
+  resolvable, suppress D20's base flag — measured as an AUTO-ALLOW when tried.
+- **`tar -C` is a destination only while extracting** (`analysis/write-roles.ts`,
+  `tarExtracts()`, gating `WRITE_FLAGS[tar]`). `tar cf out.tar -C DIR .` claimed
+  `DIR` as a write: the same flag in create mode says where to READ from, and a
+  listing mode's (`t`) does too. The mode test reads the mode POSITION (the
+  traditional dashless form included) or an option bundle, never an operand, so
+  `tar cf out.tar x` — a file named `x` — cannot claim a destination.
+
+Suite 4,585.
+
 ## 3.52.2 — 2026-11-13
 **The judge packet stops restating its defaults, and two operator-facing prompt shapes lose repeated facts.**
 
