@@ -19,7 +19,7 @@ import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decis
 import { findExecutedScript } from "../analysis/script-payload";
 import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, answeredMissPaths, intentGuardFaults, makeManualBar, type DspaGateResult, type MissAnswers, type MissFact } from "./dspa-gate";
 import { resolveUnresolvedPaths } from "../judge/path-resolver";
-import { sanitizeJudgePaths, JUDGE_PATHS_MAX } from "../judge/paths";
+import { sanitizeJudgePaths, reportBases, JUDGE_PATHS_MAX } from "../judge/paths";
 import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus, type JudgePromptDeps} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
 import { pdTargetLabel } from "../ui/prompt-builder";
@@ -351,8 +351,12 @@ async function tryIntentOverMiss(
   // One sanitized report serves both the §4.2 guard and the ledger rows, so a
   // row cannot disagree with the decision it records (§7 `judgePaths`). Full
   // report, no cap: a truncated answer set can only have made this stop stick
-  // when the judge HAD acknowledged the location (3.44.0).
-  const reported = sanitizeJudgePaths(v2?.paths, pd.cwd);
+  // when the judge HAD acknowledged the location (3.44.0). Joined against
+  // every folder the command sat in, so a folderless answer for a `cd X && …`
+  // command is matched where the command actually ran — and an answer that
+  // names a location only under a folder the floor never admitted cannot clear
+  // the stop, because the bar check runs on the same joined set.
+  const reported = sanitizeJudgePaths(v2?.paths, pd.cwd, reportBases(pd).slice(1));
   // A decline is the FLOOR's stop standing — same counters and same prompt
   // shape as the D16 advisory path, plus the stage-2 verdict when it ran.
   const stop = (

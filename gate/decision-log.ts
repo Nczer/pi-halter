@@ -497,6 +497,10 @@ export interface JudgeLogEntry {
   contextMisses?: string[];
   roleFloorMisses?: string[];
   roleJudgeMisses?: string[];
+  /** The report entries that named no folder, kept verbatim when the command
+   *  had more than one candidate base — the joins in `judgePaths` are ours,
+   *  not the judge's (see judge/paths.sanitizeJudgePaths). */
+  relativeReports?: string[];
 }
 
 /** The operation a log line is about (logJudge truncates to LEDGER_CMD_MAX). */
@@ -609,6 +613,7 @@ export function logJudgePaths(
     contextMisses: f.contextMisses,
     roleFloorMisses: f.roleFloorMisses,
     roleJudgeMisses: f.roleJudgeMisses,
+    relativeReports: f.relativeReports,
   });
 }
 

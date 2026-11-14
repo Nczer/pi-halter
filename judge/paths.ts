@@ -113,17 +113,70 @@ function toAbs(p: string, cwd: string): string {
   return resolvePathReal(p.startsWith("~") ? expandTilde(p) : p, cwd);
 }
 
+/** Did the judge name this without a folder? (A `~` form names its own root.) */
+function isRelativeReport(p: string): boolean {
+  return !p.startsWith("/") && !p.startsWith("~") && !isUnresolvedMarker(p);
+}
+
+/** The candidate locations for ONE folderless report word: one per folder the
+ *  command sat in. Shared by `sanitizeJudgePaths` (which emits them) and the
+ *  coverage check below (which has to group a word's joins back together to
+ *  tell an answered report from a blind spot). */
+export function reportJoins(
+  word: string,
+  cwd: string,
+  bases: readonly string[] = [],
+): string[] {
+  return [cwd, ...bases.filter((b) => b !== cwd)].map((b) => toAbs(word, b));
+}
+
+/**
+ * The folders a command could have been sitting in (`docs/dspa-redesign.md`
+ * — the judge-report join bases): the session cwd plus every base its own
+ * `cd` chain set, unresolvable bases dropped. A report entry that carries no
+ * folder has to be resolved against one, and the session cwd is the WRONG
+ * answer for `cd X && …` (observed 2026-11-08 judge.jsonl: three rows named
+ * paths under the SESSION cwd for files that never existed there). The set is the
+ * honest form: the report is not attributed to a pipeline stage, so no single
+ * base is knowable.
+ *
+ * An unresolvable base (D24: a `cd` inside a `||` chain, an opaque variable)
+ * is dropped rather than counted as outside-everything: that command already
+ * carries an unresolved miss of its own, so the location question is already
+ * in front of the operator, and the bar cannot name a folder it cannot work
+ * out.
+ */
+export function reportBases(pd: PromptData): string[] {
+  if (pd.type !== "bash") return []; // only a shell command moves between folders
+  const out = [pd.cwd];
+  for (const c of pd.analysis?.effectiveCwds ?? []) {
+    if (c && !isUnresolvedPath(c) && !out.includes(c)) out.push(c);
+  }
+  return out;
+}
+
 /**
  * Sanitize the model's raw report to concrete absolute paths: sentinels
- * dropped, ~ expanded, relatives resolved against the operation's cwd,
+ * dropped, ~ expanded, relatives resolved against the operation's cwd — or,
+ * when `bases` gives more than one folder the command visited, against EVERY
+ * of them, so the guess is visible as a set instead of hidden in one join —
  * deduped. NOT capped — the callers that enforce (the D19 write bar) and the
  * §4.2 answer set need every path the judge claimed; only the ledger rows
  * slice, and they record the remainder. Pure model text is never stored —
  * only this form.
+ *
+ * The two consumers read the multi-join set in opposite directions, and both
+ * are correct because the set is complete:
+ *  • the D19 write bar admits the report only when NO join falls outside the
+ *    bar — a write it cannot place is a write it cannot allow (bar-only-
+ *    narrows; a wrong join can cost a prompt, never an allow);
+ *  • §4.2's "did the judge name this location" accepts when ANY join is the
+ *    missed location — under a plausible base the judge did name it.
  */
 export function sanitizeJudgePaths(
   reported: string[] | undefined,
   cwd: string,
+  bases: readonly string[] = [],
 ): string[] {
   if (!reported) return [];
   const out: string[] = [];
@@ -131,6 +184,12 @@ export function sanitizeJudgePaths(
     if (typeof raw !== "string") continue;
     const p = raw.trim();
     if (!p || isUnresolvedMarker(p) || URL_SHAPED_RE.test(p)) continue;
+    if (isRelativeReport(p)) {
+      for (const abs of reportJoins(p, cwd, bases)) {
+        if (!out.includes(abs)) out.push(abs);
+      }
+      continue;
+    }
     const abs = toAbs(p, cwd);
     if (!out.includes(abs)) out.push(abs);
   }
@@ -183,6 +242,12 @@ export interface JudgePathReport {
    *  read, including a report that never populates `writes` (omitted when
    *  empty). */
   roleJudgeMisses?: string[];
+  /** The judge's own words for a report path that had to be joined (a
+   *  folderless name, resolved against more than one folder the command
+   *  visited) — recorded so a miner can tell "the judge named a place" from
+   *  "we guessed which place it meant" (omitted when every report was
+   *  absolute, ~-rooted, or had exactly one base). */
+  relativeReports?: string[];
 }
 
 export interface JudgePathFloor {
@@ -205,6 +270,9 @@ export interface JudgePathFloor {
    *  text itself names was available to the floor, so the row blames the
    *  floor, not the judge's Session context. */
   commandText?: string;
+  /** The other folders the command sat in (`reportBases` minus the session
+   *  cwd) — the bases a folderless report path is joined against. */
+  cwdBases?: readonly string[];
 }
 
 /**
@@ -220,8 +288,15 @@ export function judgePathReport(
   floor: JudgePathFloor,
   writes?: string[],
 ): JudgePathReport {
-  const paths = sanitizeJudgePaths(reported, floor.cwd);
+  const paths = sanitizeJudgePaths(reported, floor.cwd, floor.cwdBases);
   if (paths.length === 0) return {};
+  // A folderless report on a command that visited more than one folder is a
+  // join we made, not a path the judge gave.
+  const joinCount = 1 + new Set((floor.cwdBases ?? []).filter((b) => b !== floor.cwd)).size;
+  const relativeReports =
+    joinCount > 1 && reported
+      ? [...new Set(reported.filter((p) => typeof p === "string" && isRelativeReport(p.trim())).map((p) => p.trim()))]
+      : [];
   const floorConcrete = floor.floorPaths.filter((p) => !isUnresolvedPath(p));
   // The floor's pinned anchors: a floor path with a dynamic segment names a
   // DIRECTORY it does know (`/tmp/snap-x/$e` → `/tmp/snap-x`) even though it
@@ -233,6 +308,17 @@ export function judgePathReport(
     .filter((a) => a !== "" && a !== "/" && !floorConcrete.includes(a));
   const known = [toAbs(floor.cwd, floor.cwd), ...(floor.confirmedDirs ?? []), ...floorConcrete, ...anchors];
   const misses = paths.filter((p) => !isCovered(p, known));
+  // A join WE invented is not evidence. A folderless word on a multi-folder
+  // command yields one candidate per folder the command sat in; the WORD is what
+  // the judge said, and the row already carries it (`relativeReports`). Logging
+  // the joins as blind spots would let our own guess manufacture floor misses —
+  // two per word after a `cd`, half of them fiction (2026-11-13 round-7 audit;
+  // the pre-fix ledger had no such entries because the cd base was never joined).
+  const invented = new Set<string>();
+  for (const word of relativeReports) {
+    for (const j of reportJoins(word, floor.cwd, floor.cwdBases ?? [])) invented.add(j);
+  }
+  const blind = misses.filter((p) => !invented.has(p));
   // Context paths arrive as written in the session (relative, ~, `..`); they
   // must be compared in the same absolute form the report was sanitized to.
   const inContext = (floor.contextPaths ?? [])
@@ -258,13 +344,14 @@ export function judgePathReport(
   const contextMisses =
     floorConcrete.length === 0
       ? []
-      : misses.filter(
+      : blind.filter(
           (p) => !namedInCommand(p) && inContext.some((c) => under(p, c) || under(c, p)),
         );
-  const floorMisses = misses.filter((p) => !contextMisses.includes(p));
+  const floorMisses = blind.filter((p) => !contextMisses.includes(p));
   const r: JudgePathReport = { paths };
   if (floorMisses.length > 0) r.floorMisses = floorMisses;
   if (contextMisses.length > 0) r.contextMisses = contextMisses;
+  if (relativeReports.length > 0) r.relativeReports = relativeReports;
 
   // ── 3.43.0: ROLE disagreement ────────────────────────────────────────────
   // The set comparison above asks "did the floor get the LOCATION wrong".
@@ -293,7 +380,7 @@ export function judgePathReport(
   if (writes !== undefined || floor.floorWritePaths?.length) {
     const cwdAbs = toAbs(floor.cwd, floor.cwd);
     const floorWrites = (floor.floorWritePaths ?? []).filter((p) => !isUnresolvedPath(p));
-    const judgeWrites = sanitizeJudgePaths(writes, floor.cwd);
+    const judgeWrites = sanitizeJudgePaths(writes, floor.cwd, floor.cwdBases);
     const roleFloorMisses: string[] = [];
     for (const p of paths) {
       if (under(p, cwdAbs) || isCovered(p, misses)) continue;
@@ -334,6 +421,7 @@ export function judgePathLogFields(
   contextMisses?: string[];
   roleFloorMisses?: string[];
   roleJudgeMisses?: string[];
+  relativeReports?: string[];
 } {
   if (pd.type !== "bash" || !reported?.length || !pd.analysis) return {};
   const analysis = pd.analysis;
@@ -364,8 +452,10 @@ export function judgePathLogFields(
     // gate's coverage questions keep asking about operands, not the shell's cwd.
     ...analysis.effectiveCwds.filter((c): c is string => c !== null),
   ])];
+  const bases = reportBases(pd);
   const r = judgePathReport(reported, {
     cwd: pd.cwd,
+    cwdBases: bases.slice(1),
     floorPaths,
     confirmedDirs,
     contextPaths: ctx ? sessionContextPaths(ctx, store) : undefined,
@@ -389,5 +479,6 @@ export function judgePathLogFields(
     contextMisses: r.contextMisses,
     roleFloorMisses: r.roleFloorMisses,
     roleJudgeMisses: r.roleJudgeMisses,
+    relativeReports: r.relativeReports,
   };
 }

@@ -1071,6 +1071,29 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
     expect(line.floorMisses).toEqual([canon("/var/log/syslog")]);
   });
 
+  it("a folderless report on a command that moved logs every join and flags the word (round 7 D1b)", async () => {
+    // The judge names what it read, folderless. For `cd <dir> && …` the session
+    // cwd is the wrong base, so the row keeps EVERY candidate join and says the
+    // word carried none: resolved silently, the row would read as a path the
+    // judge never reported — and the audit could not tell our guess from the
+    // judge's claim (2026-11-13 round-7 ledger: rows naming `<session cwd>/…`
+    // for files that live under a cd target).
+    const etc = canon("/etc");
+    await runAnalyzedGate(
+      `cd ${etc} && make`,
+      verdict({ approve: "deny" }),
+      verdict({ approve: "deny", paths: ["build/out.o"] }),
+    );
+    const line = logLines()[0];
+    // The decision line shows both candidates (the join never hides a folder),
+    // and neither is a blind spot: the floor knows both folders (the cwd, and the
+    // base the `cd` set) — a join is our guess, not the judge's claim. The word
+    // flag itself rides the judge ledger's `paths` line, where the two sides are
+    // compared (see the D17 case below).
+    expect(line.judgePaths).toEqual(["/Users/u/project/build/out.o", `${etc}/build/out.o`]);
+    expect(line.floorMisses).toBeUndefined();
+  });
+
   it("floor-stop fall-through logs misses (the parser-gap mining case)", async () => {
     // The floor saw /etc/hostname (concrete outside base — advisory stop);
     // the judge additionally reports /etc/shadow, which the static analysis
@@ -1165,6 +1188,27 @@ describe("D17 — always-on judge ledger (judge.jsonl)", () => {
         floorPaths: ["/Users/u/project/target", "/Users/u/project"],
         judgePaths: ["/Users/u/project/target", canon("/etc/hostname")],
         floorMisses: [canon("/etc/hostname")],
+      }),
+    );
+  });
+
+  it("dspa: a folderless word on a command that moved — every join, and the word flagged (round 7 D1b)", async () => {
+    // ~/.pi is read-allowed, so the `cd` passes the floor and the ambiguity is
+    // the whole story: the report says `build/out.o` with no folder, and the row
+    // has to show BOTH candidates and name the word that had none. Resolved
+    // silently, the row reads as a path the judge never reported — which is how
+    // the 2026-11-13 audit lost a whole class of join questions to "judge noise".
+    const PI = path.join(os.homedir(), ".pi");
+    await runAnalyzedGate(
+      `cd ${PI} && make`,
+      verdict({ risk: "medium" }),
+      verdict({ paths: ["build/out.o", "/never/seen/x"] }),
+    );
+    expect(judgeLines().find((l) => l.kind === "paths")).toEqual(
+      expect.objectContaining({
+        relativeReports: ["build/out.o"],
+        judgePaths: ["/Users/u/project/build/out.o", `${PI}/build/out.o`, "/never/seen/x"],
+        floorMisses: ["/never/seen/x"],
       }),
     );
   });

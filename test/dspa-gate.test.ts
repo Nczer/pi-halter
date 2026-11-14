@@ -1999,6 +1999,152 @@ describe("D19: judgeWriteOutside — the write bar on the fresh report", () => {
   });
 });
 
+// ── round 7 (3.53.0): the join bases, and the locations a subcommand or a mode
+// states outright (git's verb, tar's extraction destination) ──
+
+describe("the write bar joins a folderless report against every folder the command visited", () => {
+  // NOT /tmp (a config-allowed write path): ~/.pi is read-allowed by config and
+  // never write-allowed, so a join landing there is unambiguously out of the bar.
+  const PI = path.join(os.homedir(), ".pi");
+
+  async function pd(command: string, cwd: string = BASE) {
+    const p = bashPd(command, { cwd });
+    p.analysis = await analyzeCommand(command, cwd, {
+      isInsideAllowedDir: (d) => store.isInsideAllowedDir(d, "read"),
+      getConfirmedResolution: (t) => store.getConfirmedResolution(t),
+    });
+    return p;
+  }
+
+  it("a relative report under a cd target stops on that target (was: admitted)", async () => {
+    // The judge reports what it read: `build/out.o`, no folder. The session cwd
+    // is the wrong base for `cd X && …` — and when the session cwd happens to be
+    // inside the bar, that wrong join ADMITTED an out-of-bar write (2026-11-13
+    // round-7 ledger: rows naming `<session cwd>/…` for files under a cd target).
+    const r = await pd(`cd ${PI} && make`);
+    expect(judgeWriteOutside(r, store, ["build/out.o"])).toEqual([path.join(PI, "build")]);
+  });
+
+  it("every folder the chain sat in faces the bar — admitted only if safe under all", async () => {
+    const A = path.join(os.homedir(), ".pi", "agent");
+    const r = await pd(`cd ${A} && cd ${PI} && make`);
+    expect(judgeWriteOutside(r, store, ["x/y.bin"])).toEqual([path.join(A, "x"), path.join(PI, "x")]);
+  });
+
+  it("a report safe under every join costs nothing new (a cd inside the bar)", async () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-join-")));
+    try {
+      fs.mkdirSync(path.join(dir, "sub"));
+      store.addAllowed({ writeDirs: [dir] });
+      const r = await pd("cd sub && make", dir);
+      expect((r.analysis as NonNullable<typeof r.analysis>).effectiveCwds[1]).toBe(path.join(dir, "sub"));
+      expect(judgeWriteOutside(r, store, ["build/out.o"])).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an unresolvable base joins nothing — that command already carries an unresolved miss", async () => {
+    // D24: a `cd` the floor cannot resolve is its own stop. Joining a marker
+    // would invent a folder the bar cannot name, so the report keeps the one
+    // base the floor does know (docs/dspa-intent-floor.md §4.2).
+    const r = await pd("cd $ZZ && make");
+    expect((r.analysis as NonNullable<typeof r.analysis>).effectiveCwds[1]).toBe(null);
+    expect(judgeWriteOutside(r, store, ["build/out.o"])).toEqual([]);
+  });
+
+  it("an absolute report is unaffected by the extra bases", async () => {
+    expect(judgeWriteOutside(await pd(`cd ${PI} && make`), store, [`${PI}/out.txt`])).toEqual([PI]);
+  });
+});
+
+describe("git and tar: the location the subcommand or the mode states reaches the floor", () => {
+  const OUT = "/Users/u/elsewhere"; // anonymous, and out of every bar
+
+  async function pd(command: string) {
+    const p = bashPd(command);
+    p.analysis = await analyzeCommand(command, BASE, {
+      isInsideAllowedDir: (d) => store.isInsideAllowedDir(d, "read"),
+      getConfirmedResolution: (t) => store.getConfirmedResolution(t),
+    });
+    return p;
+  }
+
+  it("an out-of-folder patch read stops (was: nothing minted, auto-allow)", async () => {
+    const r = await checkDspaGate(await pd(`git apply ${OUT}/x.patch`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain(`${OUT}/x.patch`);
+  });
+
+  it("the repository a location flag names is a WRITE for apply/am", async () => {
+    // A real folder, so the minted location resolves to itself. The stop names
+    // the write's containing dir (`rememberedDirOf` — dir-based grants, the same
+    // shape `mkdir`/`cp -t`/`unzip -d` produce): the grant it offers covers the
+    // repository the command writes, and every location under it.
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-gitwt-")));
+    try {
+      const r = await checkDspaGate(await pd(`git -C ${repo} apply --index -p2 rel.patch`), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.reason).toContain(repo);
+        expect(r.reason).toContain(`writes ${path.dirname(repo)}`);
+      }
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("`cd repo && git apply rel.patch` faces the base as a write — no token to mint", async () => {
+    // The repository here is the shell's cwd, so the operand mint has nothing to
+    // name; the D-h base-write proxy stands in (cwd-tracking.baseWriteAccess).
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-gitrepo-")));
+    try {
+      const r = await checkDspaGate(await pd(`cd ${repo} && git apply rel.patch`), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("write outside base");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a commit message file is a read: it stops as a path, not as a write", async () => {
+    const r = await checkDspaGate(await pd(`git commit -q -F ${OUT}/msg.txt`), store);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain(`${OUT}/msg.txt`);
+      expect(r.reason).not.toContain("writes");
+    }
+  });
+
+  it("git's revision and ref words still auto-allow (no invented location, no new prompt)", async () => {
+    for (const c of [
+      "git status",
+      "git log origin/main..HEAD --oneline",
+      "git checkout main",
+      "git commit -m msg",
+      "git stash",
+    ]) {
+      expect((await checkDspaGate(await pd(c), store)).ok, c).toBe(true);
+    }
+  });
+
+  it("extracting with -C outside the bar stops on the destination", async () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-tar-")));
+    try {
+      const r = await checkDspaGate(await pd(`tar xf ${dir}/a.tgz -C ${dir}/out`), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain(path.join(dir, "out"));
+      // In create mode the same flag only says where to read from, and the
+      // archive is the write — the destination is not claimed.
+      const c = await checkDspaGate(await pd(`tar cf ${dir}/a.tgz -C ${dir}/src src`), store);
+      expect(c.ok).toBe(false);
+      if (!c.ok) expect(c.reason).toContain(`${dir}/a.tgz`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("D19: hasFileScriptOutsideCwd — intent-pass escalation", () => {
   // A real base: the parser tracks a cd only into an existing directory.
   const PI = path.join(os.homedir(), ".pi");

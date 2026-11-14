@@ -198,7 +198,7 @@ describe("judgePathReport", () => {
     // `MISS: <that same base>` — the floor ran every later segment there, but
     // its knowledge set carried only operands, so the judge's honest report of
     // the folder read as a blind spot.
-    const base = "/Users/u/Strata";
+    const base = "/Users/u/work";
     const row = (cwds: (string | null)[]) => ({
       type: "bash",
       command: `cd ${base} && git fetch --all && git push`,
@@ -343,5 +343,88 @@ describe("judgePathReport — role disagreement", () => {
       floorWritePaths: writes,
     }, []);
     expect(r.roleJudgeMisses).toHaveLength(8);
+  });
+});
+
+// ── round 7 (3.53.0): the join bases — a folderless report after a `cd` ──
+//
+// The judge reports what it read: `test/out.bin`, no folder. Resolving that
+// against the SESSION cwd answered a question the command had already changed
+// (2026-11-13 round-7 ledger: rows blaming the judge for absolute paths under
+// the session cwd that never existed there — and the D19 write bar admitting
+// `out.bin` because the session cwd happened to be inside the bar). The join
+// set is the honest form: one candidate per folder the command sat in, with the
+// row flagging that the word itself carried no folder.
+
+describe("a folderless report joins every folder the command visited", () => {
+  const visited = "/Users/u/work";
+
+  it("a relative entry yields one candidate per base, in base order", () => {
+    expect(sanitizeJudgePaths(["out.bin"], cwd, [visited])).toEqual([
+      `${cwd}/out.bin`,
+      `${visited}/out.bin`,
+    ]);
+  });
+
+  it("an absolute or ~ entry is unaffected by the extra bases", () => {
+    expect(sanitizeJudgePaths(["/abs/f", "~/f"], cwd, [visited])).toEqual([
+      "/abs/f",
+      `${home}/f`,
+    ]);
+  });
+
+  it("a base equal to the cwd is not joined twice, and no bases keep the old shape", () => {
+    expect(sanitizeJudgePaths(["out.bin"], cwd, [cwd])).toEqual([`${cwd}/out.bin`]);
+    expect(sanitizeJudgePaths(["out.bin"], cwd)).toEqual([`${cwd}/out.bin`]);
+  });
+
+  it("the row flags a folderless word, and only when the command moved", () => {
+    expect(
+      judgePathReport(["out.bin"], { cwd, cwdBases: [visited], floorPaths: [`${cwd}/seed`] }).relativeReports,
+    ).toEqual(["out.bin"]);
+    // One folder: the ordinary join, nothing ambiguous to flag. An absolute
+    // report never enters the flag either.
+    expect(judgePathReport(["out.bin"], { cwd, floorPaths: [`${cwd}/seed`] }).relativeReports)
+      .toBeUndefined();
+    expect(judgePathReport([`${visited}/out.bin`], { cwd, cwdBases: [visited], floorPaths: [] }).relativeReports)
+      .toBeUndefined();
+  });
+
+  it("an invented join is logged, but it never becomes a blind spot", () => {
+    // `paths` carries every candidate (the decision D1b: visible, not silently
+    // resolved). The miss fields stay about what the FLOOR lacked: a join is a
+    // guess of ours, and a guess cannot manufacture a floorMiss — pre-fix, the
+    // cd base was never joined, so these rows wrote nothing.
+    const r = judgePathReport(["out.bin"], {
+      cwd,
+      cwdBases: [visited],
+      floorPaths: [`${cwd}/seed`, `${visited}/other`],
+    });
+    expect(r.paths).toEqual([`${cwd}/out.bin`, `${visited}/out.bin`]);
+    expect(r.floorMisses).toBeUndefined();
+    expect(r.contextMisses).toBeUndefined();
+    // Same when the floor knows neither folder's leaf.
+    expect(judgePathReport(["deep/out.bin"], { cwd, cwdBases: [visited], floorPaths: [] }).floorMisses)
+      .toBeUndefined();
+  });
+
+  it("the flag reaches the row through judgePathLogFields", () => {
+    const base = "/Users/u/work";
+    const pd = {
+      type: "bash",
+      command: `cd ${base} && make`,
+      cwd,
+      analysis: {
+        paths: [`${base}/Makefile`],
+        writePaths: [],
+        segments: [`cd ${base}`, "make"],
+        effectiveCwds: [cwd, base],
+        prompt: { unresolved: [], outsidePaths: [] },
+      },
+    };
+    const f = judgePathLogFields(pd as never, createStore(), ["out.bin"]);
+    expect(f.relativeReports).toEqual(["out.bin"]);
+    expect(f.judgePaths).toEqual([`${cwd}/out.bin`, `${base}/out.bin`]);
+    expect(f.floorMisses).toBeUndefined();
   });
 });

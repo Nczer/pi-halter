@@ -85,7 +85,7 @@ import { resolveOpaqueRefs } from "../analysis/var-resolution";
 import { expandTilde, shortenToken, staticPrefixOf, OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER, under, isUnresolvedPath, rememberedDirOf } from "../analysis/path-util";
 import { isPathWarnedResolved, resolvePathReal, isAllowedReadPath, isAllowedWritePath, isProjectPiPathResolved } from "../analysis/path-analysis";
 import { scriptFilePathInSegment } from "../analysis/script-payload";
-import { sanitizeJudgePaths } from "../judge/paths";
+import { sanitizeJudgePaths, reportBases } from "../judge/paths";
 import type { ResolutionMap } from "../judge/path-resolver";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
@@ -219,7 +219,13 @@ export function judgeWriteOutside(
   if (pd.type !== "bash" || !writes?.length) return [];
   const normCwd = path.resolve(expandTilde(pd.cwd));
   const out: string[] = [];
-  for (const p of sanitizeJudgePaths(writes, pd.cwd)) {
+  // Joined against every folder the command sat in (judge/paths.reportBases):
+  // for `cd X && …` the session cwd is the wrong join base, and a relative
+  // write admitted there is a write outside the bar nobody faced — the D19
+  // "a hallucinated path never causes a false allow" invariant held only for
+  // reports that already named a folder. Every join faces the bar, so the bar
+  // admits only a report it can place inside every folder the command used.
+  for (const p of sanitizeJudgePaths(writes, pd.cwd, reportBases(pd).slice(1))) {
     // Uncapped on purpose (3.44.0): this IS the D19 bar, so every write the
     // judge claims faces it. The old 8-path log cap lived inside
     // `sanitizeJudgePaths`, which made writes 9+ of a long report unenforced.
