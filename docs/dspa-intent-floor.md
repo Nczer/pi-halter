@@ -158,6 +158,35 @@ Two anchor rules followed from that, both Darwin-driven and both found by test:
   judge. `echo hi > $OUT` is a stop before and after; what changed is that the
   reason is now the honest one (§4.1, not "the report did not name it").
 
+**§4.2 amendment (3.53.0, round-7 ledger audit) — a folderless report word
+joins every folder the command visited, and the two bars read that join in
+opposite directions.** The judge reports what it sees: a `make` run after
+`cd repo` gets a path reported as `build/out.o` — no folder, because the
+compiler's own output names are relative and the judge copies them. Resolved
+against the PARSE-time cwd alone (the previous behavior), such a word silently
+became a location in the folder the command had left: the ledger row then read
+as a path the judge never reported, and the audit could not tell judge noise
+from a real blind spot. `reportBases` (`judge/paths.ts`) collects the
+unambiguous bases for the call — `pd.cwd` plus every `analysis.effectiveCwds`
+entry (a base already resolved to a real folder, not `$X`) — and
+`reportJoins` mints each base's join of the word. One report, one join set,
+shared by both consumers, with the directions deliberately opposed:
+
+- the **D19 write bar** admits the call only if NO join falls outside the bar —
+  a location we guessed has to be safe under EVERY reading of the word, since
+  an ambiguous "the write lands there" claim is not a safe auto-allow;
+- the **§4.2 / fallthrough answer** accepts if ANY join names the location the
+  floor missed — a read needs one witness, not unanimity, and refusing here
+  would re-open the hole §4.2 exists to close.
+
+A join is our guess, never the judge's claim, so it never enters
+`floorMisses`/`roleFloorMisses` (a guessed path outside the bar would manufacture
+a blind spot the command may not even have) and the word that needed guessing is
+named on the judge ledger row (`relativeReports`, §7) with every candidate in
+`judgePaths` — visible in both directions, never resolved silently. Unresolvable
+bases (`$X`, an unresolved cwd) contribute no join: the resolver already owns
+those tokens, and minting against them would put a fake folder into the bar.
+
 Evidence for why the guards are not optional — the sampled judge path report
 (7 `paths` rows, model local-2/Qwen3.8-Flash-Next) contained: an invented
 `/usr/bin/ether-wake` for the text's `/usr/sbin/ether-wake`; a concretized
@@ -319,6 +348,12 @@ the intent route (§3) is the one that trades determinism for friction.
   §4.2 guard and the D19 write bar see the full sanitized report, so a long
   report can no longer hide an answer (a false stop) or leave a reported write
   unbarred (writes 9+ of a 12-write report met no bar before this).
+- `relativeReports` (3.53.0) — on a `paths` row, the report words that carried no
+  folder, present only when the call had more than one base to join them
+  against. It marks which entries of `judgePaths` are our guesses (§4.2
+  amendment): a row whose paths were all absolute stays unchanged, and the
+  decision line carries the joins but not the flag — there the two sides are not
+  being compared.
 - The manual path's rows are unchanged, so the deterministic fix work keeps a
   live corpus. A floorMiss is never reclassified as a judge contextMiss when
   `floorPaths` is empty (§4.4, built step 5).

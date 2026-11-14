@@ -1783,3 +1783,64 @@ the rest were closed by 3.33–3.37. Each release below carries its rows as
     `uvx --from …`), which is why the npm family and `uv tool run` are what
     remain. The fix belongs on the grant side: a fetch-form rule must carry its
     fetch set (or be refused for a form whose packages are named by flags).
+
+## 7. Round-7 audit — the four live defects, and the gaps they left (2026-11-13)
+
+The decision-log corpus (newest row 2026-11-09 — `decisionLog` was off while
+3.52.x shipped) re-mined against 3.52.2 turned up four live defects, all built
+in 3.53.0: a folderless judge report resolved
+against the parse-time cwd only (§4.2 amendment, `judge/paths.ts`); the floor's
+own re-basing missed a relative-qualified program word (`bin/ls`,
+`.venv/bin/python`) while the parse had re-based it (`cwd-tracking.ts`,
+`isCwdRelativeWord`); git minted nothing at all, so an out-of-folder patch read
+auto-allowed (`config/bash-patterns.ts`, `gitOperandRoles`); and `tar -C` was a
+write in every mode, so `tar cf out.tar -C DIR .` claimed a destination
+(`analysis/write-roles.ts`, `tarExtracts()`). What each fix deliberately did NOT
+take on is recorded here — measured, at the minting layer, on the same tree.
+
+- **Gap R7-A — a bare-relative OPERAND is never minted.** `isPathCandidate`
+  requires an anchor (`/`, `~/`, `./`, `../`), so `touch out.txt`,
+  `cp rel/a rel/b`, `mkdir -p build/out` all measure `paths=[] write=[]`, and
+  `git apply rel.patch` with no preceding `cd` is in the same class. Neither bar
+  can see the location; what gates such a call is its command-level grant and the
+  packet's command text. This is the same bounded-minting decision that keeps a
+  bare `..` or a word inside a top-level folder from naming a folder (§9 step 1,
+  D20), and it stays unbuilt for the same reason: minting every relative build
+  artifact is a prompt on the working set the operator is standing in. The
+  round-7 fix therefore took the other half of the pair — a relative word the
+  FLOOR mints as a path (the argv0) is re-based like every other re-based form,
+  and D1 joins a folderless REPORT to the folders the command visited.
+- **Gap R7-B — tar's extractor cousins have no destination rule.** The
+  write-role table is closed and holds tar only: `cpio -id -D DIR`, `7z x a -oDIR`,
+  `dpkg -x A DIR` (and bsdtar's own form) all measure `paths=[] write=[]`. The
+  destination flag differs per tool and one is a prefix flag (`-oDIR`), so each
+  entry is its own table line plus its own false-positive cost — a policy
+  addition, not a rule.
+- **Gap R7-C — a git positional pathspec mints nothing.** `git add src/x.c`,
+  `git checkout -- /abs/x.c`, `git commit -- /abs/x.c` measure `paths=[]`,
+  while `git apply /abs/x.patch` (whose role the subcommand states outright)
+  mints it. Telling a positional pathspec from a revspec needs the index, which
+  the parse does not read, and guessing would mint a cwd child for the common
+  `git log main..feature` shape — the exact mistake §"git: the verb is the
+  subcommand" (architecture.md) exists to avoid.
+- **Gap R7-D — judge-report hygiene is a ledger-trust cost, not a floor hole.**
+  In the audit's corpus: 5 rows reported a fabricated home (`/home/username`,
+  `/root`, and three invented account names; 7 entries), 27 rows
+  carried 39 `roleFloorMisses` entries that are mostly `cd` bases and body writes
+  rather than roles, and report paths carrying `*` survive `sanitizeJudgePaths`
+  (which already drops URL-shaped tokens). None of these opens a location; all of
+  them make a row read worse than it is, so they are audit work, not gate work.
+- **A directory WRITE target is named by its CONTAINING dir.** The stop reason and
+  the Always option both go through `rememberedDirOf` (path-util.ts), so
+  `git -C REPO apply` reports `writes <dirname(REPO)>` — broader than the target
+  it was asked to name. Consistent with `mkdir`, `cp -t`, `unzip -d`; the bar
+  itself checks the target, so the direction is safe and only the naming is loose.
+- **Corpus hygiene is the round's loosest end.** `decisionLog` is ON again and
+  `.log/decisions.jsonl` grows with every session — including the sessions that
+  run the fixes (this round's working corpus now carries the build's own
+  `git apply` and `tar` probes). There is no snapshot folder (`.log/corpus/`,
+  which the replay header asks for, does not exist), so a replay pointed at the
+  default `FLOOR_LOG=.log` reads a moving corpus, and drift between the two
+  passes fakes a flip. Freeze a copy, run BOTH passes against it, and say which
+  copy the numbers came from — an audit that does not know whether it is holding
+  a snapshot or the live log reads today's build against today's traffic.

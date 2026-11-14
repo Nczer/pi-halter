@@ -313,8 +313,16 @@ awk needs the two-token `-i inplace`, since single-token `-i` is gawk's
 `--include`) — plus per-command
 flag tables for the destinations that hide in flags (`tar -f`/`--file`,
 `cp -t`, `sort -o`, `dd of=`, `find -fprint`), the flag-that-switches-the-verb
-form (`find -delete` ⇒ every walked directory), and `tarWrites()` for tar's
-extract/create asymmetry.
+form (`find -delete` ⇒ every walked directory), and tar's mode-dependent roles:
+`tarWrites()` decides whether the ARCHIVE operand is written (`cf` writes it,
+`xf` reads it) and `tarExtracts()` decides whether `-C`/`--directory` is a
+DESTINATION at all — while extracting it is (`tar xf a.tgz -C /out` unpacks
+there), in create mode the same flag says where to READ from
+(`tar cf out.tar -C DIR .`), and a listing mode's `-C` is a read location too.
+A mode test has to stay a mode test: an operand-shaped match (`tar cf out.tar x`,
+a file named `x`) would claim a destination the command never writes, so the
+test reads the mode position (the first argument, dashless traditional form
+included) or an option bundle, never an operand.
 
 The operands are minted into `analysis.writePaths` at the SAME sites as `paths`
 and with the same hop/skip/dedup filters, so `writePaths ⊆ paths` by
@@ -337,6 +345,41 @@ all — measured `paths=[]`, `writePaths=[]` — so neither bar can see it, and 
 and `bash` are not table-allowed, so it prompts) and, under dspa, the judge
 packet's full command text (`test/write-roles.test.ts`,
 `test/verified-bypasses.test.ts` P15).
+
+### git: the verb is the subcommand (3.53.0)
+
+git is deliberately absent from `pathAwareCommands`: its arguments are revisions
+and refs (`origin/main`, `HEAD~2`, `feature/x`), so "operands are paths" would
+mint a location in the current folder for almost every git call ever run — the
+same mistake the `..`-anywhere revspec clause was rewritten for (three
+2026-10-24 ledger rows). What it paid for staying out was worse than the cost of
+going in: NOTHING was minted, so `git apply /var/x.patch` — an out-of-folder
+patch read — auto-allowed with no location in the packet, and the 11-10 ledger
+row whose judge report named `/tmp/halter-mac.patch` as a floor blind spot was
+this gap, not judge noise (round-7 audit).
+
+What gets minted is what the subcommand states outright
+(`config/bash-patterns.ts`, `gitOperandRoles`), so the subcommand decides the
+role of the same operand position:
+
+- the REPOSITORY a location flag names (`-C DIR`, `--work-tree[=DIR]`) — a WRITE
+  for the subcommands that rewrite that working tree (`GIT_TREE_WRITE_SUBCOMMANDS
+  = {apply, am}`), a read for every other one;
+- the FILES the subcommand is told to read: apply/am's positional patch or
+  mailbox, and `commit`'s `-F`/`--file`/`-t`/`--template` message file.
+
+Nothing else: revisions, refs, and a bare `commit -m` message mint no path, and
+the table is closed (`git status`, `git log`, `git diff`, `git checkout` mint
+nothing, so they cannot gain a prompt).
+
+A repository named by the SHELL's cwd (`cd repo && git apply p`) has no token to
+mint — that one is the D-h base-write proxy, which is why `baseWriteAccess`
+(cwd-tracking) asks `gitOperandRoles` for the same answer rather than consulting
+the write-verb table: git is absent there too, because its verb is the
+subcommand. Both layers share the predicate, and both keep bare-relative
+operands unminted (see `isResolvableTarget`: minting one resolves it against the
+PARSE-time cwd, which after a `cd` is a folder the command never reads — and a
+resolvable operand suppresses D20's base flag, which measured as an AUTO-ALLOW).
 
 ### Runner options (the closed world a grant vouches for)
 
