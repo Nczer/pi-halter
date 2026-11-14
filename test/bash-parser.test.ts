@@ -692,6 +692,20 @@ describe("parseCommand: symlink hops (prompt display)", () => {
     const r = await parseCommand(`cat ${base}/real/f.txt`, cwd);
     expect(r.hops).toEqual([]);
   });
+
+  it("no hop for a cwd-relative word — its folder is the shell's cwd, and a cd moves it (round 7)", async () => {
+    // A hop says "the word X resolved to Y". A cwd-relative word names no
+    // folder at all, and its resolution is against the PARSE-time cwd — which
+    // threadCwdPaths then re-resolves against the segment's effective base (a
+    // `cd` earlier in the chain). The pair therefore displayed a base the
+    // command never sat in, next to the location question it could not answer.
+    // Nothing is lost by dropping it: the location itself is still minted, and
+    // a hop never causes a stop on its own (command-analysis keeps only hops
+    // whose RESOLVED side is already in the stop set).
+    const r = await parseCommand("bin/ls -la", cwd);
+    expect(r.hops).toEqual([]);
+    expect(r.paths).toContain(path.join(cwd, "bin/ls"));
+  });
 });
 
 describe("parseCommand: relative-glob loop in-lists (2026-08-31 log case)", () => {

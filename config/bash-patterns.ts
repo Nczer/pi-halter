@@ -515,6 +515,100 @@ export function gitNetworkSubcommand(words: string[]): string | null {
   return GIT_NETWORK_SUBCOMMANDS.has(sub) ? sub : null;
 }
 
+/** git subcommands that rewrite the working tree they act on, without naming
+ *  what they change: `git apply my.patch` READS the patch and writes the
+ *  repository, and `git am` applies mailboxes the same way. Deliberately
+ *  closed — commit/add/stash touch only `.git`, and the destructive ones
+ *  (reset, checkout, clean…) own a reason string in the risk table and name
+ *  their pathspecs as operands. */
+export const GIT_TREE_WRITE_SUBCOMMANDS = new Set(["apply", "am"]);
+
+/** The flags naming the REPOSITORY a git command acts on. */
+export const GIT_REPO_FLAGS = new Set(["-C", "--work-tree"]);
+
+/** Flags whose VALUE a git subcommand reads as a file (`git commit -F msg.txt`). */
+const GIT_FILE_READ_FLAGS: Record<string, string[]> = {
+  commit: ["-F", "--file", "-t", "--template"],
+};
+
+export interface GitOperandRoles {
+  /** The subcommand, lowercased. */
+  sub: string;
+  /** Token index (in `args`) of the value naming the repository: the value
+   *  token for `-C DIR`, the flag token for `--work-tree=DIR`. -1 = none. */
+  repoIdx: number;
+  /** That repository's working tree is what the subcommand rewrites. */
+  writesRepo: boolean;
+  /** Token indices of files the subcommand reads (a patch, a message). */
+  reads: number[];
+}
+
+/**
+ * Classify git's operands by what the SUBCOMMAND does with them.
+ *
+ * git is not in `pathAwareCommands`, and cannot be: its arguments are
+ * revisions and refs (`origin/main`, `HEAD~2`, `feature/x`), so a generic
+ * "operands are paths" rule invents locations in the current folder — the same
+ * mistake the `..`-anywhere revspec clause was rewritten for (three
+ * 2026-10-24 ledger rows). The other half of the omission was worse: with no
+ * entry at all, `git apply /var/tmp/x.patch` minted NOTHING — an out-of-folder
+ * patch read, auto-allowed (2026-11-13 probe; and the 11-10 ledger row where
+ * the judge reported `/tmp/halter-mac.patch` as a floor blind spot was this
+ * gap, not judge noise).
+ *
+ * `args` is git's argument list — everything AFTER the `git` word, so the
+ * returned indices address that list directly.
+ */
+export function gitOperandRoles(args: string[]): GitOperandRoles | null {
+  let i = 0;
+  let repoIdx = -1;
+  while (i < args.length) {
+    const a = stripQuotes(args[i]);
+    const eq = a.startsWith("--") ? a.indexOf("=") : -1;
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    if (GIT_REPO_FLAGS.has(name)) {
+      repoIdx = eq > 0 ? i : i + 1;
+      i += eq > 0 ? 1 : 2;
+      continue;
+    }
+    // `-c KEY=VAL` and `--git-dir DIR` consume a value; a bare `--flag=x` does
+    // not. Any other leading dash ends the global-flag walk (the subcommand is
+    // then unreadable, and only an explicit `-C DIR` still gets minted).
+    if (a === "-c" || a === "--git-dir") i += 2;
+    else if (GIT_GLOBAL_FLAGS.has(a) || (a.startsWith("--") && a.includes("="))) i += 1;
+    else break;
+  }
+  if (i >= args.length) return repoIdx >= 0 ? { sub: "", repoIdx, writesRepo: false, reads: [] } : null;
+  const sub = stripQuotes(args[i]).toLowerCase();
+  const rest = args.slice(i + 1);
+  const reads: number[] = [];
+  if (GIT_TREE_WRITE_SUBCOMMANDS.has(sub)) {
+    // apply/am take their patch / mailbox as a positional; every option of
+    // theirs carries its value inline (`-p2`, `--directory=DIR`, `--whitespace=fix`).
+    for (let j = 0; j < rest.length; j++) {
+      const a = stripQuotes(rest[j]);
+      if (a === "--") break;
+      if (a.startsWith("-")) continue;
+      reads.push(i + 1 + j);
+    }
+  } else {
+    const flags = GIT_FILE_READ_FLAGS[sub];
+    if (!flags) return repoIdx >= 0 ? { sub, repoIdx, writesRepo: false, reads } : null;
+    for (let j = 0; j < rest.length; j++) {
+      const a = stripQuotes(rest[j]);
+      const eq = a.startsWith("--") ? a.indexOf("=") : -1;
+      const name = eq > 0 ? a.slice(0, eq) : a;
+      if (flags.includes(name)) {
+        if (eq > 0) reads.push(i + 1 + j);
+        else if (rest[j + 1] !== undefined) { reads.push(i + 2 + j); j++; }
+      } else if (/^-F\S/.test(a)) {
+        reads.push(i + 1 + j); // the glued `-Fmsg.txt` spelling
+      }
+    }
+  }
+  return { sub, repoIdx, writesRepo: GIT_TREE_WRITE_SUBCOMMANDS.has(sub), reads };
+}
+
 /** git subcommands that talk to a remote. */
 export const GIT_NETWORK_SUBCOMMANDS = new Set(["push", "fetch", "pull", "clone", "ls-remote"]);
 

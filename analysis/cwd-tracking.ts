@@ -5,7 +5,7 @@ import { expandTilde, expandHomeToken, UNKNOWN_CWD_MARKER } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
 import { pathWord, type PathWord } from "./path-word";
 import { tokenizeSegment, tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
-import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS, codeBodiesWrite } from "../config";
+import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS, codeBodiesWrite, gitOperandRoles } from "../config";
 import { writeOperandIndices } from "./write-roles";
 import { hasRuntimeExpansionText, nonFileArgIndices, type BashSegment } from "./bash-parser";
 import { resolveDelegatedTokens } from "./wrapper-unwrap";
@@ -423,8 +423,42 @@ export const BARE_REDIRECT_RE = /^(?:\d{0,1}(?:&?>|>&)|\d{0,1}<)$/;
  *  fake `$HOME/Strata/origin` outside-dir (three 2026-10-24 ledger rows). */
 const DOT_SEGMENT_RE = /(^|\/)\.\.(\/|$)/;
 
-/** Token names a location resolvable (or already marker-flagged) by the path set. */
-function isResolvableTarget(t: string, hasExpansion = true): boolean {
+/**
+ * A word whose location the EFFECTIVE cwd decides, because it is a relative
+ * path: `./x`, `../x`, any `..`-bearing relative (`DOT_SEGMENT_RE`) — and the
+ * folder-bearing RELATIVE form with no leading dot (`bin/ls`,
+ * `.venv/bin/python`, `rel/x.sh`).
+ *
+ * The dotless form matters at ONE position, and only there: a program word.
+ * `classifyArgv0` calls any `/`-bearing program word "qualified" and the
+ * parser mints its location as a path (G4) — resolved against the SESSION
+ * cwd. Without this clause that minted location was never re-resolved, so
+ * `cd X && rel/x.sh` was modeled as `<session-cwd>/rel/x.sh`: inside the
+ * base, no outside-dir, and no path grant even possible, while bash execs
+ * `X/rel/x.sh`. The ledger tell was the interpreter shape — a floor path
+ * under the session cwd that exists nowhere, beside a judge report of the
+ * venv interpreter's real target (2026-11-08 judge.jsonl, 4 rows).
+ *
+ * It is deliberately NOT accepted at an operand position: the parser mints no
+ * path for a bare-relative operand (`isPathCandidate` wants `/`, `~/`, `./` or
+ * `..`), so threading one would INVENT a location — which is exactly how a
+ * git revspec (`origin/main..HEAD`) and a slash-bearing quoted label surfaced
+ * as fake outside-dirs (three 2026-10-24 ledger rows). Making the floor see
+ * those operands at all is a separate, larger question, recorded as a known
+ * gap (docs/dspa-redesign.md).
+ *
+ * Runtime-expansion forms are excluded: the parser mints them as opaque refs,
+ * and a string-join on `$VAR/x` names no place.
+ */
+export function isCwdRelativeWord(text: string): boolean {
+  if (text.startsWith("/") || text.startsWith("~") || hasRuntimeExpansionText(text)) return false;
+  return text.includes("/") || DOT_SEGMENT_RE.test(text);
+}
+
+/** Token names a location resolvable (or already marker-flagged) by the path set.
+ * Exported for the parser's own subcommand-shaped operand rules (git), so a
+ * minted location and the base flag cannot disagree about who covers it. */
+export function isResolvableTarget(t: string, hasExpansion = true): boolean {
   if (
     t.startsWith("/") || t.startsWith("~") ||
     t.startsWith("./") || t.startsWith("../") || DOT_SEGMENT_RE.test(t)
@@ -697,16 +731,18 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
  *    lands under the base and the path set sees only the base (D20's
  *    base flag). A pipeline shares the effective cwd, so any stage
  *    counts (`cat x | tee f`). Resolvable targets enter the path set
- *    themselves (read bar / D19 handle them). git is deliberately absent
- *    from the verb set — subcommand-dependent (status/log don't write).
+ *    themselves (read bar / D19 handle them). git has no VERB here — it is
+ *    subcommand-dependent (status/log don't write) — but `apply`/`am` join
+ *    through their own subcommand test, since what they rewrite is the base.
  * Subshells are not modeled here (baseAccessPath's subshell scan already
  * flags their base for the read bar).
  */
 
 /** Commands whose common use creates/modifies files at their targets
  * (D18 class 3, added D21). A bare (base-resolving) target under a
- * re-based base is a write to the base. git is deliberately absent:
- * subcommand-dependent (status/log don't write); a bare `git commit`
+ * re-based base is a write to the base. git is absent as a verb:
+ * subcommand-dependent (status/log don't write; `apply`/`am` are matched by
+ * their own test above), and a bare `git commit`
  * rides on the judge's verdict. */
 const WRITE_VERB_BASE = new Set(["mkdir", "mv", "cp", "touch", "tee", "ln", "chmod", "chown", "chgrp", "install"]);
 export function baseWriteAccess(seg: BashSegment): boolean {
@@ -753,6 +789,12 @@ export function baseWriteAccess(seg: BashSegment): boolean {
       const st = stageCommand(st0);
       if (st.capped) return true; // no program identity: assume it writes the base
       const cmd = st.cmd;
+      // git is absent from the verb table because its verb is the SUBCOMMAND
+      // (`status` reads, `apply` rewrites the working tree). The subcommand-aware
+      // operand rule mints a repository the command NAMES (`git -C DIR apply p`);
+      // here the repository IS the base, so the proxy stands in — otherwise
+      // `cd repo && git apply p` named no write at all.
+      if (cmd === "git" && gitOperandRoles(st0.slice(st.index + 1))?.writesRepo) return true;
       const sedInPlace = cmd === "sed" &&
         st0.slice(st.index + 1).some((t) => /^-[a-bd-gj-zA-Z]*i[^\s/]*$/.test(t) || t.startsWith("--in-place"));
       if (!WRITE_VERB_BASE.has(cmd) && !sedInPlace) continue;
@@ -825,9 +867,11 @@ function splitPlainStages(tokens: string[]): string[][] {
 
 /**
  * Tokens whose filesystem location depends on the effective cwd:
- * `./x`, `../x` (and ..-bearing relatives) and the statically resolvable
- * `$PWD` / `${PWD}` forms (closed set — `$PWD` means "wherever the cd chain
- * left us"; any other expansion is a computed path and stays opaque).
+ * `./x`, `../x` (and ..-bearing relatives), the folder-bearing relative
+ * program word (`bin/ls` — see isCwdRelativeWord for why only a program word),
+ * and the statically resolvable `$PWD` / `${PWD}` forms (closed set — `$PWD`
+ * means "wherever the cd chain left us"; any other expansion is a computed
+ * path and stays opaque).
  * `rel` is the cwd-relative remainder (empty string = the directory itself).
  */
 interface CwdDependentToken {
@@ -863,7 +907,7 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
     if (argv0) {
       if ((argv0.hasExpansion ?? true) && /^\$\{?PWD\}?\//.test(argv0.text)) {
         out.push({ isPwd: true, rel: argv0.text.slice(argv0.text.indexOf("/") + 1), isWrite: false });
-      } else if (isDotRelativeWord(argv0.text)) {
+      } else if (isCwdRelativeWord(argv0.text)) {
         out.push({ isPwd: false, rel: argv0.text, isWrite: false });
       }
     }
@@ -939,10 +983,9 @@ export function reResolveCwdDependentWords(
   return out;
 }
 
-/**
- * The session-cwd resolutions parseCommand emits for a segment's cwd-dependent
- * dot tokens (./../ relatives — the $PWD forms never reach the parser's path
- * set). For dot tokens expandTilde/expandHomeToken are identity, so this is
+/** The session-cwd resolutions parseCommand emits for a segment's cwd-dependent
+ * relative tokens (./../ relatives and the relative program word — the $PWD
+ * forms never reach the parser's path set). For dot tokens expandTilde/expandHomeToken are identity, so this is
  * exactly the parser's own `resolvePathReal(expandTilde(arg), cwd)` per token.
  *
  * analyzeCommand removes these when the segment's effective base differs from

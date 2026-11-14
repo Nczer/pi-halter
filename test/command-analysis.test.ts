@@ -836,3 +836,72 @@ describe("Tilde path tokens (word-initial ~)", () => {
     expect(a.paths).not.toContain(home);
   });
 });
+
+// ── round 7 (3.53.0): git's operands are decided by the SUBCOMMAND ──
+//
+// git stayed out of the path-aware table for a good reason — its arguments are
+// revisions and refs (`origin/main`, `HEAD~2`), and a generic "operands are
+// paths" rule invents locations in the current folder. What it paid for that
+// was worse than the cost of going in: nothing was minted at all, so
+// `git apply /var/x.patch` — an out-of-folder patch read — auto-allowed with no
+// location in the packet (2026-11-13 probe; the 11-10 ledger row where the judge
+// reported `/tmp/halter-mac.patch` as a floor blind spot was this gap, not
+// judge noise). The rule: mint only what the subcommand states outright.
+
+describe("git: the subcommand's own words reach the path set", () => {
+  // An anonymized out-of-folder root: identity on both platforms (`/Users`
+  // exists on macOS, the walk-up stops at / on Linux).
+  const OUT = "/Users/u/elsewhere";
+
+  it("an out-of-folder patch is a read the bar can see", async () => {
+    const a = await analyzeCommand(`git apply ${OUT}/x.patch`, cwd);
+    expect(a.paths).toEqual([`${OUT}/x.patch`]);
+    expect(a.writePaths).toEqual([]);
+  });
+
+  it("the repository a location flag names is a write for apply/am", async () => {
+    const a = await analyzeCommand(`git -C ${OUT} apply --index -p2 rel.patch`, cwd);
+    expect(a.paths).toEqual([OUT]);
+    expect(a.writePaths).toEqual([OUT]);
+    // apply/am's own options carry their value inline (`--index`, `-p2`), so the
+    // bare-relative patch is the only operand left — and it stays unminted.
+  });
+
+  it("a mailbox is a read while the tree is the write", async () => {
+    const a = await analyzeCommand(`git -C ${OUT} am ${OUT}/1.mbox`, cwd);
+    expect(a.paths).toEqual([OUT, `${OUT}/1.mbox`]);
+    expect(a.writePaths).toEqual([OUT]);
+  });
+
+  it("a commit message file is a read, never a write", async () => {
+    const a = await analyzeCommand(`git commit -q -F ${OUT}/msg.txt`, cwd);
+    expect(a.paths).toEqual([`${OUT}/msg.txt`]);
+    expect(a.writePaths).toEqual([]);
+  });
+
+  it("revisions and refs invent no locations", async () => {
+    for (const cmd of [
+      "git status",
+      "git log origin/main..HEAD --oneline",
+      "git checkout main",
+      "git commit -m msg",
+      "git push origin HEAD",
+      "git diff HEAD~2",
+    ]) {
+      const a = await analyzeCommand(cmd, cwd);
+      expect(a.paths, cmd).toEqual([]);
+      expect(a.writePaths, cmd).toEqual([]);
+    }
+  });
+
+  it("a bare-relative patch operand stays unminted — the base carries it (gap (b))", async () => {
+    // Minting `rel.patch` against the PARSE-time cwd invented a location after a
+    // `cd`, and a resolvable operand suppresses the base flag: measured with
+    // that rule in place, `cd repo && git apply rel.patch` AUTO-ALLOWED. The
+    // coarse base prompt (baseWriteAccess, D-h) is the honest outcome while
+    // operand minting stays as it is — docs/dspa-redesign.md, known gaps.
+    const a = await analyzeCommand("git apply rel.patch", cwd);
+    expect(a.paths).toEqual([]);
+    expect(a.writePaths).toEqual([]);
+  });
+});

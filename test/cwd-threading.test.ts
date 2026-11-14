@@ -7,6 +7,7 @@ import {
   reResolveCwdDependentWords,
   baseWriteAccess,
   homeReassigned,
+  isCwdRelativeWord,
 } from "../analysis/cwd-tracking";
 import { OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER } from "../analysis/path-util";
 import { dirsOfLocations, pathWord } from "../analysis/path-word";
@@ -873,6 +874,45 @@ describe("relative PROGRAM words re-base with the cd (argv0 is an executed path)
     const a = await analyzeCommand("../bin/tool", CWD);
     expect(a.paths).toContain(path.resolve(CWD, "../bin/tool"));
   }, 15000);
+
+  it("a QUALIFIED relative program re-bases too — every word the floor mints, not just ./ (round 7 D2)", async () => {
+    // The G4 argv0 rule mints a qualified program word as a path (`bin/ls` is a
+    // PATH operand, docs/dspa-redesign §6 item 4), so re-basing only the
+    // `./`/`../` forms left those pinned to the session cwd: the 2026-11-13
+    // round-7 ledger shows the prompt naming `<session cwd>/.venv/bin/python`
+    // for a command that ran under a `cd` target — a location the command never
+    // touches, shown as evidence and pointed at by a dead `Always (paths)` grant.
+    fs.mkdirSync(path.join(CWD, "sub"), { recursive: true });
+    for (const prog of ["bin/ls", ".venv/bin/python"]) {
+      const paths = await pathsOf(`cd ${path.join(CWD, "sub")} && ${prog} -la`);
+      expect(paths, prog).toContain(path.join(CWD, "sub", prog));
+      expect(paths, prog).not.toContain(path.join(CWD, prog));
+    }
+  }, 15000);
+
+  it("a bare program word stays unlocated (no separator: nothing to re-base)", async () => {
+    // `ls` names no folder at all — the cwd-relative test is what separates it
+    // from `bin/ls`, and the base-access rule owns the bare case. (Analyzed
+    // directly: an in-cwd `cd` plus `ls` is a working-set command, so there is
+    // no prompt to take the analysis from.)
+    const a = await analyzeCommand(`cd ${path.join(CWD, "sub")} && ls -la`, CWD);
+    expect(a.paths).not.toContain(path.join(CWD, "ls"));
+    expect(a.paths).not.toContain(path.join(CWD, "sub", "ls"));
+  }, 15000);
+});
+
+describe("isCwdRelativeWord: the words whose folder is the shell's cwd", () => {
+  it("a relative word with a separator is cwd-dependent", () => {
+    for (const w of ["bin/ls", ".venv/bin/python", "rel/x.sh", "./x", "../x/y", "a/../b"]) {
+      expect(isCwdRelativeWord(w), w).toBe(true);
+    }
+  });
+
+  it("an absolute, ~, bare-name or runtime-expansion word is not", () => {
+    for (const w of ["/usr/bin/ls", "~/bin/x", "ls", "$B/x", "${B}/x", "-C", ""]) {
+      expect(isCwdRelativeWord(w), w).toBe(false);
+    }
+  });
 });
 
 describe("$HOME expansion integration (P2)", () => {
@@ -1203,6 +1243,32 @@ describe("baseWriteAccess (D18)", () => {
   it("input redirects read the base, not write it", () => {
     expect(baseWriteAccess(seg("cat < f"))).toBe(false);
     expect(baseWriteAccess(seg("cat <f"))).toBe(false);
+  });
+
+  it("git's verb is its SUBCOMMAND: a working-tree rewrite writes the base (round 7 D3)", () => {
+    // `cd repo && git apply p.patch` reads a patch and rewrites the repository
+    // under the base, and git is absent from the write-verb table because its
+    // operands are revisions — so the subcommand decides (config/bash-patterns,
+    // gitOperandRoles). Without this the command named no write at all.
+    for (const t of [
+      "git apply p.patch",
+      "git am mailbox/*.mbox",
+      "git apply --index -p2 rel/p.patch",
+    ]) {
+      expect(baseWriteAccess(seg(t)), t).toBe(true);
+    }
+    for (const t of [
+      "git status",
+      "git commit -m msg",
+      "git log origin/main..HEAD",
+      "git checkout main",
+      "git diff HEAD~2",
+      // The repository is named by a flag, so the operand mint covers that one;
+      // the base stays untouched — the command never runs in it.
+      "git -C /repo status",
+    ]) {
+      expect(baseWriteAccess(seg(t)), t).toBe(false);
+    }
   });
 
   it("opaque inline code (heredoc / -c / -e) is a base write", () => {

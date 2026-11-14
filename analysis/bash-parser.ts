@@ -2,14 +2,14 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { allowedReadPaths, allowedWritePaths, pathAwareCommands, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, codeBodiesWrite, type CodeBody } from "../config";
+import { allowedReadPaths, allowedWritePaths, pathAwareCommands, SHELL_INTERPRETERS, SCRIPT_INTERPRETERS, codeBodiesWrite, gitOperandRoles, type CodeBody } from "../config";
 import { resolvePathReal } from "./path-analysis";
 import { pathWord, mintWord, barLocations, type PathWord } from "./path-word";
 import { OPAQUE_VAR_DIR, HOME_TOKEN_RE, expandTilde, expandHomeToken, expandHomeLiterals, under } from "./path-util";
 import { isCwdLocalWord } from "./cwd-local";
 import { resolveDelegatedTokens } from "./wrapper-unwrap";
 import { classifyArgv0 } from "./argv0-path";
-import { homeReassigned } from "./cwd-tracking";
+import { homeReassigned, isCwdRelativeWord, isResolvableTarget } from "./cwd-tracking";
 import { inlineCodeArgIndices } from "../config/script-operand";
 import { writeOperandIndices } from "./write-roles";
 import type { ShellAssignment } from "./var-resolution";
@@ -2183,14 +2183,14 @@ export async function parseCommand(
     const bodyWrites: string[] = [];
     const obscuredArgv0: string[] = [];
     const opaque: OpaqueRef[] = [];
-    // Symlink hops (written ≠ resolved) for prompt display. Dot-prefixed
-    // tokens are excluded: threadCwdPaths re-resolves them against the
-    // per-segment effective cwd (a `cd` earlier in the chain), so a
-    // parse-time hop would pin the wrong base.
+    // Symlink hops (written ≠ resolved) for prompt display. Cwd-relative
+    // tokens are excluded (cwd-tracking.isCwdRelativeWord): threadCwdPaths
+    // re-resolves them against the per-segment effective cwd (a `cd` earlier
+    // in the chain), so a parse-time hop would pin the wrong base.
     const hops: PathHop[] = [];
     const hopSeen = new Set<string>();
     const recordHop = (written: string, resolved: string): void => {
-      if (written === resolved || /^(?:\.\/|\.\.\/)/.test(written)) return;
+      if (written === resolved || isCwdRelativeWord(written)) return;
       const key = written + "\u0000" + resolved;
       if (!hopSeen.has(key)) { hopSeen.add(key); hops.push({ written, resolved }); }
     };
@@ -2502,6 +2502,48 @@ export async function parseCommand(
           const targetNode = args[i].node;
           const hasExpansion = nodeHasRuntimeExpansion(targetNode);
           mintArgWord(words, m[2], targetNode, hasExpansion, m[1] === "of" || m[1] === "converse");
+        }
+      }
+
+      // git: the operand grammar is SUBCOMMAND-dependent, so git stays out of
+      // `pathAwareCommands` (its arguments are revisions and refs — `origin/main`,
+      // `HEAD~2` — and a generic "operands are paths" rule would mint them in the
+      // current folder). The cost of staying out was worse than the cost of going
+      // in: nothing was minted at all, so `git apply /var/tmp/x.patch` — an
+      // out-of-folder patch read — auto-allowed with no location in the packet
+      // (2026-11-13 probe; the 11-10 ledger row whose judge reported
+      // `/tmp/halter-mac.patch` as a floor blind spot was this gap, not judge
+      // noise). What gets minted is what the subcommand states outright: the
+      // repository its location flag names (a WRITE for the subcommands that
+      // rewrite that working tree — `git apply my.patch` reads a patch and
+      // changes the repo), and the files it is told to read (the patch, a commit
+      // message file). A repository named by the SHELL's cwd (`cd repo && git
+      // apply p`) has no token to mint; that one is the D-h base-write proxy,
+      // which `baseWriteAccess` now also grants to these subcommands.
+      if (cmdName === "git") {
+        const roles = gitOperandRoles(args.map((a) => a.text));
+        if (roles) {
+          const mintGitArg = (idx: number, isWrite: boolean): void => {
+            const arg = args[idx];
+            if (!arg) return;
+            const eq = arg.text.startsWith("--") ? arg.text.indexOf("=") : -1;
+            const value = eq > 0 ? arg.text.slice(eq + 1) : arg.text;
+            if (value === "" || value.startsWith("-")) return;
+            const hasExpansion = nodeHasRuntimeExpansion(arg.node);
+            // A BARE-RELATIVE value stays unminted, exactly as it does for every
+            // other command's operands (isPathCandidate wants `/`, `~/` or a dot).
+            // Minting it would resolve it against the parse-time cwd, and after a
+            // `cd` that is a folder the command never reads — and because a
+            // resolvable operand suppresses D20's base flag, the invented path
+            // made `cd repo && git apply rel.patch` AUTO-ALLOW (measured with this
+            // rule in place, before the guard). The coarse base prompt is the
+            // honest outcome while operand minting stays as it is
+            // (docs/dspa-redesign.md, known gaps).
+            if (!isResolvableTarget(value, hasExpansion)) return;
+            mintArgWord(words, value, arg.node, hasExpansion, isWrite);
+          };
+          if (roles.repoIdx >= 0) mintGitArg(roles.repoIdx, roles.writesRepo);
+          for (const idx of roles.reads) mintGitArg(idx, false);
         }
       }
     }

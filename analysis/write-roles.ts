@@ -71,6 +71,11 @@ const WRITE_FLAGS: Record<string, string[]> = {
   sort: ["-o", "--output"],
   patch: ["-o", "--output-file"],
   unzip: ["-d", "--directory"],
+  // tar's destination, and only when it is EXTRACTING: `tar xf a.tgz -C DIR`
+  // creates files under DIR (the sibling of `unzip -d DIR`, which has always
+  // been a write). In create mode the same flag only says where to READ from
+  // (`tar cf out.tar -C DIR .`), so the role is mode-dependent, not flag-wide.
+  tar: ["-C", "--directory"],
   find: ["-fprint", "-fprintf", "-fls"],
   // The fetched file of a download. `-O`/`--remote-name` (and bare `wget URL`)
   // name the basename in the CURRENT base, so nothing outside is minted and the
@@ -92,6 +97,21 @@ const WRITE_ALL_WHEN_FLAG: Record<string, string> = { find: "-delete" };
  *  letter: `tar cf out.tar .` writes out.tar, `tar xf in.tar` reads it. */
 const TAR_MODE_RE = /(?:^|\s)-?[rcuuta](?:[a-zA-Z]*f[a-zA-Z]*)?\b/;
 const TAR_READ_MODE_RE = /^-[a-zA-Z]*[xt](?:[a-zA-Z]*f[a-zA-Z]*)?$/;
+
+/** The extract side of the mode: the ONE mode whose `-C` is a destination.
+ *  `t` LISTs (its `-C` only says where to read from), `c` CREATEs, so this is
+ *  deliberately `x`-only. The mode is the FIRST argument (the dashless
+ *  traditional `tar xf a.tgz -C DIR`) or an option bundle (`-zxvf`); a later
+ *  token is an operand, and an operand-shaped match (`tar cf out.tar x`) would
+ *  invent a write destination in create mode. */
+const TAR_EXTRACT_MODE_RE = /^-[a-zA-Z]*x[a-zA-Z]*$/;
+
+function tarExtracts(args: string[]): boolean {
+  if (args.some((a) => /^--(?:extract|get)$/.test(a))) return true;
+  const head = args[0] ?? "";
+  if (!head.startsWith("-") && /^[a-zA-Z]*x[a-zA-Z]*$/.test(head)) return true;
+  return args.some((a) => TAR_EXTRACT_MODE_RE.test(a));
+}
 
 function tarWrites(args: string[]): boolean {
   if (args.some((a) => /^--(?:create|append|update|concatenate)$/.test(a))) return true;
@@ -117,7 +137,13 @@ export function writeOperandIndices(
   const out = new Set<number>();
   if (!cmd) return out;
 
-  const flags = WRITE_FLAGS[cmd];
+  // tar's flag roles are mode-dependent — `-C` names a DESTINATION only while
+  // extracting (`tar xf a.tgz -C DIR` unpacks there); in create mode the same
+  // flag says where to READ from (`tar cf out.tar -C DIR .`), and a listing
+  // mode's `-C` is a read location too. So the table entry cannot be taken
+  // unconditionally (2026-11-13 round 7: extracting to an out-of-folder
+  // destination minted nothing, and the write bar never saw it).
+  const flags = cmd === "tar" && !tarExtracts(args) ? undefined : WRITE_FLAGS[cmd];
   const all = WRITE_ALL.has(cmd)
     || (WRITE_ALL_WHEN_FLAG[cmd] !== undefined && args.includes(WRITE_ALL_WHEN_FLAG[cmd]));
   const targetDirGiven = TARGET_DIR_FLAGS.some((f) => args.includes(f) || args.some((a) => a.startsWith(`${f}=`)));

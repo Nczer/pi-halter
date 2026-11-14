@@ -19,6 +19,7 @@ import path from "node:path";
 import os from "node:os";
 import { describe, expect, it } from "vitest";
 import { writeOperandIndices } from "../analysis/write-roles";
+import { gitOperandRoles } from "../config";
 import { parseCommand } from "../analysis/bash-parser";
 
 /** args are the parser's arguments AFTER the command word, so index 0 of the
@@ -176,5 +177,87 @@ describe("parseCommand: writePaths is the write-role subset", () => {
     // after `cd` is the analysis layer's job (threadCwdPaths), pinned in
     // test/verified-bypasses (P15).
     expect(await writesFor("cd ~/.pi/agent && mkdir ./pwned")).toEqual(["/work/pwned"]);
+  });
+});
+
+// ── round 7 (3.53.0): mode-dependent roles — tar's destination, git's verb ──
+//
+// Two programs whose operand roles depend on something OUTSIDE the operand
+// position. `tar -C DIR` is a destination while extracting and a read location
+// while creating (`tar cf out.tar -C DIR .`), so a flag-wide table entry had to
+// go mode-dependent (2026-11-13: `tar xf a.tgz -C /outside` minted no write at
+// all). git's verb is its SUBCOMMAND, and it stayed out of the position table
+// entirely because its arguments are revisions (`origin/main`); the cost was
+// that NOTHING was minted — `git apply /var/x.patch` auto-allowed.
+
+describe("tar: the -C destination is a write only while extracting", () => {
+  it("extracting writes the -C directory, and not the archive it reads", () => {
+    expect(idx("tar", ["xf", "a.tgz", "-C", "/d"])).toEqual([3]);
+    expect(idx("tar", ["x", "a.tgz", "-C", "/d"])).toEqual([3]);
+    expect(idx("tar", ["-zxvf", "a.tgz", "-C", "/d"])).toEqual([3]);
+    expect(idx("tar", ["--extract", "--file", "a.tgz", "--directory", "/d"])).toEqual([4]);
+    // The mode may come after the flag — the destination is still the write.
+    expect(idx("tar", ["--directory", "/d", "-xf", "a.tgz"])).toEqual([1]);
+  });
+
+  it("creating writes the archive, and -C only says where to read from", () => {
+    expect(idx("tar", ["cf", "a.tgz", "-C", "/d", "out"])).toEqual([1]);
+    expect(idx("tar", ["rf", "a.tar", "-C", "/d", "out"])).toEqual([1]);
+  });
+
+  it("listing claims no destination", () => {
+    expect(idx("tar", ["tf", "a.tgz", "-C", "/d"])).toEqual([1]);
+    expect(idx("tar", ["--list", "-f", "a.tgz", "-C", "/d"])).toEqual([]);
+  });
+
+  it("a positional operand is never read as the mode", () => {
+    // `tar cf out.tar x` — a file named `x` is not an extract mode, and an
+    // operand-shaped match would claim `-C`'s read location as a write.
+    expect(idx("tar", ["cf", "out.tar", "x"])).toEqual([1]);
+  });
+});
+
+describe("gitOperandRoles: the subcommand decides what an operand means", () => {
+  const roles = (args: string[]) => gitOperandRoles(args);
+
+  it("a working-tree rewrite reads its patch and writes the repository", () => {
+    expect(roles(["apply", "/var/p.patch"])).toEqual({
+      sub: "apply", repoIdx: -1, writesRepo: true, reads: [1],
+    });
+    expect(roles(["am", "/box/1.mbox"])).toMatchObject({ sub: "am", writesRepo: true, reads: [1] });
+    // Its own options all carry the value inline, so the first bare word is the patch.
+    expect(roles(["-C", "/repo", "apply", "--index", "-p2", "rel.patch"])).toEqual({
+      sub: "apply", repoIdx: 1, writesRepo: true, reads: [5],
+    });
+  });
+
+  it("the location flags name the repository; --git-dir does not (it is not the tree)", () => {
+    expect(roles(["--work-tree=/repo", "apply", "p"])).toMatchObject({ repoIdx: 0, writesRepo: true });
+    expect(roles(["--git-dir", "/g", "apply", "/p"])).toMatchObject({ repoIdx: -1, reads: [3] });
+  });
+
+  it("a message file is a read, and only commit declares such flags", () => {
+    expect(roles(["commit", "-q", "-F", "/m/msg.txt"])).toEqual({
+      sub: "commit", repoIdx: -1, writesRepo: false, reads: [3],
+    });
+    expect(roles(["commit", "-Fmsg.txt"])).toMatchObject({ reads: [1] }); // the glued spelling
+    expect(roles(["commit", "--file=/m/msg.txt"])).toMatchObject({ reads: [1] });
+    // A subcommand that declares read-flags answers with an empty set rather
+    // than null: nothing is minted, and the caller cannot confuse "no opinion"
+    // with "opinion: nothing".
+    expect(roles(["commit", "-m", "text"])).toEqual({
+      sub: "commit", repoIdx: -1, writesRepo: false, reads: [],
+    });
+  });
+
+  it("global flags are walked past; a subcommand with no location operand says nothing", () => {
+    expect(roles(["-c", "k=v", "am", "/box/1"])).toMatchObject({ sub: "am", repoIdx: -1, reads: [3] });
+    expect(roles(["status"])).toBeNull();
+    expect(roles(["log", "origin/main..HEAD"])).toBeNull();
+    expect(roles(["diff", "HEAD~2"])).toBeNull();
+    // A repository named without a tree-writing subcommand is still a read.
+    expect(roles(["-C", "/repo", "status"])).toEqual({
+      sub: "status", repoIdx: 1, writesRepo: false, reads: [],
+    });
   });
 });
