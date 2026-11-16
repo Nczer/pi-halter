@@ -1,5 +1,77 @@
 # Changelog
 
+## 3.54.0 — 2026-11-16
+**The credential stop is no longer the operator's only answer: accredit the directory for the session and the judge rules on the read — and the ledger finally records the answer, the verdict, and the class of every stop.**
+
+Grill `docs/dspa-credential-vouch.md` (V-a…V-i, guards G1–G7). Frozen-ledger
+replay, both passes on one copy of `.log/decisions.jsonl` (1,989 rows, window
+2026-11-15 → 11-16), 1,381 bash rows through the real `decide()` + floor with a
+fresh store per row, floor-only — no model call in either pass: **0 decision-kind
+flips, 0 gate-ok flips, 0 reason-text differences**. 784 rows differ in one
+field only — they gained a `stopClass`, which is the point of L3, and the
+class census over those stops is `outside-base` 693, `untrusted-package` 47,
+`write-outside-base` 14, `credential-pattern` 10, `unverifiable-glob` 7,
+`dangerous` 6, `full-fs-scan` 4, `network-egress` 2, `absolute-bar` 1. Over the
+same corpus the credential floor stops 10 times, and **9 of the 10 would have
+cleared for the judge on one accreditation** (one dir, `/mnt/Ndr/Projects`);
+the tenth is suppressed by a finding the scan could not name, which is G4/G5
+working, not a hole.
+
+- **An operator can accredit one directory for the session** (V-a/V-b,
+  `gate/store.ts`, widget segment `R cred`): "the credential material here is
+  mine". The credential stop then stands down **for the judge** — stage 1 is
+  skipped (the packet would say only "credential file" against a rule that
+  denies on that fact alone, V-e/V-f) and stage 2, which sees the grants,
+  rules. Cleared by `/halter-forget` with the learned read dirs; never
+  persisted to settings.
+- **A ceiling decides what an accreditation can never lift**
+  (`isAccreditableCredentialPath` in `analysis/credentials.ts`, V-c/G1): what
+  reads as a secret store, a standalone keyfile, or a pseudo-fs secret stays
+  absolute *inside* the accredited dir. An env file is name-shaped whatever it
+  ends with, so it never lifts either — found while re-scoping the safety probe,
+  which had reached for exactly that case as its clearance example
+  (`docs/dspa-intent-floor.md`, stage 8).
+- **The prompt offers the answer at the stop**, in plain words, and the click
+  records a session READ grant and the accreditation together (V-d) because the
+  corpus commands name the dir themselves. The offer only appears when the scan
+  can point at a concrete dir: the scan now reports WHICH paths it matched
+  (`CredentialFindings`), and anything it cannot name suppresses both the
+  clearance and the offer.
+- **Two doors, not three** (V-g amended at build): the bash door and the file
+  door, both judge-fed. The manual / auto file-policy door keeps stopping — it
+  has no judge, so clearing it would auto-allow a credential read silently
+  (§4.5). `decide/file-policy.ts` is untouched on purpose.
+- **The eligibility rule, stated once** (`docs/dspa-content-classes.md` §2,
+  V-h): a C4 stop whose bar keys on a LOCATION may take an operator grant; a
+  stop keyed on a verb, a destination or a blast radius may not. No registry —
+  one implementation, and the second class gets wired when it has a case.
+- **The ledger can answer what the feature did** (§7 L1–L3). `answer`
+  (allow | allowDir | allowCred | deny | abort) written after the operator
+  clicks; the verdict as a value rather than an absence (`judgeVerdict`,
+  `judgeStage`, `judgeModel`, `judgeSkipped`, and `judgeExplain` for every
+  non-approve, so a defer is no longer silent); and `stopClass` + `stopDetail`,
+  required on the gate's not-ok branch, so a future stop site cannot ship with
+  no class. `dspaStopClass` fixes the priority order where layers could each
+  own one stop — a floor stop outranks any verdict (D16), then an approve held
+  above its stage's risk authority (`judge-unauthorized`), then a stage-2
+  non-approve (`judge-declined`), then nothing usable (`judge-failed`).
+- **A judge the operator switched off stopped being reported as a judge call
+  that failed** — the prompt line and the row now say `judge off (settings)`.
+  A harness notice is data, not a diagnosis.
+
+**Ledger field switchover (this version).** Readers use live field names only —
+no alias fallback, because alias readers printed no misses at all. From 3.54.0:
+`judgeDeny` is `judgeExplain`; rows gain `answer`, `stopClass`, `stopDetail`,
+`judgeVerdict`, `judgeStage`, `judgeModel`, `judgeSkipped`; a dismissed prompt
+records `abort` (in the decision row and in `unresolved.jsonl`'s `decision`)
+instead of a reason-less deny. Rows written before this version carry
+`judgeDeny` and have no `answer` / `stopClass` — `tools/log-inspect.mjs` and
+`tools/replay.mts` read the new names only, and moved in the same commit as the
+fields (`tools/probe.mts` prints `decide()` outcomes and reads no ledger field,
+so it needed no change).
+
+Suite 4,644.
+
 ## 3.53.0 — 2026-11-14
 **Four location holes the round-7 ledger audit opened close: a folderless judge report, an argv0 the `cd` never moved, git's silent operands, and `tar -C` outside extract mode.**
 
