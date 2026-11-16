@@ -12,7 +12,7 @@
  * so the section carries exactly three data classes and nothing else:
  *  - the user's last messages, verbatim (the intent channel);
  *  - a one-line-per-call digest of recent tool calls (what the session does);
- *  - the session's permission grants (scope the user already vouched for).
+ *  - the session's permission grants (scope the user already granted).
  * NEVER: agent prose, tool outputs, attachments.
  *
  * Source: `ctx.sessionManager.getBranch()` — the active conversation path
@@ -190,6 +190,13 @@ export function buildSessionContext(ctx: ExtensionContext, store: Store): string
   const grantLines: string[] = [];
   try {
     for (const d of store.listAllowedWriteDirs()) grantLines.push(`write dir: ${d}`);
+    // The credential accreditations (docs/dspa-credential-vouch.md), named with
+    // their own word: not a scope grant but a statement that a judge may rule on
+    // this directory's credential reads. The stage-2 clause keys on "accredited",
+    // so the two must keep the same word — the judge sees only this line.
+    for (const d of store.listAccreditedDirs()) {
+      grantLines.push(`credential dir (accredited, read-only): ${d}`);
+    }
     for (const { sig, cwd } of store.listAllowedBashCwds()) {
       grantLines.push(`bash (cwd ${cwd}): ${sig}`);
     }

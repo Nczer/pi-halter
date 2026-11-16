@@ -1173,6 +1173,16 @@ describe("D13 — stage-2 path report", () => {
     expect(JUDGE_SYSTEM_PROMPT).not.toContain("report `writes`");
   });
 
+  // docs/dspa-credential-vouch.md: the accreditation gets an exception clause in
+  // the stage-2 text only. Stage 1 is skipped for this class (the skip itself
+  // lives in gate/fallthrough.ts), and its text is the eval-scored one (D23) —
+  // stage 2 embeds stage 1 verbatim, so that containment is the byte-lock.
+  it("the credential accreditation clause is stage-2 only", () => {
+    expect(JUDGE_STAGE2_SYSTEM_PROMPT).toContain("accredited for credential reads");
+    expect(JUDGE_SYSTEM_PROMPT).not.toContain("accredited");
+    expect(JUDGE_STAGE2_SYSTEM_PROMPT).toContain(JUDGE_SYSTEM_PROMPT);
+  });
+
   it("D19: parses a writes array (strings only, trimmed, non-empty kept)", async () => {
     const r = await judge(
       baseInput,

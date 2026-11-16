@@ -142,6 +142,25 @@ describe("grants", () => {
     expect(out).toContain(`bash (cwd ${BASE}): npm test`);
   });
 
+  // docs/dspa-credential-vouch.md: the judge must see the authority alongside
+  // the class — the stage-2 clause keys on the word "accredited", so the line
+  // here and the clause in judge/judge.ts are one contract.
+  it("names an accredited credential dir by its own word", () => {
+    const store = createStore();
+    store.accreditDir("/w/certs");
+    const out = buildSessionContext(makeCtx([userMsg("go")]), store);
+    expect(out).toContain("credential dir (accredited, read-only): /w/certs");
+  });
+
+  // G3: no derivation. A read grant is not an accreditation — the judge may not
+  // read one as permission over a credential file.
+  it("a read grant alone never appears as an accreditation", () => {
+    const store = createStore();
+    store.addAllowed({ readDirs: ["/w/certs"] });
+    const out = buildSessionContext(makeCtx([userMsg("go")]), store);
+    expect(out).not.toContain("credential dir");
+  });
+
   it("caps the grants block at 10 lines", () => {
     const store = createStore();
     store.addAllowed({ writeDirs: Array.from({ length: 15 }, (_, i) => `/d${i}`) });

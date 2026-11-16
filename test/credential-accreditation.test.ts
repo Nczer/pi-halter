@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { checkDspaGate } from "../gate/dspa-gate";
-import { credentialAccreditation } from "../gate/accreditation";
+import { credentialAccreditation, credentialClassCleared } from "../gate/accreditation";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../gate/store";
 import type { BashPromptData, FilePromptData } from "../decide/types";
@@ -227,5 +227,55 @@ describe("file door — the same exemption, both spellings", () => {
     const r = await checkDspaGate(filePd("/home/u/.ssh/id_rsa", "/home/u", false, ".ssh"), store);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.accreditDir).toBeUndefined();
+  });
+});
+
+// The judge cascade asks the doors' question in one word: is this the credential
+// class, cleared by an accreditation? When it is, stage 1 is skipped (V-e) — the
+// packet it would receive says only "credential file", against a rule that
+// denies on that fact, while the operator's act was to say the judge may rule.
+
+describe("credentialClassCleared (the stage-1 skip route)", () => {
+  it("true for a bash read under an accredited dir", async () => {
+    store.accreditDir(ROOT);
+    expect(credentialClassCleared(await realPd(`cat ${ROOT}/ca.pem`, ROOT), store)).toBe(true);
+  });
+
+  it("false while nothing is accredited — the class is there, the grant is not", async () => {
+    const pd = await realPd(`cat ${ROOT}/ca.pem`, ROOT);
+    expect(pd.credentialRule).not.toBeNull();
+    expect(credentialClassCleared(pd, store)).toBe(false);
+  });
+
+  it("false when the NAME is the credential (the ceiling outranks the grant, G1)", async () => {
+    fs.writeFileSync(path.join(ROOT, "id_rsa"), "x");
+    store.accreditDir(ROOT);
+    expect(credentialClassCleared(await realPd(`cat ${ROOT}/id_rsa`, ROOT), store)).toBe(false);
+  });
+
+  it("false when the command writes the credential path (V-d/G2)", async () => {
+    store.accreditDir(ROOT);
+    const pd = await realPd(`cp ${ROOT}/ca.pem ${ROOT}/sub/ca.pem`, ROOT);
+    expect(credentialClassCleared(pd, store)).toBe(false);
+  });
+
+  // The conservative direction, documented in gate/accreditation.ts: without the
+  // analysis there is nothing named, so stage 1 runs — an extra call, never a
+  // skipped judge.
+  it("false for hand-constructed prompt data (no analysis behind the rule)", () => {
+    store.accreditDir(ROOT);
+    const pd = bashPd(`cat ${ROOT}/ca.pem`, ROOT, { credentialRule: "*.pem" });
+    expect(credentialClassCleared(pd, store)).toBe(false);
+  });
+
+  it("the file branch: true for a read under an accredited dir, false for a write", () => {
+    store.accreditDir(ROOT);
+    expect(credentialClassCleared(filePd(`${ROOT}/ca.pem`, ROOT, false, "*.pem"), store)).toBe(true);
+    expect(credentialClassCleared(filePd(`${ROOT}/ca.pem`, ROOT, true, "*.pem"), store)).toBe(false);
+  });
+
+  it("false for a file the credential floor never flagged", () => {
+    store.accreditDir(ROOT);
+    expect(credentialClassCleared(filePd(`${ROOT}/notes.txt`, ROOT, false, null), store)).toBe(false);
   });
 });

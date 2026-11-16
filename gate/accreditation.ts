@@ -21,6 +21,7 @@
 import path from "node:path";
 import { under } from "../analysis/path-util";
 import { isAccreditableCredentialPath, type CredentialFindings } from "../analysis/credentials";
+import type { PromptData } from "../decide/types";
 import type { Store } from "./store";
 
 export interface CredentialGrant {
@@ -84,4 +85,40 @@ export function credentialAccreditation(
   if (pending.length === 0) return { cleared: true, offerDir: null };
   const dir = commonAncestorDir(pending);
   return dir ? { cleared: false, offerDir: dir } : NO_GRANT;
+}
+
+/**
+ * Is this operation the credential class, standing down on an accreditation?
+ *
+ * The judge cascade asks it (gate/fallthrough.ts): an accredited credential
+ * stop has a stage-1 packet that says only "credential file", against a rule
+ * that denies on that fact alone — while the operator's whole act was to say
+ * the judge may rule. So stage 1 would add a call and nothing else
+ * (docs/dspa-credential-vouch.md V-e).
+ *
+ * The floor doors do not use this: they also need `offerDir`, and the bash door
+ * asks with the analysis it resolved for the decision rather than one riding on
+ * the prompt data. Drift between the two is safe in one direction only: the
+ * cascade either ran stage 1 for nothing, or skipped it while stage 2 — the
+ * final verdict, and the only stage that sees the grants — still ruled.
+ */
+export function credentialClassCleared(pd: PromptData, store: Store): boolean {
+  if (pd.type === "bash") {
+    const a = pd.analysis;
+    if (!a || !pd.credentialRule) return false;
+    return credentialAccreditation(a.credentialFindings, store, [
+      ...a.writePaths,
+      ...a.bodyWritePaths,
+    ]).cleared;
+  }
+  // The file branch's one path is the whole finding; a write target never
+  // clears (V-d/G2) — same synthesis as the file door.
+  if (pd.type === "file" && pd.warnedRule) {
+    return credentialAccreditation(
+      { paths: [{ path: pd.resolved, rule: pd.warnedRule }], pathless: [] },
+      store,
+      pd.isWriteOp ? [pd.resolved] : [],
+    ).cleared;
+  }
+  return false;
 }

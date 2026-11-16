@@ -17,6 +17,7 @@ import type {PermissionRequest, Decision, PromptData} from "../decide/types";
 import type { Store } from "./store";
 import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decision-log";
 import { findExecutedScript } from "../analysis/script-payload";
+import { credentialClassCleared } from "./accreditation";
 import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, answeredMissPaths, intentGuardFaults, makeManualBar, type DspaGateResult, type MissAnswers, type MissFact } from "./dspa-gate";
 import { resolveUnresolvedPaths } from "../judge/path-resolver";
 import { sanitizeJudgePaths, reportBases, JUDGE_PATHS_MAX } from "../judge/paths";
@@ -512,9 +513,15 @@ export async function tryDspaAutoAllow(
   // so stage 1 would only add a call; stage 2 (low|medium) is the
   // authority. Absent analysis (hand-constructed prompt data) → no skip
   // (the conservative direction: an extra call, never a skipped judge).
+  // The credential class, accredited (docs/dspa-credential-vouch.md V-e), is
+  // the same shape from the other side: the floor stood down because the
+  // operator said the judge may rule, and stage 1's packet carries only
+  // "credential file" against a rule that denies on that fact — the session
+  // context an honest approve needs exists only in stage 2.
   const skipStage1 =
-    pd.type === "bash" && pd.analysis != null &&
-    findExecutedScript(pd.analysis, pd.cwd) !== null;
+    credentialClassCleared(pd, store) ||
+    (pd.type === "bash" && pd.analysis != null &&
+      findExecutedScript(pd.analysis, pd.cwd) !== null);
   // Stage 1 — stateless (the packet's static analysis is the whole input).
   const o1 = skipStage1 ? null : await getStage1Outcome(pd, ctx, store, deps);
   const v1 = o1?.verdict ?? null;
