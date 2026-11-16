@@ -256,9 +256,9 @@ describe("intent-learned read dirs (3.42 notes)", () => {
     expect([...store.listLearnedReadDirs()]).toEqual(["/opt/seen"]);
     // Repeat learn: nothing new to report, nothing to double-count in the toast.
     expect(store.addLearnedReadDirs(["/opt/seen"])).toEqual([]);
-    expect(store.forgetLearnedReadDirs()).toEqual(["/opt/seen"]);
+    expect(store.forgetSessionDirGrants()).toEqual({ readDirs: ["/opt/seen"], accreditedDirs: [] });
     expect(store.listAllowedReadDirs().size).toBe(0);
-    expect(store.forgetLearnedReadDirs()).toEqual([]);
+    expect(store.forgetSessionDirGrants()).toEqual({ readDirs: [], accreditedDirs: [] });
   });
 
   it("junk never enters the bar", () => {
@@ -272,7 +272,7 @@ describe("intent-learned read dirs (3.42 notes)", () => {
     store.addLearnedReadDirs(["/opt/seen"]);
     store.addAllowed({ readDirs: ["/opt/seen"] }); // a later "Always (paths)" click
     expect(store.isLearnedReadDir("/opt/seen")).toBe(false);
-    expect(store.forgetLearnedReadDirs()).toEqual([]);
+    expect(store.forgetSessionDirGrants().readDirs).toEqual([]);
     expect(store.listAllowedReadDirs().size).toBe(1);
   });
 
@@ -282,6 +282,61 @@ describe("intent-learned read dirs (3.42 notes)", () => {
     store.reset();
     expect(store.listAllowedReadDirs().size).toBe(0);
     expect(store.listLearnedReadDirs().size).toBe(0);
+  });
+});
+
+// docs/dspa-credential-vouch.md — the accreditation is one operator answer about
+// a location; these tests are the store half of guards G3/G4.
+describe("credential accreditation (dspa-credential-vouch)", () => {
+  it("accredit → covers the subtree, listed, never a write grant", () => {
+    const store = createStore();
+    expect(store.accreditDir("/mnt/certs")).toBe(true);
+    expect(store.isInsideAccreditedDir("/mnt/certs/ca.pem")).toBe(true);
+    expect(store.isInsideAccreditedDir("/mnt/certs/sub/key.pem")).toBe(true); // subtree
+    expect(store.isInsideAccreditedDir("/mnt/other/ca.pem")).toBe(false);
+    expect([...store.listAccreditedDirs()]).toEqual(["/mnt/certs"]);
+    // V-d/G2: an accreditation is not a read grant, and never a write grant.
+    expect(store.isInsideAllowedDir("/mnt/certs/ca.pem", "read")).toBe(false);
+    expect(store.isInsideAllowedDir("/mnt/certs/ca.pem", "write")).toBe(false);
+  });
+
+  it("a read grant accredits nothing (G3 — ~/.pi is in readDirs)", () => {
+    const store = createStore();
+    store.addAllowed({ readDirs: ["/home/op/.pi"] });
+    store.addLearnedReadDirs(["/opt/seen"]);
+    expect(store.isInsideAccreditedDir("/home/op/.pi/secrets/id_ed25519")).toBe(false);
+    expect(store.isInsideAccreditedDir("/opt/seen/tls.pem")).toBe(false);
+  });
+
+  it("nothing nameable, nothing accredited (G4, fail closed)", () => {
+    const store = createStore();
+    expect(store.accreditDir("")).toBe(false);
+    expect(store.accreditDir("/")).toBe(false); // the class switch V-a rejects
+    expect(store.accreditDir("<unresolved>")).toBe(false);
+    expect(store.listAccreditedDirs().size).toBe(0);
+    expect(store.isInsideAccreditedDir("/any/path")).toBe(false);
+    // An unresolved path word is in no accreditation either (fail closed).
+    store.accreditDir("/mnt/certs");
+    expect(store.isInsideAccreditedDir("<unresolved>")).toBe(false);
+  });
+
+  it("/halter-forget drops accreditations but nothing operator-owned", () => {
+    const store = createStore();
+    store.accreditDir("/mnt/certs");
+    store.addAllowed({ readDirs: ["/mnt/keep"] });
+    const forgotten = store.forgetSessionDirGrants();
+    expect(forgotten.accreditedDirs).toEqual(["/mnt/certs"]);
+    expect(store.listAccreditedDirs().size).toBe(0);
+    expect(store.isInsideAccreditedDir("/mnt/certs/ca.pem")).toBe(false);
+    expect(store.listAllowedReadDirs()).toEqual(new Set(["/mnt/keep"]));
+  });
+
+  it("reset clears accreditations (the session is their whole lifetime)", () => {
+    const store = createStore();
+    store.accreditDir("/mnt/certs");
+    store.reset();
+    expect(store.listAccreditedDirs().size).toBe(0);
+    expect(store.isInsideAccreditedDir("/mnt/certs/ca.pem")).toBe(false);
   });
 });
 

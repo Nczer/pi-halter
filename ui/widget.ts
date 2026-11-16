@@ -45,8 +45,8 @@ export function groupCommandVariants(items: string[]): string[] {
 // ── Status rendering ──
 
 /**
- * One session-rules line: `· R/W: … · R: … · R intent: … · Bash: … · Pkg: … ·
- * Cwd: … · Tools: …` — every grant category on ONE row (same style as the
+ * One session-rules line: `· R/W: … · R: … · R intent: … · R cred: … · Bash: … ·
+ * Pkg: … · Cwd: … · Tools: …` — every grant category on ONE row (same style as the
  * other bottom-bar lines), in safety-priority order (the write boundary first,
  * learned read grants after the clicked ones).
  * Each category caps its items (paths 3, commands 5, cwd 2, tools 3) with a
@@ -108,7 +108,7 @@ function displayPaths(paths: string[], cap: number): string {
  *   » DSPA                                       order: a auto-allowed, g floor stop,
  *   » DSPA: 3a — judging stage 2…                r judge reject, c declined, d defer;
  *   ◎ DSPAT: 3/4 agreed                          bare name pre-first-op, like ◎ DSPAT.
- *   · R/W: … · R: … · R intent: … · Bash: …      The model tag shows only when the
+ *   · R/W: … · R: … · R intent: … · R cred: …    The model tag shows only when the
  *   · Pkg: … · Cwd: … · Tools: …                 judge model differs from the session
  *                                                 model. The in-flight judging stage
  *                                                 rides the mode line inline (the
@@ -147,6 +147,13 @@ export function updateStatus(ctx: ExtensionContext): void {
   const readDirItems = filterSubPaths(
     [...store.listAllowedReadDirs()].filter((d) => !store.isLearnedReadDir(d)),
   );
+  // Credential accreditations (docs/dspa-credential-vouch.md): their own
+  // segment, NOT merged into "R" and NOT hidden behind it. A dir usually sits
+  // in both — the accreditation click carries a read grant (V-d) — and the two
+  // lines mean different things: "I may read here" vs "credential-named
+  // material here is mine". The operator must see the second one, because it is
+  // the only segment that says a floor is open.
+  const accreditedDirItems = filterSubPaths([...store.listAccreditedDirs()]);
   const writeDirItems = filterSubPaths([...store.listAllowedWriteDirs()]);
   const pkgItems = [...store.listTrustedPackages()];
   const toolGrantItems = [...store.listToolGrants()];
@@ -166,6 +173,7 @@ export function updateStatus(ctx: ExtensionContext): void {
     bashItems.length > 0 ||
     readOnlyPaths.length > 0 ||
     learnedReadPaths.length > 0 ||
+    accreditedDirItems.length > 0 ||
     allWritePaths.length > 0 ||
     cwdItems.length > 0 ||
     pkgItems.length > 0 ||
@@ -253,6 +261,11 @@ export function updateStatus(ctx: ExtensionContext): void {
       // "R intent" = read dirs the dspa intent pass recorded for this session
       // (docs/dspa-intent-floor.md §8 3.42 build notes); /halter-forget drops them.
       segments.push({ label: "R intent", text: displayPaths(learnedReadPaths.map(shortenHomePath), 3) });
+    }
+    if (accreditedDirItems.length > 0) {
+      // "R cred" = dirs the operator accredited for credential-named material
+      // this session (docs/dspa-credential-vouch.md); /halter-forget drops them.
+      segments.push({ label: "R cred", text: displayPaths(accreditedDirItems.map(shortenHomePath), 3) });
     }
     if (bashItems.length > 0) {
       segments.push({ label: "Bash", text: capList(groupCommandVariants(bashItems), 5) });

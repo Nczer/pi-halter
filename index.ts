@@ -261,20 +261,32 @@ export default async function halterExtension(pi: ExtensionAPI) {
     setLedgerLogEnabled,
   );
 
-  // ── /halter-forget — drop the read grants the dspa intent pass recorded ──
-  // Only the learned ones (docs/dspa-intent-floor.md §8 3.42 build notes): the operator's own
-  // halter.readDirs list and everything clicked in a prompt stay. Deliberately
-  // does not touch settings-ext.json — a learned grant is session state, and
-  // making one durable means writing the list by hand (3.42 design, G3).
+  // ── /halter-forget — drop the session-only dir grants ──
+  // Both kinds the operator never wrote into settings: the read dirs the intent
+  // pass recorded (docs/dspa-intent-floor.md §8 3.42 build notes) and every
+  // credential accreditation clicked at a prompt
+  // (docs/dspa-credential-vouch.md V-b). The operator's own halter.readDirs
+  // list and any "Always" click stay. Deliberately does not touch
+  // settings-ext.json — these are session state, and making one durable means
+  // writing the list by hand (3.42 design, G3).
   pi.registerCommand("halter-forget", {
     description:
-      "Drop the session read grants the dspa intent pass recorded this session (the widget's 'R intent' segment) so those locations need the judge again. Never touches halter.readDirs in settings-ext.json or grants you confirmed in a prompt.",
+      "Drop the session-only dir grants: the read dirs the dspa intent pass recorded (the widget's 'R intent' segment) and every credential accreditation given at a prompt ('R cred') — those locations need the judge again. Never touches halter.readDirs in settings-ext.json or a dir you granted with 'Always'.",
     handler: async (_args, ctx) => {
-      const removed = store.forgetLearnedReadDirs();
+      const { readDirs, accreditedDirs } = store.forgetSessionDirGrants();
+      const parts: string[] = [];
+      if (readDirs.length > 0) {
+        parts.push(`${readDirs.length} session read grant${readDirs.length === 1 ? "" : "s"}`);
+      }
+      if (accreditedDirs.length > 0) {
+        parts.push(
+          `${accreditedDirs.length} credential accreditation${accreditedDirs.length === 1 ? "" : "s"}`,
+        );
+      }
       ctx.ui.notify(
-        removed.length > 0
-          ? `Halter: forgot ${removed.length} session read grant${removed.length === 1 ? "" : "s"} — those dirs need the judge again`
-          : "Halter: no session read grants to forget (halter.readDirs is untouched)",
+        parts.length > 0
+          ? `Halter: forgot ${parts.join(" and ")} — those dirs need the floor and the judge again`
+          : "Halter: no session read grants or credential accreditations to forget (halter.readDirs is untouched)",
         "info",
       );
       updateStatus(ctx);

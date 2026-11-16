@@ -65,8 +65,36 @@ export interface Store {
   addLearnedReadDirs(dirs: string[]): string[];
   /** True when this exact dir was recorded by the intent pass (not clicked). */
   isLearnedReadDir(dir: string): boolean;
-  /** Clear every learned read dir; returns what was removed. */
-  forgetLearnedReadDirs(): string[];
+  /**
+   * Credential accreditation (docs/dspa-credential-vouch.md V-a/V-b): the
+   * operator answered a credential floor stop with "the credential material
+   * under this dir is mine to work on". Session-scoped, never persisted, and
+   * never implied by a read grant (G3): the credential floor consults ONLY
+   * this set — `~/.pi` is a readDirs entry, so deriving it from the read bar
+   * would open the secrets sitting under it.
+   *
+   * The click performs two acts (V-d): this call, plus a read grant through
+   * addAllowed — the corpus commands name the dir itself, so a class-only
+   * exemption would stop on `outside base` one decision later. This method
+   * records only the accreditation; it refuses "/" (that would be the whole
+   * class switch V-a rejects) and any unresolved token (G4, fail closed).
+   * Returns true when the dir was newly recorded.
+   */
+  accreditDir(dir: string): boolean;
+  /**
+   * Is this resolved path under an accredited dir? Subtree semantics, like a
+   * read grant. Reads ONLY the accreditation set (G3), and refuses a word
+   * that names no location (fail closed — no accreditation, floor stands).
+   */
+  isInsideAccreditedDir(resolved: string): boolean;
+  /**
+   * Drop the session-only dir grants the operator never wrote into settings:
+   * the intent-learned read dirs AND every credential accreditation
+   * (docs/dspa-credential-vouch.md V-b — a grant made at a prompt must be
+   * revocable in the same breath). `halter.readDirs` and every "Always" click
+   * are untouched.
+   */
+  forgetSessionDirGrants(): { readDirs: string[]; accreditedDirs: string[] };
   /** Check if a resolved path is inside a session-auto-allowed dir (no Set copy). */
   isInsideAllowedDir(resolved: string, kind: "read" | "write"): boolean;
   /**
@@ -97,6 +125,8 @@ export interface Store {
   listTrustedPackages(): Set<string>;
   /** Intent-learned read dirs (see addLearnedReadDirs). */
   listLearnedReadDirs(): Set<string>;
+  /** Accredited dirs (see accreditDir) — the widget renders these. */
+  listAccreditedDirs(): Set<string>;
 
   /** Get current time (uses injected clock for testability). */
   now(): number;
@@ -121,6 +151,7 @@ export function createStore(nowFn = Date.now): Store {
   const toolGrantModels = new Map<string, string>();
   const trustedPackages = new Set<string>();
   const learnedReadDirs = new Set<string>();
+  const accreditedDirs = new Set<string>();
   const confirmedResolutions = new Map<string, string[]>();
   const aborted = new Map<string, number>();
   let pcount = 0;
@@ -175,11 +206,28 @@ export function createStore(nowFn = Date.now): Store {
       return fresh;
     },
     isLearnedReadDir(d) { return learnedReadDirs.has(d); },
-    forgetLearnedReadDirs() {
-      const removed = [...learnedReadDirs];
-      for (const d of removed) readDirs.delete(d);
+    accreditDir(dir) {
+      // No concrete dir, no accreditation (G4) — and never the whole disk.
+      if (!dir || dir === "/" || dir.startsWith("<")) return false;
+      if (accreditedDirs.has(dir)) return false;
+      accreditedDirs.add(dir);
+      return true;
+    },
+    isInsideAccreditedDir(resolved) {
+      if (isUnresolvedPath(resolved)) return false;
+      if (accreditedDirs.has(resolved)) return true;
+      for (const d of accreditedDirs) {
+        if (under(resolved, d)) return true;
+      }
+      return false;
+    },
+    forgetSessionDirGrants() {
+      const readDirsRemoved = [...learnedReadDirs];
+      for (const d of readDirsRemoved) readDirs.delete(d);
       learnedReadDirs.clear();
-      return removed;
+      const accredited = [...accreditedDirs];
+      accreditedDirs.clear();
+      return { readDirs: readDirsRemoved, accreditedDirs: accredited };
     },
     getConfirmedResolution(token) { return confirmedResolutions.get(token) ?? null; },
     confirmResolution(token, dirs) {
@@ -247,6 +295,7 @@ export function createStore(nowFn = Date.now): Store {
     listToolGrants() { return new Set(toolGrants); },
     listTrustedPackages() { return new Set(trustedPackages); },
     listLearnedReadDirs() { return new Set(learnedReadDirs); },
+    listAccreditedDirs() { return new Set(accreditedDirs); },
 
     incrementPromptCount() {
       pcount++;
@@ -264,6 +313,7 @@ export function createStore(nowFn = Date.now): Store {
       toolGrantModels.clear();
       trustedPackages.clear();
       learnedReadDirs.clear();
+      accreditedDirs.clear();
       confirmedResolutions.clear();
       aborted.clear();
       pcount = 0;
