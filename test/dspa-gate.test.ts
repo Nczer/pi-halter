@@ -2297,7 +2297,7 @@ describe("config read-bar grants (halter.readDirs)", () => {
     expect(await checkDspaGate(bashPd(`cat ${B}/not/created/yet.dxf`), store)).toEqual({ ok: true });
   });
 
-  it("the ceiling survives the grant: credentials and writes still stop", async () => {
+  it("the ceiling survives the grant: a wider READ bar moves no other bar", async () => {
     registerAllowedReadDirs([C]);
     const cases: Array<[string, Partial<BashPromptData>, string]> = [
       [`cat ${C}/.env`, { credentialRule: ".env" }, "credential pattern"],
@@ -2309,6 +2309,64 @@ describe("config read-bar grants (halter.readDirs)", () => {
       const r = await checkDspaGate(bashPd(cmd, over), store);
       expect(r.ok, cmd).toBe(false);
       if (!r.ok) expect(String(r.reason), cmd).toContain(why);
+    }
+  });
+
+  it("the re-scoped safety probe: an accreditation moves the credential floor, a read grant does not", async () => {
+    // This is the probe `docs/dspa-intent-floor.md` pinned as "a widened read
+    // bar moves no other bar". It held until the accreditation (V-d) made one
+    // click record a read grant AND an accreditation, so the two answers now
+    // look alike from the store's outside — which is exactly why the probe is
+    // re-scoped to tell them apart: the read bar still moves nothing, and the
+    // credential floor moves only under an accreditation, only within the V-c
+    // ceiling, and never for a write. Real scan, real dir: a clearance that
+    // worked because the test hand-wrote the findings would be worthless.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "halter-probe-"));
+    try {
+      fs.writeFileSync(path.join(root, ".env"), "x");
+      fs.writeFileSync(path.join(root, "id_rsa"), "x");
+      fs.writeFileSync(path.join(root, "ca.pem"), "x");
+      registerAllowedReadDirs([root]); // the read half alone, no accreditation
+      const pd = async (command: string) => {
+        const analysis = await analyzeCommand(command, root);
+        return bashPd(command, { cwd: root, credentialRule: analysis.credentialRule, analysis });
+      };
+
+      // A SUFFIX-shaped hit (a cert, not a store) is the case an accreditation
+      // can reach at all. Read bar widened, nothing accredited: it stops, and
+      // the stop names the dir it wants.
+      const readBarred = await checkDspaGate(await pd(`cat ${root}/ca.pem`), store);
+      expect(readBarred.ok).toBe(false);
+      if (!readBarred.ok) {
+        expect(String(readBarred.reason)).toContain("credential pattern");
+        expect(readBarred.accreditDir).toBe(path.resolve(root)); // the answer it wants
+      }
+
+      store.accreditDir(root);
+      const accredited = await checkDspaGate(await pd(`cat ${root}/ca.pem`), store);
+      expect(accredited.ok, JSON.stringify(accredited)).toBe(true); // the judge decides now
+
+      // …and the ceiling outranks the grant: what reads as a store or a
+      // standalone keyfile stays stopped, offering nothing, inside the very dir
+      // the operator just accredited (V-c). `.env` is here because an env file
+      // is name-shaped whatever it ends with — the suffix does not make it a
+      // cert.
+      for (const name of ["id_rsa", ".env"]) {
+        const blocked = await checkDspaGate(await pd(`cat ${root}/${name}`), store);
+        expect(blocked.ok, name).toBe(false);
+        if (!blocked.ok) {
+          expect(String(blocked.reason), name).toContain("credential pattern");
+          expect(blocked.accreditDir, name).toBeUndefined();
+        }
+      }
+
+      // V-d: the accreditation is a read answer. A write to the accredited cert
+      // is still a credential write.
+      const wrote = await checkDspaGate(await pd(`echo x > ${root}/ca.pem`), store);
+      expect(wrote.ok).toBe(false);
+      if (!wrote.ok) expect(String(wrote.reason)).toContain("credential");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

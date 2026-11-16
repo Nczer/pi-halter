@@ -326,6 +326,16 @@ in the same commit, and the switchover version gets stamped in `CHANGELOG.md`.
 8. re-scope the pinned safety probe (`docs/dspa-intent-floor.md:760` and its
    test): a widened read bar still moves no other bar — the accreditation is what
    moves the credential floor.
+   DONE (2026-11-16): the probe lives in `test/dspa-gate.test.ts` ("the ceiling
+   survives the grant"), and a second test now shares its fixture and
+   discriminates the two operator answers — read grant alone (still stops, and
+   names the dir it wants), accreditation (cleared), the V-c pair under the
+   same accredited dir (`id_rsa`, `.env` — stopped, nothing offered), a write
+   to the accredited cert (stopped). One correction worth keeping: `.env` was
+   the obvious clearance case to reach for and is NOT one — an env file is
+   name-shaped whatever it ends with (`ENV_FILE_RE` in
+   `analysis/credentials.ts`), so the ceiling keeps it absolute. `ca.pem` is
+   the case an accreditation can reach.
 
 Pacing (standing rule for this repo): per stage = suite + the 62-row manual
 corpus + the 31-row dspa floor; the 875-row frozen-ledger replay runs once, at the

@@ -765,10 +765,27 @@ that keep costing are genuinely one-off (`/proc/meminfo`, `/opt/cuda/bin/nvcc`,
 `~/.zshrc`) — which is what the design wants: unlearned locations stay cheap
 in count and expensive in attention.
 
-**Safety probe** (`/tmp/hgrant-safety.mts`, now a test): with a grant
+**Safety probe** (`/tmp/hgrant-safety.mts`, now a test in
+`test/dspa-gate.test.ts`, "the ceiling survives the grant"): with a grant
 registered, `cat <dir>/.env` still stops on `credential pattern (.env)`,
-`rm -rf <dir>/logs` and `echo > <dir>/f` still stop on `write outside base`.
-A widened read bar moves no other bar.
+`rm -rf <dir>/logs` and `echo > <dir>/f` still stop on `write outside base`. A
+widened read bar moves no other bar.
+
+**Re-scoped 2026-11-16 (`docs/dspa-credential-vouch.md` stage 8).** That
+headline stopped being the whole truth when the accreditation made ONE click
+record a session read grant AND an accreditation (V-d): from the store's
+outside the two operator answers now look alike, and the credential floor is
+no longer permanently immovable. The probe keeps its original assertion and
+grows the half that discriminates, in a second test sharing the fixture — real
+scan, real temp dir, since a clearance that worked because a test hand-wrote
+the findings would be worthless. Read grant and NO accreditation →
+`cat <dir>/ca.pem` stops, and the stop names the dir it wants (`accreditDir`);
+accredited → cleared, for the judge to decide; `id_rsa` and `.env` in that same
+accredited dir → still stopped, offering nothing (V-c: the ceiling outranks the
+grant, and an env file is name-shaped whatever it ends with); a write to the
+accredited `ca.pem` → still stopped (V-d). The read bar moved nothing in either
+phase, which is the point: **the accreditation is what moves the credential
+floor, and it moves nothing else.**
 
 **Suite:** 4341 passed / 0 failed on Linux at 3.42.0 (HEAD measured in the
 same run: 4327 / 0 — the "7 failed" in the 3.41.0 notes are Darwin
