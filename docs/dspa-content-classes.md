@@ -40,7 +40,7 @@ pipeline.
 | **C1 — content-determined** | the visible payload IS the effect | exa search/contents (T1); file write/edit (as-is) |
 | **C2 — effect-extending** | payload is code; the effect reaches beyond the text | bash; script payloads (T3) |
 | **C3 — context-dependent** | arguments are opaque refs; meaning comes from the session | joplin (T6) |
-| **C4 — policy-absolute** | the user's call, never the judge's | egress bash (D14), outside-base scope (Q1), rm, credentials, unresolvable sentinels (D7) |
+| **C4 — policy-absolute** | the user's call, never the judge's | egress bash (D14), outside-base scope (Q1), rm, credentials (with the location exception below), unresolvable sentinels (D7) |
 
 **The gate kind is the mechanism.** Tool plugins classify each call into a
 kind that selects its class's pipeline — content-judge: `exec` (C2,
@@ -55,6 +55,25 @@ judgeable (C2).
 Stage 2's role follows from the classes: it is for operations that are
 slightly risky or need more context before judgment can happen — C2 always,
 C1 when stage 1 does not clear, C4 display-only.
+
+**A C4 stop takes an operator grant only when it keys on a location.** The
+rule, stated once here and enforced per class, not as a mechanism (V-h of
+`docs/dspa-credential-vouch.md`):
+
+- A stop whose bar keys on a **location** may stand down for an operator
+  grant. One instance exists: credential files under a dir the operator
+  accredited for this session (`accreditedDirs` — "the material here is
+  mine"). The grant moves the stop to the judge, never past it, and a
+  ceiling keeps name-shaped secret stores, standalone keyfiles and pseudo-fs
+  secrets absolute even inside an accredited dir (V-c).
+- A stop that keys on a **verb**, a **destination**, or a **blast radius**
+  may not: egress (D14), delete-scale, full-filesystem scan, unresolvable
+  sentinels. There is no vouch registry — a second class gets wired when it
+  has a case, not before.
+
+The grant also has to have a judge to hand. The manual/auto file-policy door
+has none, so an accreditation does not clear it: clearing it would silently
+auto-allow a credential read (`docs/dspa-credential-vouch.md` §4.5).
 
 ## 3. Decisions
 

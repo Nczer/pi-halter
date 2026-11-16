@@ -317,6 +317,12 @@ in the same commit, and the switchover version gets stamped in `CHANGELOG.md`.
    "judge never grants over a bar" line), `docs/dspa-intent-floor.md` §6 D-a
    marked reversed-in-place + §9 additions, `docs/dspa-redesign.md` (D7/D11 marks),
    `CHANGELOG.md`.
+   DONE (2026-11-16) except `CHANGELOG.md`: an entry there carries the release
+   version and the frozen-ledger replay numbers, so it lands at the release
+   commit, where the version bump happens. It must also stamp the ledger field
+   switchover (`judgeDeny` → `judgeExplain`, the new `answer` / `stopClass` /
+   `stopDetail` / `judge*` fields, the `abort` answer) — readers use live field
+   names only, so a changelog reader is the only place that bridge exists.
 8. re-scope the pinned safety probe (`docs/dspa-intent-floor.md:760` and its
    test): a widened read bar still moves no other bar — the accreditation is what
    moves the credential floor.

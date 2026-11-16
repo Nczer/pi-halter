@@ -213,6 +213,15 @@ the intent route (§3) is the one that trades determinism for friction.
   `unverifiable glob`, `untrusted package` / `unvetted run-form option`,
   `full filesystem scan`, `tool … never auto-allows`, and the file-branch
   `outside base (session …)`. None of them is handed to intent.
+  (**Reversed in place for one entry, 2026-11-16**: `credential pattern` is no
+  longer absolute when the path sits under a dir the operator **accredited**
+  for the session — the stop stands down and stage 2 decides, with the V-c
+  ceiling keeping secret stores, standalone keyfiles and pseudo-fs secrets
+  absolute. What survived is the rule, not the exception: a location-keyed bar
+  may take an operator grant, a stop keyed on a verb, a destination or a blast
+  radius may not (`docs/dspa-content-classes.md` §2, V-h of
+  `docs/dspa-credential-vouch.md`). It is still never a verdict that outranks a
+  bar.)
 - **D-b — `dangerous:` (577) is split by entry, not by name.** Absolute
   half: disk/system (`mkfs`, `mount`, `dd if=/of=`, `shutdown`, `reboot`),
   history/worktree (`git push --force`, `git reset --hard`, `git clean
@@ -1328,3 +1337,33 @@ not replayable against current code — read them as history, not as a diff.
   discriminator was found — the `fs.existsSync` test used for JS regex literals
   would break body WRITES, which are non-existent by definition, and a
   `v1|api|status` blocklist is brittle by construction. Ledger: 1 real row.
+
+### Filed 2026-11-16 from the credential-accreditation grill (found, not built)
+
+Corpus `.log/*.jsonl`, 875 decision rows; full text of every item in
+`docs/dspa-credential-vouch.md` §9. Listed here because each one bears on this
+doc's boundary between a bar and an answer.
+
+- **The `Always` suppression is out of sync with D-b** —
+  `ui/prompt-builder.ts:271` suppresses persistence on 25 of 69 prompts (36%)
+  because a syntax label (`[Risk] pipe operator`) suppresses as hard as
+  `[Tool] python`. D-b split exactly that conflation for the floor ("a
+  pattern-table CLASS label is a name the judge rules on, not a bar"); the
+  suppression list never followed. Needs its own grill — it touches principle 5.
+- **Two stops repeat although the click that should clear them exists**:
+  `tool consent` 5× in one dir despite "Allow `<kind>` this session", and
+  `untrusted package` 4× despite `Trust: <pkg> (session)`. Not root-caused —
+  either the option is not offered for that kind or the grant does not stick.
+  These are why the accreditation's session-scoping (V-b) was verified live
+  rather than assumed.
+- **Egress wants a destination-shaped answer, which V-h's rule excludes** —
+  `network egress` repeated 6× in one dir; "this host is mine" is the right
+  concept, but a destination is not a location, so it needs a new class of
+  operator answer, not the accreditation. `full filesystem scan` (D9) is the
+  only other location-shaped class and IS eligible by the same rule; 2 rows in
+  the corpus is not a case yet.
+- **The manual / auto file-policy door stays closed to an accreditation**
+  (§4.5 of the spec): that door has no judge, so clearing it would auto-allow a
+  credential read silently. The two judge-fed doors are what the read-tool case
+  needed. Anyone tempted to "finish" the third door should re-read that section
+  first — the asymmetry is the design.

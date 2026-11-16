@@ -21,6 +21,8 @@ Decision rationale for the judge regimes lives in `docs/dspa-redesign.md`; per-c
 | fetchable form | A package-manager run form that fetches from a registry: `npx <pkg>`, `uvx`, `npm exec`, `pnpm dlx`, `bun x`. Gated by per-package trust (D10). |
 | run form | A package-manager form that executes local code: `npm run`, `uv run`, `bun <script>`, `python <file>`. Judgeable, never fetch-gated (D8). |
 | grant | A session-scoped "Always" outcome: command signature, path (read or read+write), or trusted package. |
+| accredit / accredited dir | The operator's session-scoped decision that the credential material in one named directory is theirs (`accreditedDirs`, `R cred` in the widget): the credential floor stop stands down FOR THE JUDGE at that op — stage 1 skipped, stage 2 decides. The V-c ceiling keeps what reads as a secret store, a standalone keyfile, or a pseudo-fs secret (`/proc/<pid>/environ`) absolutely stopped even under an accredited dir, and the accreditation never travels to another dir or to a write. `docs/dspa-credential-vouch.md`. |
+| stop class | One slug per blocked reason (`stopClass` on the decision row, beside the `reason` prose), so a reason rewording never breaks a tally. Where several layers could own one stop, the class that wins is fixed by priority order, not by arrival order — `dspaStopClass` in `gate/fallthrough.ts`. |
 | fall-through | A prompt shown because the dspa auto-allow attempt did not complete: floor stop or judge verdict/absence. Carries which layer stopped it. |
 | packet | The judge's entire input for one operation: command, analysis digest, script content. Untrimmed (D11); file EDITS carry the after-edit view (replaced regions ±10 lines, line numbers) instead of the whole file. |
 
@@ -128,6 +130,9 @@ The five principles, from the header of `test/cases.test.ts`:
   filesystem-verified answer for pure-wildcard globs. The old hard-block tier
   was removed: its false positives (a `sed` program body, `echo .*`) refused
   benign commands, and deny-vs-warn never changed auto-allow behaviour.
+  Manual mode is where an accreditation does NOT reach: it has no judge, so
+  clearing the stop there would auto-allow a credential read silently
+  (`docs/dspa-credential-vouch.md` §4.5).
 
 **Block** (never promptable):
 - retry-loop guard: a command aborted within 60 s is blocked, not re-prompted.
@@ -547,7 +552,12 @@ lists every directory.
 Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
 
 1. **Floor** (`gate/dspa-gate.ts`, code only). Stops, by class:
-   - credential pattern;
+   - credential pattern — **unless the path sits under a dir the operator
+     accredited this session** (`R cred`): the stop then stands down for the
+     judge, which decides at stage 2 with stage 1 skipped. The ceiling (V-c)
+     keeps anything that reads as a secret store, a standalone keyfile, or a
+     pseudo-fs secret a bar even inside an accredited dir. The prompt that
+     offers it, and why only dirs qualify: `docs/dspa-credential-vouch.md`;
    - untrusted **fetchable** run form (D10) → stop names the package; the
      prompt offers `Trust: <pkg> (session)`;
    - network egress: fetch forms and raw egress stop; **loopback-only
@@ -570,7 +580,9 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
    information than the static pass. Everything above is a POLICY stop.
 
    **Two tiers (3.40.0, `docs/dspa-intent-floor.md`): bars vs misses.** A
-   **bar** is absolute — no verdict clears it: credential paths, non-loopback
+   **bar** is absolute — no verdict clears it: credential paths (except under
+   an accredited dir, which moves the stop to the judge rather than past it),
+   non-loopback
    egress, full-filesystem scans, untrusted fetchable run forms, `[Absolute]`
    dangerous-pattern entries, delete reach past the temp zone, and any WRITE
    at a location outside the write bar (3.49.0: a write the command's own SHAPE puts
@@ -595,7 +607,9 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
 
    Every floor stop that reaches the prompt is **advisory** (D16): the judge
    runs both stages and the verdict renders in the prompt ("— advisory (floor
-   stop stands)") — the stop stands, the judge never grants over a bar.
+   stop stands)") — the stop stands, the judge never grants over a bar. An
+   accreditation does not bend this: it removes a location-keyed bar for that
+   one op, it never lets a verdict outrank a bar that remains.
 2. **Stage 1** (stateless, LRU-cached on the operation): the packet's static
    analysis is the whole input. `approve` + `low` auto-allows. Script
    payloads (C2, content-classes T3) skip stage 1 — the class always
@@ -878,7 +892,9 @@ scripted calls queue instead of opening two prompts.
   learned session READ dirs (`addLearnedReadDirs` / `listLearnedReadDirs` /
   `forgetLearnedReadDirs` — kept apart from clicked grants so the widget and
   `/halter-forget` can tell them apart). Injected into `decide()` and the
-  prompt flow; a runtime singleton.
+  prompt flow; a runtime singleton. Accredited credential dirs (`accreditedDirs`,
+  widget segment `R cred`) live here too: session-only, cleared by
+  `/halter-forget` with the learned read dirs, and never written to settings.
 - **Decision log** (`.log/decisions.jsonl`, off by default): one line per tool
   call with kind, target, why/reason, regime tag, and dspa stop tag.
   Nothing wipes it: it appends and rotates at 5 MiB, so rows from several gate
@@ -888,6 +904,19 @@ scripted calls queue instead of opening two prompts.
   its own toggle (`/halter-decision-log`); the three ledgers share one
   (`/halter-ledger-log`; same arg handling; D17 split). `tools/log-inspect.mjs`
   does the recurring extractions (summary, audit, dspa, dspa --paths, stats).
+  The row also carries what happened after a stop, which is the only way to
+  evaluate a stop-clearing feature: `answer` (allow | allowDir | allowCred |
+  deny | abort — written after the operator clicks, so a session that dies
+  mid-prompt leaves no row), `stopClass` / `stopDetail` (one slug per blocked
+  reason, chosen by priority order where several layers could own the stop, so a
+  reason rewording never breaks a tally), and the judge's state — `judgeVerdict`,
+  `judgeStage`, `judgeModel`, `judgeExplain` (set for EVERY non-approve, so a
+  defer is no longer silent) and `judgeSkipped`
+  (`d22` | `judge-off` | `not-run` | `floor-before-verdict` | `risk-tier`).
+  Readers use live field names only — the `judgeDeny` → `judgeExplain` rename
+  moved `tools/log-inspect.mjs` and `tools/replay.mts` in the same commit, and
+  the version where the fields changed is stamped in that release's changelog
+  entry (`docs/dspa-credential-vouch.md` §7).
   `halter-forget` clears the session READ grants the intent floor learned —
   never a clicked grant, never `halter.readDirs`. A row that was economy-capped
   says so (3.44.0): `cmd` sliced to 1000 chars carries `cmdCut`, and a

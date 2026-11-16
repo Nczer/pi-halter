@@ -313,6 +313,17 @@ replay); the rm carve-out keeps non-explicit rm targets on the floor
 (`rm -rf $X`); obscured positions, credentials, network egress. Manual/dspat modes are unchanged (no floor
 there — the prompt path was already the outcome).
 
+
+**Marked 2026-11-16 (`docs/dspa-credential-vouch.md`).** This section's
+"…which is the user's call, not the judge's" is the principle the credential
+accreditation generalises into a rule: a stop whose bar keys on a LOCATION may
+take an operator grant; one keyed on a verb, a destination or a blast radius
+may not (V-h, `docs/dspa-content-classes.md` §2). The accreditation is that
+grant — session-scoped, one named dir, and it moves the op to the judge rather
+than past it. Nothing here is reversed: an unresolvable location still stops,
+and the two miss reasons it names stay in the ledger under `outside-base`
+because their prose contains the phrase a reader matches on.
+
 ### D8. Shrink the floor: package-manager run forms + /tmp scratch rm are judgeable (2026-08-24 log)
 
 The stop-tag data settled it: in the 2026-08-24 log (231 lines) **all 26
@@ -532,6 +543,16 @@ from. Six decisions (implemented the same day; reverts fix (a) of
 6. **The floor keeps**: unresolvable-location stops (now with advisory
    verdict; since 3.40.0 typed as miss stops that intent may clear under
    the §4 guards), full-filesystem scans, and rm targets outside the bar.
+
+
+**Marked 2026-11-16 (`docs/dspa-credential-vouch.md`).** The identity built
+here — the floor's bar IS the manual bar — survives the credential
+accreditation intact, and the reason it survives is worth keeping visible: the
+accreditation clears the credential stop at the two judge-fed doors only. The
+manual / auto file-policy door keeps stopping, because there is no judge there
+and clearing it would auto-allow a credential read silently (§4.5 of that doc).
+So the credential stop is no longer a pure bar in dspa, while the manual bar it
+used to be identical to never was a judgeable thing at all.
 
 ### D12. Converge: unresolved tokens resolve to determinism (2026-08-27)
 
