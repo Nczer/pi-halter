@@ -10,6 +10,37 @@ import type { PathHop } from "../analysis/bash-parser";
 
 export type { Store, AllowRules } from "../gate/store";
 
+/**
+ * L3 (docs/dspa-credential-vouch.md §7): which floor stopped this, in ONE
+ * machine-readable word. Every stop already spelled itself in prose — in the
+ * gate's `reason` and again in the ledger's `dspa` tag — so counting a class
+ * meant a hand-written regex per field. The slug is the class; the prose stays
+ * in `reason` / `stopDetail` (decomposing those sentences further is L4, filed).
+ *
+ * Gate stops name the bar (`credential-pattern` … `tool-consent`); judge stops
+ * name what the judge did (`judge-declined`, `judge-failed`,
+ * `judge-unauthorized` — the verdict approved but sat above the stage's risk
+ * authority, so it could not auto-allow). A gate slug is set at the stop site
+ * (`DspaGateResult.stopClass`, required by the type); a judge slug comes from
+ * the fall-through (`gate/fallthrough.ts`, dspaStopClass).
+ */
+export type StopClass =
+  | "credential-pattern"
+  | "unverifiable-glob"
+  | "outside-base"
+  | "write-outside-base"
+  | "network-egress"
+  | "full-fs-scan"
+  | "untrusted-package"
+  | "unvetted-option"
+  | "delete-scale"
+  | "absolute-bar"
+  | "dangerous"
+  | "tool-consent"
+  | "judge-declined"
+  | "judge-failed"
+  | "judge-unauthorized";
+
 // ── Request types (discriminated union) ──
 
 export interface BashRequest {

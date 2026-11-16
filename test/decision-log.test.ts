@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { gate } from "../gate/gate";
 import { createStore } from "../gate/store";
 import { canon } from "./canon";
@@ -37,10 +37,33 @@ import { DECISION_LOG_ENABLED, setLedgerLogEnabled } from "../config/logging";
 import type {BashRequest, Decision, FileRequest} from "../decide/types";
 import type {JudgeResult} from "../judge/judge";
 
+// The prompt is mocked so the L1 tests can see the ledger from BOTH sides of
+// the answer — what is on disk while the prompt is open, and what the row says
+// after. The click→answer mapping itself is prompt-flow's contract and is
+// pinned in prompt-flow.test.ts.
+const { promptMock } = vi.hoisted(() => ({ promptMock: vi.fn() }));
+vi.mock("../ui/prompt-flow", () => ({ showPrompt: promptMock }));
+
 const noUiCtx = { hasUI: false } as never;
 const noReject = (() => {
   throw new Error("onReject should not be called with hasUI=false");
 }) as never;
+// A UI ctx just deep enough for gate(): the tools-panel expand/restore.
+const uiCtx = {
+  hasUI: true,
+  cwd: "/tmp",
+  ui: { notify: () => {}, setWidget: () => {}, getToolsExpanded: () => false, setToolsExpanded: () => {} },
+} as never;
+const denyReject = (() => ({ block: true as const, reason: "denied" })) as never;
+
+/** A tool prompt at the session-consent bar — the manual stop whose class the
+ *  prompt data states without any prose to parse (L3's manualStopClass). */
+function consentDecision(): Decision {
+  return {
+    kind: "prompt",
+    promptData: { type: "tool", tool: "exa", label: "search", gate: "consent", argsPreview: "{}" },
+  } as Decision;
+}
 
 function lines(file: string): DecisionLogEntry[] {
   return fs
@@ -93,7 +116,7 @@ describe("decision log", () => {
     logDecision(
       { type: "bash", command: "make test", cwd: tmp } as BashRequest,
       { kind: "auto-allow", reason: "dspa: judge approved (m-test)" },
-      "dspa",
+      { mode: "dspa" },
     );
     logDecision({ type: "bash", command: "pwd", cwd: tmp } as BashRequest, { kind: "auto-allow" });
     const [tagged, plain] = lines(logFile);
@@ -121,14 +144,12 @@ describe("decision log", () => {
     logDecision(
       { type: "bash", command: "make test", cwd: tmp } as BashRequest,
       filePrompt,
-      "dspa",
-      "gate: unsafe pattern (obfuscation/subshell/redirect)",
+      { mode: "dspa", dspa: "gate: unsafe pattern (obfuscation/subshell/redirect)" },
     );
     logDecision(
       { type: "bash", command: "make test", cwd: tmp } as BashRequest,
       filePrompt,
-      "dspa",
-      "judge: declined",
+      { mode: "dspa", dspa: "judge: declined" },
     );
     logDecision({ type: "bash", command: "pwd", cwd: tmp } as BashRequest, { kind: "auto-allow" });
     const [gateStop, judgeStop, plain] = lines(logFile);
@@ -142,7 +163,11 @@ describe("decision log", () => {
     expect("dspa" in plain).toBe(false);
   });
 
-  it("logs the LLM reject explanation as judgeDeny; absent when omitted", () => {
+  // L2 (docs/dspa-credential-vouch.md §7): the verdict state is a VALUE, and
+  // the explanation covers every non-approve. The old `judgeDeny` wrote only a
+  // REJECT's words (2 rows in 69), so approve / defer / skipped-stage / off all
+  // read as the same blank.
+  it("logs the verdict state, and the LLM's words for any non-approve", () => {
     const filePrompt = {
       kind: "prompt",
       promptData: {
@@ -161,25 +186,108 @@ describe("decision log", () => {
     logDecision(
       { type: "bash", command: "make test", cwd: tmp } as BashRequest,
       filePrompt,
-      "dspa",
-      "judge: declined (stage 2)",
-      "wipes the build output the user asked to keep",
+      {
+        mode: "dspa",
+        dspa: "judge: declined (stage 2)",
+        judgeVerdict: "deny",
+        judgeStage: 2,
+        judgeModel: "m-test",
+        judgeExplain: "wipes the build output the user asked to keep",
+      },
     );
     logDecision(
       { type: "bash", command: "make test", cwd: tmp } as BashRequest,
       filePrompt,
-      "dspa",
-      "judge: declined (stage 2)",
+      { mode: "dspa", dspa: "judge: declined (stage 2)", judgeVerdict: "defer", judgeStage: 2 },
     );
-    const [withDeny, withoutDeny] = lines(logFile);
-    expect(withDeny).toMatchObject({
+    logDecision(
+      { type: "bash", command: "make test", cwd: tmp } as BashRequest,
+      filePrompt,
+      // A floor stop with an approving verdict: the floor outranked the judge,
+      // and the row has to say so instead of looking like a judge refusal.
+      {
+        mode: "dspa",
+        dspa: "gate: credential pattern (*.pem)",
+        stopClass: "credential-pattern",
+        stopDetail: "credential pattern (*.pem)",
+        judgeVerdict: "approve",
+        judgeStage: 1,
+        judgeModel: "m-test",
+        judgeSkipped: "d22",
+      },
+    );
+    const [denied, deferred, approved] = lines(logFile);
+    expect(denied).toMatchObject({
       kind: "prompt",
       mode: "dspa",
       dspa: "judge: declined (stage 2)",
-      judgeDeny: "wipes the build output the user asked to keep",
+      judgeVerdict: "deny",
+      judgeStage: 2,
+      judgeModel: "m-test",
+      judgeExplain: "wipes the build output the user asked to keep",
     });
-    expect(withoutDeny.judgeDeny).toBeUndefined();
-    expect("judgeDeny" in withoutDeny).toBe(false);
+    expect("judgeDeny" in denied).toBe(false);
+    // A DEFER is no longer silent-but-identical to a deny: it carries its own
+    // verdict value and no explanation (none was asked for).
+    expect(deferred.judgeVerdict).toBe("defer");
+    expect(deferred.judgeExplain).toBeUndefined();
+    expect("judgeExplain" in deferred).toBe(false);
+    expect(approved).toMatchObject({
+      judgeVerdict: "approve",
+      judgeSkipped: "d22",
+      stopClass: "credential-pattern",
+      stopDetail: "credential pattern (*.pem)",
+    });
+    expect(approved.judgeExplain).toBeUndefined();
+  });
+
+  // L1: the row is written after the answer, so the click survives. Before
+  // this the row was written at decision CREATION — so what happened after the
+  // prompt was invisible, and a false positive (a stop the operator allowed
+  // anyway) could not be counted at all.
+  it("writes a prompt row only AFTER the answer, carrying the click", async () => {
+    let rowsWhileOpen = -1;
+    promptMock.mockImplementation(async () => {
+      rowsWhileOpen = fs.existsSync(logFile) ? lines(logFile).length : 0;
+      return { allowed: true, answer: "allowCred" as const };
+    });
+    const r = await gate(
+      { type: "bash", command: "ls", cwd: tmp } as BashRequest,
+      uiCtx, createStore(), noReject, consentDecision(),
+    );
+    expect(r).toBeUndefined();
+    expect(rowsWhileOpen).toBe(0); // nothing on disk while the prompt was open
+    const [row] = lines(logFile);
+    expect(row).toMatchObject({ kind: "prompt", answer: "allowCred" });
+  });
+
+  it("records a rejection's answer too, and none on a row nobody answered", async () => {
+    promptMock.mockResolvedValue({ allowed: false, answer: "abort" as const });
+    const r = await gate(
+      { type: "bash", command: "ls", cwd: tmp } as BashRequest,
+      uiCtx, createStore(), denyReject, consentDecision(),
+    );
+    expect(r).toEqual({ block: true, reason: "denied" });
+    const [row] = lines(logFile);
+    expect(row).toMatchObject({ kind: "prompt", answer: "abort" });
+
+    // An auto-allow was never a question, so it carries no answer key at all.
+    fs.unlinkSync(logFile);
+    expect(await gate({ type: "bash", command: "ls", cwd: tmp } as BashRequest, noUiCtx, createStore(), noReject)).toBeUndefined();
+    expect("answer" in lines(logFile)[0]).toBe(false);
+  });
+
+  // L3: a slug is a slug — one field, no sentence to regex per class.
+  it("names the stop class as one slug, beside the human reason", async () => {
+    promptMock.mockResolvedValue({ allowed: true, answer: "allow" as const });
+    await gate(
+      { type: "bash", command: "ls", cwd: tmp } as BashRequest,
+      uiCtx, createStore(), noReject, consentDecision(),
+    );
+    const [row] = lines(logFile);
+    expect(row).toMatchObject({ kind: "prompt", stopClass: "tool-consent" });
+    expect(typeof row.stopDetail).toBe("string");
+    expect(typeof row.reason).toBe("string"); // the operator's sentence stays (L4 filed)
   });
 
   it("logs the prompted directory for file prompts (path-resolver debug)", async () => {

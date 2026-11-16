@@ -78,7 +78,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type {PromptData} from "../decide/types";
+import type {PromptData, StopClass} from "../decide/types";
 import type { Store } from "./store";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { resolveOpaqueRefs } from "../analysis/var-resolution";
@@ -114,6 +114,12 @@ export type DspaGateResult =
   | {
       ok: false;
       reason: string;
+      /** L3 (docs/dspa-credential-vouch.md §7): the class, as ONE slug.
+       *  Required by the type on purpose — a new stop site cannot ship without
+       *  naming its class, so the ledger's class rollup stays complete instead
+       *  of growing a regex per reason string. `reason` keeps the operator's
+       *  sentence. */
+      stopClass: StopClass;
       /** D16: a floor stop that reaches the prompt is advisory — the judge
        *  ran both stages and its verdict renders in the fall-through prompt
        *  as input to the user's allow/deny/grant decision. The stop stands:
@@ -844,6 +850,7 @@ export async function checkDspaGate(
     if (pd.gate === "file" || pd.gate === "consent") {
       return {
         ok: false,
+        stopClass: pd.gate === "consent" ? "tool-consent" : "outside-base",
         reason: `tool ${pd.gate} never auto-allows (session grants cover its repetition)`,
         advisory: true,
       };
@@ -872,7 +879,7 @@ export async function checkDspaGate(
     // read as though the file were outside its parent dir. The grant dir
     // stays visible in the same log line (promptDir/target).
     if (!writeBarOk && pd.outsideDir) {
-      return { ok: false, reason: `outside base (session ${pd.cwd})`, advisory: true };
+      return { ok: false, stopClass: "outside-base", reason: `outside base (session ${pd.cwd})`, advisory: true };
     }
     if (pd.warnedRule) {
       // The same door as the bash branch, from the one path this decision has
@@ -885,7 +892,7 @@ export async function checkDspaGate(
         pd.isWriteOp ? [pd.resolved] : [],
       );
       if (!cred.cleared) {
-        const stop = { ok: false, reason: `credential pattern (${pd.warnedRule})`, advisory: true } as const;
+        const stop = { ok: false, stopClass: "credential-pattern", reason: `credential pattern (${pd.warnedRule})`, advisory: true } as const;
         return cred.offerDir ? { ...stop, accreditDir: cred.offerDir } : stop;
       }
     }
@@ -925,7 +932,7 @@ export async function checkDspaGate(
   // rides the packet) and the judge weighs it.
   const ds = analysis.deleteScale;
   if (ds.absolute.length > 0) {
-    return { ok: false, reason: ds.absolute.slice(0, 2).join("; ").slice(0, 120), advisory: true };
+    return { ok: false, stopClass: "delete-scale", reason: ds.absolute.slice(0, 2).join("; ").slice(0, 120), advisory: true };
   }
 
   let outsideExempt = new Set<string>();
@@ -933,7 +940,7 @@ export async function checkDspaGate(
   if (hasRm) {
     // rm carve-out: bounded, explicit targets only (see header).
     const rm = checkRmTargets(analysis.segments, pd.cwd, isInsideManualBar);
-    if (rm.reason) return { ok: false, reason: rm.reason, advisory: true };
+    if (rm.reason) return { ok: false, stopClass: "delete-scale", reason: rm.reason, advisory: true };
     outsideExempt = rm.exempt;
     // Non-rm dangerous reasons still stop the auto-allow: the carve-out
     // covers only the rm's own footprint (recursive/forced delete, its
@@ -948,7 +955,7 @@ export async function checkDspaGate(
       (r) => !RM_RISK_REASON_RE.test(r) && !CLASS_LABEL_REASON_RE.test(r),
     );
     if (otherDanger.length > 0) {
-      return { ok: false, reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}`, advisory: true };
+      return { ok: false, stopClass: "dangerous", reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}`, advisory: true };
     }
   }
   // D-g: the absolute bars. Everything else the pattern tables label is a class
@@ -962,6 +969,7 @@ export async function checkDspaGate(
   if (bars.length > 0) {
     return {
       ok: false,
+      stopClass: "absolute-bar",
       reason: `absolute bar (${bars.slice(0, 3).join("; ")})`,
       advisory: true,
     };
@@ -977,7 +985,7 @@ export async function checkDspaGate(
     // An unverifiable glob is a verification failure, not a credential match
     // — name it honestly (the prompt renders the same distinction).
     if (isGlobUnverified(pd.credentialRule)) {
-      return { ok: false, reason: `unverifiable glob (${globUnverifiedToken(pd.credentialRule)})`, advisory: true };
+      return { ok: false, stopClass: "unverifiable-glob", reason: `unverifiable glob (${globUnverifiedToken(pd.credentialRule)})`, advisory: true };
     }
     // docs/dspa-credential-vouch.md: an accredited dir stands this stop down
     // for the JUDGE (V-e) — it does not approve the command. Everything the
@@ -989,7 +997,7 @@ export async function checkDspaGate(
       [...analysis.writePaths, ...analysis.bodyWritePaths],
     );
     if (!cred.cleared) {
-      const stop = { ok: false, reason: `credential pattern (${pd.credentialRule})`, advisory: true } as const;
+      const stop = { ok: false, stopClass: "credential-pattern", reason: `credential pattern (${pd.credentialRule})`, advisory: true } as const;
       return cred.offerDir ? { ...stop, accreditDir: cred.offerDir } : stop;
     }
   }
@@ -1030,6 +1038,7 @@ export async function checkDspaGate(
     const uniq = [...new Set(untrusted)];
     return {
       ok: false,
+      stopClass: "untrusted-package",
       reason: `untrusted package (${uniq.slice(0, 3).join(", ")})`,
       // The prompt offers "Trust: <pkg> (session)" — computed from the
       // same analysis (BashPromptData.fetchableForms), not carried here.
@@ -1039,6 +1048,7 @@ export async function checkDspaGate(
   if (unvettedOptions.length > 0) {
     return {
       ok: false,
+      stopClass: "unvetted-option",
       reason: `unvetted run-form option (${[...new Set(unvettedOptions)].slice(0, 3).join(", ")})`,
       advisory: true,
     };
@@ -1048,7 +1058,7 @@ export async function checkDspaGate(
   // ("touches paths outside base (/)") understates what the command does.
   for (const seg of analysis.segments) {
     const scan = rootScanTarget(seg);
-    if (scan) return { ok: false, reason: `full filesystem scan (${scan} /)`, advisory: true };
+    if (scan) return { ok: false, stopClass: "full-fs-scan", reason: `full filesystem scan (${scan} /)`, advisory: true };
   }
   // D14 (docs/dspa-redesign.md) + D-a (docs/dspa-intent-floor.md): network
   // egress. Only the outbound half of the split is a floor stop — an inbound
@@ -1061,7 +1071,7 @@ export async function checkDspaGate(
   // egress is never auto-allowed).
   const net = networkHit(pd.command, analysis.segments);
   if (net && net.kind !== "fetch" && !isLoopbackEgress(pd.command, analysis.segments)) {
-    return { ok: false, reason: `network egress (${net.token})`, advisory: true };
+    return { ok: false, stopClass: "network-egress", reason: `network egress (${net.token})`, advisory: true };
   }
   // prompt.outsidePaths already applied the manual bar (above): what's left
   // is exactly what manual mode would prompt for — the scope class (Q1:
@@ -1286,6 +1296,7 @@ export async function checkDspaGate(
     } else if (r.kind === "stop") {
       return {
         ok: false,
+        stopClass: "outside-base",
         reason: r.reason,
         advisory: true,
         ...withMisses([unresolvedFact(token, p)]),
@@ -1333,6 +1344,7 @@ export async function checkDspaGate(
       : `touches paths outside base (${shown.join(", ")})`;
     return {
       ok: false,
+      stopClass: "outside-base",
       reason,
       advisory: true,
       ...(confirmedOutside.length > 0 ? { confirmedOutside } : {}),
@@ -1348,6 +1360,7 @@ export async function checkDspaGate(
     const proxyFacts = [...outsideFacts(bodyWriteOps), ...baseFacts];
     return {
       ok: false,
+      stopClass: "write-outside-base",
       reason: `write outside base (${writeOutside.slice(0, 2).join(", ")})`,
       advisory: true,
       writeOutside,

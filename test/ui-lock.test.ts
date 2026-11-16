@@ -93,7 +93,7 @@ describe("shared UI lock (halter ↔ ask)", () => {
   it("the lock is released when the prompt select resolves with a cancel", async () => {
     const ctx: any = { ui: { select: async () => undefined } };
     const result = await twoTierAlwaysPrompt(makePrompt(), store, ctx, vi.fn(), vi.fn(), vi.fn());
-    expect(result).toBe("no"); // cancel → reason-less No
+    expect(result).toBe("abort"); // dismissed — and the lock is still released
     let ran = false;
     await halterLock(async () => {
       ran = true;

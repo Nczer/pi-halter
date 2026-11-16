@@ -216,6 +216,37 @@ function summary() {
     console.log(`  ${String(n).padStart(4)}  ${trunc(r ?? "(null)", 100)}`);
   console.log("");
 
+  // L1: what the operator actually did with a prompt. Rows written before the
+  // answer existed (and rows nobody answered) land in the `(no answer)` line —
+  // a row written at decision creation is not evidence of consent.
+  const stopped = F.filter((e) => e.kind === "prompt" || e.kind === "block");
+  console.log("## operator answers (written after the click)");
+  const answers = counts(F.filter((e) => e.answer), (e) => e.answer);
+  if (!answers.length) console.log("  (none in this window)");
+  for (const [a, n] of answers) console.log(`  ${String(n).padStart(4)}  ${a}`);
+  const noAnswer = stopped.filter((e) => !e.answer).length;
+  if (noAnswer) console.log(`  ${String(noAnswer).padStart(4)}  (no answer — row predates it, or nobody answered)`);
+  console.log("");
+
+  // L3 + L1 together: the one number the credential accreditation is argued on
+  // — of the stops in a class, how many did the operator wave through anyway.
+  console.log("## allowed anyway (by stop class)");
+  const ALLOWED = new Set(["allow", "allowDir", "allowCred"]);
+  const byClass = new Map();
+  for (const e of stopped) {
+    const r = byClass.get(e.stopClass ?? "(none)") ?? { n: 0, ok: 0, cred: 0 };
+    r.n++;
+    if (ALLOWED.has(e.answer)) r.ok++;
+    if (e.answer === "allowCred") r.cred++;
+    byClass.set(e.stopClass ?? "(none)", r);
+  }
+  if (!byClass.size) console.log("  (none)");
+  for (const [c, r] of [...byClass.entries()].sort((a, b) => b[1].n - a[1].n)) {
+    const pct = ((r.ok / r.n) * 100).toFixed(0);
+    console.log(`  ${String(r.n).padStart(4)}  ${String(c).padEnd(22)} ${String(r.ok).padStart(3)} allowed (${pct.padStart(3)}%)${r.cred ? ` · ${r.cred} by accreditation` : ""}`);
+  }
+  console.log("");
+
   console.log("## dspa stop tags (judge regime fall-throughs)");
   const stops = F.filter((e) => e.kind === "prompt" && e.dspa);
   if (!stops.length) console.log("  (none)");
@@ -265,8 +296,15 @@ function dspaCmd() {
   for (const e of ds) {
     console.log(`\n[${e.__idx}] ${e.ts}  ${e.mode}  ${e.kind}`);
     if (e.dspa) console.log(`  stop:   ${e.dspa}`);
+    if (e.stopClass) console.log(`  class:  ${e.stopClass}${e.stopDetail ? ` — ${trunc(e.stopDetail, 120)}` : ""}`);
+    if (e.answer) console.log(`  answer: ${e.answer}`);
     if (e.reason) console.log(`  reason: ${trunc(e.reason, 160)}`);
-    if (e.judgeDeny) console.log(`  judgeDeny: ${trunc(e.judgeDeny, 160)}`);
+    // L2: the verdict is a state, and the skip reason is stated, not inferred
+    // from an empty field.
+    if (e.judgeVerdict)
+      console.log(`  verdict: ${e.judgeVerdict}${e.judgeStage ? ` (stage ${e.judgeStage}${e.judgeModel ? ` via ${e.judgeModel}` : ""})` : ""}`);
+    if (e.judgeSkipped) console.log(`  skipped: ${e.judgeSkipped}`);
+    if (e.judgeExplain) console.log(`  judgeExplain: ${trunc(e.judgeExplain, 160)}`);
     if (e.judgePaths?.length) console.log(`  judgePaths: ${e.judgePaths.join(", ")}`);
     if (e.floorMisses?.length) console.log(`  floorMisses: ${e.floorMisses.join(", ")}`);
     console.log(`  target: ${trunc(firstLine(e.target), 160)}`);
@@ -326,7 +364,9 @@ function dspaReasons() {
   };
   section("auto-allow reasons", ds.filter((e) => e.kind === "auto-allow"), (e) => e.reason ?? "(no reason)");
   section("stop tags (fall-through prompts)", ds.filter((e) => e.kind === "prompt"), (e) => e.dspa ?? "(no stop tag)");
-  section("judge denials (the LLM's words)", ds, (e) => e.judgeDeny);
+  section("stop classes", ds, (e) => e.stopClass);
+  section("operator answers", ds.filter((e) => e.kind === "prompt"), (e) => e.answer);
+  section("judge explanations (the LLM's words, any non-approve)", ds, (e) => e.judgeExplain);
   section("D13 floor misses (judge-reported, floor never saw)", ds, (e) => e.floorMisses?.join(", "));
   section("stage-2 context echoes (path only named in the Session context section)", ds, (e) => e.contextMisses?.join(", "));
 }

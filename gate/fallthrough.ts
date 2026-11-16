@@ -13,9 +13,9 @@
  * UI layer imports it from the gate, not the other way around.
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type {PermissionRequest, Decision, PromptData} from "../decide/types";
+import type {PermissionRequest, Decision, PromptData, StopClass} from "../decide/types";
 import type { Store } from "./store";
-import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved } from "./decision-log";
+import { logDecision, logJudgeDiff, logJudgePaths, logUnresolved, type JudgeLedgerFields, type JudgeSkipped } from "./decision-log";
 import { findExecutedScript } from "../analysis/script-payload";
 import { credentialClassCleared } from "./accreditation";
 import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, answeredMissPaths, intentGuardFaults, makeManualBar, type DspaGateResult, type MissAnswers, type MissFact } from "./dspa-gate";
@@ -61,6 +61,10 @@ export interface DspaFallthrough {
    *  intent pass produced none but stage 1 did — the ledger tag needs it,
    *  because "stage 2 fails while the server is up" is otherwise unmeasurable. */
   judgeFail?: string;
+  /** L2 (docs/dspa-credential-vouch.md §7): why no judge stage DECIDED this
+   *  stop, set where the cascade knows it. The ledger's `judgeSkipped` — the
+   *  verdict value alone cannot tell "stage 2 never ran" from "stage 2 said no". */
+  judgeSkipped?: JudgeSkipped;
   /** Intent-declined only: the row data prompt-flow writes after the click
    *  (see MissLedger). Absent on every other stop. */
   missLedger?: MissLedger;
@@ -70,8 +74,8 @@ export interface DspaFallthrough {
  * The dspa stop-tag for the decision log: which layer stopped the
  * auto-allow — the deterministic hard gate (its code-produced reason is
  * safe to accumulate) or the judge (only the declined/failed fact; a
- * REJECT's explanation is logged separately via dspaJudgeDeny as a debug
- * aid — verdict stats stay session-scoped by design).
+ * REJECT's explanation is logged separately by judgeLedgerFields as
+ * `judgeExplain` (a debug aid — verdict stats stay session-scoped).
  * The stage is plumbing (which judge layer decided), not verdict content:
  *  - `judge: declined (stage 2)` — the intent pass rendered a verdict that
  *    did not auto-allow (the final call on the operation);
@@ -92,14 +96,60 @@ export function dspaStopTag(f: DspaFallthrough | undefined): string | undefined 
 }
 
 /**
- * The LLM's reject words for the decision log (the NOTE's debug exception
- * in decision-log.ts): the FINAL verdict's explanation when it is a
- * REJECT. Which layer stopped first does not matter for debugging the
- * judge — the stop tag already says that; this is what the model said.
+ * L3 (docs/dspa-credential-vouch.md §7): the fall-through's stop class as ONE
+ * slug, beside the prose tag `dspaStopTag` writes. A floor stop carries its own
+ * (`DspaGateResult.stopClass`, required by the type); the judge's own stop is
+ * classified here, and in priority order — the field has to name what DECIDED:
+ *  1. a floor stop outranks any verdict (D16: no verdict grants over a bar);
+ *  2. `judge-unauthorized` — the verdict approved above the stage's risk
+ *     authority: calling that `judge-declined` would blame a yes;
+ *  3. a stage-2 verdict that did not approve → `judge-declined`;
+ *  4. otherwise the judge produced nothing usable → `judge-failed` (stage 2
+ *     silent over a stage-1 verdict, or no verdict at all).
  */
-export function dspaJudgeDeny(f: DspaFallthrough | undefined): string | undefined {
-  if (!f?.verdict || f.verdict.approve !== "deny") return undefined;
-  return f.verdict.explanation;
+export function dspaStopClass(
+  f: DspaFallthrough | undefined,
+): { stopClass: StopClass; stopDetail: string } | undefined {
+  if (!f) return undefined;
+  if (!f.gate.ok) return { stopClass: f.gate.stopClass, stopDetail: f.gate.reason };
+  if (f.judgeSkipped === "risk-tier") {
+    return {
+      stopClass: "judge-unauthorized",
+      stopDetail: `approved above the stage's risk authority (stage ${f.stage ?? "?"})`,
+    };
+  }
+  if (f.verdict && f.stage === 2) {
+    return { stopClass: "judge-declined", stopDetail: `${f.verdict.approve} (stage 2)` };
+  }
+  const why = f.stage === 1 && f.judgeFail ? f.judgeFail : f.note;
+  return { stopClass: "judge-failed", stopDetail: why ? `no usable verdict (${why})` : "no usable verdict" };
+}
+
+/**
+ * L2 (docs/dspa-credential-vouch.md §7): the verdict state as a VALUE, so a
+ * reader never infers it from an absence. Before this, only a REJECT's
+ * explanation was written (`judgeDeny`: 2 rows in 69), and every other state —
+ * approve, defer, stage 2 skipped by D22, judge off, no verdict — was the same
+ * blank, so "would the judge have allowed this?" was unanswerable.
+ *
+ * An approve on a PROMPT row is not a contradiction: either the floor's stop
+ * stands over an approving verdict (`judgeSkipped: floor-before-verdict`) or the
+ * risk tier held it (`risk-tier`). `judgeExplain` replaces `judgeDeny` and
+ * covers every non-approve, so a DEFER is no longer silent.
+ */
+export function judgeLedgerFields(f: DspaFallthrough | undefined): JudgeLedgerFields {
+  if (!f) return {};
+  const v = f.verdict;
+  if (!v) {
+    return { judgeVerdict: "none", ...(f.judgeSkipped ? { judgeSkipped: f.judgeSkipped } : {}) };
+  }
+  return {
+    judgeVerdict: v.approve,
+    ...(f.stage ? { judgeStage: f.stage } : {}),
+    judgeModel: v.model,
+    ...(f.judgeSkipped ? { judgeSkipped: f.judgeSkipped } : {}),
+    ...(v.approve !== "approve" ? { judgeExplain: v.explanation } : {}),
+  };
 }
 
 /** Record + surface one dspa auto-allow (D6: the log reason carries the
@@ -127,13 +177,21 @@ export function dspaAutoAllowed(
   // D13: a stage-2 auto-allow logs the judge's path report (and any path
   // the floor never saw) — the parser-gap probe. Stage 1 never reports.
   const jp = stage === 2 ? judgePathLogFields(pd, store, verdict.paths, ctx) : {};
-  logDecision(
-    request,
-    { kind: "auto-allow", reason: misses
+  logDecision(request, {
+    kind: "auto-allow",
+    reason: misses
       ? `dspa: intent over miss stop (${[...new Set(misses.map((m) => m.kind))].join("+")}, ${verdict.model})`
-      : `dspa: judge approved (stage ${stage}, ${verdict.model})` },
-    "dspa", undefined, undefined, jp.judgePaths, jp.floorMisses,
-  );
+      : `dspa: judge approved (stage ${stage}, ${verdict.model})`,
+  }, {
+    mode: "dspa",
+    // L2: an auto-allow row used to bury "which stage approved, and which model
+    // rendered it" inside the reason sentence.
+    judgeVerdict: "approve",
+    judgeStage: stage,
+    judgeModel: verdict.model,
+    judgePaths: jp.judgePaths,
+    floorMisses: jp.floorMisses,
+  });
   // D17: the same path report also goes to the on-by-default judge ledger
   // (decisions.jsonl is toggle-gated and version-bound; the ledger is the
   // durable home for D13 mining).
@@ -276,12 +334,13 @@ function writeOutsideStop(
   pd: PromptData,
   store: Store,
   writes: string[] | undefined,
-): { ok: false; advisory: true; reason: string; writeOutside: string[] } | null {
+): { ok: false; advisory: true; reason: string; stopClass: StopClass; writeOutside: string[] } | null {
   const out = judgeWriteOutside(pd, store, writes);
   if (out.length === 0) return null;
   return {
     ok: false,
     advisory: true,
+    stopClass: "write-outside-base",
     reason: `write outside base (${out.slice(0, 2).join(", ")})`,
     writeOutside: out,
   };
@@ -365,6 +424,7 @@ async function tryIntentOverMiss(
     gate: DspaGateResult,
     verdict: JudgeResult | null,
     bucket: DspaStopKind,
+    skipped?: JudgeSkipped,
   ): { autoAllowed: false; fallthrough: DspaFallthrough } => {
     // The row waits for the operator's answer (prompt-flow): the intent
     // pass's outcome and the click are ONE event (§7). Compute the §4.2 match
@@ -383,15 +443,30 @@ async function tryIntentOverMiss(
         gate,
         verdict,
         stage: verdict ? 2 : null,
+        ...(skipped ? { judgeSkipped: skipped } : {}),
         ...(misses.length > 0 ? { missLedger: { misses, guard: why, answered } } : {}),
       },
     };
   };
-  // Any judge failure resolves to the prompt — never an allow.
-  if (!v2) return stop("no verdict", gateResult, null, "gate");
-  // D-g: the judge's own write report faces the write bar first.
+  // Any judge failure resolves to the prompt — never an allow. The judge being
+  // OFF is a skip, not a failure: L2 keeps the two apart, because "the judge
+  // said nothing" and "there was no judge" imply different fixes.
+  if (!v2) {
+    const skipped = judgeStatus(ctx).state === "ok" ? undefined : "judge-off" as const;
+    return stop("no verdict", gateResult, null, "gate", skipped);
+  }
+  // D-g: the judge's own write report faces the write bar first. The verdict
+  // may well have approved — the FLOOR outranks it, which is what L2 records.
   const wStop = writeOutsideStop(pd, store, v2.writes);
-  if (wStop) return stop(`reported write outside the write bar (${wStop.writeOutside.join(", ")})`, wStop, v2, "gate");
+  if (wStop) {
+    return stop(
+      `reported write outside the write bar (${wStop.writeOutside.join(", ")})`,
+      wStop,
+      v2,
+      "gate",
+      v2.approve === "approve" ? "floor-before-verdict" : undefined,
+    );
+  }
   // The verdict's own authority comes before the §4 guards: the ledger's
   // `guard` field names what DECIDED, and a denial decides by itself.
   const authorized = v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium");
@@ -401,6 +476,9 @@ async function tryIntentOverMiss(
       gateResult,
       v2,
       v2.approve === "deny" ? "deny" : v2.approve === "defer" ? "defer" : "declined",
+      // An approve above the tier's authority is the tier holding, not the
+      // judge refusing (L2's `risk-tier`).
+      v2.approve === "approve" ? "risk-tier" : undefined,
     );
   }
   // §4.2 amendment (3.41.0, G-b): a miss with no static anchor can only be
@@ -414,7 +492,9 @@ async function tryIntentOverMiss(
     if (r) answers.resolved = r;
   }
   const faults = intentGuardFaults(misses, reported, answers);
-  if (faults.length > 0) return stop(faults.join("; "), gateResult, v2, "gate");
+  // An approving verdict held by the §4.2 guards: the FLOOR's stop stands
+  // (L2's `floor-before-verdict`) — the judge is not what declined.
+  if (faults.length > 0) return stop(faults.join("; "), gateResult, v2, "gate", "floor-before-verdict");
   // The judge-ledger paths line is written by dspaAutoAllowed's stage-2 pass
   // (D17) — a declined attempt never executed, so its report rides the
   // prompt's decision line only and the parser-gap probe stays clean of stops.
@@ -491,6 +571,18 @@ export async function tryDspaAutoAllow(
       // carries the report (gate.ts).
       logJudgeDiff(pd, "dspa", v1, v2);
       const final = (v2 ?? v1) ?? null;
+      // L2: why no stage decided, from the branch the cascade actually took.
+      // D22 skipped stage 2 (stage 1 approved); a judge that is off or invalid
+      // never ran at all; an approving verdict here is advice the floor
+      // outranks — the stop is the floor's either way.
+      const skipped: JudgeSkipped | undefined =
+        v1 && v1.approve === "approve"
+          ? "d22"
+          : judgeStatus(ctx).state !== "ok"
+            ? "judge-off"
+            : final?.approve === "approve"
+              ? "floor-before-verdict"
+              : undefined;
       // The stop is the FLOOR's (any verdict here is advisory) — count it as
       // a gate stop, with the verdict's model for counter scoping.
       recordDspaStop("gate", final?.model ?? null);
@@ -501,12 +593,16 @@ export async function tryDspaAutoAllow(
           gate: gateResult,
           verdict: final,
           stage: v2 ? 2 : v1 ? 1 : null,
+          ...(skipped ? { judgeSkipped: skipped } : {}),
         },
       };
     }
     recordDspaStop("gate", null);
     updateDspaWidget(ctx);
-    return { autoAllowed: false, fallthrough: { gate: gateResult, verdict: null, stage: null } };
+    return {
+      autoAllowed: false,
+      fallthrough: { gate: gateResult, verdict: null, stage: null, judgeSkipped: "not-run" },
+    };
   }
   // T3 (content-classes): a bash command that executes a file script (the
   // D3/D11 identification) skips stage 1 — the class always escalates,
@@ -555,7 +651,12 @@ export async function tryDspaAutoAllow(
     updateDspaWidget(ctx);
     return {
       autoAllowed: false,
-      fallthrough: { gate: writeStop, verdict: (v2 ?? v1) ?? null, stage: v2 ? 2 : v1 ? 1 : null },
+      fallthrough: {
+        gate: writeStop,
+        verdict: (v2 ?? v1) ?? null,
+        stage: v2 ? 2 : v1 ? 1 : null,
+        ...(v2?.approve === "approve" ? { judgeSkipped: "floor-before-verdict" as const } : {}),
+      },
     };
   }
   if (v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium")) {
@@ -577,19 +678,33 @@ export async function tryDspaAutoAllow(
     const jstatus = judgeStatus(ctx);
     // The typed class from judge() (timeout / call-failed / auth / bad reply),
     // not a guess: "stage 2 fails while the server is up" is only diagnosable
-    // if the prompt says which kind of failure it was.
+    // if the prompt says which kind of failure it was. An OFF judge never ran:
+    // calling that a failed call told the operator to debug a server that was
+    // fine (and the ledger to count a failure that never happened).
     const why = judgeFailPhrase(o2) || judgeFailPhrase(o1);
     const stop = skipStage1
       ? "stage 2 call failed (stage 1 skipped — script payload)"
       : "judge call failed";
-    note = jstatus.state === "invalid"
-      ? `judge invalid: ${jstatus.reason}`
-      : `${stop}${why ? ` (${why})` : ""}`;
+    note =
+      jstatus.state === "invalid"
+        ? `judge invalid: ${jstatus.reason}`
+        : jstatus.state === "off"
+          ? "judge off (settings)"
+          : `${stop}${why ? ` (${why})` : ""}`;
   } else if (v1 && !v2) {
     const why = judgeFailPhrase(o2);
     note = `stage 2 produced no verdict${why ? ` (${why})` : ""} — stateless stage-1 verdict only`;
   }
   const judgeFail = v1 && !v2 ? judgeFailPhrase(o2) || undefined : undefined;
+  // L2: why nothing auto-allowed, from the branch taken — an approving stage-2
+  // verdict that did not auto-allow was held by its RISK TIER (the judge said
+  // yes, the tier said no), and a judge that is off or invalid never ran.
+  const skipped: JudgeSkipped | undefined =
+    (v2 ?? v1)?.approve === "approve"
+      ? "risk-tier"
+      : !v2 && !v1 && judgeStatus(ctx).state !== "ok"
+        ? "judge-off"
+        : undefined;
   // The judge (or its absence) is the stop here: classify by the FINAL
   // verdict — no verdict at all joins the defer (fail-safe) bucket.
   recordDspaStop(
@@ -599,6 +714,13 @@ export async function tryDspaAutoAllow(
   updateDspaWidget(ctx);
   return {
     autoAllowed: false,
-    fallthrough: { gate: gateResult, verdict: final, stage: v2 ? 2 : v1 ? 1 : null, note, judgeFail },
+    fallthrough: {
+      gate: gateResult,
+      verdict: final,
+      stage: v2 ? 2 : v1 ? 1 : null,
+      note,
+      judgeFail,
+      ...(skipped ? { judgeSkipped: skipped } : {}),
+    },
   };
 }

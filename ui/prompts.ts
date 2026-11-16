@@ -11,7 +11,14 @@ async function selectIndex(ctx: ExtensionContext, title: string, options: string
 }
 
 /** User's response to a two-tier prompt. */
-type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | { kind: "no"; reason: string };
+/**
+ * The click. `abort` is dismissing the prompt without answering (Escape /
+ * cancel at the picker): it behaves exactly like the reason-less No — the
+ * operation is blocked either way — but it is a DIFFERENT fact about a floor
+ * (L1, docs/dspa-credential-vouch.md §7): "the operator refused" and "the
+ * operator walked away" must not share one tally.
+ */
+type PromptResult = "yes" | "always" | "alwaysPaths" | "alwaysFile" | "no" | "abort" | { kind: "no"; reason: string };
 
 /**
  * On-demand judge hook: when provided, tier-1 gets an "Explain" option.
@@ -349,7 +356,7 @@ export async function twoTierAlwaysPrompt(
         "No",
       ];
       const idx = await selectIndex(ctx, warningPrefix + activePrompt.title + "\n\n" + activePrompt.body, choices);
-      if (idx === null) return "no"; // cancelled — the reason-less No
+      if (idx === null) return "abort"; // dismissed without answering (Escape)
       if (idx === 0) {
         onAlways();
         return "always";
@@ -375,7 +382,9 @@ export async function twoTierAlwaysPrompt(
 
     const showRetry = !!retryJudge;
     // "No" is the with-reason path (it asks on pick); escape/cancel is the
-    // reason-less path (selectIndex null → "no" below). One No, not two.
+    // reason-less path (selectIndex null → "abort" below). Both block the
+    // operation; they are recorded apart (L1: a refusal and a walk-away are
+    // different facts about a floor).
     const choices = [
       "Yes",
       ...options.map(o => o.label),
@@ -385,7 +394,7 @@ export async function twoTierAlwaysPrompt(
     ];
 
     const idx = await selectIndex(ctx, warningPrefix + activePrompt.title + "\n\n" + activePrompt.body, choices);
-    if (idx === null) return "no"; // cancelled — the reason-less No
+    if (idx === null) return "abort"; // dismissed without answering (Escape)
 
     // ── Direct actions (no tier-2) ──
     if (idx === 0) return "yes";

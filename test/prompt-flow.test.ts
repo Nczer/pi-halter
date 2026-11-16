@@ -315,7 +315,7 @@ describe("D17: dspat stage disagreement → always-on judge ledger", () => {
 describe("/dspa fall-through", () => {
   it("gate blocked → 🚧 gate reason line (even with invalid judge)", async () => {
     judgeStatusMock.mockReturnValue({ state: "invalid", modelLabel: null, reason: "session model not resolvable" });
-    const dspa: DspaFallthrough = { gate: { ok: false, reason: "dangerous: rm" }, verdict: null, stage: null };
+    const dspa: DspaFallthrough = { gate: { ok: false, stopClass: "dangerous", reason: "dangerous: rm" }, verdict: null, stage: null };
     await showPrompt(bashDecision(), ctx, store, dspa);
     // The floor stop is the title now — it leads the prompt; the body scrolls.
     // The ledger's `dangerous:` bucket word and source tags are stripped for
@@ -356,7 +356,7 @@ describe("/dspa fall-through", () => {
 
   it("gate blocked on untrusted package → 🚧 line + advisory verdict block (D10)", async () => {
     const dspa: DspaFallthrough = {
-      gate: { ok: false, reason: "untrusted package (npx evil-pkg)" },
+      gate: { ok: false, stopClass: "untrusted-package", reason: "untrusted package (npx evil-pkg)" },
       verdict: { model: "llama-cpp/qwen", explanation: "Dev tool in use this session.", approve: "approve", risk: "low", reason: "dev tool", latencyMs: 10, cached: false },
       stage: 2,
     };
@@ -407,6 +407,7 @@ describe("dspa write stop: the paths grant is write-shaped", () => {
       gate: {
         ok: false,
         advisory: true,
+        stopClass: "write-outside-base",
         reason: "reported write outside the write bar (/home/user/Downloads)",
         writeOutside: ["/home/user/Downloads"],
       },
@@ -507,7 +508,7 @@ describe("Judge again wiring (dspa fall-through)", () => {
   });
 
   it("floor stop → no retry (the deterministic layer is not re-judged)", async () => {
-    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: false, reason: "dangerous: rm" }, { ...defer1, approve: "approve", risk: "low" }, 2), request);
+    await showPrompt(bashDecision(), ctx, store, fallthrough({ ok: false, stopClass: "dangerous", reason: "dangerous: rm" }, { ...defer1, approve: "approve", risk: "low" }, 2), request);
     expect(retryArg()).toBeUndefined();
   });
 
@@ -680,7 +681,7 @@ describe("unresolved ledger on a dspa miss stop", () => {
   function missStop(extra: MissFact[] = []): DspaFallthrough {
     const misses = [MISS_FACT, ...extra];
     return {
-      gate: { ok: false, reason: `runtime location unresolvable (${MISS})`, misses },
+      gate: { ok: false, stopClass: "outside-base", reason: `runtime location unresolvable (${MISS})`, misses },
       verdict: null,
       stage: null,
       missLedger: {
@@ -763,7 +764,7 @@ describe("unresolved ledger on a dspa miss stop", () => {
   it("without a miss list every token still gets its prompt row", async () => {
     // A bare stop (no intent pass ran) keeps the generic rows: nothing else
     // records those tokens.
-    const bare: DspaFallthrough = { gate: { ok: false, reason: "network egress (https://x.y/z)" }, verdict: null, stage: null };
+    const bare: DspaFallthrough = { gate: { ok: false, stopClass: "network-egress", reason: "network egress (https://x.y/z)" }, verdict: null, stage: null };
     await showPrompt(decision(), ctx, createStore(), bare);
     expect(rows().map((r) => r.outcome)).toEqual(["gate-stop", "gate-stop"]);
   });

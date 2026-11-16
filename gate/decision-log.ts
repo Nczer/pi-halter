@@ -51,7 +51,7 @@ import { rememberedDirOf } from "../analysis/path-util";
 import { DECISION_LOG_ENABLED, LEDGER_LOG_ENABLED, isLedgerLogEnabled } from "../config/logging";
 import { SETTINGS_PATH, readSettingsFile, writeSettings } from "../halter-settings";
 import { summarizePrompt } from "../ui/prompt-builder";
-import type {Decision, FilePromptData, PermissionRequest, PromptData} from "../decide/types";
+import type {Decision, FilePromptData, PermissionRequest, PromptData, StopClass} from "../decide/types";
 import type {Store} from "./store";
 import type {JudgeFailReason, JudgeResult} from "../judge/judge";
 import { judgePathLogFields } from "../judge/paths";
@@ -150,13 +150,29 @@ export interface DecisionLogEntry {
   mode?: DspModeTag;
 
   /**
+   * The operator's click, recorded ONCE, after the answer (L1,
+   * docs/dspa-credential-vouch.md §7). Before this, the row was written at
+   * decision CREATION (gate.ts), so what happened after the prompt was
+   * invisible: `kind: "block"` never appeared and the false-positive rate of
+   * every floor class could not be measured. `allowCred` is the credential
+   * accreditation click (docs/dspa-credential-vouch.md) — the one answer that
+   * moves a floor rather than this operation. Absent on rows that were never
+   * answered (auto-allow, block, no-UI).
+   *
+   * The cost of writing after the answer, accepted in the spec: a session that
+   * dies mid-prompt loses the row.
+   */
+  answer?: PromptAnswer;
+
+  /**
    * dspa prompt fall-through only (absent otherwise): which layer stopped
    * the auto-allow before the prompt was shown (see dspaStopTag, gate.ts).
+   * The human sentence; `stopClass` is its machine-readable twin (L3).
    *  - `gate: <reason>` — the deterministic hard gate (code-produced;
    *    accumulates safely across sessions).
    *  - `judge: declined (stage 2)` — the gate passed, the intent pass's
    *    verdict did not auto-allow (a REJECT verdict's explanation rides
-   *    along in `judgeDeny` — the NOTE's debug exception).
+   *    along in `judgeExplain` — the NOTE's debug exception).
    *  - `judge: stage 2 failed` — stage 1 produced a verdict but the intent
    *    pass did not (an infra fact).
    *  - `judge: <note>` — no verdict was produced at all (judge invalid or
@@ -165,12 +181,38 @@ export interface DecisionLogEntry {
   dspa?: string;
 
   /**
-   * dspa prompt fall-through only, and only when the FINAL verdict is a
-   * REJECT (approve === "deny"): the LLM's own words for why it refused.
-   * The NOTE's debug exception — raw verdict content for inspecting judge
+   * L3: which class stopped this, one slug, one field — see StopClass
+   * (decide/types.ts). `stopDetail` is the same stop's free text (the gate's
+   * reason, or the judge's note); `reason` keeps its human sentence for the
+   * operator, which this replaces for COUNTING.
+   */
+  stopClass?: StopClass;
+  stopDetail?: string;
+
+  // ── L2: the verdict state as a VALUE, not an absence ──
+  //
+  // Before this, only `judgeDeny` was written, and on 2 rows in 69: its
+  // absence conflated approve / defer / stage-2-skipped-by-D22 / judge-off /
+  // no-verdict, so "how often would the judge have allowed this?" had no
+  // answer. `judgeSkipped` says why no stage decided.
+
+  /** The FINAL verdict the prompt carries, or `none` when no stage rendered
+   *  one. An approve on a prompt row is not a contradiction: the floor's stop
+   *  stands over an approving verdict (see judgeSkipped). */
+  judgeVerdict?: "approve" | "deny" | "defer" | "none";
+  /** Which stage produced `judgeVerdict` (plumbing, not verdict content). */
+  judgeStage?: 1 | 2;
+  /** The model that rendered it — judge quality is model-dependent. */
+  judgeModel?: string;
+  /** Why no stage decided — see JudgeSkipped. */
+  judgeSkipped?: JudgeSkipped;
+  /**
+   * The LLM's own words whenever the verdict is NOT an approve (L2 replaces
+   * `judgeDeny`, which covered only REJECTs and left a DEFER silent). The
+   * NOTE's debug exception — raw verdict content for inspecting judge
    * behavior, never aggregated (stats stay session-scoped).
    */
-  judgeDeny?: string;
+  judgeExplain?: string;
 
   /**
    * D13: the stage-2 judge's report of the paths the operation touches
@@ -223,9 +265,10 @@ export interface DecisionLogEntry {
  * on dspa prompt lines likewise records only WHICH layer stopped the
  * auto-allow (the gate's code-produced reason, or the fact that the judge
  * declined/failed) — still no verdict content, with one exception:
- * `judgeDeny` carries a dspa REJECT verdict's explanation verbatim — a
- * raw debug aid for judge behavior, read by a human inspecting the log,
- * never aggregated into stats. Second exception (D13): `judgePaths` /
+ * `judgeExplain` carries a dspa non-approve verdict's explanation verbatim
+ * (L2: REJECT or DEFER — the old `judgeDeny` left a DEFER silent) — a raw
+ * debug aid for judge behavior, read by a human inspecting the log, never
+ * aggregated into stats. Second exception (D13): `judgePaths` /
  * `floorMisses` carry the stage-2 judge's path report and its
  * cross-check against the floor's own knowledge — model output, but
  * sanitized, capped, and diagnostic-only: nothing in the gate reads these
@@ -242,46 +285,111 @@ export function resolveLogPath(): string | null {
 }
 
 /**
+ * The operator's click (L1). `allow` is the one-shot Yes; `allowDir` is any
+ * "Always" flavor (a standing session grant); `allowCred` is the credential
+ * accreditation (docs/dspa-credential-vouch.md — the only answer that stands a
+ * floor down for a DIRECTORY rather than approving one operation); `deny` is the
+ * reasoned No; `abort` is dismissing the prompt without answering (Escape) —
+ * kept distinct from `deny` because "the operator refused" and "the operator
+ * walked away" are different facts about a floor.
+ */
+export type PromptAnswer = "allow" | "allowDir" | "allowCred" | "deny" | "abort";
+
+/**
+ * Why no judge stage decided this stop (L2). One word per real branch of
+ * gate/fallthrough.ts, so a `judgeVerdict` can be read without re-deriving the
+ * cascade from the stop tag:
+ *  - `d22` — stage 1 approved, so the intent pass was skipped (D22): the floor
+ *    stop stands either way and stage 2 could not have changed the outcome;
+ *  - `judge-off` — the judge is off or invalid: no stage ran;
+ *  - `not-run` — this regime never consults the judge (a manual-regime prompt,
+ *    or the defensive non-advisory stop);
+ *  - `floor-before-verdict` — a verdict exists but had no authority here: the
+ *    floor's stop stands over an approving verdict (D16 advisory stops, §4.2
+ *    guard faults, the D19 reported-write bar);
+ *  - `risk-tier` — the verdict approved at a risk above the stage's authority,
+ *    so nothing auto-allowed (the judge agreed; the tier held).
+ * Absent when a stage rendered the verdict that decided.
+ */
+export type JudgeSkipped =
+  | "d22"
+  | "judge-off"
+  | "not-run"
+  | "floor-before-verdict"
+  | "risk-tier";
+
+/** The L2 verdict fields (see DecisionLogEntry) — produced by
+ *  gate/fallthrough.ts's judgeLedgerFields from the DspaFallthrough. */
+export interface JudgeLedgerFields {
+  judgeVerdict?: "approve" | "deny" | "defer" | "none";
+  judgeStage?: 1 | 2;
+  judgeModel?: string;
+  judgeSkipped?: JudgeSkipped;
+  judgeExplain?: string;
+}
+
+/**
+ * Everything a log line adds beyond the request and the decision. An options
+ * object, not positional: the old call took 7 positional parameters (four of
+ * them adjacent `string | undefined`) and L1–L3 add five more.
+ *
+ * All optional and `undefined`-dropped by JSON.stringify, so a row carries only
+ * the fields its own path produced.
+ */
+export interface DecisionLogFields extends JudgeLedgerFields {
+  /** dsp regime tag (see DspModeTag); omit for the manual regime. */
+  mode?: DspModeTag;
+  /** dspa stop-tag (see DecisionLogEntry.dspa); omit outside dspa prompts. */
+  dspa?: string;
+  /** L3: the stop's class + free text (see DecisionLogEntry). */
+  stopClass?: StopClass;
+  stopDetail?: string;
+  /** L1: the operator's click — omit on rows that were never answered. */
+  answer?: PromptAnswer;
+  /** D13: the stage-2 judge's path report / the floor's blind spots. */
+  judgePaths?: string[];
+  floorMisses?: string[];
+}
+
+/**
  * Append one decision to the JSONL log. Never throws — logging problems are
  * silently dropped; the gate's behavior must not depend on disk state.
  *
- * @param mode - dsp regime tag (see DspModeTag); omit for the manual regime.
- *   undefined is dropped by JSON.stringify, so untagged lines carry no
- *   `mode` key at all.
- * @param dspaStop - dspa stop-tag (see DecisionLogEntry.dspa); omit outside
- *   dspa prompt fall-throughs.
- * @param judgeDeny - the LLM's reject explanation (see
- *   DecisionLogEntry.judgeDeny); omit unless the fall-through verdict is
- *   a REJECT.
- * @param judgePaths - D13: the stage-2 judge's path report (see
- *   DecisionLogEntry.judgePaths); omit unless a stage-2 verdict reported
- *   paths.
- * @param floorMisses - D13: judge-reported paths the floor never saw (see
- *   DecisionLogEntry.floorMisses); omit when empty.
+ * Called at each TERMINAL outcome of gate() — auto-allow, block, no-UI block,
+ * and a prompt AFTER the operator answered (L1). A prompt row therefore records
+ * the click, and a session that dies mid-prompt writes no row.
+ *
+ * A manual-regime prompt with no explicit class still gets one where the prompt
+ * data states it plainly (see manualStopClass); anything whose class lives only
+ * in prose is L4, filed.
  */
 export function logDecision(
   request: PermissionRequest,
   decision: Decision,
-  mode?: DspModeTag,
-  dspaStop?: string,
-  judgeDeny?: string,
-  judgePaths?: string[],
-  floorMisses?: string[],
+  fields: DecisionLogFields = {},
 ): void {
   try {
     const file = resolveLogPath();
     if (!file) return;
 
     const target = targetOf(request);
+    const stop = fields.stopClass ? undefined : manualStopClass(decision);
     const entry: DecisionLogEntry = {
       ts: new Date().toISOString(),
       tool: request.type,
       kind: decision.kind,
-      mode,
-      dspa: dspaStop,
-      judgeDeny,
-      judgePaths,
-      floorMisses,
+      mode: fields.mode,
+      answer: fields.answer,
+      dspa: fields.dspa,
+      stopClass: fields.stopClass ?? stop?.stopClass,
+      stopDetail: fields.stopDetail ?? stop?.stopDetail,
+      judgeVerdict: fields.judgeVerdict,
+      judgeStage: fields.judgeStage,
+      judgeModel: fields.judgeModel,
+      judgeSkipped: fields.judgeSkipped,
+      judgeExplain: fields.judgeExplain,
+      judgePaths: fields.judgePaths,
+      floorMisses: fields.floorMisses,
       reason:
         decision.kind === "block"
           ? decision.reason
@@ -356,8 +464,10 @@ export interface UnresolvedLogEntry {
    * mining corpus for locations the parser still cannot name.
    */
   outcome: "prompted" | "gate-stop" | "auto-allowed" | "intent-allowed" | "intent-declined";
-  /** The prompt outcome ("yes" | "no" | "always" | "alwaysPaths" | …);
-   *  "auto-allow" for an auto-allowed or intent-allowed row. */
+  /** The prompt outcome ("yes" | "no" | "abort" | "always" | "alwaysPaths" | …);
+   *  "auto-allow" for an auto-allowed or intent-allowed row. "no" is a refusal,
+   *  "abort" a dismissed prompt — both block, but conflating them makes a
+   *  refusal rate unreadable. */
   decision?: string;
   /** Intent rows only: the miss class as the floor classified it. */
   missKind?: "unresolved" | "outside-path" | "base-write" | "body-write";
@@ -671,6 +781,25 @@ export function logResolverInfra(
     model,
     detail,
   });
+}
+
+// The two stop classes a MANUAL prompt states in its own structured data, with
+// no prose to parse: a consent prompt is the session-consent bar, a dangerous
+// command is the danger bar. Everything else a manual prompt stops on is named
+// only in `reason` — decomposing that sentence is L4 (filed), so this stays a
+// two-case labeler rather than a regex over the operator's text.
+function manualStopClass(
+  decision: Decision,
+): { stopClass: StopClass; stopDetail: string } | undefined {
+  if (decision.kind !== "prompt") return undefined;
+  const pd = decision.promptData;
+  if (pd.type === "tool" && pd.gate === "consent") {
+    return { stopClass: "tool-consent", stopDetail: "session consent" };
+  }
+  if (pd.type === "bash" && pd.riskDangerous) {
+    return { stopClass: "dangerous", stopDetail: pd.riskReasons.slice(0, 2).join("; ") };
+  }
+  return undefined;
 }
 
 // The one-line prompt summary lives in prompt-builder (summarizePrompt);

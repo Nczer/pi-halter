@@ -14,7 +14,7 @@ import { makeManualBar } from "../gate/dspa-gate";
 import { isPositionalRef } from "../analysis/path-util";
 import type { DspaFallthrough } from "../gate/fallthrough";
 import { logMissDecision } from "../gate/fallthrough";
-import { logJudgeDiff, logJudgePaths, logUnresolved } from "../gate/decision-log";
+import { logJudgeDiff, logJudgePaths, logUnresolved, type PromptAnswer } from "../gate/decision-log";
 
 /**
  * The floor reason doubles as a ledger sentence: it carries source tags
@@ -35,6 +35,9 @@ interface PromptFlowResult {
   allowed: boolean;
   /** Optional rejection reason from user. */
   reason?: string;
+  /** L1 (docs/dspa-credential-vouch.md §7): WHICH click this was, for the
+   *  decision log — gate() writes the row after the answer, with this value. */
+  answer?: PromptAnswer;
 }
 
 /**
@@ -334,6 +337,10 @@ export async function showPrompt(
     }
   };
 
+  // The credential option returns a plain "always" (it IS an always-style
+  // grant), so the accreditation click is otherwise indistinguishable from
+  // "Always (path)" — and L1 counts them apart.
+  let accreditClicked = false;
   const result = await twoTierAlwaysPrompt(prompt, store, ctx, () => {
     const rules = RuleGenerator.generatePrimaryRules(decision.promptData);
     store.addAllowed(rules);
@@ -400,8 +407,23 @@ export async function showPrompt(
       store.accreditDir(accreditDir);
       store.addAllowed({ readDirs: [accreditDir] });
       updateStatus(ctx);
+      accreditClicked = true;
     }
   });
+
+  // L1 (docs/dspa-credential-vouch.md §7): the click, for the decision log.
+  // Every "Always" flavor is one fact — the operator moved a standing grant —
+  // so they share `allowDir`; the credential accreditation is the one click
+  // that stands a FLOOR down for a directory, so it is recorded apart.
+  const answer: PromptAnswer = accreditClicked
+    ? "allowCred"
+    : result === "yes"
+      ? "allow"
+      : result === "always" || result === "alwaysPaths" || result === "alwaysFile"
+        ? "allowDir"
+        : result === "abort"
+          ? "abort"
+          : "deny";
 
   // /dspat: record the verdict paired with the human's decision —
   // session-scoped stats only (judge quality is model-dependent).
@@ -417,7 +439,7 @@ export async function showPrompt(
   // callbacks): confirm only all-in-bar resolutions.
   if (result === "yes" || result === "always") persistResolutions(false);
 
-  const rejected = result === "no" || (typeof result === "object" && result.kind === "no");
+  const rejected = result === "no" || result === "abort" || (typeof result === "object" && result.kind === "no");
 
   const chosen = typeof result === "string" ? result : "no";
 
@@ -459,7 +481,7 @@ export async function showPrompt(
   }
 
   if (rejected) {
-    return { allowed: false, ...(typeof result === "object" ? { reason: result.reason } : {}) };
+    return { allowed: false, answer, ...(typeof result === "object" ? { reason: result.reason } : {}) };
   }
-  return { allowed: true };
+  return { allowed: true, answer };
 }

@@ -27,6 +27,9 @@ function makeCtx(scripted: (number | string | null)[]): any {
         ctx.__selects.push(options);
         const val = scripted[idx++];
         if (val === null || val === undefined) return undefined;
+        // -1 means "the last option" = No, whatever the layout: the layouts
+        // differ by which Always tiers they show, and No is always last.
+        if (val === -1) return options[options.length - 1];
         return typeof val === "number" ? options[val] : val;
       },
       input: async (_title?: string): Promise<string | undefined> => {
@@ -101,9 +104,9 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
     const cb = makeCallbacks();
     // tier-1: Always (1), tier-2: Back (1), tier-1: No (3)
     const result = await twoTierAlwaysPrompt(
-      makePrompt(), store, makeCtx([1, 1, 3]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+      makePrompt(), store, makeCtx([1, 1, -1, "no thanks"]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(cb.onAlways).not.toHaveBeenCalled();
   });
 
@@ -130,17 +133,17 @@ describe("twoTierAlwaysPrompt: simple bash layout", () => {
   it("returns 'no' when No is selected", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      makePrompt(), store, makeCtx([3]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+      makePrompt(), store, makeCtx([-1, "no thanks"]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
   });
 
-  it("returns 'no' when selection is cancelled (null)", async () => {
+  it("dismissed (null) returns 'abort', not a refusal", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
       makePrompt(), store, makeCtx([null]), cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(result).toBe("no");
+    expect(result).toBe("abort");
   });
 });
 
@@ -232,20 +235,20 @@ describe("twoTierAlwaysPrompt: file outside cwd with broader", () => {
   it("umbrella broader → sub-menu Back → loops back", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([3, 2, 5]),
+      prompt, store, makeCtx([3, 2, -1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
   });
 
   it("returns 'no' at last index", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([5]),
+      prompt, store, makeCtx([-1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
   });
 
   it("returns reason when No is selected", async () => {
@@ -328,19 +331,19 @@ describe("twoTierAlwaysPrompt: single Always option layout", () => {
   it("returns 'no' when index 3 (No) is selected", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      singleAlwaysPrompt, store, makeCtx([3]),
+      singleAlwaysPrompt, store, makeCtx([-1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
   });
 
-  it("cancel (null) returns 'no'", async () => {
+  it("dismissed (null) returns 'abort'", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
       singleAlwaysPrompt, store, makeCtx([null]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(result).toBe("no");
+    expect(result).toBe("abort");
   });
 });
 
@@ -374,10 +377,10 @@ describe("twoTierAlwaysPrompt: no Always option (unsafe pattern)", () => {
   it("returns 'no' at index 2", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([2]),
+      prompt, store, makeCtx([-1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
   });
 
   it("cancelled reason editor (null) loops back then selects Yes", async () => {
@@ -437,10 +440,10 @@ describe("twoTierAlwaysPrompt: paths tier decoupled from unsafe command", () => 
   it("Back from tier-2 loops back to tier-1, then No", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([1, 1, 3]),
+      prompt, store, makeCtx([1, 1, -1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(cb.onAlwaysPaths).not.toHaveBeenCalled();
   });
 
@@ -493,10 +496,10 @@ describe("twoTierAlwaysPrompt: trust layout (fetchable forms)", () => {
   it("returns 'no' for index 4 (No)", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([4]),
+      prompt, store, makeCtx([-1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
   });
 });
 
@@ -570,10 +573,10 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
     // sub-menu: Back (2, last index)
     // tier-1: No (5)
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([3, 2, 5]),
+      prompt, store, makeCtx([3, 2, -1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
   });
 
@@ -583,10 +586,10 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
     // sub-menu: cancel (null)
     // tier-1: No (5)
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([3, null, 5]),
+      prompt, store, makeCtx([3, null, -1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
   });
 
@@ -597,10 +600,10 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
     // tier-2: Back (1)
     // tier-1: No (5)
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([3, 0, 1, 5]),
+      prompt, store, makeCtx([3, 0, 1, -1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(cb.onAlwaysBroader).not.toHaveBeenCalled();
   });
 
@@ -619,10 +622,10 @@ describe("twoTierAlwaysPrompt: file broaderPaths (3-level hierarchy)", () => {
   it("returns 'no' at index 5 (No)", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([5]),
+      prompt, store, makeCtx([-1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
   });
 
   it("returns {kind:'no', reason} at index 4 (No with reason)", async () => {
@@ -671,10 +674,10 @@ describe("twoTierAlwaysPrompt: file broaderPaths (single level, no umbrella)", (
     // Verify there's no "Always (broader)" option — only file + path + no
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([4]),
+      prompt, store, makeCtx([-1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
   });
 });
 
@@ -721,10 +724,10 @@ describe("twoTierAlwaysPrompt: paths-only layout (bash no broader)", () => {
   it("returns 'no' at index 4 (No)", async () => {
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      prompt, store, makeCtx([4]),
+      prompt, store, makeCtx([-1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
   });
 });
 
@@ -739,10 +742,10 @@ describe("twoTierAlwaysPrompt: high prompt frequency warning", () => {
     // Just verify the function completes successfully (doesn't crash).
     const cb = makeCallbacks();
     const result = await twoTierAlwaysPrompt(
-      makePrompt(), store, makeCtx([3]), // No
+      makePrompt(), store, makeCtx([-1, "no thanks"]), // No
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
   });
 });
 
@@ -763,7 +766,7 @@ describe("twoTierAlwaysPrompt: Explain option", () => {
             if (val === null || val === undefined) return undefined;
             return typeof val === "number" ? options[val] : val;
           },
-          input: async () => undefined,
+          input: async () => "no thanks", // a No pick answers the reason input
         },
       } as any,
     };
@@ -836,7 +839,7 @@ describe("twoTierAlwaysPrompt: Judge again option", () => {
             if (val === null || val === undefined) return undefined;
             return typeof val === "number" ? options[val] : val;
           },
-          input: async () => undefined,
+          input: async () => "no thanks", // a No pick answers the reason input
         },
       } as any,
     };
@@ -860,7 +863,7 @@ describe("twoTierAlwaysPrompt: Judge again option", () => {
       undefined, undefined, undefined, { retry },
     );
 
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(retry).toHaveBeenCalledTimes(2); // repeatable — each pick is a fresh call
     expect(calls[0].options).toEqual(["Yes", "Always: test *", "Judge again", "No"]);
     expect(calls[0].title).not.toContain("💭 Judge:");
@@ -894,7 +897,7 @@ describe("twoTierAlwaysPrompt: Judge again option", () => {
       undefined, { explain: vi.fn(async () => "💭 Judge: first") }, undefined, { retry },
     );
 
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(calls[0].options).toEqual(["Yes", "Always: test *", "Explain", "Judge again", "No"]);
     expect(calls[1].title).toContain("💭 Judge: DEFER (low)");
     expect(calls[1].options).toEqual(["Yes", "Always: test *", "Explain", "Judge again", "No"]);
@@ -946,10 +949,10 @@ describe("twoTierAlwaysPrompt: D10 trust option", () => {
     // choices = ["Yes", "Always: test *", "No"] — no Trust
     // Always → Back → No
     const result = await twoTierAlwaysPrompt(
-      makePrompt(), store, makeCtx([1, 1, 3]),
+      makePrompt(), store, makeCtx([1, 1, -1, "no thanks"]),
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader, undefined, onTrust,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(onTrust).not.toHaveBeenCalled();
   });
 });
@@ -1019,13 +1022,13 @@ describe("twoTierAlwaysPrompt: D18 Allow-writes option", () => {
   it("no option without writeGrantDirs (plain layout unchanged)", async () => {
     const cb = makeCallbacks();
     const onWriteGrant = vi.fn();
-    const ctx = makeCtx([1, 1, 3]); // Always → Back → No
+    const ctx = makeCtx([1, 1, -1, "no thanks"]); // Always → Back → No
     const result = await twoTierAlwaysPrompt(
       makePrompt(), store, ctx,
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
       undefined, undefined, undefined, onWriteGrant,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(onWriteGrant).not.toHaveBeenCalled();
     expect(ctx.__selects[0]).toEqual(["Yes", "Always: test *", "No"]);
   });
@@ -1058,27 +1061,27 @@ describe("twoTierAlwaysPrompt: credential accreditation option", () => {
   it("Back from the tier-2 records nothing", async () => {
     const cb = makeCallbacks();
     const onAccredit = vi.fn();
-    const ctx = makeCtx([1, 1, 2]); // option → Back → No → cancel
+    const ctx = makeCtx([1, 1, -1, "no thanks"]); // option → Back → No (reason answered)
     const result = await twoTierAlwaysPrompt(
       makePrompt({ includeAlwaysOption: false, accreditDir: "/w/certs" }),
       store, ctx,
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
       undefined, undefined, undefined, undefined, onAccredit,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(onAccredit).not.toHaveBeenCalled();
   });
 
   it("no option without a stopped dir (plain layout unchanged)", async () => {
     const cb = makeCallbacks();
     const onAccredit = vi.fn();
-    const ctx = makeCtx([1, 1, 3]); // Always → Back → No
+    const ctx = makeCtx([1, 1, -1, "no thanks"]); // Always → Back → No
     const result = await twoTierAlwaysPrompt(
       makePrompt(), store, ctx,
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
       undefined, undefined, undefined, undefined, onAccredit,
     );
-    expect(result).toBe("no");
+    expect(result).toEqual({ kind: "no", reason: "no thanks" });
     expect(onAccredit).not.toHaveBeenCalled();
     expect(ctx.__selects[0]).toEqual(["Yes", "Always: test *", "No"]);
   });
@@ -1210,7 +1213,7 @@ describe("twoTierAlwaysPrompt: session consent (T4)", () => {
       consentPrompt, store, ctx2,
       cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
     );
-    expect(r2).toBe("no");
+    expect(r2).toBe("abort"); // dismissed, not refused (L1)
   });
 
   it('Explain is offered when the judge can run, consumed after use', async () => {

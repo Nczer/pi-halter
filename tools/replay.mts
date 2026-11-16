@@ -447,6 +447,7 @@ async function main(): Promise<void> {
           autoAllowed: dspa.autoAllowed,
           stage: dspa.fallthrough.stage,
           gate: dspa.fallthrough.gate.ok ? null : dspa.fallthrough.gate.reason,
+          gateClass: dspa.fallthrough.gate.ok ? null : dspa.fallthrough.gate.stopClass,
           guard: dspa.fallthrough.missLedger?.guard ?? null,
           misses: dspa.fallthrough.missLedger?.misses ?? null,
           verdict: dspa.fallthrough.verdict && {
@@ -471,7 +472,9 @@ async function main(): Promise<void> {
     } else if (converted.kind === "prompt") {
       const f = dspa?.fallthrough;
       const gate = f?.gate && !f.gate.ok ? oneLine(f.gate.reason, 180) : "ok";
-      console.log(`  floor  ${gate}`);
+      // The class slug leads the floor line: counting a class is a field
+      // lookup, not a regex over the human sentence (L3).
+      console.log(`  floor  ${f?.gate && !f.gate.ok ? `[${f.gate.stopClass}] ` : ""}${gate}`);
       const guard = missSummary(f);
       if (guard) console.log(`  guard  ${guard}`);
       const v = verdictLine(f);

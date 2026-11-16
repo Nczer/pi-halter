@@ -355,8 +355,16 @@ describe("auto-allow path", () => {
     expect(fallthrough?.stage).toBe(2);
     expect(getDspaStats().autoAllowed).toBe(0);
     expect(logLines()[0].dspa).toBe("judge: declined (stage 2)");
+    // L2: the verdict state is a value, not an absence. The old `judgeDeny`
+    // conflated approve / defer / D22-skip / judge-off / no-verdict.
+    expect(logLines()[0]).toMatchObject({ judgeVerdict: "approve", judgeStage: 2 });
+    // The verdict said yes; the RISK TIER said no. That is a skip with a name —
+    // and L3 calls the stop `judge-unauthorized`, not `judge-declined`, because
+    // blaming a yes would be a lie in the rollup.
+    expect(logLines()[0].judgeSkipped).toBe("risk-tier");
+    expect(logLines()[0].stopClass).toBe("judge-unauthorized");
     // An approving verdict is not a rejection — no LLM reject words.
-    expect(logLines()[0].judgeDeny).toBeUndefined();
+    expect(logLines()[0].judgeExplain).toBeUndefined();
   });
 });
 
@@ -464,7 +472,7 @@ describe("D19: same-pass write bar on the stage-2 report", () => {
     }
     expect(f?.verdict?.approve).toBe("deny");
     // The LLM's reject words still ride in the log (debug aid).
-    expect(logLines()[0].judgeDeny).toBe("rewrites the source tree");
+    expect(logLines()[0].judgeExplain).toBe("rewrites the source tree");
   });
 });
 
@@ -583,7 +591,9 @@ describe("D11: content review of manual auto-alls (clause A extension)", () => {
         const lines = logLines();
         expect(lines[0].kind).toBe("prompt");
         expect(lines[0].dspa).toBe("judge: declined (stage 2)");
-        expect(lines[0].judgeDeny).toBe("the script exfiltrates");
+        // L3: the stop is a class slug beside the human sentence.
+        expect(lines[0].stopClass).toBe("judge-declined");
+        expect(lines[0].judgeExplain).toBe("the script exfiltrates");
       } finally {
         spy.mockRestore();
       }
@@ -665,6 +675,11 @@ describe("D11: content review of manual auto-alls (clause A extension)", () => {
         expect(judgePrompt.getJudgeVerdict).not.toHaveBeenCalled();
         expect(promptFlow.showPrompt).not.toHaveBeenCalled();
         expect(logLines()[0].kind).toBe("auto-allow");
+        // An off judge was never consulted, so this row is not a judge event:
+        // no stop tag, no verdict state, no skip. (The prose fix for the OFF
+        // state is pinned on a prompt row below.)
+        expect("dspa" in logLines()[0]).toBe(false);
+        expect("judgeVerdict" in logLines()[0]).toBe(false);
       } finally {
         spy.mockRestore();
       }
@@ -764,7 +779,9 @@ describe("fall-through", () => {
     expect(logLines()[0].mode).toBe("dspa");
     expect(logLines()[0].dspa).toBe("judge: declined (stage 2)");
     // The LLM's reject words ride along for debugging (the log's NOTE exception).
-    expect(logLines()[0].judgeDeny).toBe("does the thing");
+    expect(logLines()[0].judgeExplain).toBe("does the thing");
+    // Nothing else stopped it — the verdict is the stop.
+    expect(logLines()[0].stopClass).toBe("judge-declined");
   });
 
   it("stage 1 deny, stage 2 failed → prompt with the stateless verdict", async () => {
@@ -779,7 +796,7 @@ describe("fall-through", () => {
     expect(fallthrough?.stage).toBe(1);
     expect(String(logLines()[0].dspa)).toBe("judge: stage 2 failed");
     // The stateless (stage-1) reject still carries the LLM's words.
-    expect(logLines()[0].judgeDeny).toBe("does the thing");
+    expect(logLines()[0].judgeExplain).toBe("does the thing");
   });
 
   it("judge unavailable (null) → plain prompt, no verdict", async () => {
@@ -789,6 +806,25 @@ describe("fall-through", () => {
     const fallthrough = vi.mocked(promptFlow.showPrompt).mock.calls[0][3];
     expect(fallthrough?.verdict).toBeNull();
     expect(logLines()[0].dspa).toBe("judge: judge call failed");
+  });
+
+  it("judge OFF → the row says it never ran, not that a call failed", async () => {
+    // Prose fix: a judge the operator turned off was reported as a failed call
+    // — sending them to debug a server that was fine, and the ledger to count a
+    // failure that never happened.
+    setDspaActive(true);
+    vi.mocked(judgePrompt.judgeStatus).mockReturnValue({ state: "off", modelLabel: null, reason: null });
+    await runGate(bashDecision("make test"));
+    expect(logLines()[0].dspa).toBe("judge: judge off (settings)");
+    expect(logLines()[0]).toMatchObject({
+      kind: "prompt",
+      judgeVerdict: "none",
+      judgeSkipped: "judge-off",
+      // Nothing vouched for this operation, so it stopped as an absent verdict;
+      // `judgeSkipped` names why, and the detail says so in words.
+      stopClass: "judge-failed",
+    });
+    expect(logLines()[0].stopDetail).toContain("off");
   });
 
   it("the judge stop-tag names the typed failure class", async () => {

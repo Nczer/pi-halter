@@ -303,6 +303,15 @@ in the same commit, and the switchover version gets stamped in `CHANGELOG.md`.
 5. judge: stage-1 skip route + the stage-2 clause + verify the accredited dir
    reaches the grants block (`judge/session-context.ts:190`).
 6. ledger L1 / L2 / L3 + every reader updated in the same commit.
+   DONE (2026-11-16). Two vocabulary additions beyond §7's illustrative lists, both because the list could not name what actually happened: the slug
+   `judge-unauthorized` (a verdict that approved above its stage's risk
+   authority — filing it under `judge-declined` would blame a yes) and the
+   `judgeSkipped` value `risk-tier`, set where the cascade holds an approving
+   verdict — including the stage-1 approve that stage 2 (D22) never re-raised.
+   `judge-failed` stays the one slug for "nothing vouched", with `judgeSkipped:
+   "judge-off"` plus `stopDetail` naming why: the slug says what stopped the
+   operation, the fields beside it say why that layer was silent. L1's `abort`
+   also reaches `unresolved.jsonl`'s `decision` field.
 7. docs in place: `docs/dspa-content-classes.md` (the C4 row + V-h eligibility
    rule), `docs/architecture.md` (glossary term, the floor class list, the
    "judge never grants over a bar" line), `docs/dspa-intent-floor.md` §6 D-a

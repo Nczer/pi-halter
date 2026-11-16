@@ -1,12 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {PermissionRequest, Decision, DecideOptions} from "../decide/types";
 import {decide} from "../decide/engine";
-import { logDecision, type DspModeTag } from "./decision-log";
+import { logDecision, type DecisionLogFields, type DspModeTag, type PromptAnswer } from "./decision-log";
 import { showPrompt } from "../ui/prompt-flow";
 import type { Store } from "./store";
 import { isDspaActive } from "../modes/dspa-mode";
 import { isDspatActive } from "../modes/dspat-mode";
-import { tryDspaAutoAllow, dspaStopTag, dspaJudgeDeny, type DspaFallthrough } from "./fallthrough";
+import { tryDspaAutoAllow, dspaStopTag, dspaStopClass, judgeLedgerFields, type DspaFallthrough } from "./fallthrough";
 import { applyDspaConversions } from "./conversions";
 import { judgePathLogFields } from "../judge/paths";
 
@@ -98,6 +98,12 @@ export async function gate(
 
   // Decision log (JSONL): one line per tool call, including fail-closed
   // synthetic blocks. Fire-and-forget — logDecision never throws.
+  // L1 (docs/dspa-credential-vouch.md §7): the line is written at the TERMINAL
+  // outcome, and a prompt row waits for the answer. The old position — before
+  // the prompt — recorded that a prompt existed and never what the operator did
+  // about it, so no floor class could be scored (a false positive is a stop the
+  // operator allowed anyway). Accepted cost: a session that dies mid-prompt
+  // loses that row.
   // D13: a dspa fall-through whose FINAL verdict is stage 2 logs the judge's
   // path report + floor mismatches — the richest parser-gap case is a floor
   // stop where the judge saw paths the static analysis never did.
@@ -105,24 +111,31 @@ export async function gate(
     decision.kind === "prompt" && dspaFallthrough?.stage === 2
       ? judgePathLogFields(decision.promptData, store, dspaFallthrough.verdict?.paths, ctx)
       : {};
-  logDecision(
-    request,
-    decision,
-    dspModeTag(decision, ctx),
-    dspaStopTag(dspaFallthrough),
-    dspaJudgeDeny(dspaFallthrough),
-    judgePathFields.judgePaths,
-    judgePathFields.floorMisses,
-  );
+  // L2/L3: the verdict state and the stop class come from the fall-through —
+  // both are values now, not absences a reader has to interpret.
+  const baseFields: DecisionLogFields = {
+    mode: dspModeTag(decision, ctx),
+    dspa: dspaStopTag(dspaFallthrough),
+    ...dspaStopClass(dspaFallthrough),
+    ...judgeLedgerFields(dspaFallthrough),
+    judgePaths: judgePathFields.judgePaths,
+    floorMisses: judgePathFields.floorMisses,
+  };
+  const log = (answer?: PromptAnswer) => logDecision(request, decision, { ...baseFields, answer });
 
-  if (decision.kind === "auto-allow") return;
+  if (decision.kind === "auto-allow") {
+    log();
+    return;
+  }
 
   if (decision.kind === "block") {
+    log();
     return { block: true, reason: decision.reason };
   }
 
   // No UI available — block
   if (!ctx.hasUI) {
+    log();
     return { block: true, reason: "[Permission Policy] Auto-blocked (no UI): requires confirmation" };
   }
 
@@ -130,6 +143,8 @@ export async function gate(
 
   try {
     const result = await showPrompt(decision, ctx, store, dspaFallthrough, request);
+    // L1: written now, after the click — the row carries what the operator chose.
+    log(result.answer);
     if (!result.allowed) {
       return onReject(decision, result);
     }
