@@ -36,12 +36,13 @@ import path from "node:path";
 import fs from "node:fs";
 import { warnPaths } from "../config";
 import { logGlobVerifyError } from "../config/logging";
-import { expandTilde, under } from "./path-util";
+import { expandTilde, under, isUnresolvedPath } from "./path-util";
 import { braceVariants } from "./brace";
 import { tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import {
   isPathWarnedResolved,
   resolvePathReal,
+  ENV_FILE_RE,
 } from "./path-analysis";
 
 
@@ -69,6 +70,56 @@ export function isGlobUnverified(value: string | null | undefined): boolean {
 
 export function globUnverifiedToken(value: string | null | undefined): string {
   return typeof value === "string" ? value.slice(GLOB_UNVERIFIED_PREFIX.length) : "";
+}
+
+/** Pseudo-fs files that hold secrets — not in `warnPaths` (name-based) but the
+ *  same class §4.3 refuses to judge (the Oct-18 ledger has a real stop on
+ *  `/proc/<pid>/environ`, and the pseudo-fs read class is what this floor now
+ *  lets intent through). Lives here, beside the credential ceiling that also
+ *  refuses them, so the class has one owner rather than a regex per call site. */
+export const PROC_SECRET_RE = /\/proc\/[^/]+\/(environ|cmdline)\b/;
+
+/** `warnPaths` entries that are suffix globs, as their suffix (`*.pem` → `.pem`). */
+const CREDENTIAL_SUFFIX_RULES = warnPaths.filter((r) => r.startsWith("*."));
+
+/** `warnPaths` entries that are NAMEs — every rule that is not a suffix glob. */
+const CREDENTIAL_NAME_RULES = warnPaths.filter((r) => !r.startsWith("*."));
+
+/**
+ * The credential ceiling (docs/dspa-credential-vouch.md V-c / guard G1): which
+ * credential-shaped paths an accreditation may lift.
+ *
+ * Only a path whose credential-shape comes from a SUFFIX rule (`ca-key.pem`,
+ * `server.crt.pem`) lifts. A path that is credential-shaped because of its
+ * NAME — a credential store (`.ssh`, `.gnupg`, `.aws`, `.docker/config.json`
+ * …), a standalone keyfile (`id_rsa`, `.envrc`), an env file — stays absolute
+ * inside even an accredited dir: naming a store is the operator saying "these
+ * certificates are mine", not "hand over the keyring". The pseudo-fs secret
+ * files are absolute for the same reason, and are refused here so ONE function
+ * answers the question (docs/dspa-intent-floor.md §4.3).
+ *
+ * Keyed on the MATCHED PATH, not on the rule the matcher happened to report:
+ * `isPathWarnedResolved` synthesizes the name `.env.*` for `.env.production`,
+ * which looks glob-shaped and must never lift, and a name rule can sit ABOVE a
+ * suffix-shaped file (`~/.ssh/id_rsa.pem`). Where both shapes apply, the name
+ * wins — the absolute answer.
+ *
+ * Fail closed: a word that names no location is lifted by nothing.
+ */
+export function isAccreditableCredentialPath(resolved: string): boolean {
+  if (isUnresolvedPath(resolved)) return false;
+  if (PROC_SECRET_RE.test(resolved)) return false;
+  const parts = resolved.split("/").filter(Boolean);
+  const base = parts[parts.length - 1] ?? "";
+  // An env file is name-shaped whatever it ends with (`.env.production.pem`).
+  if (ENV_FILE_RE.test(base)) return false;
+  for (const rule of CREDENTIAL_NAME_RULES) {
+    // A multi-segment rule (`.docker/config.json`) is a tail, not a component.
+    if (rule.includes("/") ? resolved.endsWith(`/${rule}`) : parts.includes(rule)) {
+      return false;
+    }
+  }
+  return CREDENTIAL_SUFFIX_RULES.some((rule) => base.endsWith(rule.slice(1)));
 }
 
 /**

@@ -8,8 +8,9 @@ import { under, isUnresolvedPath } from "./path-util";
 
 /** Pre-compiled regex for relative path detection (./foo, ../foo). */
 const RELATIVE_PATH_RE = /^\.\/|^\.\.\//;
-/** Pre-compiled regex for .env.* pattern detection. */
-const ENV_FILE_RE = /^\.env\.[^/]*$/;
+/** Pre-compiled regex for .env.* pattern detection. Exported for the credential
+ * ceiling, which refuses env files whatever they end with (V-c). */
+export const ENV_FILE_RE = /^\.env\.[^/]*$/;
 
 /**
  * Check if the first token is a relative path (./foo, ../foo).

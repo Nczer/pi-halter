@@ -88,7 +88,7 @@ import { scriptFilePathInSegment } from "../analysis/script-payload";
 import { sanitizeJudgePaths, reportBases } from "../judge/paths";
 import type { ResolutionMap } from "../judge/path-resolver";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
-import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
+import { isGlobUnverified, globUnverifiedToken, PROC_SECRET_RE } from "../analysis/credentials";
 import { cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
 import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
 import { getDelegatedCommand, segmentFetchPackage, segmentFetchOptionsOk } from "../analysis/segment-helpers";
@@ -723,12 +723,6 @@ const CLASS_LABEL_REASON_RE = /^\[Pattern\]\s/;
  * Coupled to the label text — see config/dangerous-patterns.ts.
  */
 const REMOTE_EXEC_LABEL_RE = /download & execute/;
-
-/** Pseudo-fs files that hold secrets — not in `warnPaths` (name-based) but the
- *  same class §4.3 refuses to judge (the Oct-18 ledger has a real stop on
- *  `/proc/<pid>/environ`, and the pseudo-fs read class is what this floor now
- *  lets intent through). */
-const PROC_SECRET_RE = /\/proc\/[^/]+\/(environ|cmdline)\b/;
 
 /**
  * The §4 guards on intent-over-miss (docs/dspa-intent-floor.md). Returns the

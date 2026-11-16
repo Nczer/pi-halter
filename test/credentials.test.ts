@@ -10,6 +10,7 @@ import {
   GLOB_UNVERIFIED_PREFIX,
   isGlobUnverified,
   globUnverifiedToken,
+  isAccreditableCredentialPath,
 } from "../analysis/credentials";
 import { tokenizeSegmentQuoted, type QuotedToken } from "../analysis/tokenizer";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
@@ -614,5 +615,55 @@ describe("checkCommandForCredentialPaths: quoted bodies (field regression)", () 
       cwd,
     );
     expect(r).toBeNull();
+  });
+});
+
+// The credential ceiling (docs/dspa-credential-vouch.md V-c / G1). These rows
+// are the whole safety argument for accreditations, so they are pinned by name:
+// what an operator's "these certs are mine" answer may and may not reach.
+describe("isAccreditableCredentialPath (the ceiling)", () => {
+  it("a suffix-shaped credential file lifts, at any depth", () => {
+    expect(isAccreditableCredentialPath("/mnt/certs/ca-key.pem")).toBe(true);
+    expect(isAccreditableCredentialPath("/mnt/certs/sub/intermediate.pem")).toBe(true);
+  });
+
+  it("a credential store stays absolute inside an accredited dir", () => {
+    for (const p of [
+      "/home/op/.ssh/id_rsa",
+      "/home/op/.ssh/config",
+      "/home/op/.gnupg/private-keys-v1.d/key.key",
+      "/home/op/.aws/credentials",
+      "/home/op/.git-credentials",
+      "/home/op/.docker/config.json",
+      "/home/op/.netrc",
+    ]) {
+      expect(isAccreditableCredentialPath(p)).toBe(false);
+    }
+  });
+
+  it("a store above a suffix-shaped file outranks the suffix", () => {
+    // The reason the ceiling keys on the path, not on the matched rule string.
+    expect(isAccreditableCredentialPath("/home/op/.ssh/id_rsa.pem")).toBe(false);
+    expect(isAccreditableCredentialPath("/home/op/.gnupg/backup.pem")).toBe(false);
+  });
+
+  it("env files and standalone keyfile names stay absolute, whatever they end with", () => {
+    expect(isAccreditableCredentialPath("/srv/app/.env")).toBe(false);
+    expect(isAccreditableCredentialPath("/srv/app/.env.production")).toBe(false);
+    expect(isAccreditableCredentialPath("/srv/app/.env.production.pem")).toBe(false);
+    expect(isAccreditableCredentialPath("/home/op/.ssh/id_ed25519")).toBe(false);
+    expect(isAccreditableCredentialPath("/srv/app/.envrc")).toBe(false);
+  });
+
+  it("pseudo-fs secrets are never liftable (docs/dspa-intent-floor.md §4.3)", () => {
+    expect(isAccreditableCredentialPath("/proc/1234/environ")).toBe(false);
+    expect(isAccreditableCredentialPath("/proc/self/cmdline")).toBe(false);
+  });
+
+  it("fail closed: a word that names no location is lifted by nothing", () => {
+    expect(isAccreditableCredentialPath("<unresolved>")).toBe(false);
+    expect(isAccreditableCredentialPath("")).toBe(false);
+    // A path the credential floor never fired on: void question, safe answer.
+    expect(isAccreditableCredentialPath("/mnt/certs/README.txt")).toBe(false);
   });
 });
