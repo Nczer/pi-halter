@@ -608,13 +608,36 @@ const globRuleForWord = (token: string): string | null => {
 };
 
 /**
+ * What a credential scan FOUND, in the shape a grant needs. The scanner's
+ * return value is a rule NAME (".ssh", "*.pem", a resolved symlink, the
+ * unverifiable-glob marker) — enough to stop on, not enough to accredit a
+ * directory with (docs/dspa-credential-vouch.md §4.2: no concrete dir, no
+ * offer). A caller that wants to offer a grant passes a collector and gets:
+ *  - `paths`: every credential-shaped path the scan RESOLVED, with its rule;
+ *  - `pathless`: every finding with no resolved path behind it here — a
+ *    glob-decoded name, a cwd symlink escape, a substitution body's own pass.
+ * `pathless` is what makes the grant fail closed: one finding the scan cannot
+ * name and the caller has no basis for saying the command touches nothing else.
+ */
+export interface CredentialFindings {
+  paths: Array<{ path: string; rule: string }>;
+  pathless: string[];
+}
+
+/**
  * Check a bash command string for credential path references. Returns the
  * matched warn rule — a credential pattern name, a resolved path (a symlink
  * leaving the working directory), or the GLOB_UNVERIFIED marker — or null when
  * nothing credential-shaped is reachable. See the file header for what a warn
  * does (never auto-allowed, always a prompt).
+ *
+ * `findings` (optional) collects what matched, per CredentialFindings.
  */
-export function checkCommandForCredentialPaths(command: string, cwd: string): string | null {
+export function checkCommandForCredentialPaths(
+  command: string,
+  cwd: string,
+  findings?: CredentialFindings,
+): string | null {
   // Heredoc bodies and shell comments are DATA, not path operands — strip
   // them before scanning so credential names in the body / a comment don't
   // false-positive (`# check the credential dir\nls` must not flag `ls`).
@@ -648,6 +671,10 @@ export function checkCommandForCredentialPaths(command: string, cwd: string): st
   // Bare-token symlink check — must run even when the pre-scan below would
   // early-return (a symlink's literal name carries no credential text).
   let warned = checkBareRelativeTokens(words, cwd);
+  // Its findings are recorded as pathless on purpose: the rule it reports is
+  // a realpath chosen by the scanner, not a credential operand the command
+  // named, so a grant must not be derived from it (fail closed).
+  if (warned && findings) findings.pathless.push(warned);
 
   /** Keep a finding; a concrete credential match outranks an unverifiable glob. */
   const keep = (rule: string | null): void => {
@@ -671,7 +698,14 @@ export function checkCommandForCredentialPaths(command: string, cwd: string): st
   /** Check a path string against the credential patterns, returning the matched rule. */
   const checkPath = (pathStr: string): string | null => {
     const resolved = resolvePathReal(expandTilde(pathStr), cwd);
-    return isPathWarnedResolved(pathStr, resolved).matchedRule;
+    const matched = isPathWarnedResolved(pathStr, resolved);
+    if (matched.warned && matched.matchedRule && findings) {
+      const rule = matched.matchedRule;
+      if (!findings.paths.some((f) => f.path === resolved && f.rule === rule)) {
+        findings.paths.push({ path: resolved, rule });
+      }
+    }
+    return matched.matchedRule;
   };
 
   /** Check one token (or value) against the credential path patterns. */
@@ -730,7 +764,13 @@ export function checkCommandForCredentialPaths(command: string, cwd: string): st
       // id_rs? → id_rsa). Skipped for a wholly quoted word: quoted globs
       // cannot expand at runtime (`grep ".*" f` is a pattern, `cat "s*sh"` a
       // literal name), while unquoted ones keep the check (`cat */id_rsa`).
-      if (!word.quotedWhole) keep(globRuleForWord(token));
+      if (!word.quotedWhole) {
+        const globRule = globRuleForWord(token);
+        // A glob-decoded name proves something credential-shaped is reachable
+        // without naming which file — nothing to accredit (G4/G5).
+        if (globRule && findings) findings.pathless.push(globRule);
+        keep(globRule);
+      }
     }
   }
 

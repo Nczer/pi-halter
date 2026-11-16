@@ -89,6 +89,7 @@ import { sanitizeJudgePaths, reportBases } from "../judge/paths";
 import type { ResolutionMap } from "../judge/path-resolver";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
 import { isGlobUnverified, globUnverifiedToken, PROC_SECRET_RE } from "../analysis/credentials";
+import { credentialAccreditation } from "./accreditation";
 import { cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
 import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
 import { getDelegatedCommand, segmentFetchPackage, segmentFetchOptionsOk } from "../analysis/segment-helpers";
@@ -140,6 +141,14 @@ export type DspaGateResult =
        *  amendment answers it from the path resolver instead of refusing to
        *  ask. */
       misses?: MissFact[];
+      /** docs/dspa-credential-vouch.md: this credential stop is standing only
+       *  because the operator has not accredited a location yet — the
+       *  fall-through prompt may offer "credential files here, this session"
+       *  for EXACTLY this dir (deepest common ancestor of the paths the command
+       *  wanted). Absent when nothing nameable was found (G4): a glob, a cwd
+       *  symlink escape, a store path, or a write to a credential file — those
+       *  stop as they always did, with no offer. */
+      accreditDir?: string;
     };
 
 /**
@@ -865,7 +874,21 @@ export async function checkDspaGate(
     if (!writeBarOk && pd.outsideDir) {
       return { ok: false, reason: `outside base (session ${pd.cwd})`, advisory: true };
     }
-    if (pd.warnedRule) return { ok: false, reason: `credential pattern (${pd.warnedRule})`, advisory: true };
+    if (pd.warnedRule) {
+      // The same door as the bash branch, from the one path this decision has
+      // (V-g: the exemption has to mean one thing, or reading a cert with the
+      // read tool reads broken the first time). A write target never clears
+      // here — an accreditation is a statement about reading (V-d/G2).
+      const cred = credentialAccreditation(
+        { paths: [{ path: pd.resolved, rule: pd.warnedRule }], pathless: [] },
+        store,
+        pd.isWriteOp ? [pd.resolved] : [],
+      );
+      if (!cred.cleared) {
+        const stop = { ok: false, reason: `credential pattern (${pd.warnedRule})`, advisory: true } as const;
+        return cred.offerDir ? { ...stop, accreditDir: cred.offerDir } : stop;
+      }
+    }
     return { ok: true };
   }
 
@@ -956,7 +979,19 @@ export async function checkDspaGate(
     if (isGlobUnverified(pd.credentialRule)) {
       return { ok: false, reason: `unverifiable glob (${globUnverifiedToken(pd.credentialRule)})`, advisory: true };
     }
-    return { ok: false, reason: `credential pattern (${pd.credentialRule})`, advisory: true };
+    // docs/dspa-credential-vouch.md: an accredited dir stands this stop down
+    // for the JUDGE (V-e) — it does not approve the command. Everything the
+    // scan could not name, and anything the command writes, keeps the stop
+    // (gate/accreditation.ts).
+    const cred = credentialAccreditation(
+      analysis.credentialFindings,
+      store,
+      [...analysis.writePaths, ...analysis.bodyWritePaths],
+    );
+    if (!cred.cleared) {
+      const stop = { ok: false, reason: `credential pattern (${pd.credentialRule})`, advisory: true } as const;
+      return cred.offerDir ? { ...stop, accreditDir: cred.offerDir } : stop;
+    }
   }
   // D10 (docs/dspa-redesign.md): a fetchable run form names a package that
   // may be FETCHED (and executed) on cache miss — the same fetch class the

@@ -65,7 +65,7 @@ Coverage is all three doors the credential floor has, so the act means one thing
 |---|---|
 | bash | `gate/dspa-gate.ts:959–965` (`credentialRule` / `unverifiable glob`) |
 | file branch | `gate/dspa-gate.ts:874` (`warnedRule`) |
-| manual/auto file policy | `decide/file-policy.ts` — a warned path never auto-allows, even inside cwd |
+| manual/auto file policy | `decide/file-policy.ts` — a warned path never auto-allows, even inside cwd. **Left standing** (§4.5) |
 
 ## 4. Details
 
@@ -143,6 +143,21 @@ maintain. Private key material lifting is intended: the trigger corpus ran
   authority. VERIFY at build: the grants block today lists `write dir` entries —
   confirm the accredited dirs reach it, or add them.
 
+### 4.5 The manual bar is not a door this grant opens (built, 2026-11-16)
+
+V-g listed `decide/file-policy.ts` as the third door. Building it showed the
+list was one door short of what it describes: that file is the MANUAL bar, and
+manual mode has no judge. Clearing a warned path there is not "make this
+judgeable" — it is a silent auto-allow of a credential read with nothing
+ruling on it, which contradicts G6 ("the grant lifts the floor, not the
+verdict") and the trigger itself (all ten corpus rows carry `mode: dspa`).
+
+So the exemption covers the two doors that feed the judge, and the manual bar
+keeps stopping. Under `/dspa` the read-tool case is already covered: the manual
+bar's prompt routes to the dspa file door (§4.2's file row), where the
+accreditation applies and the judge decides. The trigger corpus is served
+without touching manual mode.
+
 ## 5. Guards
 
 - **G1** The ceiling (§4.3) outranks the grant: a name-shaped path never lifts.
@@ -184,9 +199,10 @@ maintain. Private key material lifting is intended: the trigger corpus ran
   anyway, so the eval-scored `JUDGE_SYSTEM_PROMPT` stays byte-identical.
   Rejected: no clause (a guaranteed deny + a wasted uncached call for every
   accredited op), clause in both stages.
-- **V-g — coverage**: all three doors (bash, file branch, manual/auto file
-  policy). Rejected: bash-only — the exemption reads broken the first time pi
-  reads a cert with the read tool.
+- **V-g — coverage**: all three doors as asked (bash, file branch, manual/auto file
+  policy). **Amended at build**: the third is the manual bar, where no judge
+  exists — clearing it would auto-allow silently, so it stands (§4.5). The two
+  judge-fed doors are covered, which is what the read-tool case needs.
 - **V-h — this case, not a mechanism**: one credential implementation, plus the
   eligibility RULE written down once in `docs/dspa-content-classes.md`: *a C4
   policy stop whose bar keys on a location may take an operator grant; a stop
@@ -276,8 +292,12 @@ in the same commit, and the switchover version gets stamped in `CHANGELOG.md`.
 2. ceiling helper: name-shaped / pseudo-fs absolute, suffix-shaped liftable;
    tests pinning `.env`, `.env.production`, `id_rsa`, `/proc/<pid>/environ` never
    lift, and a private-key file lifting under a grant.
-3. floor: bash branch (`gate/dspa-gate.ts:959`), file branch (`:874`),
-   `decide/file-policy.ts` warned reads; the offer data rides on the prompt data.
+3. floor: bash branch (`gate/dspa-gate.ts:959`), file branch (`:874`);
+   `decide/file-policy.ts` deliberately unchanged (§4.5). The offer dir rides
+   the gate result (`accreditDir`), next to `writeOutside`/`confirmedOutside`.
+   DONE (2026-11-16): the scan now also reports WHICH paths it matched
+   (`CredentialFindings`) — a finding it cannot name suppresses both the
+   clearance and the offer.
 4. prompt: the new option in the grant tier, plain-words label; the `Always`
    suppression for credentials stays as-is (that is the §9 D-b item, not this one).
 5. judge: stage-1 skip route + the stage-2 clause + verify the accredited dir

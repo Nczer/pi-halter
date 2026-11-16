@@ -10,7 +10,7 @@ import { hasRelativePath, getOutsideCwdPaths, getOutsideWritePaths } from "./pat
 import { dirsOfLocations, barLocations, pathWord, type PathWord } from "./path-word";
 import { classifyStageArgv0 } from "./argv0-path";
 import { assessDeletes, type DeleteScale } from "./delete-scale";
-import { checkCommandForCredentialPaths } from "./credentials";
+import { checkCommandForCredentialPaths, type CredentialFindings } from "./credentials";
 import { getCommandSignature, getFirstWord, hasInlineAssignment, STARTS_WITH_REDIRECT_RE, segmentNamesRunOptions, segmentRunFormUngrantable, segmentStages } from "./segment-helpers";
 import { isAllowedCommand, isSafeSubcommand } from "../config";
 
@@ -149,6 +149,9 @@ export interface CommandAnalysis {
   hasCredentialPath: boolean;
   /** Matched credential pattern name, if any (e.g. ".env", ".aws"). */
   credentialRule: string | null;
+  /** Which paths the credential scan matched, and which findings it could not
+   *  name (see CredentialFindings in analysis/credentials.ts). */
+  credentialFindings: CredentialFindings;
   /** Whether tree-sitter produced ERROR nodes (malformed bash). */
   hasParseError: boolean;
   /** Prompt-specific derived data. */
@@ -776,7 +779,17 @@ export async function analyzeCommand(
   // The command-text pass cannot see an operand inside a QUOTED substitution
   // (`echo "$(cat .env)"` — the whole span is one quoted word), so a body's
   // own pass (analyzeSubstBodies) is folded in here rather than trusted to it.
-  const credentialCheck = checkCommandForCredentialPaths(cmd, cwd) ?? substCredential;
+  //
+  // `credentialFindings` collects WHICH paths matched, for the only consumer
+  // that needs more than the rule name: a credential accreditation is scoped
+  // to a directory, so it can be offered only where the scan named one
+  // (docs/dspa-credential-vouch.md §4.2). A substitution BODY's finding is
+  // recorded as pathless — the body's operand is not a path this pass resolved,
+  // so it suppresses an offer rather than licensing a guess.
+  const credentialFindings: CredentialFindings = { paths: [], pathless: [] };
+  const credentialCheck =
+    checkCommandForCredentialPaths(cmd, cwd, credentialFindings) ?? substCredential;
+  if (substCredential) credentialFindings.pathless.push(substCredential);
 
   // Fold the [TmuxPayload] and [Subst] reasons into the whole-command risk
   // (order-stable, deduped) so PromptFallbackRule surfaces them in the prompt
@@ -828,6 +841,7 @@ export async function analyzeCommand(
     parsedSegments: segments,
     hasCredentialPath: credentialCheck !== null,
     credentialRule: credentialCheck,
+    credentialFindings,
     prompt: {
       nonAllowlistedSegmentIndices,
       promptSignatures,
