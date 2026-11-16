@@ -1031,6 +1031,59 @@ describe("twoTierAlwaysPrompt: D18 Allow-writes option", () => {
   });
 });
 
+// ── Credential accreditation option (the credential floor named a dir) ──
+
+describe("twoTierAlwaysPrompt: credential accreditation option", () => {
+  it("names the stopped dir, and confirms into the accreditation callback", async () => {
+    const cb = makeCallbacks();
+    const onAccredit = vi.fn();
+    // choices = ["Yes", "Allow credential files: /w/certs (session)", "No"]
+    const ctx = makeCtx([1, 0]);
+    const result = await twoTierAlwaysPrompt(
+      makePrompt({ includeAlwaysOption: false, accreditDir: "/w/certs" }),
+      store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      undefined, undefined, undefined, undefined, onAccredit,
+    );
+    expect(result).toBe("always");
+    expect(onAccredit).toHaveBeenCalledTimes(1);
+    expect(cb.onAlways).not.toHaveBeenCalled();
+    expect(ctx.__selects[0]).toEqual(["Yes", "Allow credential files: /w/certs (session)", "No"]);
+  });
+
+  // Back out of the tier-2: nothing is recorded — the accreditation is a
+  // session-wide statement about a directory, so it needs its own confirm.
+  // (The scripted No is answered with no reason, so the flow re-prompts and
+  // the scripted cancel ends it as the reason-less "no".)
+  it("Back from the tier-2 records nothing", async () => {
+    const cb = makeCallbacks();
+    const onAccredit = vi.fn();
+    const ctx = makeCtx([1, 1, 2]); // option → Back → No → cancel
+    const result = await twoTierAlwaysPrompt(
+      makePrompt({ includeAlwaysOption: false, accreditDir: "/w/certs" }),
+      store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      undefined, undefined, undefined, undefined, onAccredit,
+    );
+    expect(result).toBe("no");
+    expect(onAccredit).not.toHaveBeenCalled();
+  });
+
+  it("no option without a stopped dir (plain layout unchanged)", async () => {
+    const cb = makeCallbacks();
+    const onAccredit = vi.fn();
+    const ctx = makeCtx([1, 1, 3]); // Always → Back → No
+    const result = await twoTierAlwaysPrompt(
+      makePrompt(), store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      undefined, undefined, undefined, undefined, onAccredit,
+    );
+    expect(result).toBe("no");
+    expect(onAccredit).not.toHaveBeenCalled();
+    expect(ctx.__selects[0]).toEqual(["Yes", "Always: test *", "No"]);
+  });
+});
+
 // ── Covered scopes: Always options suppressed (standing session grant) ──
 
 describe("twoTierAlwaysPrompt: covered Always options are suppressed", () => {

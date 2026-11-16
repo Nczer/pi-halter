@@ -46,6 +46,13 @@ export interface BuiltPrompt {
    *  for exactly these (sanitized: no root, no sentinels). Bash dspa
    *  fall-through only; empty elsewhere. */
   writeGrantDirs?: string[];
+  /** A credential-class stop the operator can accredit: the one directory the
+   *  gate will vouch for, read-only, for the rest of the session (from the
+   *  dspa gate's `accreditDir`) — tier-1 offers the accreditation for exactly
+   *  this dir. Absent when the stop has nothing dir-shaped to accredit (§4.2:
+   *  an unspecifiable glob, a finding that cannot be named, a credential whose
+   *  NAME is the secret). Set by the prompt flow, not the builders. */
+  accreditDir?: string;
   /** Directories the "Always (paths)" option would grant — the concrete
    *  outside-cwd dirs plus any LLM-resolved token dirs (bash prompts only;
    *  empty elsewhere). The prompt flow grants EXACTLY these on that option. */

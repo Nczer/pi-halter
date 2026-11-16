@@ -428,6 +428,52 @@ describe("dspa write stop: the paths grant is write-shaped", () => {
   });
 });
 
+// The credential floor named one directory it could be accredited for
+// (docs/dspa-credential-vouch.md). The click that accepts the offer records
+// BOTH grants (V-d): the accreditation, which stands the credential floor down,
+// and the read grant it presumes — without the read grant the next command under
+// the dir stops on `outside base` and the accreditation looks broken. It grants
+// no verdict: the judge still rules every run (G6).
+
+describe("credential stop: the accreditation offer and its click", () => {
+  const credStop = (accreditDir?: string): DspaFallthrough =>
+    ({
+      gate: {
+        ok: false,
+        advisory: true,
+        reason: "credential file (/w/certs/ca.pem)",
+        ...(accreditDir ? { accreditDir } : {}),
+      },
+      verdict: null,
+      stage: null,
+    }) as DspaFallthrough;
+
+  it("carries the stopped dir to the prompt, for the option to name", async () => {
+    await showPrompt(bashDecision(), ctx, createStore(), credStop("/w/certs"));
+    expect((promptSpy.mock.calls[0][0] as { accreditDir?: string }).accreditDir).toBe("/w/certs");
+  });
+
+  it("the click accredits the dir and grants read for it", async () => {
+    const s = createStore();
+    promptSpy.mockImplementation(async (_p: unknown, _st: unknown, _c: unknown, ...rest: unknown[]) => {
+      (rest[8] as () => void)(); // index 11: onAccredit
+      return "always";
+    });
+    const r = await showPrompt(bashDecision(), ctx, s, credStop("/w/certs"));
+    expect([...s.listAccreditedDirs()]).toEqual(["/w/certs"]);
+    expect(s.isInsideAllowedDir("/w/certs/sub/ca.pem", "read")).toBe(true);
+    expect(s.isInsideAllowedDir("/w/certs/ca.pem", "write")).toBe(false);
+    expect(r.allowed).toBe(true);
+  });
+
+  it("a stop with nothing dir-shaped to accredit carries nothing", async () => {
+    const s = createStore();
+    await showPrompt(bashDecision(), ctx, s, credStop());
+    expect((promptSpy.mock.calls[0][0] as { accreditDir?: string }).accreditDir).toBeUndefined();
+    expect([...s.listAccreditedDirs()]).toEqual([]);
+  });
+});
+
 describe("Judge again wiring (dspa fall-through)", () => {
   const request: PermissionRequest = { type: "bash", command: "rm -rf /tmp/test", cwd: "/home/user/project" };
   const defer1 = { model: "llama-cpp/qwen", explanation: "E.", approve: "defer" as const, risk: "low" as const, reason: "r", latencyMs: 10, cached: false };

@@ -104,6 +104,11 @@ export async function showPrompt(
     pd.type === "bash" && dspa && !dspa.gate.ok
       ? (dspa.gate.writeOutside ?? []).filter((d) => d !== "/" && !d.startsWith("<"))
       : undefined;
+  /** The credential floor stopped this run and named the one directory it can
+   *  be accredited for (gate/accreditation.ts). Needs no filtering here: the
+   *  gate never names the root (nothing but the root in common → no offer) and
+   *  never a `<marker>` or a path whose name is the credential. */
+  const accreditDir = dspa && !dspa.gate.ok ? dspa.gate.accreditDir : undefined;
   // A WRITE-shaped stop makes the paths tier a WRITE tier. `Always (paths)`
   // mints what the prompt data's write tier says, so a stop whose subject is a
   // write (the D18 base write, or the D-h write the stage-2 judge reported)
@@ -122,6 +127,9 @@ export async function showPrompt(
         }
       : decision;
   let prompt = buildPrompt(grantDecision, resolutions ?? undefined, confirmedTokens, isCovered, writeGrantDirs);
+  // Carry the dir, not the wording: the option's label and its tier-2 live in
+  // prompts.ts with every other tier-1 option.
+  if (accreditDir) prompt = { ...prompt, accreditDir };
   // T4 (content-classes): the consent trust prompt names the model — the
   // trust decision ("the model could be trusted and is not incompetent")
   // is made at the prompt. The session model identity also feeds the T5
@@ -379,6 +387,18 @@ export async function showPrompt(
     // the floor and the judge decides.
     if (writeGrantDirs?.length) {
       store.addAllowed({ writeDirs: writeGrantDirs });
+      updateStatus(ctx);
+    }
+  }, () => {
+    // The credential floor: vouch for this directory's credential material for
+    // the rest of the session, and record the read grant the accreditation
+    // presumes (V-d) — one click, both grants. Without the read grant the next
+    // command under the dir stops on `outside base` instead, which would make
+    // the accreditation look broken. The judge still rules per run (G6), and a
+    // credential named by NAME stays blocked whatever the store says.
+    if (accreditDir) {
+      store.accreditDir(accreditDir);
+      store.addAllowed({ readDirs: [accreditDir] });
       updateStatus(ctx);
     }
   });

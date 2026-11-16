@@ -61,6 +61,8 @@ interface AlwaysCallbacks {
   /** D18: grant write (implies read) for the stopped base dirs (session).
    *  Allow-writes option. */
   onWriteGrant?: () => void;
+  /** Accredit the stopped credential dir (session). Accreditation option. */
+  onAccredit?: () => void;
 }
 
 /** A tier-1 "Always" option that confirms via a standard tier-2 prompt. */
@@ -105,7 +107,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
   // suppressed. The command tier is not. (File prompts' dir umbrella and
   // bash's package-trust option are independent too — the umbrella needs
   // broaderPaths, Trust needs trustPackages.)
-  if (!prompt.includeAlwaysOption && !prompt.includePathsOption && !prompt.trustPackages?.length && !prompt.writeGrantDirs?.length) return [];
+  if (!prompt.includeAlwaysOption && !prompt.includePathsOption && !prompt.trustPackages?.length && !prompt.writeGrantDirs?.length && !prompt.accreditDir) return [];
 
   const { broaderPaths } = prompt;
   const hasBroaderPaths = !!(prompt.includeBroaderOption && broaderPaths && broaderPaths.length > 0);
@@ -224,6 +226,27 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
       ),
     );
   }
+  // The credential floor (docs/dspa-credential-vouch.md): the operator vouches
+  // for the credential material under one directory, read-only, for this
+  // session. Not a grant of permission to run something — it moves one floor so
+  // the judge can rule. SESSION_SCOPE_WARNING is deliberately not appended:
+  // what follows is not an auto-allow, and saying so is the option's whole point.
+  if (prompt.accreditDir && cb.onAccredit) {
+    options.push(
+      confirmOpt(
+        `Allow credential files: ${prompt.accreditDir} (session)`,
+        {
+          title: "Confirm Credential Accreditation",
+          body:
+            `"Allow credential files" stands the credential floor down for reads under this directory for the rest of the session:\n` +
+            `  • ${prompt.accreditDir}/**\n` +
+            `The judge then rules on each one — it can still say no, and the prompt comes back when it does.\n` +
+            `A file whose name is the credential (id_rsa, a .env, a credential store) stays blocked.`,
+        },
+        () => { cb.onAccredit?.(); return "always"; },
+      ),
+    );
+  }
   return options;
 }
 
@@ -299,8 +322,9 @@ export async function twoTierAlwaysPrompt(
   onTrust?: () => void,
   retryJudge?: JudgeRetry,
   onWriteGrant?: () => void,
+  onAccredit?: () => void,
 ): Promise<PromptResult> {
-  const options = buildAlwaysOptions(prompt, { onAlways, onAlwaysPaths, onAlwaysFile, onAlwaysBroader, onTrust, onWriteGrant });
+  const options = buildAlwaysOptions(prompt, { onAlways, onAlwaysPaths, onAlwaysFile, onAlwaysBroader, onTrust, onWriteGrant, onAccredit });
 
   // Count this prompt once — not once per loop iteration (Back from tier-2
   // shouldn't inflate the frequency warning).
