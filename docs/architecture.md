@@ -807,7 +807,13 @@ namespace (`match`, a `*` glob such as `mcp__blender__*` — one plugin for one
 MCP server); dispatch is exact key first, then the first matching glob in sorted
 order, and the plugin must not gate the whole tool surface (`match` needs a
 literal prefix or validate() rejects it). `buildRequest(event, ctx)` classifies each
-call, and the KIND SELECTS THE PATH — two families (content-classes):
+call — synchronously, or as a Promise the gate awaits (3.55.0) when the
+classification needs a fact only the tool itself can give (joplin resolves a
+note's notebook on a session-map miss). Rules for an async classifier: ask only
+when the answer changes the classification (one bounded call, never a warm or a
+poll), the lookup returns FACTS and the classification is computed after it, and
+a failed lookup is an unknown, never an allow. The KIND SELECTS THE PATH — two
+families (content-classes):
 
 Content-judge (judgeable — the /dspa cascade can auto-allow):
 
@@ -830,7 +836,11 @@ Human-gated (never auto-allowed — the prompt is the gate):
   first prompt per kind per session asks "Allow <kind> this session?" — yes
   IS the session grant, no blocks that op, single tier, the prompt names the
   model. Consent grants reset on model switch (T5): the trust decision is
-  about a specific model.
+  about a specific model. The body shows the plugin's `note` — the WHY (which
+  notebook, which unknown) — between the label and the argument preview, which
+  the dialog caps per line and in total (head + tail + elision marker) while
+  the judge packet keeps it verbatim; a prompt that showed only the payload
+  made an exempt-tree write look arbitrary (3.55.0).
 
 Mixed: classification is PER CALL — one tool's actions map to whichever
 path their payload demands (joplin: all consent; exa: all egress; a tool may

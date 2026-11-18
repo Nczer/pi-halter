@@ -1,5 +1,48 @@
 # Changelog
 
+## 3.55.0 — 2026-11-18
+**A classifier may now ask its own tool a question before it classifies — and the consent prompt finally shows the reason the plugin was asking about, in a dialog that fits the screen.**
+
+The report: a `joplin edit` into a note that had been edited ungated for two
+days cost a prompt after a reboot, and the prompt was 2,604 characters of diff
+with no reason in it. Ledger + code, both ends. `.log/decisions.jsonl`
+2026-11-15T09:58:42Z, mode `dspa`, `dspa: "gate: tool consent never auto-allows
+(session grants cover its repetition)"`: the FIRST joplin write of that process
+prompted, and the NEXT joplin row, 8 seconds later, is `auto-allow` with no
+reason — the session write grant, clicked at that prompt, covers it from then
+on. The note
+(`b584bff6…`) lives in
+the Agent notebook, the exempt tree: the stop was never about the tree, it was
+the fail-closed "destination unknown this session" branch, reached because the
+note→notebook map is per-process and the classifier was synchronous, so every
+restarted pi lost the map and its session grant at once. A later stop in the
+post-reboot process (2026-11-18T07:06:44Z) reads `stopClass tool-consent` with
+the judge approving at stage 1 — the judge had the reason (`context:` carries
+the note), the operator did not.
+
+- **`buildRequest` may return a Promise, and the gate awaits it**
+  (`plugins/types.ts`, `handlers/tool.ts`): the joplin plugin resolves a note's
+  notebook on a session-map miss with one bounded `GET /notes/<id>` instead of
+  guessing from a warm cache. Contract rules for the async form: ask only when
+  the answer changes the classification (never a poll or a startup warm), return
+  FACTS and classify afterwards, and a failed lookup is an unknown, not an allow
+  — an unreachable server must not buy an exemption. A REJECTION lands in the
+  existing fail-closed catch, so a classifier swallows transport errors and
+  returns the unknown.
+- **The consent prompt renders the plugin's `note`** (`ui/prompt-builder.ts`):
+  the why — which notebook, or "unknown this session" — between the label and
+  the arguments. It was destructured and never used in that branch, which is why
+  an exempt-tree write looked arbitrary.
+- **A dialog-sized argument preview** (`capPreview`): 90 chars per line, 800
+  total, head 70% / tail 30% with `… (+N lines, M chars elided)`. That 2,604-char
+  diff becomes ~830. The PROMPT only — `judge/packet.ts` keeps sending the
+  plugin's `argsPreview` verbatim, so the two-stage review still reads every byte.
+- Sync classifiers are unchanged — awaiting a plain value is a no-op for them.
+  `npx vitest run` → **4,647 passed** (3 new: an async classification reaches the
+  gate, an async rejection blocks fail-closed, the consent body renders the note
+  and caps the preview); the joplin plugin's suite in the memory ext grew to 23
+  cases over a stubbed Web API (595 passed there).
+
 ## 3.54.0 — 2026-11-16
 **The credential stop is no longer the operator's only answer: accredit the directory for the session and the judge rules on the read — and the ledger finally records the answer, the verdict, and the class of every stop.**
 

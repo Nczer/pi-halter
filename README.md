@@ -73,6 +73,12 @@ export default {
 };
 ```
 
+`buildRequest` may return a **Promise** (3.55.0) — the gate awaits it, so a
+classifier can ask its own tool for a fact it cannot cache instead of answering
+from a warm one. Ask only when the answer changes the classification, return
+FACTS (never a decision), and resolve a failed lookup to the unknown: an
+unreachable server must not buy an exemption (`plugins/types.ts`).
+
 The loader scans the extensions root at halter load and keys slots by the
 GATED TOOL's name — or by `match`, a glob covering a whole namespace (an MCP
 server's verbs, a multi-verb ext) so one plugin gates them all:
