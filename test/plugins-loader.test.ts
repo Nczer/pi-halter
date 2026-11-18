@@ -194,6 +194,25 @@ describe("handleTool dispatch", () => {
     expect(r.reason).toContain("classification exploded");
   });
 
+  // 3.55.0 contract: buildRequest may be async (ask the tool a question the
+  // plugin cannot cache). A no-UI block alone cannot prove the await — an
+  // unawaited Promise is truthy too — so the rejection case below is the proof.
+  it("gates an async classifier's request (no UI → block)", async () => {
+    const r = await handleTool(fakeEvent("asyncclass", { action: "read" }), fakeCtx());
+    expect(r).toBeDefined();
+    if (!r) throw new Error("expected block");
+    expect(r.reason).toContain("no UI");
+  });
+
+  it("blocks when an async buildRequest rejects (fail closed)", async () => {
+    const r = await handleTool(fakeEvent("asyncclass", { action: "boom" }), fakeCtx());
+    expect(r).toBeDefined();
+    if (!r) throw new Error("expected block");
+    // only an AWAITED rejection lands in handleTool's try/catch
+    expect(r.reason).toContain("threw while classifying the call");
+    expect(r.reason).toContain("lookup failed after awaiting");
+  });
+
   it("passes through null classifications (discovery/status)", async () => {
     expect(await handleTool(fakeEvent("good"), fakeCtx())).toBeUndefined();
     // goodbuild: non-`run` action → null → pass

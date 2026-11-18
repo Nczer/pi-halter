@@ -75,8 +75,29 @@ export interface HalterPlugin {
    * @param ctx the session context the classifier may READ (e.g. `ctx.model`
    *            for a local-reader exemption). Read-only input — no decisions
    *            or prompts here (the core owns those).
+   * @returns the classification, or a Promise of it. Since 3.55.0 the gate
+   *            `await`s the result, so a classifier may ASK ITS OWN TOOL a
+   *            question instead of answering from a cache: the joplin plugin
+   *            resolves a note's notebook on a cache miss, because a write
+   *            that cannot name its destination costs a consent prompt even
+   *            when it lands in the exempt tree (a restarted pi loses both the
+   *            map and the session grant). Rules for an async classifier:
+   *            1. ASK ONLY WHEN THE ANSWER CHANGES THE CLASSIFICATION — one
+   *               bounded call, on this call, never a poll or a warm at startup
+   *               (idle calls are the ext's own ban, not the gate's);
+   *            2. NEVER DECIDE IN THE ASK — the lookup returns FACTS; the
+   *               kind/label/note are computed after it, as before;
+   *            3. A FAILED LOOKUP IS AN ABSENCE, NOT AN ALLOW — resolve to
+   *               `null`/unknown and let the existing fail-closed branch speak
+   *               (an unreachable server must never buy an exemption). A
+   *               REJECT here still fails closed (the call is blocked), so
+   *               swallow transport errors and return the unknown.
+   *            Sync classifiers keep working unchanged.
    */
-  buildRequest(event: ToolCallEvent, ctx: ExtensionContext): ToolGateRequest | null;
+  buildRequest(
+    event: ToolCallEvent,
+    ctx: ExtensionContext,
+  ): ToolGateRequest | null | Promise<ToolGateRequest | null>;
 }
 
 /** Load state for one <ext>/halter plugin. */

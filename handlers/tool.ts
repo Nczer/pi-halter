@@ -51,7 +51,10 @@ export async function handleTool(
 
   let req: ToolGateRequest | null;
   try {
-    req = slot.plugin.buildRequest(event, ctx);
+    // 3.55.0: the contract allows an async classifier (plugins/types.ts) — a
+    // plugin may ask its own tool for a fact it cannot cache. A REJECT fails
+    // closed like a throw: the block below reports it and the call never runs.
+    req = await slot.plugin.buildRequest(event, ctx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
