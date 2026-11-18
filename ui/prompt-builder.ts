@@ -592,7 +592,13 @@ function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
 
   if (gate === "consent") {
     let body = `${label} (${data.consentKind})`;
-    const args = data.argsPreview ? stripBraces(data.argsPreview) : "";
+    // The plugin's WHY (which notebook, which unknown) rides under the label
+    // and above the payload: the consent stop is the one prompt whose reason
+    // is not visible in the arguments, and the judge packet already shows it
+    // (`context:`) — withholding it from the operator made an exempt-tree
+    // write look arbitrary (joplin `edit`, 2026-11-18).
+    if (note) body += `\n\u2139\ufe0f ${note}`;
+    const args = data.argsPreview ? capPreview(stripBraces(data.argsPreview)) : "";
     if (args) body += `\nArguments:\n${args}`;
     return {
       title: `Allow ${tool} ${data.consentKind} this session?`,
@@ -611,7 +617,7 @@ function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
 
   if (gate === "egress") {
     let body = label;
-    const args = data.argsPreview ? stripBraces(data.argsPreview) : "";
+    const args = data.argsPreview ? capPreview(stripBraces(data.argsPreview)) : "";
     if (args) body += `\nArguments:\n${args}`;
     body += `\n⚠️ ${note ?? "Data egress — the arguments leave the machine."}`;
     return {
@@ -634,7 +640,7 @@ function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
   let body = label;
   if (gate === "exec") {
     if (data.script) body += `\nScript:\n${truncateLongCommand(data.script)}`;
-    const args = data.argsPreview ? stripBraces(data.argsPreview) : "";
+    const args = data.argsPreview ? capPreview(stripBraces(data.argsPreview)) : "";
     if (args) body += `\nArguments:\n${args}`;
     body += `\n\u26a0\ufe0f ${note ?? "Executes code in an external tool."}`;
   } else {
@@ -669,5 +675,50 @@ function buildToolPrompt(data: ToolPromptData): BuiltPrompt {
 function stripBraces(preview: string): string {
   const inner = preview.replace(/^\{\n/, "").replace(/\n\}$/, "").trimEnd();
   return inner && inner !== "{}" ? inner : "";
+}
+
+/** A preview line's ceiling, and the whole preview's (chars, codepoints).
+ *  A plugin caps its OWN payload shape; the dialog's size is the renderer's
+ *  problem — a joplin `edit` diff of 15 paragraph-lines is 2.6k chars the
+ *  operator scrolls through to decide one write (measured 2026-11-18). */
+const PREVIEW_LINE_CHARS = 90;
+const PREVIEW_CHARS = 800;
+
+/**
+ * Cap a tool call's args preview for a prompt: clip every line, then keep the
+ * HEAD and the TAIL of the preview (a diff's new content is often at the end,
+ * its subject at the top, so a middle cut costs the least). Unicode-safe.
+ * The PROMPT only — the judge packet (judge/packet.ts) sends the plugin's
+ * `argsPreview` untrimmed, so the two-stage review still sees every byte.
+ */
+function capPreview(preview: string): string {
+  const lines = preview.split("\n").map((l) => {
+    const cps = [...l];
+    return cps.length > PREVIEW_LINE_CHARS ? cps.slice(0, PREVIEW_LINE_CHARS - 1).join("") + "\u2026" : l;
+  });
+  const full = lines.join("\n");
+  if (full.length <= PREVIEW_CHARS) return full;
+
+  const headBudget = Math.floor(PREVIEW_CHARS * 0.7);
+  const tailBudget = PREVIEW_CHARS - headBudget;
+  // A clipped line is at most PREVIEW_LINE_CHARS, so both loops always take
+  // at least one line — no degenerate all-tail or all-head case.
+  const head: string[] = [];
+  let used = 0;
+  for (const l of lines) {
+    if (used + l.length + 1 > headBudget) break;
+    head.push(l);
+    used += l.length + 1;
+  }
+  const tail: string[] = [];
+  let tailUsed = 0;
+  for (let i = lines.length - 1; i >= head.length; i--) {
+    if (tailUsed + lines[i].length + 1 > tailBudget) break;
+    tail.unshift(lines[i]);
+    tailUsed += lines[i].length + 1;
+  }
+  const dropped = lines.length - head.length - tail.length;
+  const elided = full.length - used - tailUsed;
+  return [...head, `\u2026 (+${dropped} lines, ${elided} chars elided)`, ...tail].join("\n");
 }
 

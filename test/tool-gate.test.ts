@@ -241,6 +241,36 @@ describe("buildPrompt: tool prompts", () => {
     expect(p.includeFileOption).toBe(false);
   });
 
+  it("consent: renders the plugin's note, and caps a long argsPreview", async () => {
+    // 2026-11-18: a joplin `edit` consent showed a 2604-char diff and NONE of
+    // the reason — the operator decided blind while the judge saw both.
+    const pd = promptOf(
+      await decide(
+        consentReq({
+          tool: "joplin",
+          consentKind: "write",
+          label: "edit note b584bff6",
+          note: "destination notebook is not the Agent notebook tree (unknown this session)",
+          argsPreview: Array.from({ length: 40 }, (_, i) => `+ ${i} ${"x".repeat(140)}`).join("\n"),
+        }),
+        createStore(),
+      ),
+    ).promptData;
+    const p = buildPrompt({ kind: "prompt", promptData: pd });
+    expect(p.body).toContain("\u2139\ufe0f destination notebook");
+    // the reason sits between the label and the payload
+    expect(p.body.indexOf("\u2139\ufe0f")).toBeLessThan(p.body.indexOf("Arguments:"));
+    // dialog-sized: the payload is capped (the judge packet still gets it whole)
+    expect([...p.body].length).toBeLessThan(1000);
+    expect(p.body).toContain("chars elided)");
+    expect(p.body).toContain("+ 0 ");
+    expect(p.body).toContain("+ 39 ");
+    // every line is clipped to the dialog's width
+    for (const l of p.body.split("\n").filter((x) => x.startsWith("+ "))) {
+      expect([...l].length).toBeLessThanOrEqual(91); // 90 + the ellipsis
+    }
+  });
+
   it("egress: warning title, FULL args in the body, kind-scoped Always (T1)", async () => {
     const pd = promptOf(await decide(egressReq(), createStore())).promptData;
     const p = buildPrompt({ kind: "prompt", promptData: pd });
