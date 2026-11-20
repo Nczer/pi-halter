@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.55.1 — 2026-11-20
+**The ledger row that proves token convergence worked now says so — `confirmedPrior` was never written on the auto-allow path, so the convergence rate read 0% while the mechanism fired.**
+
+Found mining `.log/unresolved.jsonl` (the 2026-11-15→11-20 corpus, cleared on 2026-11-20 at the operator's request): **0 of 127 real rows carried `confirmedPrior: true`**, yet 10 rows recorded a confirmation being stored and 5 recorded a later allow running on one. The five witnesses are `$L` at 2026-11-16T14:31:04Z / 14:31:15Z / 14:36:42Z / 14:44:51Z and `$f` at 2026-11-18T07:04:08Z — each `outcome: "auto-allowed"`, `llm: ["…/.local/state/plasma-wake-heal"]`, `persisted: true`; `$f`'s two minutes after the `Always (paths)` click at 07:02:39Z that stored it.
+
+- **The field was only computed where a stop is raised.** The gate's fact builders (`gate/dspa-gate.ts`) fill `MissFact.confirmedPrior` and `logMissRow` passes it through, so every intent row was honest. Convergence is the *absence* of a miss fact — the gate passes because `getConfirmedResolution` made the token judgeable — so its row comes from the `pd.unresolved` branch in `gate/fallthrough.ts`, which wrote `llm` and `persisted` and no `confirmedPrior`.
+- **`gate/fallthrough.ts` now writes it.** Nothing on the auto-allow path stores a resolution (the only writer is a prompt click, `ui/prompt-flow.ts`), so on these rows the store lookup can only find a PRIOR grant: `persisted` and `confirmedPrior` are the same fact, and both say it. `gate/decision-log.ts`'s field note drops the "intent rows only" label the field never honoured.
+- **`test/intent-floor.test.ts`** asserts the row end-to-end (a confirmed resolution inside the bar, gate pass, allow). The harness had to carry `pd.unresolved` the way `decide/bash-rules.ts:346` does — before that carry the branch was unreachable from a test, which is how the field went unnoticed.
+
+Left alone deliberately: `logIntentAllowed`'s hardcoded `persisted: false`. The field means "stored by THIS run's decision" (a click did it), and an intent allow stores no resolution — it names its fast track in `grantedDirs` instead.
+
 ## 3.55.0 — 2026-11-18
 **A classifier may now ask its own tool a question before it classifies — and the consent prompt finally shows the reason the plugin was asking about, in a dialog that fits the screen.**
 
