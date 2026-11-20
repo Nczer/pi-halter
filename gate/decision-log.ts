@@ -478,10 +478,14 @@ export interface UnresolvedLogEntry {
    *  claimed the unknown location IS. Omitted when nothing answered it (that
    *  is a decline, and `guard` names it). */
   judgePaths?: string[];
-  /** Intent rows only: a confirmed resolution (an earlier user grant, this
-   *  session) already covered this location. `persisted` is the OTHER half —
-   *  a confirmation stored by THIS run's decision (true on a declined row
-   *  when the click stored one). */
+  /** A confirmed resolution (an earlier user grant, this session) already
+   *  covered this location. Written on the intent rows (§7) AND on the
+   *  auto-allow-on-confirmed-resolution row (`outcome: "auto-allowed"`,
+   *  3.55.1 — that row is convergence's only witness, and until it carried
+   *  this field the rate read 0% while the mechanism fired). On the intent
+   *  rows `persisted` is the OTHER half — a confirmation stored by THIS
+   *  run's decision (true on a declined row when the click stored one); on
+   *  the auto-allowed row nothing is stored, so both halves are the prior. */
   confirmedPrior?: boolean;
   /**
    * Intent-allowed rows only (docs/dspa-intent-floor.md §8 3.42 build notes): the session

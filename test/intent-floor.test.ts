@@ -117,6 +117,9 @@ async function run(
   // the 3.42 learned grant are built from, so the harness has to carry them too.
   pd.outsideDirs = pd.analysis.prompt.outsideDirs ?? [];
   pd.outsideWriteDirs = pd.analysis.prompt.outsideWriteDirs ?? [];
+  // decide() carries the unresolved tokens the same way (decide/bash-rules.ts:346)
+  // — they are what the auto-allow convergence row is written from.
+  pd.unresolved = pd.analysis.prompt.unresolved;
   vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(v1);
   vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(v2);
   setDspaActive(true);
@@ -493,6 +496,29 @@ describe("intent over a miss stop", () => {
         token: canon("/Users/u/Strata"),
         confirmedPrior: true,
         judgePaths: [canon("/Users/u/Strata/design.dxf")],
+      }),
+    ]);
+  });
+
+  it("§7: the auto-allow-on-confirmed-resolution row carries confirmedPrior too", async () => {
+    // Convergence's only witness: the gate PASSES because a prior grant made
+    // the token judgeable, so there is no miss fact and the intent path never
+    // runs — the row comes from the unresolved-token branch instead, which
+    // wrote llm/persisted but no confirmedPrior (the 3.55.0 corpus: 5 such
+    // rows, all reading as though no confirmation existed).
+    const store = createStore();
+    store.addAllowed({ readDirs: [canon("/Users/u/Strata")] });
+    store.confirmResolution("/Users/u/Strata/$E/f.txt", [canon("/Users/u/Strata")]);
+    await run("cat /Users/u/Strata/$E/f.txt", verdict(), null, store);
+    expect(promptFlow.showPrompt).not.toHaveBeenCalled();
+    expect(unres()).toEqual([
+      expect.objectContaining({
+        outcome: "auto-allowed",
+        decision: "auto-allow",
+        token: "/Users/u/Strata/$E/f.txt",
+        persisted: true,
+        confirmedPrior: true,
+        llm: [canon("/Users/u/Strata")],
       }),
     ]);
   });

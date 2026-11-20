@@ -600,6 +600,15 @@ corpus shapes — `/proc/$EP/io`, `cd ~/Strata && python3 - <<EOF`,
   stop, in the gate's fact builders); `answeredMissPaths(miss, reported)` as the
   §4.2 match set, shared by the guard and the ledger; `UnresolvedLogEntry.judgePaths`
   / `.confirmedPrior`.
+- **3.55.1: the fact could not witness its own success.** `confirmedPrior` is
+  filled at a STOP, so the row written when the gate PASSES on a confirmed
+  resolution — the convergence end-state, `outcome: "auto-allowed"`, the
+  `pd.unresolved` branch in `gate/fallthrough.ts` — carried `llm` and
+  `persisted` and no `confirmedPrior`, and the 2026-11-15→11-20 corpus read
+  0 true of 127 real rows while five of those rows showed the mechanism firing.
+  The branch now writes the field: it holds the store, and nothing on the
+  auto-allow path stores a resolution (the only writer is a prompt click), so
+  its lookup can only find a PRIOR grant.
 - **Why `confirmedPrior` lives on the fact, not on the log call.** The gate is the
   only place holding `store.getConfirmedResolution` at the moment of the stop;
   threading the store through the logging path would let the row and the decision

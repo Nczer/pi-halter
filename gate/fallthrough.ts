@@ -211,12 +211,21 @@ export function dspaAutoAllowed(
   } else if (pd.type === "bash" && pd.unresolved?.length) {
     for (const u of pd.unresolved) {
       const confirmed = store.getConfirmedResolution(u.token);
+      // The store lookup can only find a PRIOR grant here: nothing on the
+      // auto-allow path stores a resolution (the only writer is a prompt
+      // click, ui/prompt-flow.ts), so `persisted` on these rows has always
+      // meant "a confirmation is in effect". `confirmedPrior` is that same
+      // fact under its §7 name — without it the convergence rows the ledger
+      // does show (the 3.55.0 corpus: 5 of them) recorded no confirmedPrior
+      // at all, so the convergence rate read 0% while the mechanism fired.
+      const confirmedPrior = (confirmed?.length ?? 0) > 0;
       logUnresolved({
         cmd: pd.command,
         cwd: pd.cwd,
         token: u.token,
         llm: confirmed ?? undefined,
-        persisted: (confirmed?.length ?? 0) > 0,
+        persisted: confirmedPrior,
+        confirmedPrior,
         outcome: "auto-allowed",
         decision: "auto-allow",
       });
