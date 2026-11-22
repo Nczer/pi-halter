@@ -373,23 +373,93 @@ type EgressKind = "fetch" | "upload" | "opaque";
  *  URL elsewhere in their argv is data — `git log --grep='http://x'`. */
 const ENUMERATED_NETWORK_COMMANDS = new Set(["git", "cargo", "go"]);
 
+/** Short flags of curl/wget that consume a value (not upload/method flags):
+ * encountering one in a bundled short cluster ends the cluster because the
+ * remaining characters are its value, not additional flags. */
+const CURL_NON_UPLOAD_VALUE_SHORT = new Set([
+  "-o", "-H", "-A", "-e", "-m", "-w", "-x", "-C", "-D", "-r", "-z", "-E", "-U", "-Y", "-y", "-Q", "-c",
+]);
+const WGET_NON_UPLOAD_VALUE_SHORT = new Set([
+  "-O", "-o", "-a", "-i", "-B", "-t", "-T", "-w", "-Q", "-P", "-U", "-e", "-l", "-A", "-R", "-D", "-X", "-I",
+]);
+
+/** Long flags on curl/wget that redirect routing, proxy traffic, or load
+ * targets/options from a file — destinationHosts cannot prove locality when
+ * any of these is present. */
+const EGRESS_ROUTING_LONG_FLAGS = new Set([
+  "--proxy", "--preproxy", "--noproxy", "--resolve", "--connect-to",
+  "--config", "--url", "--unix-socket", "--abstract-unix-socket",
+  "--socks4", "--socks4a", "--socks5", "--socks5-hostname",
+  "--dns-servers", "--doh-url", "--input-file", "--execute",
+]);
+const CURL_ROUTING_SHORT_FLAGS = new Set(["-x", "-K"]);
+const WGET_ROUTING_SHORT_FLAGS = new Set(["-i", "-e"]);
+
 /** True when a curl/wget segment sends data OUT (config:UPLOAD_BODY_FLAGS, plus
- *  a mutating `-X`/`--request` method). Short flags may carry the value
- *  attached (`-d'x=1'`, `-XPOST`); `--name=value` splits on the `=`. */
-function curlUploadForm(args: string[]): boolean {
+ * a mutating `-X`/`--request`/`--method` method). Walks bundled short-flag
+ * clusters character-by-character (`-sd @file`, `-sT file`, `-fsSX POST`) so a
+ * leading boolean flag can never hide an upload or method switch. */
+function curlUploadForm(cmd: "curl" | "wget", args: string[]): boolean {
+  const valueShort = cmd === "curl" ? CURL_NON_UPLOAD_VALUE_SHORT : WGET_NON_UPLOAD_VALUE_SHORT;
   for (let i = 0; i < args.length; i++) {
     const t = cleanToken(args[i]);
-    if (!t.startsWith("-")) continue;
-    const eq = t.indexOf("=");
-    const name = eq > 0 ? t.slice(0, eq) : t;
-    // A short value flag may carry its value attached: `-d`/`-d'x'`/`-Td`.
-    const short = name.length > 2 && !name.startsWith("--") ? name.slice(0, 2) : name;
-    if (UPLOAD_BODY_FLAGS.has(name) || UPLOAD_BODY_FLAGS.has(short)) return true;
-    if (HTTP_METHOD_FLAGS.has(name) || HTTP_METHOD_FLAGS.has(short)) {
-      // The value is `--request=POST`, `-X POST` or `-XPOST`.
-      const attached = eq > 0 ? t.slice(eq + 1) : t.slice(short.length);
-      const method = cleanToken(attached || args[i + 1] || "").toUpperCase();
-      if (method && method !== "GET" && method !== "HEAD") return true;
+    if (t === "--") break;
+    if (!t.startsWith("-") || t === "-") continue;
+    if (t.startsWith("--")) {
+      const eq = t.indexOf("=");
+      const name = eq > 0 ? t.slice(0, eq) : t;
+      if (UPLOAD_BODY_FLAGS.has(name)) return true;
+      if (HTTP_METHOD_FLAGS.has(name)) {
+        const val = eq > 0 ? t.slice(eq + 1) : (args[i + 1] ?? "");
+        const method = cleanToken(val).toUpperCase();
+        if (!method || (method !== "GET" && method !== "HEAD")) return true;
+        if (eq === -1) i++;
+      }
+      continue;
+    }
+    // Bundled short flags: scan char-by-char until a value-taking flag.
+    for (let c = 1; c < t.length; c++) {
+      const flag = `-${t[c]}`;
+      if (cmd === "curl" && UPLOAD_BODY_FLAGS.has(flag)) return true;
+      if (cmd === "curl" && HTTP_METHOD_FLAGS.has(flag)) {
+        const attached = t.slice(c + 1);
+        const val = attached || (args[i + 1] ?? "");
+        const method = cleanToken(val).toUpperCase();
+        if (!method || (method !== "GET" && method !== "HEAD")) return true;
+        if (!attached) i++;
+        break;
+      }
+      if (valueShort.has(flag)) {
+        if (c === t.length - 1) i++;
+        break;
+      }
+    }
+  }
+  return false;
+}
+
+/** True when a curl/wget argv carries a proxy, routing, config, or URL-file
+ * override (attached or separate) that defeats static destination inspection. */
+function hasEgressRoutingOverride(cmd: "curl" | "wget", args: string[]): boolean {
+  const routingShort = cmd === "curl" ? CURL_ROUTING_SHORT_FLAGS : WGET_ROUTING_SHORT_FLAGS;
+  const valueShort = cmd === "curl" ? CURL_NON_UPLOAD_VALUE_SHORT : WGET_NON_UPLOAD_VALUE_SHORT;
+  for (let i = 0; i < args.length; i++) {
+    const t = cleanToken(args[i]);
+    if (t === "--") break;
+    if (!t.startsWith("-") || t === "-") continue;
+    if (t.startsWith("--")) {
+      const eq = t.indexOf("=");
+      const name = (eq > 0 ? t.slice(0, eq) : t).toLowerCase();
+      if (EGRESS_ROUTING_LONG_FLAGS.has(name)) return true;
+      continue;
+    }
+    for (let c = 1; c < t.length; c++) {
+      const flag = `-${t[c]}`;
+      if (routingShort.has(flag)) return true;
+      if (valueShort.has(flag) || (cmd === "curl" && (UPLOAD_BODY_FLAGS.has(flag) || HTTP_METHOD_FLAGS.has(flag)))) {
+        if (c === t.length - 1) i++;
+        break;
+      }
     }
   }
   return false;
@@ -415,7 +485,7 @@ function segmentEgress(seg: string): { token: string; kind: EgressKind } | null 
   if (gc) return { token: gc, kind: "opaque" };
   if (!NETWORK_COMMANDS.has(first)) return null;
   if (first === "curl" || first === "wget") {
-    return { token: first, kind: curlUploadForm(oper.slice(1)) ? "upload" : "fetch" };
+    return { token: first, kind: curlUploadForm(first, oper.slice(1)) ? "upload" : "fetch" };
   }
   if (UPLOAD_COPY_COMMANDS.has(first)) return { token: first, kind: "upload" };
   return { token: first, kind: "opaque" };
@@ -499,13 +569,17 @@ const LOOPBACK_V4_RE = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
  */
 function isLoopbackHost(hostWithPort: string): boolean {
   let h = hostWithPort;
+  // Strip userinfo BEFORE checking `[`: `http://[::1]@evil.example/x` carries
+  // `evil.example` as the real host, not `[::1]`.
+  const at = h.lastIndexOf("@");
+  if (at !== -1) h = h.slice(at + 1);
   if (h.startsWith("[")) {
     const close = h.indexOf("]");
     if (close < 0) return false;
+    const rest = h.slice(close + 1);
+    if (rest !== "" && !/^:\d+$/.test(rest)) return false;
     return h.slice(1, close) === "::1";
   }
-  const at = h.lastIndexOf("@");
-  if (at !== -1) h = h.slice(at + 1); // userinfo — the host is what follows
   const noPort = h.split(":")[0];
   if (noPort === "localhost" || noPort === "::1") return true;
   if (!LOOPBACK_V4_RE.test(noPort)) return false;
@@ -594,7 +668,12 @@ function destinationHosts(command: string, segments: string[]): string[] | null 
     const oper = operativeWords(tokenizeSegment(seg));
     const first = cleanToken(oper[0] ?? "").toLowerCase();
     if (!first || !LOOPBACK_EGRESS_CMDS.has(first)) continue;
-    for (const w of oper.slice(1)) {
+    const segArgs = oper.slice(1);
+    // Proxy, routing, config, or URL-file overrides can redirect traffic off
+    // loopback even when every visible URL is local (`curl --proxy=evil:8080
+    // http://127.0.0.1/y`, `curl -xevil:8080 ...`, `--resolve=...`).
+    if (hasEgressRoutingOverride(first as "curl" | "wget", segArgs)) return null;
+    for (const w of segArgs) {
       const t = cleanToken(w);
       if (!t || t.startsWith("-")) continue; // flags stay out; their values are not hosts
       const bare = t.match(BARE_TARGET_RE);

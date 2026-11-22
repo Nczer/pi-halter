@@ -629,14 +629,17 @@ export const GIT_FETCH_SUBCOMMANDS = new Set(["fetch", "pull", "ls-remote"]);
  */
 export const UPLOAD_BODY_FLAGS = new Set([
   "-d", "--data", "--data-ascii", "--data-binary", "--data-raw", "--data-urlencode",
+  "--json",
   "-F", "--form", "--form-string", "-T", "--upload-file",
   "-b", "--cookie", "-u", "--user", "--proxy-user",
-  "--post-data", "--post-file", // wget
+  "-K", "--config", "--netrc", "--netrc-file", "--oauth2-bearer", "--aws-sigv4",
+  "--post-data", "--post-file", "--body-data", "--body-file", // wget
+  "--password", "--http-user", "--http-password", // wget auth
 ]);
 
 /** The HTTP method switch: its VALUE decides inbound vs outbound (`-X GET` is a
  *  fetch, `-X POST`/`PUT`/`PATCH`/`DELETE` mutate remote state — not fetch). */
-export const HTTP_METHOD_FLAGS = new Set(["-X", "--request"]);
+export const HTTP_METHOD_FLAGS = new Set(["-X", "--request", "--method"]);
 
 /** Copy-to-remote commands. Direction is NOT parsed: an scp/rsync operand can
  *  be inbound (`scp host:f ./`) or outbound (`scp ./f host:`), and a bug in that
