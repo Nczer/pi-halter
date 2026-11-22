@@ -100,11 +100,11 @@ export function resetPathResolverCache(): void {
   cache.clear();
 }
 
-/** sha256 of model + command + token list — same operation bytes → same
- * resolutions; a changed command never reuses a stale map. */
+/** sha256 of model + cwd + command + token list — same operation & base → same
+ * resolutions; a changed cwd or command never reuses a stale map. */
 function cacheKey(modelId: string, pd: BashPromptData, tokens: string[]): string {
   return createHash("sha256")
-    .update(`${modelId}\u0000${pd.command}\u0000${tokens.join("\u0000")}`, "utf-8")
+    .update(`${modelId}\u0000${pd.cwd}\u0000${pd.command}\u0000${tokens.join("\u0000")}`, "utf-8")
     .digest("hex");
 }
 

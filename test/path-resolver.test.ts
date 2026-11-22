@@ -332,7 +332,7 @@ describe("resolveUnresolvedPaths", () => {
     expect(boom).toBeNull();
   });
 
-  it("LRU-caches on model + command + tokens", async () => {
+  it("LRU-caches on model + cwd + command + tokens", async () => {
     const calls: CapturedCall[] = [];
     const streamFn = fixedStream(
       () => toolCallReply("report_paths", { results: [{ index: 1, known: true, dirs: ["/a"] }] }),
@@ -348,6 +348,10 @@ describe("resolveUnresolvedPaths", () => {
     // A changed command is a different key.
     await resolveUnresolvedPaths(makePd(CMD + " 2>/dev/null", "/Users/u/project", [TOKEN]), ctx, { stream: streamFn, settings: ON });
     expect(calls).toHaveLength(2);
+    // So is a changed base: the tokens resolve against the cwd, so a map
+    // computed under one directory must not answer under the next.
+    await resolveUnresolvedPaths(makePd(CMD, "/Users/u/other", [TOKEN]), ctx, { stream: streamFn, settings: ON });
+    expect(calls).toHaveLength(3);
   });
 });
 
