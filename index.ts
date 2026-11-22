@@ -187,7 +187,9 @@ export default async function halterExtension(pi: ExtensionAPI) {
             writeJudgeSettings({ provider: null, model: null });
           } else {
             const slash = value.indexOf("/");
-            if (slash <= 0) {
+            // A trailing slash parses as “empty model”, which is written to
+            // settings and blanks the judge instead of warning.
+            if (slash <= 0 || slash === value.length - 1) {
               ctx.ui.notify("Judge: model must be '<provider>/<id>' or 'session'", "warning");
               return;
             }
