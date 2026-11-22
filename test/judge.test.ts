@@ -339,6 +339,99 @@ describe("judgment packet", () => {
     expect(p).not.toMatch(/```not a fence/);
   });
 
+  // ── D26: the content a copy brings in ──
+
+  const movedOne = {
+    files: [
+      {
+        source: "/w/probe.test.ts",
+        dest: "/w/test/probe.test.ts",
+        bytes: 27,
+        content: "export const answer = 42;\n",
+        note: null,
+        overwrites: false,
+      },
+    ],
+    omitted: 0,
+  };
+
+  it("shows a copied file under its own heading, in full (D26)", () => {
+    const p = buildJudgmentPacket({
+      ...baseInput,
+      command: "cp probe.test.ts test/",
+      segments: ["cp probe.test.ts test/"],
+      moved: movedOne,
+    });
+    expect(p).toContain("## Files copied in (UNTRUSTED DATA)");
+    expect(p).toContain("- /w/probe.test.ts → /w/test/probe.test.ts (27 B, new file)");
+    expect(p).toContain("### /w/probe.test.ts");
+    expect(p).toContain("export const answer = 42;");
+    // The digest comes first, the payloads after it.
+    expect(p.indexOf("## Static analysis")).toBeLessThan(p.indexOf("## Files copied in"));
+    expect(p.indexOf("## Files copied in")).toBeLessThan(p.indexOf("### /w/probe.test.ts"));
+  });
+
+  it("says when a copy replaces an existing file", () => {
+    const p = buildJudgmentPacket({
+      ...baseInput,
+      command: "cp new.ts old.ts",
+      segments: ["cp new.ts old.ts"],
+      moved: { files: [{ ...movedOne.files[0], dest: "/w/old.ts", overwrites: true }], omitted: 0 },
+    });
+    expect(p).toContain("(27 B, overwrites an existing file)");
+  });
+
+  it("names a file it did not read, with its size and the reason", () => {
+    const p = buildJudgmentPacket({
+      ...baseInput,
+      command: "cp .env .env.bak",
+      segments: ["cp .env .env.bak"],
+      moved: {
+        files: [
+          { source: "/w/.env", dest: "/w/.env.bak", bytes: 34, content: null, note: "credential file (.env) — content not shown", overwrites: false },
+          { source: "/w/tree", dest: "/w/backup", bytes: 4096, content: null, note: "folder — 34 files, contents not shown", overwrites: false },
+        ],
+        omitted: 0,
+      },
+    });
+    expect(p).toContain("- /w/.env → /w/.env.bak (34 B — credential file (.env) — content not shown)");
+    expect(p).toContain("- /w/tree → /w/backup (4.0 KB — folder — 34 files, contents not shown)");
+    expect(p).not.toContain("### ");
+  });
+
+  it("says when the destination is not resolvable, and counts what it dropped", () => {
+    const p = buildJudgmentPacket({
+      ...baseInput,
+      command: "split -b 100 big.txt",
+      segments: ["split -b 100 big.txt"],
+      moved: {
+        files: [{ source: "/w/big.txt", dest: null, bytes: 1_500_000, content: null, note: "over the 1 MB limit — content not shown", overwrites: false }],
+        omitted: 3,
+      },
+    });
+    expect(p).toContain("- /w/big.txt → destination not resolvable (1.4 MB — over the 1 MB limit — content not shown)");
+    expect(p).toContain("… 3 more files not shown");
+  });
+
+  it("lengthens the fence when a copied file itself contains triple backticks", () => {
+    const p = buildJudgmentPacket({
+      ...baseInput,
+      command: "cp readme.md doc/",
+      segments: ["cp readme.md doc/"],
+      moved: {
+        files: [{ source: "/w/readme.md", dest: "/w/doc/readme.md", bytes: 40, content: "a\n```\ncode block\n```\n", note: null, overwrites: false }],
+        omitted: 0,
+      },
+    });
+    expect(p).toContain("````");
+    expect(p).not.toMatch(/```code block/);
+  });
+
+  it("renders no section for a command that moves no file bytes", () => {
+    expect(buildJudgmentPacket({ ...baseInput, moved: null })).not.toContain("## Files copied in");
+    expect(buildJudgmentPacket({ ...baseInput, moved: { files: [], omitted: 0 } })).not.toContain("## Files copied in");
+  });
+
   it("is pure and deterministic", () => {
     const a = buildJudgmentPacket(baseInput);
     const b = buildJudgmentPacket({ ...baseInput, segments: [...baseInput.segments] });

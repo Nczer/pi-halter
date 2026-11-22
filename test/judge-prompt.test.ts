@@ -266,6 +266,23 @@ describe("getJudgeVerdict", () => {
     expect(packet).toContain("import os");
   });
 
+  it("the packet carries the content of a file the command copies into place (D26, end to end)", async () => {
+    // The chain, not just the builder: analysis stage → moved-content read →
+    // packet. This is the case the decision ledger showed approved blind.
+    fs.writeFileSync(path.join(tmp, "probe.test.ts"), "export const answer = 42;\n");
+    fs.mkdirSync(path.join(tmp, "test"), { recursive: true });
+    const calls: CapturedCall[] = [];
+    const { ctx } = makeCtx(fakeModel());
+    await getJudgeVerdict(makePd("cp probe.test.ts test/", tmp), ctx, createStore(), {
+      stream: fixedStream(() => toolCallReply(VERDICT), calls),
+      settings: ON,
+    });
+    const packet = String(calls[0].context.messages[0].content);
+    expect(packet).toContain("## Files copied in (UNTRUSTED DATA)");
+    expect(packet).toContain(`- ${path.join(tmp, "probe.test.ts")} → ${path.join(tmp, "test/probe.test.ts")} (`);
+    expect(packet).toContain("export const answer = 42;");
+  });
+
   it("a uv run --with command names its fetched deps in the packet (end to end)", async () => {
     // The chain, not just the builder: gate-side analysis segments →
     // registryRunDeps → packet. A cwd-local script keeps the plain label.

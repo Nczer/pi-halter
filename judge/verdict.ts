@@ -24,6 +24,7 @@ import type {BashPromptData, PromptData} from "../decide/types";
 import type { Store } from "../gate/store";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { findExecutedScript } from "../analysis/script-payload";
+import { findMovedContent } from "../analysis/moved-content";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { expandTilde } from "../analysis/path-util";
 import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeAttributionHeaders, judgeRequestModel, judgeSessionId, JudgeStreamFn, JudgeResult, JudgeSettings, JudgeFailReason} from "./judge";
@@ -73,6 +74,10 @@ export async function buildJudgmentInput(
         getConfirmedResolution: (t) => store.getConfirmedResolution(t),
       }));
     const script = findExecutedScript(analysis, pd.cwd);
+    // D26: the bytes a copy moves are the operation's payload. Read once here
+    // so BOTH judge passes see the same packet (the stage-2 retry reuses this
+    // input), and read outside the packet builder so that file stays pure.
+    const moved = findMovedContent(analysis, pd.cwd);
     // D21: the base the command actually operates under (after a re-basing
     // cd) — radius context only. Grant state is never in the packet: the
     // floor enforces scope, and the verdict weighs affected dirs only when
@@ -98,6 +103,7 @@ export async function buildJudgmentInput(
       paths: analysis.paths,
       outsidePaths: analysis.prompt.outsidePaths ?? [],
       script,
+      moved,
       effectiveBase,
     };
     return input;

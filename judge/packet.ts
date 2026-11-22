@@ -13,6 +13,7 @@
 import { findNetworkEgress, isTrustedScriptPath, registryRunDeps } from "../config";
 import { under, isUnresolvedPath } from "../analysis/path-util";
 import { getDelegatedCommand } from "../analysis/segment-helpers";
+import type { MovedContent } from "../analysis/moved-content";
 
 // ── Judgment packet ──
 
@@ -44,6 +45,12 @@ export interface JudgmentBashInput {
   outsidePaths?: string[];
   /** Untrusted local script the command executes, if any. */
   script?: JudgmentScript | null;
+  /** Files this command copies or moves into place, already read from disk by
+   *  the caller (D26): their content is the operation's payload, and a judge
+   *  that never saw it could not verify the copy. Null/absent when the command
+   *  moves no file bytes. Read in the caller, never here — this builder stays
+   *  pure. */
+  moved?: MovedContent | null;
   /** halter's risk severity for the whole command (low/medium/high/null) —
    *  rendered as the risk line's prefix so a high-severity reason list
    *  reads as a verdict input, not a footnote. */
@@ -326,12 +333,14 @@ function buildBashPacket(input: JudgmentBashInput): string {
   if (input.credentialRule) lines.push(`credential rule: ${input.credentialRule}`);
   parts.push(lines.join("\n"), "");
 
+  // ── Content the command brings in (untrusted, fenced, FULL — D26) ──
+  const moved = renderMoved(input);
+  if (moved) parts.push(moved, "");
+
   // ── Script payload (untrusted, fenced, FULL — D11) ──
   if (input.script) {
     const { content } = input.script;
-    // Fence longer than any backtick run in the content (scripts contain ```).
-    const maxRun = (content.match(/`+/g) ?? [""]).reduce((m, r) => Math.max(m, r.length), 0);
-    const fence = "`".repeat(Math.max(3, maxRun + 1));
+    const fence = fenceFor(content);
     // The heading names the trust state honestly. A script under the
     // operator's trusted scripts dir is not an unknown file — its INVOCATION
     // just lost trust (an unallowlisted dependency, a non-transparent
@@ -343,4 +352,46 @@ function buildBashPacket(input: JudgmentBashInput): string {
   }
 
   return parts.join("\n");
+}
+
+/** A fence longer than any backtick run in the content (scripts and copied
+ *  source both contain ```). */
+function fenceFor(content: string): string {
+  const maxRun = (content.match(/`+/g) ?? [""]).reduce((m, r) => Math.max(m, r.length), 0);
+  return "`".repeat(Math.max(3, maxRun + 1));
+}
+
+/** `940 B`, `2.1 KB`, `4.0 MB` — the size a skipped file is named by. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+/** The facts the judge needs before it sees a byte: where it came from, where
+ *  it lands, how big, and why anything is missing. */
+function renderMoved(input: JudgmentBashInput): string | null {
+  const moved = input.moved;
+  if (!moved || moved.files.length === 0) return null;
+  const lines: string[] = ["## Files copied in (UNTRUSTED DATA)"];
+  for (const f of moved.files) {
+    const size = f.bytes === null ? "size unknown" : formatBytes(f.bytes);
+    // The destination is named only where the shell's rule makes it certain;
+    // guessing one would hand the judge a fact it cannot check.
+    const where = f.dest ? ` → ${f.dest}` : " → destination not resolvable";
+    const fact = f.content === null
+      ? `${size} — ${f.note ?? "content not shown"}`
+      : `${size}, ${f.overwrites ? "overwrites an existing file" : "new file"}`;
+    lines.push(`- ${f.source}${where} (${fact})`);
+  }
+  if (moved.omitted > 0) lines.push(`… ${moved.omitted} more file${moved.omitted === 1 ? "" : "s"} not shown`);
+
+  // Whole payloads follow their own heading (D11: whole or not at all).
+  for (const f of moved.files) {
+    if (f.content === null) continue;
+    const fence = fenceFor(f.content);
+    lines.push("", `### ${f.source}`, fence, f.content, fence);
+  }
+  return lines.join("\n");
 }

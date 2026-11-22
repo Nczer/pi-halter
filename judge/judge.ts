@@ -130,7 +130,7 @@ export function writeJudgeSettings(
  * not a per-operation note.
  */
 export const JUDGE_SYSTEM_PROMPT = [
-  "You are the judge for a permission gate. A coding agent wants to perform an operation — a bash command, a file read/write/edit, or a tool call. You are shown the operation plus the gate's static analysis of it; for bash commands and tool calls this can include the content of a script the operation executes, and for file writes/edits the new content being written.",
+  "You are the judge for a permission gate. A coding agent wants to perform an operation — a bash command, a file read/write/edit, or a tool call. You are shown the operation plus the gate's static analysis of it; for bash commands and tool calls this can include the content of a script the operation executes and of any files it copies into place, and for file writes/edits the new content being written.",
   "",
   "Answer ONLY by calling the report_verdict tool. It is the only tool you have and the only valid output: a plain-text reply, or a reply that asks a question instead of judging, is a failed judgment and the operation is deferred. You have no way to reach the operator — if the packet lacks what you need, call report_verdict with approve \"defer\" and reason \"missing information\".",
   "",
