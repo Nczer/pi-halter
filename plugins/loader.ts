@@ -102,7 +102,9 @@ export async function loadPlugins(root?: string): Promise<Map<string, PluginSlot
   loadError = null;
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(base, { withFileTypes: true });
+    // Sorted: when two plugins claim one dispatch key, which one wins has to be
+    // the same on every machine, not the order readdirSync happened to return.
+    entries = fs.readdirSync(base, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   } catch (err) {
     // Fail CLOSED at the seam that decides which tools are gated: with no
     // listing we cannot prove any plugin exists, and a silent empty map would
@@ -123,7 +125,11 @@ export async function loadPlugins(root?: string): Promise<Map<string, PluginSlot
     const file = path.join(base, entry.name, "halter", "index.ts");
     if (!fs.existsSync(file)) continue;
     try {
-      const mod = await import(pathToFileURL(file).href);
+      // mtime+size in the specifier: a bare file URL is cached for the life of
+      // the process, so a plugin edited on disk would keep loading its previous
+      // module instance. The version key keeps unchanged plugins on the cache.
+      const { mtimeMs, size } = fs.statSync(file);
+      const mod = await import(`${pathToFileURL(file).href}?v=${mtimeMs}-${size}`);
       validate(mod.default);
       const plugin = mod.default as HalterPlugin;
       slots.set(plugin.match ?? plugin.name, { state: "ok", plugin });
