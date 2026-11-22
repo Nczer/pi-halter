@@ -75,7 +75,10 @@ export async function handleTool(
     consentKind:
       req.kind === "consent" || req.kind === "egress" ? req.consentKind : undefined,
     argsPreview: req.kind !== "file" ? req.argsPreview : undefined,
-    note: req.kind !== "file" ? req.note : undefined,
+    // The note rides every kind: decide/engine.ts forwards it to the judge
+    // packet's `context:` line, so gating it by kind silently starves the LLM
+    // judge of the reason a file operation was flagged.
+    note: req.note,
   };
 
   return await gate(request, ctx, store, (decision, result) =>
