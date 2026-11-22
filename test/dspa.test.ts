@@ -799,6 +799,30 @@ describe("fall-through", () => {
     expect(logLines()[0].judgeExplain).toBe("does the thing");
   });
 
+  it("stage 1 approve/medium, stage 2 failed → judge-failed, NOT judge-unauthorized", async () => {
+    // The one row of its class in the live log: `(v2 ?? v1)?.approve` let a
+    // stage-1 approve pose as an approving verdict the RISK TIER held, so the
+    // row read `judge-unauthorized` / "approved above the stage's risk
+    // authority (stage 1)" beside a `dspa` tag saying the stage-2 call failed.
+    // Stage 2 is the authority for anything that got past the stage-1 low-risk
+    // auto-allow, so its ABSENCE is the stop, and the stats bucket is the
+    // fail-safe one (`defer`), not `declined` ("the judge said yes, the bar
+    // said no" — nobody said yes here).
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(verdict({ risk: "medium" }));
+    vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(null);
+    await runGate(bashDecision("make test"));
+    const row = logLines()[0];
+    expect(row.dspa).toBe("judge: stage 2 failed");
+    expect(row.judgeSkipped).toBeUndefined();
+    expect(row.stopClass).toBe("judge-failed");
+    expect(String(row.stopDetail)).toContain("stage 2 produced no verdict");
+    // The stage-1 approve is still reported as the verdict the prompt carries,
+    // at the stage that rendered it — the fix is about the stop, not the verdict.
+    expect(row).toMatchObject({ judgeVerdict: "approve", judgeStage: 1 });
+    expect(getDspaStats()).toMatchObject({ autoAllowed: 0, declined: 0, defer: 1 });
+  });
+
   it("judge unavailable (null) → plain prompt, no verdict", async () => {
     setDspaActive(true);
     vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(null);

@@ -101,7 +101,9 @@ function switchModel(m: string): void {
  *  - `defer`    — the final verdict was DEFER, or NO verdict at all
  *                 (timeout / failed call / invalid judge — the fail-safe
  *                 class; a defer means "I can't vouch", so both share the
- *                 bucket for session health).
+ *                 bucket for session health). Includes a stage-1 approve that
+ *                 stage 2 — the authority for it — never confirmed: nothing
+ *                 said yes where the decision lived, so it is not a `declined`.
  */
 export type DspaStopKind = "gate" | "deny" | "declined" | "defer";
 

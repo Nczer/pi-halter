@@ -101,8 +101,9 @@ export function dspaStopTag(f: DspaFallthrough | undefined): string | undefined 
  * (`DspaGateResult.stopClass`, required by the type); the judge's own stop is
  * classified here, and in priority order — the field has to name what DECIDED:
  *  1. a floor stop outranks any verdict (D16: no verdict grants over a bar);
- *  2. `judge-unauthorized` — the verdict approved above the stage's risk
- *     authority: calling that `judge-declined` would blame a yes;
+ *  2. `judge-unauthorized` — the (stage-2) verdict approved above the stage's
+ *     risk authority: calling that `judge-declined` would blame a yes. Stage 2
+ *     only — a stage that never answered is the failed class below;
  *  3. a stage-2 verdict that did not approve → `judge-declined`;
  *  4. otherwise the judge produced nothing usable → `judge-failed` (stage 2
  *     silent over a stage-1 verdict, or no verdict at all).
@@ -705,19 +706,33 @@ export async function tryDspaAutoAllow(
     note = `stage 2 produced no verdict${why ? ` (${why})` : ""} — stateless stage-1 verdict only`;
   }
   const judgeFail = v1 && !v2 ? judgeFailPhrase(o2) || undefined : undefined;
-  // L2: why nothing auto-allowed, from the branch taken — an approving stage-2
+  // L2: why nothing auto-allowed, from the branch taken — an approving STAGE-2
   // verdict that did not auto-allow was held by its RISK TIER (the judge said
   // yes, the tier said no), and a judge that is off or invalid never ran.
+  // Stage 2 only: reaching here, a stage-1 approve is never authoritative —
+  // an approve the stage could grant already auto-allowed above — so when
+  // stage 2 produced nothing the reason is its ABSENCE, not a tier. Reading
+  // `(v2 ?? v1)` called that stage-2 failure `risk-tier`, which dspaStopClass
+  // outranks everything below it: the row went out as
+  // `stopClass: judge-unauthorized, stopDetail: "approved above the stage's
+  // risk authority (stage 1)"` next to a `dspa` tag saying "stage 2 failed
+  // (bad-args …)" — the only judge-unauthorized row in the live log.
   const skipped: JudgeSkipped | undefined =
-    (v2 ?? v1)?.approve === "approve"
+    v2?.approve === "approve"
       ? "risk-tier"
       : !v2 && !v1 && judgeStatus(ctx).state !== "ok"
         ? "judge-off"
         : undefined;
   // The judge (or its absence) is the stop here: classify by the FINAL
-  // verdict — no verdict at all joins the defer (fail-safe) bucket.
+  // verdict — no verdict at all joins the defer (fail-safe) bucket. FINAL
+  // means the verdict that had AUTHORITY: a stage-1 approve over which stage
+  // 2 failed is not "the judge said yes, the bar said no" (what `declined`
+  // means in DspaStopKind) — nothing said yes where the decision lived, so it
+  // counts as the fail-safe class the doc assigns to a missing verdict.
   recordDspaStop(
-    final === null ? "defer" : final.approve === "deny" ? "deny" : final.approve === "defer" ? "defer" : "declined",
+    final === null || (final.approve === "approve" && !v2)
+      ? "defer"
+      : final.approve === "deny" ? "deny" : final.approve === "defer" ? "defer" : "declined",
     final?.model ?? null,
   );
   updateDspaWidget(ctx);
