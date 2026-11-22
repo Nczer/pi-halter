@@ -1003,6 +1003,7 @@ judge/
   judge.ts                judge settings access + streaming model call
                           (first-token deadline + response cap) + cache
   packet.ts               packet building + system prompts + script payload
+                          (+ the content a copy brings in, D26)
   verdict.ts              verdict wrappers, advisory block rendering
   session-context.ts      reasoning-blind stage-2 context
   paths.ts                stage-2 path report cross-check (log-only)
@@ -1044,6 +1045,8 @@ analysis/                 (unchanged) bash-parser, tokenizer, cwd-tracking,
                           new-session command — plus the safety tables),
                           script-payload (the local script a command
                           executes, read in full),
+                          moved-content (the bytes a copy moves: the source
+                          file it reads for the judge, whole — D26),
                           evaluators/ (6 domain evaluators + builder + types)
 config/                   (unchanged) bash-patterns (the fetch set a run form
                           selects, per family, + the one uv arity table),

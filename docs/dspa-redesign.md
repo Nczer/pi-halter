@@ -1420,6 +1420,91 @@ on the pre-3.56 tree); a cd that cannot succeed keeps the base and the read
 stays inside; a symlinked session cwd holds its real children inside while the
 target's sibling and `/etc/hosts` still stop.
 
+### D26. The bytes a copy moves are read for the judge (2026-11-22)
+
+**The hole.** A file write carries its new content to the judge; a copy does
+the same thing to a file that already exists, and the packet said nothing about
+it. Measured on `.log/decisions.jsonl` (the 515-decision corpus live on
+2026-11-22): **13 copy/move/tee-class bash commands reached the judge — 10
+approved, 2 deferred, 1 arrived with no verdict**; the whole log holds 5
+defers, so this shape supplied two of them. The deferrals named the cause
+themselves: "missing information". Under the judge's own rule — approve only
+what is fully verifiable — an invisible payload is not a judgment in either
+direction, and a 10-approve rate on unseen bytes is the same prompt-engineering
+failure D11 fixed for trimmed script content, in a smaller window.
+
+**The rule is semantic, not a verb list.** Content is shown when a command
+makes an existing local file's bytes appear at another path: `cp`, `mv`,
+`install`, `split` (the write-role table's WRITE_LAST family minus `ln`, which
+creates a name and moves nothing), plus `dd if=A of=B` and `cat A > B` / `cat <
+A > B`, where the destination is a flag value or the shell's redirect rather
+than an operand. Not shown, for a stated reason in each case: `tee` (its
+payload is already in the command text, which the packet carries in full),
+`sed -i` and `patch` (the bytes are COMPUTED, not relocated — that content is
+D11's job for writes, and there is no source file to read here), links and
+`mkdir` (no bytes).
+
+**Whole or not at all.** A shown file rides entire, same as D11's script and
+write payloads: half a file is the same failure with more confidence. The
+packet section carries no caps of its own; the limits are the read's.
+
+**Limits, because this read happens while the operator waits.** 1 MB per file
+(`MAX_MOVED_FILE_BYTES`, the line `handlers/file.ts` already uses for its
+pre-read), 8 files per command (`MAX_MOVED_FILES`); beyond that the files are
+named, with the ones past the count tallied as a number. A command that moves
+more than this is bulk, and bulk is the floor's business, not the packet's.
+
+**What is never read, and says so.** A source the credential scan matches —
+the packet names the path and the matched rule, never the bytes: the judge
+cannot stop the copy either way (a credential stop is advisory and its packet
+still goes), so reading would only place a secret in front of a model. Nothing
+under `/proc`, `/sys`, `/dev` (a read there can hang or balloon). Binaries.
+Folders and archives — `cp -r dir dest`, `tar x`, `unzip`: named with their
+file count, contents not read; walking a tree reads far more material than the
+command's name suggests, and the payload is not one file's bytes. A source the
+analysis cannot place (`$VAR`, a brace the tokenizer flags, a segment after an
+unresolvable `cd`): named as unresolvable — guessing the session cwd would
+present some other file's bytes as this copy's payload, which is worse than
+saying nothing.
+
+**Globs expand.** `cp *.test.ts test/` is a statement about every match, so
+halter lists them (`fs.globSync` — the house glob, the same one the credential
+scan and the parser use, against the segment's effective base) and shows each
+match's content. A glob that matches nothing, and one that cannot be listed,
+are named as such. This is the only widening of what the analysis claimed: the
+rest of the packet reports what the parser resolved, and here the shell's own
+expansion is reproduced rather than skipped.
+
+**Both passes.** One read, one `moved` field on the bash input, so stage 1 and
+the stage-2 retry see the same bytes — the two passes disagreeing about the
+payload would be a bug dressed as a second opinion.
+
+**The destination, where the shell's rule is certain.** `cp A B` lands at `B`;
+`cp A… DIR/` (or `-t DIR`) lands at `DIR/<basename>`; that is the whole rule, so
+the packet states it and adds whether the destination already holds a file.
+Otherwise — `split` names its outputs by prefix, an operand the analysis
+cannot resolve — the line says the destination is not resolvable and the
+new/overwrite fact is dropped. The OLD content of an overwritten file stays
+out: a file write's packet does not show what it replaces either, and the fact
+that it does replace something is in the line.
+
+**Named non-goal.** `dd` has no write-role entry, so `dd if=A of=B` still
+mints no write operand for the write bar (`analysis/write-roles.ts`) — a
+pre-existing gap, unrelated to content and needing its own table decision. This
+change reads the payload; it does not fix the bar's blind spot.
+
+**Tests** (`test/moved-content.test.ts`, 31 rows): the verbs and the
+redirect/`dd` forms; `-t` versus a trailing operand; a wrapper (`timeout 60 cp
+…`) is still the same copy; a pipeline that copies and moves; glob expansion
+with its no-match row; every named-instead-of-read row (credential source
+naming its rule, `/proc`, over-limit, binary, folder with its count,
+unresolvable source, unknown run directory, absent source); the 8-shown-plus-one
+omitted row; and eight commands that move no bytes getting no read at all.
+`test/judge.test.ts` pins the section's rendering (heading, the fact line with
+size and new/overwrite, the named-instead-of-read lines, the omission tally, the
+grown fence); one `test/judge-prompt.test.ts` row runs the chain end to end —
+real `cp`, real files, packet as the model receives it.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa

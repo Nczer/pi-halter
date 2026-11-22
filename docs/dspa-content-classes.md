@@ -42,6 +42,12 @@ pipeline.
 | **C3 — context-dependent** | arguments are opaque refs; meaning comes from the session | joplin (T6) |
 | **C4 — policy-absolute** | the user's call, never the judge's | egress bash (D14), outside-base scope (Q1), rm, credentials (with the location exception below), unresolvable sentinels (D7) |
 
+**A bash copy is C1 inside a C2 operation (D26).** `cp A B` has a payload, and
+that payload is the effect — so halter reads `A` and the packet shows it, exactly
+as a file write's content is shown. Bash stays C2 as a class: the command's
+REACH is what makes it effect-extending. The reading rule, its limits and what
+it refuses to read are D26 in `docs/dspa-redesign.md`.
+
 **The gate kind is the mechanism.** Tool plugins classify each call into a
 kind that selects its class's pipeline — content-judge: `exec` (C2,
 script payload) and `egress` (C1, outgoing payload); human-gated: `file`
