@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { allowedReadPaths, allowedWritePaths, warnPaths, isTrustedScriptPath } from "../config";
-import { under, isUnresolvedPath } from "./path-util";
+import { under, isUnresolvedPath, expandTilde } from "./path-util";
 
 // ── Relative path detection ──
 
@@ -101,17 +101,37 @@ export function isAllowedWritePath(resolved: string): boolean {
   return allowedWritePaths.some(d => under(resolved, d));
 }
 
+/**
+ * Is this location inside the session cwd? The cwd is canonicalized first
+ * (`realCwd`): a cwd that is itself a symlink (`~/work/proj` → `/data/proj`)
+ * holds the command's files at their real spelling, and testing only the
+ * lexical one stopped on every read inside it. `under` takes real-disk form on
+ * both sides, so each spelling is tested only when it is in that form.
+ *
+ * The lexical spelling is kept so this change only ever WIDENS the bar: a
+ * location that reaches here un-canonicalized still gets the answer the bar
+ * gave before, rather than a stop nobody can explain.
+ */
+function isUnderCwd(p: string, cwd: string, realCwd: string): boolean {
+  if (under(p, realCwd)) return true;
+  if (realCwd !== cwd && !isUnresolvedPath(cwd) && path.normalize(cwd) === cwd) {
+    return under(p, cwd);
+  }
+  return false;
+}
+
 export function getOutsideCwdPaths(
   paths: string[],
   cwd: string,
   isInsideAllowedDir?: (p: string) => boolean,
 ): string[] {
+  const realCwd = resolvePathReal(expandTilde(cwd), "/");
   return paths.filter(p => {
     // A word that names no location is OUTSIDE by definition — dropping it here
     // is how an unbound path used to slip the bar (the sentinel sits outside
     // every real dir on purpose).
     if (isUnresolvedPath(p)) return true;
-    if (under(p, cwd)) return false;
+    if (isUnderCwd(p, cwd, realCwd)) return false;
     if (isInsideAllowedDir?.(p)) return false;
     if (isAllowedReadPath(p)) return false;
     if (isAllowedWritePath(p)) return false;
@@ -134,9 +154,10 @@ export function getOutsideWritePaths(
   cwd: string,
   isInsideAllowedWriteDir?: (p: string) => boolean,
 ): string[] {
+  const realCwd = resolvePathReal(expandTilde(cwd), "/");
   return paths.filter(p => {
     if (isUnresolvedPath(p)) return true; // an unnameable location is in no write bar
-    if (under(p, cwd)) return false;
+    if (isUnderCwd(p, cwd, realCwd)) return false;
     if (isInsideAllowedWriteDir?.(p)) return false;
     if (isAllowedWritePath(p)) return false;
     return true;

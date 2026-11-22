@@ -6,6 +6,7 @@ import {
   resolvePathReal,
   isAllowedReadPath,
   getOutsideCwdPaths,
+  getOutsideWritePaths,
   isProjectPiPathResolved,
   isPathWarnedResolved,
 } from "../analysis/path-analysis";
@@ -108,6 +109,31 @@ describe("getOutsideCwdPaths", () => {
   it("excludes allowed read paths", () => {
     const outside = getOutsideCwdPaths([`${cwd}/a`, path.join(tmpdir, "foo"), "/etc/hosts"], cwd);
     expect(outside).toEqual(["/etc/hosts"]);
+  });
+
+  it("a session cwd that is a symlink holds its real children inside", () => {
+    // The harness hands the gate a cwd as the shell spelled it (`~/work/proj`,
+    // a link), while every location the command reaches comes back in real-disk
+    // form. Testing only the lexical spelling stopped on every read inside such
+    // a cwd — the operator saw `outside ~/work/proj` for a file under it.
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(home, ".halter-symcwd-")));
+    try {
+      const target = path.join(root, "real");
+      fs.mkdirSync(target, { recursive: true });
+      fs.writeFileSync(path.join(target, "f"), "x");
+      const link = path.join(root, "link");
+      fs.symlinkSync(target, link);
+      expect(getOutsideCwdPaths([path.join(target, "f"), target], link)).toEqual([]);
+      // Widening the bar to the real spelling admits nothing else: the target's
+      // sibling, and a path that was always outside, still stop.
+      expect(getOutsideCwdPaths([`${target}-other/f`], link)).toEqual([`${target}-other/f`]);
+      expect(getOutsideCwdPaths(["/etc/hosts"], link)).toEqual(["/etc/hosts"]);
+      // The write bar's twin containment answers the same way.
+      expect(getOutsideWritePaths([path.join(target, "h")], link)).toEqual([]);
+      expect(getOutsideWritePaths([`${target}-other/h`], link)).toEqual([`${target}-other/h`]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

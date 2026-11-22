@@ -10,6 +10,7 @@ import {
   isCwdRelativeWord,
 } from "../analysis/cwd-tracking";
 import { OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER } from "../analysis/path-util";
+import { getOutsideCwdPaths } from "../analysis/path-analysis";
 import { dirsOfLocations, pathWord } from "../analysis/path-word";
 import { analyzeCommand } from "../analysis/command-analysis";
 import {decide} from "../decide/engine";
@@ -1331,5 +1332,63 @@ describe("2026-10-24 ledger rows end to end (redirect-carrying cd, git revspec)"
     const a = await analyzeCommand(`cd ${CWD}/sub/deep && cat other/../x.txt; ls ..`, CWD);
     expect(a.paths).toContain(path.join(CWD, "sub", "deep", "x.txt"));
     expect(a.paths).toContain(path.join(CWD, "sub"));
+  }, 15000);
+});
+
+// ── A cd whose target is a symlink: the base is the directory it points at ──
+
+describe("a cd through a symlink re-bases to the real directory", () => {
+  // The hole this closes: with `link → out`, `cd ./link && cat ./passwd` opened
+  // a file OUTSIDE the session cwd while every consumer of the analysis — the
+  // read bar, the outside set, the prompt's `outside …` line — saw a path
+  // *under* it. Base, location and bar have to name one place, so
+  // `resolveCdTarget` answers with the target the disk gives (3.56.0).
+  let root: string;
+  let out: string;
+  beforeAll(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(HOME, ".halter-cdl-")));
+    out = fs.realpathSync(fs.mkdtempSync(path.join(HOME, ".halter-cdlout-")));
+    fs.mkdirSync(path.join(out, "sub"));
+    fs.writeFileSync(path.join(out, "passwd"), "x");
+    fs.writeFileSync(path.join(out, "sub", "f"), "x");
+    fs.symlinkSync(out, path.join(root, "link"));
+  });
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(out, { recursive: true, force: true });
+  });
+
+  it("a relative cd names the real path, and the read is outside the cwd", async () => {
+    const a = await analyzeCommand("cd ./link && cat ./passwd", root);
+    const target = path.join(out, "passwd");
+    expect(a.effectiveCwds[a.effectiveCwds.length - 1]).toBe(out);
+    expect(a.paths).toEqual([target]);
+    expect(getOutsideCwdPaths(a.paths, root)).toEqual([target]);
+  }, 15000);
+
+  it("an absolute cd names it too, and a later relative cd rides the real base", async () => {
+    const a = await analyzeCommand(`cd ${path.join(root, "link")} && cd sub && cat ./f`, root);
+    const target = path.join(out, "sub", "f");
+    expect(a.effectiveCwds[a.effectiveCwds.length - 1]).toBe(path.join(out, "sub"));
+    expect(a.paths).toEqual([target]);
+    expect(getOutsideCwdPaths(a.paths, root)).toEqual([target]);
+  }, 15000);
+
+  it("a session cwd that is a symlink is the base in its real spelling", async () => {
+    // `trackEffectiveCwd` seeds the base list and `analyzeCommand` compares each
+    // segment's base against that seed. Seeded with the link's spelling, every
+    // location came back in that spelling too — not the real-disk form every bar
+    // and every grant is stored in, so an already-allowed file stopped again.
+    fs.symlinkSync(out, path.join(root, "cwdlink"));
+    const a = await analyzeCommand("cat ./passwd", path.join(root, "cwdlink"));
+    expect(a.effectiveCwds[0]).toBe(out);
+    expect(a.paths).toEqual([path.join(out, "passwd")]);
+  }, 15000);
+
+  it("a cd that cannot succeed keeps the base, and the read stays under it", async () => {
+    const a = await analyzeCommand("cd ./nope && cat ./passwd", root);
+    expect(a.effectiveCwds[a.effectiveCwds.length - 1]).toBe(root);
+    expect(a.paths).toEqual([path.join(root, "passwd")]);
+    expect(getOutsideCwdPaths(a.paths, root)).toEqual([]);
   }, 15000);
 });

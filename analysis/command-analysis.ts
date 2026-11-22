@@ -6,7 +6,7 @@ import { expandTilde, OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER, under, isUnresolvedPat
 import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
 import { analyzeWholeCommandRisk, type CommandRisk } from "./risk-analyzer";
-import { hasRelativePath, getOutsideCwdPaths, getOutsideWritePaths } from "./path-analysis";
+import { hasRelativePath, getOutsideCwdPaths, getOutsideWritePaths, resolvePathReal } from "./path-analysis";
 import { dirsOfLocations, barLocations, pathWord, type PathWord } from "./path-word";
 import { classifyStageArgv0 } from "./argv0-path";
 import { assessDeletes, type DeleteScale } from "./delete-scale";
@@ -417,7 +417,7 @@ async function analyzeTmuxSendKeysPayload(
   let unsafe = false;
   const words: PathWord[] = [];
   const reasons: string[] = [];
-  const normBase = path.resolve(expandTilde(cwd));
+  const normBase = resolvePathReal(expandTilde(cwd), "/");
   for (const chunk of chunks) {
     const parsed = await parseCommand(chunk, cwd);
     if (parsed.hasParseError) return { simple: false, unsafe: true, words: [], reasons: [] };
@@ -524,7 +524,7 @@ export async function analyzeCommand(
   // on the effective base, drop the stale session-cwd resolutions, flag
   // base access. Under an unknown base the tokens resolve to a marker path
   // outside every allowed dir, forcing path approval.
-  const normBase = path.resolve(expandTilde(cwd));
+  const normBase = resolvePathReal(expandTilde(cwd), "/");
   threadCwdPaths(segments, effectiveCwds, normBase, words, assignments, writePaths);
 
   // G5: substitution bodies are analyzed as programs (see analyzeSubstBodies).

@@ -48,8 +48,8 @@ export type CwdBase = string | null;
 
 type CdResolution =
   | { kind: "thread"; dir: string } // literal target that exists → base becomes dir
-  | { kind: "unknown" }             // target not exactly determinable → base unknown
-  | { kind: "unchanged" };          // not a cd, or the cd cannot succeed at runtime
+  | { kind: "unknown" } // target not exactly determinable → base unknown
+  | { kind: "unchanged" }; // not a cd, or the cd cannot succeed at runtime
 
 /** Strip backslash escapes from a shell word (\X → X) so escaped literal
  *  targets (`cd /tmp/ha\lt`) resolve to the same directory bash cd's into. */
@@ -177,12 +177,14 @@ export function resolveCdTarget(
   const resolved = path.resolve(cwd ?? "/", expanded);
   try {
     if (!fs.statSync(resolved).isDirectory()) return { kind: "unchanged" };
+    // Canonicalize symlinks so `cd ./link && cat ./passwd` (where ./link -> /etc)
+    // tracks `/etc` rather than `<cwd>/link` (which would pass `under(p, cwd)`).
+    return { kind: "thread", dir: fs.realpathSync(resolved) };
   } catch {
     // cd fails at runtime: under && nothing after it runs; under ; the next
     // command keeps the OLD cwd — exactly what "unchanged" preserves.
     return { kind: "unchanged" };
   }
-  return { kind: "thread", dir: resolved };
 }
 
 /**
@@ -263,7 +265,7 @@ export function trackEffectiveCwd(
   assignments?: ShellAssignment[],
 ): CwdBase[] {
   const result: CwdBase[] = [];
-  const bases: CwdBase[] = [path.resolve(expandTilde(baseCwd))];
+  const bases: CwdBase[] = [resolvePathReal(expandTilde(baseCwd), "/")];
   // Base at the start of the current (;) statement, per depth — the || freeze anchor.
   const stmtStarts: CwdBase[] = [bases[0]];
   // Distinct conditional-branch cd targets since the last definite cd, per depth.
@@ -333,7 +335,7 @@ function resolveLoopCdCandidates(inList: string[], base: CwdBase, homeFixed = fa
       if (base === null) return null; // relative token under unknown base
       resolved = path.resolve(base, t);
     }
-    if (resolved.search(/[*?[[]/) !== -1) {
+    if (resolved.search(/[*?[\[]/) !== -1) {
       const pattern = resolved.endsWith("/") ? resolved.slice(0, -1) : resolved;
       let matches: string[];
       try {
@@ -511,11 +513,15 @@ function subshellBaseAccess(tokens: string[], base: CwdBase, homeFixed = false):
           const expanded = expandTilde(homeTarget);
           if (path.isAbsolute(expanded)) {
             try {
-              if (fs.statSync(expanded).isDirectory()) localBase = expanded;
+              if (fs.statSync(expanded).isDirectory()) localBase = fs.realpathSync(expanded);
               // nonexistent: the inner cd fails — localBase unchanged
             } catch { /* unchanged */ }
           } else if (localBase !== null) {
-            localBase = path.resolve(localBase, expanded);
+            const next = path.resolve(localBase, expanded);
+            try {
+              if (fs.statSync(next).isDirectory()) localBase = fs.realpathSync(next);
+              // nonexistent: the inner cd fails — localBase unchanged
+            } catch { /* unchanged */ }
           } else {
             localBase = null;
           }

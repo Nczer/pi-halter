@@ -9,19 +9,35 @@ function real(p: string): string {
   try { return fs.realpathSync(p); } catch { return p; }
 }
 
+/**
+ * Add each dir's realpath spelling beside the written one (deduped), so a
+ * symlinked root matches whichever spelling a caller arrives with: macOS
+ * `os.tmpdir()` is `/var/folders/…/T` while `resolvePathReal` answers
+ * `/private/var/…`, and `~/.pi` may be a link to another volume. The bars
+ * compare with `under`, which needs real-disk form on both sides.
+ * `registerAllowedReadDirs` gives the operator's `halter.readDirs` the same
+ * two spellings.
+ */
+function withReal(paths: string[]): string[] {
+  const out: string[] = [];
+  for (const p of paths) {
+    for (const s of [p, real(p)]) {
+      if (s && !out.includes(s)) out.push(s);
+    }
+  }
+  return out;
+}
+
 const tmpdir = os.tmpdir();
-const tmpdirReal = real(tmpdir); // macOS: /var/folders/.../T → /private/var/folders/.../T
 
 /** Directories always allowed for read access. */
-export const allowedReadPaths: string[] = [
+export const allowedReadPaths: string[] = withReal([
   "/opt/pi-coding-agent",
   path.join(os.homedir(), ".pi"),
   path.join(os.homedir(), ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
-  tmpdir,        // os.tmpdir() e.g. /var/folders/.../T
-  tmpdirReal,    // macOS: realpath of tmpdir → /private/var/folders/.../T
-  "/tmp",        // skill scripts write to /tmp
-  "/private/tmp", // macOS: realpathSync resolves /tmp → /private/tmp
-];
+  tmpdir, // os.tmpdir() e.g. /var/folders/.../T — withReal adds its /private/... spelling
+  "/tmp", // skill scripts write to /tmp (withReal adds /private/tmp on macOS)
+]);
 
 /**
  * Operator scope grants (settings key `halter.readDirs`, A of the 3.42 read-bar
@@ -89,12 +105,10 @@ function expandHome(p: string): string {
 }
 
 /** Directories always allowed for write/edit access. */
-export const allowedWritePaths: string[] = [
-  tmpdir,        // os.tmpdir()
-  tmpdirReal,    // macOS: realpath of tmpdir
-  "/tmp",        // macOS: same reason as above
-  "/private/tmp", // macOS: realpathSync resolves /tmp → /private/tmp
-];
+export const allowedWritePaths: string[] = withReal([
+  tmpdir, // os.tmpdir()
+  "/tmp", // the spelling a command types, whatever tmpdir canonicalizes to
+]);
 
 /**
  * File/directory names that may contain credentials — always a prompt with a

@@ -1366,6 +1366,53 @@ tail; the `HOME`-reassigned interlock; `cdBaseBounds` for a folded cd (bounded,
 candidates = {session cwd, folded target}); anchor — `$C/V$v.txt` → prefix is
 `C`'s directory while `$v` stays dynamic.
 
+### D25. A `cd` through a symlink re-bases to the real directory (2026-11-22)
+
+**The hole.** With `link → /elsewhere`, `cd ./link && cat ./passwd` opened a
+file OUTSIDE the session cwd while the analysis named it UNDER it:
+`resolveCdTarget` threaded `path.resolve(base, target)`, so the effective base
+kept the link's spelling and every location built under it (`<cwd>/link/passwd`)
+read as inside to the read bar, the outside set and the prompt's `outside …`
+line. Measured against the pre-3.56 tree: `paths: ["<cwd>/link/passwd"],
+outside: []` for a file the gate had no claim on.
+
+**The rule.** One place decides what a cd target IS: `resolveCdTarget` stats the
+target and, when the disk answers, threads the **realpath** (`fs.realpathSync`),
+so base, locations and bars name the directory the shell actually entered —
+`resolvePathReal` already did this for every *word* ("a symlink-escaping word
+names its REAL target", D15), the cd base was the one place it did not.
+A target the disk cannot answer (it does not exist) keeps today's answer: the cd
+cannot succeed, the base does not move, and the reads stay under it — covered by
+its own test row so the widening cannot become a guess.
+
+**Same identity, three more places.** The rule is the same fact, asked where a
+location is compared or remembered:
+- `getOutsideCwdPaths` canonicalizes the session cwd before containing
+  (`realCwd`), so a cwd the harness spelled as a link (`~/work/proj` →
+  `/data/proj`) no longer stops on every read inside it. The lexical spelling is
+  still tested, so the change only ever WIDENS the bar: nothing that was inside
+  before becomes an unexplainable stop.
+- `withReal` (`config/path-rules.ts`) adds each bar directory's realpath spelling
+  to the list once, which is where the hand-listed `/private/tmp` and
+  `tmpdirReal` entries came from; the operator's `halter.readDirs` get the same
+  treatment.
+- the path resolver's cache key gains `pd.cwd` (`judge/path-resolver.ts`): the
+  tokens resolve against the base, so a map computed in one directory was
+  answering in the next.
+
+**Why the bound argument still holds.** `cdBaseBounds` says the base is the
+session cwd or "the target of a LITERAL cd that existed when the gate stat'd
+it" (D24). A symlinked target passes that same `statSync`, so the candidate set
+is unchanged; the only difference is that the candidate is named by its real
+spelling, which is the spelling every location arrives in.
+
+**Tests** (`test/cwd-threading.test.ts`, `test/path-analysis.test.ts`): relative
+and absolute cd through a link — the base is the target, the location is the
+real path, and `getOutsideCwdPaths` reports it outside the cwd (both rows fail
+on the pre-3.56 tree); a cd that cannot succeed keeps the base and the read
+stays inside; a symlinked session cwd holds its real children inside while the
+target's sibling and `/etc/hosts` still stop.
+
 ## 4. Phasing
 
 - **Phase 1 — done**: rm-branch non-rm-dangerous filter (`4957afc`); dspa
