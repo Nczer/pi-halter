@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import {
   trackEffectiveCwd,
-  reResolveCwdDependentWords,
+  reResolveCwdDependentParts,
   baseWriteAccess,
   homeReassigned,
   isCwdRelativeWord,
@@ -22,9 +22,10 @@ import { canon } from "./canon";
 
 /** The LOCATIONS a re-resolve yields: these tests are about places. The record
  *  itself (text, kind, completeness — analysis/path-word) is pinned in
- *  test/path-word.test.ts. */
-const rr = (...a: Parameters<typeof reResolveCwdDependentWords>) =>
-  reResolveCwdDependentWords(...a).flatMap((w) => w.locations);
+ *  test/path-word.test.ts, and which of those locations are WRITES is pinned by
+ *  the writeLocations field in test/command-analysis.test.ts. */
+const rr = (...a: Parameters<typeof reResolveCwdDependentParts>) =>
+  reResolveCwdDependentParts(...a).words.flatMap((w) => w.locations);
 
 const HOME = os.homedir();
 const DOC_EXTRACT = path.join(HOME, ".pi", "agent", "skills", "doc-extract");
@@ -318,7 +319,7 @@ describe("parser operator metadata (precedingOp / backgrounded)", () => {
   }, 15000);
 });
 
-describe("reResolveCwdDependentWords", () => {
+describe("reResolveCwdDependentParts", () => {
   it("re-resolves ./ and ../ tokens against the effective cwd", () => {
     expect(rr(seg("cat ./secret.txt"), "/tmp")).toEqual(["/tmp/secret.txt"]);
     expect(rr(seg("cat ../x.txt"), "/tmp/a")).toEqual(["/tmp/x.txt"]);

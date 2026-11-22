@@ -1194,7 +1194,7 @@ Deviations from the decisions, named rather than absorbed:
   type test.** tree-sitter lexes an unquoted `/x/{a,b}` as a `concatenation`, so a
   type test would have refused every group. Mixed quoting (`x"{a,b}"`) is not
   opened — the fail-closed side of a call I chose not to guess.
-- **The stale-cwd re-resolve (`reResolveCwdDependentWords`) does not open braces.**
+- **The stale-cwd re-resolve (`reResolveCwdDependentParts`) does not open braces.**
   It has no node, so it cannot tell a quoted word from an unquoted one. Such a
   word keeps its braces as one location; `dirsOfLocations` answers it at its static
   prefix, so the stop still fires and the grant still binds. Coarse, not wrong;

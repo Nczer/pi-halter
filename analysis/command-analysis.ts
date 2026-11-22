@@ -1,7 +1,7 @@
 import path from "node:path";
 import { parseCommand, type OpaqueRef, type BashSegment, type PathHop } from "./bash-parser";
 import { analyzeSegment } from "./segment-analysis";
-import { trackEffectiveCwd, reResolveCwdDependentWords, baseAccessPath, staleCwdResolutions, homeReassigned, type CwdBase } from "./cwd-tracking";
+import { trackEffectiveCwd, reResolveCwdDependentParts, baseAccessPath, staleCwdResolutions, homeReassigned, type CwdBase } from "./cwd-tracking";
 import { expandTilde, OPAQUE_VAR_DIR, UNKNOWN_CWD_MARKER, under, isUnresolvedPath } from "./path-util";
 import { resolveOpaqueRefs, type UnresolvedRef, type ShellAssignment } from "./var-resolution";
 import { parseTmuxCommand, tmuxSendKeysKeys } from "./tmux";
@@ -366,6 +366,7 @@ function threadCwdPaths(
     if (effectiveCwds[i] === normBase) { for (const s of stale) keepStale.add(s); }
     else { for (const s of stale) dropStale.add(s); }
   }
+  let pruned = false;
   for (const s of dropStale) {
     if (keepStale.has(s)) continue;
     // One occurrence, exactly as the flat list did: parseCommand dedupes by
@@ -374,25 +375,29 @@ function threadCwdPaths(
       const idx = w.locations.indexOf(s);
       if (idx === -1) continue;
       w.locations.splice(idx, 1);
+      pruned = true;
       break;
     }
+    const wi = writePaths?.indexOf(s) ?? -1;
+    if (writePaths && wi !== -1) writePaths.splice(wi, 1);
+  }
+  if (pruned) {
     for (let i = words.length - 1; i >= 0; i--) {
       // A record with no location is not necessarily empty: a brace group the
       // caps refuse names no place on purpose and carries its anchor (S5).
       const w = words[i];
       if (!w.locations.length && !w.anchor) words.splice(i, 1);
     }
-    const wi = writePaths?.indexOf(s) ?? -1;
-    if (writePaths && wi !== -1) writePaths.splice(wi, 1);
   }
   for (let i = 0; i < segments.length; i++) {
     const base = effectiveCwds[i];
     if (base !== normBase) {
-      words.push(...reResolveCwdDependentWords(segments[i], base));
+      const resolved = reResolveCwdDependentParts(segments[i], base);
+      words.push(...resolved.words);
       // G3: the same re-basing for the write set, restricted to the tokens the
       // write-role table calls a destination — otherwise a cd chain hides the
       // write (`cd ~/.pi/agent && mkdir ./x`) while the read bar sees it.
-      if (writePaths) writePaths.push(...reResolveCwdDependentWords(segments[i], base, { writesOnly: true }).flatMap((w) => w.locations));
+      if (writePaths) writePaths.push(...resolved.writeLocations);
       const basePath = baseAccessPath(segments[i], base, homeFixed);
       // No word in the text names this — the segment itself touches its base
       // (`cd /var/tmp && ls`), so the location is what the parser mints.
@@ -400,8 +405,9 @@ function threadCwdPaths(
     } else {
       // Base === session cwd: parseCommand already resolved ./../ tokens
       // against it — collect only the $PWD tokens it never saw.
-      words.push(...reResolveCwdDependentWords(segments[i], base, { skipDotPaths: true }));
-      if (writePaths) writePaths.push(...reResolveCwdDependentWords(segments[i], base, { skipDotPaths: true, writesOnly: true }).flatMap((w) => w.locations));
+      const resolved = reResolveCwdDependentParts(segments[i], base, { skipDotPaths: true });
+      words.push(...resolved.words);
+      if (writePaths) writePaths.push(...resolved.writeLocations);
     }
   }
 }

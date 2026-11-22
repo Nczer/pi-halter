@@ -945,26 +945,32 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
  * One record per TOKEN, text as typed: these are words the parser resolved
  * against the wrong base, so the record is where the re-based location and the
  * spelling the operator typed stay together.
+ *
+ * `writeLocations` is the subset those tokens hold in a WRITE role (the same
+ * `writeOperandIndices` answer the write bar uses, see cwdDependentTokens) —
+ * the caller needs both sets, and tokenizing the segment twice is how the two
+ * once disagreed.
  */
-export function reResolveCwdDependentWords(
+export function reResolveCwdDependentParts(
   seg: BashSegment,
   base: CwdBase,
-  opts?: { skipDotPaths?: boolean; writesOnly?: boolean },
-): PathWord[] {
-  const out: PathWord[] = [];
+  opts?: { skipDotPaths?: boolean },
+): { words: PathWord[]; writeLocations: string[] } {
+  const words: PathWord[] = [];
+  const writeLocations: string[] = [];
   for (const { isPwd, rel, isWrite } of cwdDependentTokens(seg)) {
     if (opts?.skipDotPaths && !isPwd) continue;
-    if (opts?.writesOnly && !isWrite) continue;
     // String join, NOT path.join: join normalizes `..` so the marker escapes
     // (`<unresolved-cwd>/../x` → `../x`) and a bare relative token lands in
     // the outside set — displayed as its dirname (`.`, `node_modules/.bin`).
     // Keeping the marker prefix intact makes the prompt read `outside <unresolved-cwd>`.
     const location = base === null
       ? (rel ? `${UNKNOWN_CWD_MARKER}/${rel.replace(/^\.\//, "")}` : UNKNOWN_CWD_MARKER)
-      : path.resolve(base, rel);
-    out.push(pathWord(rel, [location]));
+      : resolvePathReal(rel, base);
+    words.push(pathWord(rel, [location]));
+    if (isWrite) writeLocations.push(location);
   }
-  return out;
+  return { words, writeLocations };
 }
 
 /** The session-cwd resolutions parseCommand emits for a segment's cwd-dependent
