@@ -823,12 +823,14 @@ const OPAQUE_CODE_BODY_RE = /\$\(|`|\|\s*(?:sh|bash|zsh|dash|ksh|python\d*|node|
  * form) writes its operand whatever the program body says. */
 const IN_PLACE_FLAG_RE = /(?:^|\s)-[a-zA-Z]*i[a-zA-Z]*(?=\s)/;
 
-/** An output redirect inside a shell body (`sh -c 'echo x > f'`) lands in the
- * effective cwd, which is the re-based base — the outer-command redirect scan
- * never sees it, because the whole payload is one quoted token. Same
- * exclusions as that scan: an fd dup (`2>&1`) and a numeric fd are not writes,
- * an absolute target is already in the path set. Anything else (including an
- * expansion or a truncated body) counts — fail-closed. */
+/** Pseudo-device sinks inside a shell body (`2>/dev/null`, `>/dev/stderr`). */
+const SHELL_BODY_DEV_SINK_RE = /^\/dev\/(?:null|stderr|stdout)$/;
+
+/** An output redirect inside a shell body (`sh -c 'echo x > f'`) is invisible
+ * to the outer-command redirect scan (and `sh -c` bodies mint no paths into the
+ * path set), so EVERY file redirect — relative, absolute, tilde, or expanded —
+ * counts as write-capable. Only fd duplications (`2>&1`, `>&-`) and standard
+ * `/dev/{null,stderr,stdout}` sinks are non-writes. */
 function shellBodyRedirect(body: string): boolean {
   const re = /(?:\d*>>?|&>)/g;
   let m: RegExpExecArray | null;
@@ -838,7 +840,7 @@ function shellBodyRedirect(body: string): boolean {
     const tok = (rest.match(/^[^\s'"`;|()]+/) ?? [""])[0];
     if (!tok) return true;
     if (tok.startsWith("&") || /^\d+$/.test(tok)) continue;
-    if (tok.startsWith("/") || tok.startsWith("~")) continue;
+    if (SHELL_BODY_DEV_SINK_RE.test(tok)) continue;
     return true;
   }
   return false;
