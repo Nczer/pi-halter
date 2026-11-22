@@ -189,31 +189,31 @@ describe("handleFile edit pre-validation security", () => {
     expect(result).toBeUndefined();
   });
 
-  it("skips prompt when edits array is empty", async () => {
+  it("blocks fail-closed when edits array is empty", async () => {
     const event = {
       toolName: "edit",
       input: { path: "src/index.ts", edits: [] },
     } as any;
     const result = await handleFile(event, makeCtx());
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("unexpected input shape") });
   });
 
-  it("skips prompt when edits array is null/undefined", async () => {
+  it("blocks fail-closed when edits array is null/undefined", async () => {
     const event = {
       toolName: "edit",
       input: { path: "src/index.ts", edits: null },
     } as any;
     const result = await handleFile(event, makeCtx());
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("unexpected input shape") });
   });
 
-  it("skips prompt when edits have invalid entries (missing oldText)", async () => {
+  it("blocks fail-closed when edits have invalid entries (missing oldText)", async () => {
     const event = {
       toolName: "edit",
       input: { path: "src/index.ts", edits: [{ newText: "bar" }] },
     } as any;
     const result = await handleFile(event, makeCtx());
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("unexpected input shape") });
   });
 
   it("skips prompt when file does not exist", async () => {
@@ -498,6 +498,27 @@ describe("buildEditAfterView", () => {
     const view = buildEditAfterView(file, [{ oldText: "bb", newText: "BB" }]);
     expect(view!).toMatch(shown(1, ">", "aa BB cc"));
     expect(view!).toContain("3 lines total");
+  });
+
+  it("fuzzy match: untouched lines keep the file's own characters", () => {
+    // Block matches only after the fold (em dash → hyphen), so pi rewrites the
+    // matched line from the folded base. The neighbour line holds typographic
+    // quotes and a trailing tab: folded, the judge would be shown a file that
+    // does not exist on disk.
+    const file = "keep the “dash”;	\ntarget — text\nend";
+    const view = buildEditAfterView(file, [{ oldText: "target - text", newText: "TARGET - text" }]);
+    expect(view!).toMatch(shown(1, "·", "keep the “dash”;\t"));
+    expect(view!).toMatch(shown(2, ">", "TARGET - text"));
+    expect(view).not.toContain('keep the "dash";');
+  });
+
+  it("fuzzy match: a line the fold aligned is still shown as the file spells it", () => {
+    // The folded base and the file agree on the NBSP line's LENGTH, not its
+    // bytes — preservation is by line index, driven by the replacement ranges.
+    const file = "a\u00A0b\nmid\nold — new";
+    const view = buildEditAfterView(file, [{ oldText: "old - new", newText: "OLD" }]);
+    expect(view!).toMatch(shown(1, "·", "a\u00A0b"));
+    expect(view!).toMatch(shown(3, ">", "OLD"));
   });
 
   it("returns null when a block matches twice (or never)", () => {

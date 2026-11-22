@@ -17,15 +17,6 @@ const EDIT_PREVALIDATE_MAX_BYTES = 1_048_576; // 1 MB
 /** Context lines shown around each replaced region in the edit after-view. */
 const EDIT_VIEW_CONTEXT = 10;
 
-/** Index of a needle occurring EXACTLY once in the haystack (pi edit
- * semantics — 0 or 2+ occurrences fail the edit); -1 otherwise. */
-function uniqueIndexOf(haystack: string, needle: string): number {
-  if (needle === "") return -1;
-  const first = haystack.indexOf(needle);
-  if (first === -1) return -1;
-  return haystack.indexOf(needle, first + 1) === -1 ? first : -1;
-}
-
 // ── pi edit-tool match semantics (mirrored from the harness) ────────────
 //
 // pi matches every block against the ORIGINAL file (not sequentially) — but
@@ -70,6 +61,55 @@ function countEdits(base: string, oldText: string): number {
   return normalizeForFuzzyMatch(base).split(normalizeForFuzzyMatch(oldText)).length - 1;
 }
 
+interface MatchedEditRange {
+  start: number;
+  end: number;
+  newText: string;
+  order: number;
+}
+
+/**
+ * Compute non-overlapping match ranges against the original file using pi's
+ * exact-then-fuzzy matcher (BOM-stripped, LF-normalized). Shared by
+ * `editWillApply` and `buildEditAfterView` so pre-validation and the judge
+ * packet never disagree about what pi will write.
+ */
+function matchEditRanges(
+  rawContent: string,
+  edits: Array<{ oldText: string; newText: string }>,
+): {
+  base: string;
+  matchBase: string;
+  ranges: MatchedEditRange[];
+  needsFuzzy: boolean;
+  normalized: Array<{ oldText: string; newText: string }>;
+} | null {
+  const base = normalizeEditText(rawContent.replace(/^\uFEFF/, ""));
+  const normalized = edits.map((e) => ({
+    oldText: normalizeEditText(e.oldText),
+    newText: normalizeEditText(e.newText),
+  }));
+  // pi rejects an empty oldText (getEmptyOldTextError) before matching.
+  if (normalized.length === 0 || normalized.some((e) => e.oldText.length === 0)) return null;
+  // The matcher base flips to the fuzzy normalization when ANY block misses
+  // exactly (pi's replacementBaseContent).
+  const needsFuzzy = normalized.some((e) => base.indexOf(e.oldText) === -1);
+  const matchBase = needsFuzzy ? normalizeForFuzzyMatch(base) : base;
+  const ranges: MatchedEditRange[] = [];
+  for (let i = 0; i < normalized.length; i++) {
+    const e = normalized[i];
+    const m = findEdit(matchBase, e.oldText);
+    if (!m) return null; // not-found error
+    if (countEdits(matchBase, e.oldText) > 1) return null; // duplicate error
+    ranges.push({ start: m.index, end: m.index + m.length, newText: e.newText, order: i });
+  }
+  ranges.sort((a, b) => a.start - b.start);
+  for (let i = 1; i < ranges.length; i++) {
+    if (ranges[i - 1].end > ranges[i].start) return null; // overlap error
+  }
+  return { base, matchBase, ranges, needsFuzzy, normalized };
+}
+
 /**
  * Will pi's edit tool apply this multi-block edit? Mirrors the harness's
  * matcher end to end: BOM-stripped LF-normalized base, exact-then-fuzzy
@@ -82,35 +122,94 @@ export function editWillApply(
   rawContent: string,
   edits: Array<{ oldText: string; newText: string }>,
 ): boolean {
-  const base = normalizeEditText(rawContent.replace(/^\uFEFF/, ""));
-  const normalized = edits.map((e) => ({
-    oldText: normalizeEditText(e.oldText),
-    newText: normalizeEditText(e.newText),
-  }));
-  // pi rejects an empty oldText (getEmptyOldTextError) before matching.
-  if (normalized.some((e) => e.oldText.length === 0)) return false;
-  // The matcher base flips to the fuzzy normalization when ANY block misses
-  // exactly (pi's replacementBaseContent).
-  const needsFuzzy = normalized.some((e) => base.indexOf(e.oldText) === -1);
-  const matchBase = needsFuzzy ? normalizeForFuzzyMatch(base) : base;
-  const ranges: Array<[number, number]> = [];
-  for (const e of normalized) {
-    const m = findEdit(matchBase, e.oldText);
-    if (!m) return false; // not-found error
-    if (countEdits(matchBase, e.oldText) > 1) return false; // duplicate error
-    ranges.push([m.index, m.index + m.length]);
-  }
-  ranges.sort((a, b) => a[0] - b[0]);
-  for (let i = 1; i < ranges.length; i++) {
-    if (ranges[i - 1][1] > ranges[i][0]) return false; // overlap error
-  }
+  const matched = matchEditRanges(rawContent, edits);
+  if (!matched) return false;
   // No-change rejection (getNoChangeError): decidable without simulating
   // pi's splice only in the fully-exact all-identical case — every block
   // replaces its range with the same text, so the result equals the base.
   // A fuzzy no-op is NOT a failure: pi rewrites the matched lines from the
   // trim-normalized base, so it usually IS a write — never claim it fails.
-  if (!needsFuzzy && normalized.every((e) => e.oldText === e.newText)) return false;
+  if (!matched.needsFuzzy && matched.normalized.every((e) => e.oldText === e.newText)) return false;
   return true;
+}
+
+/** Splice `±` markers + newText into `content`; `offset` re-bases absolute
+ *  range offsets onto a slice of the matcher base. Reverse order so earlier
+ *  offsets stay valid (pi's `applyReplacements`). */
+function markRanges(
+  content: string,
+  ranges: MatchedEditRange[],
+  offset = 0,
+): string {
+  let marked = content;
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    const r = ranges[i];
+    marked =
+      marked.slice(0, r.start - offset) +
+      `\u0001${r.order}\u0002` +
+      r.newText +
+      `\u0001${r.order}\u0003` +
+      marked.slice(r.end - offset);
+  }
+  return marked;
+}
+
+/**
+ * pi's `applyReplacementsPreservingUnchangedLines`, mirrored (see also
+ * `getReplacementLineRange`/`getLineSpans`): each replacement is widened to the
+ * lines it actually touches, the touched lines are rewritten from the folded
+ * matcher base, and every other line is copied back verbatim from the file. The
+ * ranges drive the preservation, so a line whose folded form collides with
+ * another cannot be aligned to the wrong occurrence.
+ *
+ * Without this, a fuzzy-matched edit shows the judge typographic quotes, dashes
+ * and spaces folded to ASCII on lines the edit never touched: a file line
+ * `const msg = “‑ keep ‑”;` reads back as `const msg = "- keep -";`.
+ *
+ * `null` = the fold changed the line count (pi throws on this; the view falls
+ * back to raw newText rather than showing a file that does not exist).
+ */
+function markPreservingUnchangedLines(
+  matched: NonNullable<ReturnType<typeof matchEditRanges>>,
+): string | null {
+  const rawLines = matched.base.split("\n");
+  const baseLines = matched.matchBase.split("\n");
+  if (rawLines.length !== baseLines.length) return null;
+  // Line spans in matcher-base coordinates; every line but the last carries its
+  // own "\n", which is what decides a replacement ending exactly at a line end.
+  const spans: Array<{ start: number; end: number }> = [];
+  let off = 0;
+  for (let i = 0; i < baseLines.length; i++) {
+    spans.push({ start: off, end: off + baseLines[i].length + (i === baseLines.length - 1 ? 0 : 1) });
+    off = spans[i].end;
+  }
+  const groups: Array<{ startLine: number; endLine: number; ranges: MatchedEditRange[] }> = [];
+  for (const r of matched.ranges) {
+    // ranges are already sorted by start, so groups come out sorted too.
+    const startLine = spans.findIndex((s) => r.start >= s.start && r.start < s.end);
+    if (startLine === -1) return null;
+    let endLine = startLine;
+    while (endLine < spans.length && spans[endLine].end < r.end) endLine++;
+    if (endLine >= spans.length) return null;
+    const current = groups[groups.length - 1];
+    if (current && startLine < current.endLine) {
+      current.endLine = Math.max(current.endLine, endLine + 1);
+      current.ranges.push(r);
+    } else {
+      groups.push({ startLine, endLine: endLine + 1, ranges: [r] });
+    }
+  }
+  const out: string[] = [];
+  let copied = 0;
+  for (const g of groups) {
+    out.push(...rawLines.slice(copied, g.startLine));
+    const groupStart = spans[g.startLine].start;
+    const groupEnd = spans[g.endLine - 1].end;
+    out.push(...markRanges(matched.matchBase.slice(groupStart, groupEnd), g.ranges, groupStart).split("\n"));
+    copied = g.endLine;
+  }
+  out.push(...rawLines.slice(copied));
+  return out.join("\n");
 }
 
 /**
@@ -119,10 +218,12 @@ export function editWillApply(
  * are 1-based final-file lines; '>' marks the lines the edit sets, '·'
  * context, '…' omitted runs.
  *
- * Built on a marker-stamped copy — replacement i is bracketed by
- * \u0001i\u0002 … \u0001i\u0003 — so the changed ranges are read off the FINAL
- * file (later blocks' line shifts are already reflected). Returns null when
- * a block does not match exactly once (the caller pre-validates; defensive).
+ * Shares `matchEditRanges` with `editWillApply` and splices markers in reverse
+ * offset order against the matcher base — matching pi's own non-sequential
+ * application (including CRLF and BOM) while reflecting final line shifts. On a
+ * fuzzy match the untouched lines come back from the file itself
+ * (`markPreservingUnchangedLines`), so the view never folds characters of a line
+ * the edit did not touch.
  *
  * The after-view is the edit's EFFECT (delta + where it lands). Unlike a
  * write — where the whole new file IS the effect and rides untrimmed (D11) —
@@ -132,17 +233,12 @@ export function buildEditAfterView(
   file: string,
   edits: Array<{ oldText: string; newText: string }>,
 ): string | null {
-  let marked = file;
-  for (let i = 0; i < edits.length; i++) {
-    const pos = uniqueIndexOf(marked, edits[i].oldText);
-    if (pos === -1) return null;
-    marked =
-      marked.slice(0, pos) +
-      `\u0001${i}\u0002` +
-      edits[i].newText +
-      `\u0001${i}\u0003` +
-      marked.slice(pos + edits[i].oldText.length);
-  }
+  const matched = matchEditRanges(file, edits);
+  if (!matched) return null;
+  const marked = matched.needsFuzzy
+    ? markPreservingUnchangedLines(matched)
+    : markRanges(matched.matchBase, matched.ranges);
+  if (marked === null) return null;
   const lines = marked.split("\n");
   const ranges: Array<[number, number]> = []; // 0-based final-file line ranges
   for (let i = 0; i < edits.length; i++) {
@@ -195,6 +291,12 @@ export function buildEditAfterView(
   return out.join("\n");
 }
 
+/** True when a filesystem error indicates the target does not exist (ENOENT). */
+function isEnoent(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown } | null;
+  return e?.code === "ENOENT" || (typeof e?.message === "string" && /\bENOENT\b/.test(e.message));
+}
+
 export async function handleFile(
   event: ToolCallEvent,
   ctx: ExtensionContext,
@@ -202,19 +304,42 @@ export async function handleFile(
   const toolName = event.toolName as string;
   if (!FILE_TOOLS.includes(toolName as "read" | "write" | "edit")) return;
 
-  const input = event.input as { path?: string; content?: string; edits?: Array<{ oldText: string; newText: string }> };
+  const input = (event.input ?? {}) as { path?: unknown; content?: unknown; edits?: unknown };
   const filePath = input.path;
-  if (!filePath) return;
+  // Fail closed on unexpected input shape (matching handlers/bash.ts): a custom
+  // or malformed call without a valid `path` string must not slip past the gate.
+  if (typeof filePath !== "string" || filePath.trim().length === 0) {
+    return {
+      block: true,
+      reason: `[Permission Policy] Built-in ${toolName} tool called with unexpected input shape — blocked (missing \`path\` string).`,
+    };
+  }
 
   // Resolve once — reused by pre-validation and decision engine
   const resolvedPath = resolvePathReal(expandTilde(filePath), ctx.cwd);
 
-  // Structurally validate edit calls first (no fs access).
+  // Structurally validate edit calls first (no fs access) — fail closed on
+  // missing/malformed edits rather than passing through ungated.
   let edits: Array<{ oldText: string; newText: string }> | null = null;
   if (toolName === "edit") {
-    edits = input.edits ?? null;
-    if (!edits || !Array.isArray(edits) || edits.length === 0) return;
-    if (!edits.every(e => typeof e.oldText === "string" && typeof e.newText === "string")) return;
+    const rawEdits = input.edits;
+    if (
+      !Array.isArray(rawEdits) ||
+      rawEdits.length === 0 ||
+      !rawEdits.every(
+        (e): e is { oldText: string; newText: string } =>
+          e !== null &&
+          typeof e === "object" &&
+          typeof (e as { oldText?: unknown }).oldText === "string" &&
+          typeof (e as { newText?: unknown }).newText === "string",
+      )
+    ) {
+      return {
+        block: true,
+        reason: "[Permission Policy] Built-in edit tool called with unexpected input shape — blocked (missing or malformed `edits` array).",
+      };
+    }
+    edits = rawEdits;
   }
 
   // Content being written — carried for the judge (verification input),
@@ -252,29 +377,39 @@ export async function handleFile(
     const isCredentialPath = isPathWarnedResolved(filePath, resolvedPath).warned;
 
     if (!isCredentialPath) {
+      let fileContent: string | null = null;
       try {
         // Size cap: skip pre-validation on large files rather than blocking the
         // event loop on a full synchronous read. The edit will simply prompt.
         if (fs.statSync(resolvedPath).size <= EDIT_PREVALIDATE_MAX_BYTES) {
-          const content = fs.readFileSync(resolvedPath, "utf-8");
-          // Only a call pi WILL REJECT may pass through ungated (the
-          // editWillApply mirror decides); everything else reaches the gate.
-          if (!editWillApply(content, edits)) return;
-          // Every block matches exactly once: swap the judge's input from the
-          // bare newText blocks to the AFTER-EDIT file view (replaced regions
-          // with context, line numbers). A fragment alone reads "truncated /
-          // non-self-contained" and forced a stage-2 pass — and a defer — on
-          // every safe edit; the human prompt is untouched (judge input only).
-          if (decision.kind === "prompt" && decision.promptData.type === "file") {
-            const view = buildEditAfterView(content, edits);
+          fileContent = fs.readFileSync(resolvedPath, "utf-8");
+        }
+      } catch (err) {
+        // Only ENOENT proves pi's edit will fail; any other error (EACCES,
+        // special file, etc.) fails closed into gate().
+        if (isEnoent(err)) return;
+        fileContent = null;
+      }
+
+      if (fileContent !== null) {
+        // Only a call pi WILL REJECT may pass through ungated (the
+        // editWillApply mirror decides); everything else reaches the gate.
+        if (!editWillApply(fileContent, edits)) return;
+        // Every block matches exactly once: swap the judge's input from the
+        // bare newText blocks to the AFTER-EDIT file view (replaced regions
+        // with context, line numbers). Isolated so a view-builder failure falls
+        // back to raw edits content and never skips gate().
+        if (decision.kind === "prompt" && decision.promptData.type === "file") {
+          try {
+            const view = buildEditAfterView(fileContent, edits);
             if (view) {
               decision.promptData.content = view;
               decision.promptData.contentHeading = "File after this edit";
             }
+          } catch {
+            /* fall back to raw edits content; never skip gate() */
           }
         }
-      } catch {
-        return; // Can't read file — skip prompt
       }
     }
   }
