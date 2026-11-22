@@ -129,6 +129,64 @@ function tarWrites(args: string[]): boolean {
  * an interpreter's inline program or a grep pattern is data, never a
  * destination, so the two layers share one notion of "file operand".
  */
+/**
+ * Where the location operands of an invocation are: the arguments the program
+ * treats as files, and among them which ones a `--output`-shaped flag handed
+ * it (an inline `-o=x` carries its value in the FLAG token — the index
+ * returned for it is the flag's own, which is what the parser minted too).
+ *
+ * This is `writeOperandIndices`' walk, factored out so there is exactly ONE
+ * notion of "which argument is a file": the destination half is what the role
+ * model claims, the rest are sources, and a second implementation is how a bar
+ * and a packet start disagreeing about the same command (the G3 lesson).
+ */
+function collectLocationOperands(
+  args: string[],
+  skipArgs: Set<number>,
+  flags: string[] | undefined,
+  cmd: string,
+): { positionals: number[]; flagValues: number[] } {
+  const positionals: number[] = [];
+  const flagValues: number[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith("-")) {
+      const eq = a.indexOf("=");
+      const name = eq > 0 ? a.slice(0, eq) : a;
+      if (flags?.includes(name)) {
+        if (eq > 0) {
+          if (!skipArgs.has(i)) flagValues.push(i);
+        } else if (args[i + 1] !== undefined && !args[i + 1].startsWith("-") && !skipArgs.has(i + 1)) {
+          flagValues.push(i + 1);
+          i++;
+        }
+      }
+      continue;
+    }
+    if (skipArgs.has(i) || /^\d+$/.test(a)) continue;
+    // gawk's program FILE (`-f prog.awk`) is an input the parser keeps
+    // path-checked; `-i inplace` rewrites the DATA operands, never the program.
+    if (cmd === "awk" && i > 0 && /^(?:-f|--file)$/.test(args[i - 1])) continue;
+    positionals.push(i);
+  }
+  return { positionals, flagValues };
+}
+
+/** Every operand index the command reads as a file — destination included.
+ *  `writeOperandIndices` answers which of those it WRITES; a caller that needs
+ *  the bytes flowing INTO the command (analysis/moved-content) takes the
+ *  complement. */
+export function locationOperandIndices(
+  cmd: string,
+  args: string[],
+  skipArgs: Set<number>,
+): number[] {
+  if (!cmd) return [];
+  const flags = cmd === "tar" && !tarExtracts(args) ? undefined : WRITE_FLAGS[cmd];
+  const { positionals, flagValues } = collectLocationOperands(args, skipArgs, flags, cmd);
+  return [...flagValues, ...positionals].sort((a, b) => a - b);
+}
+
 export function writeOperandIndices(
   cmd: string,
   args: string[],
@@ -153,28 +211,8 @@ export function writeOperandIndices(
   const tarArchive = cmd === "tar" ? tarWrites(args) : false;
   if (!all && !last && !first && !inPlace && !flags && !tarArchive) return out;
 
-  const positionals: number[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.startsWith("-")) {
-      const eq = a.indexOf("=");
-      const name = eq > 0 ? a.slice(0, eq) : a;
-      if (flags?.includes(name)) {
-        if (eq > 0) {
-          if (!skipArgs.has(i)) out.add(i);
-        } else if (args[i + 1] !== undefined && !args[i + 1].startsWith("-") && !skipArgs.has(i + 1)) {
-          out.add(i + 1);
-          i++;
-        }
-      }
-      continue;
-    }
-    if (skipArgs.has(i) || /^\d+$/.test(a)) continue;
-    // gawk's program FILE (`-f prog.awk`) is an input the parser keeps
-    // path-checked; `-i inplace` rewrites the DATA operands, never the program.
-    if (cmd === "awk" && i > 0 && /^(?:-f|--file)$/.test(args[i - 1])) continue;
-    positionals.push(i);
-  }
+  const { positionals, flagValues } = collectLocationOperands(args, skipArgs, flags, cmd);
+  flagValues.forEach((i) => out.add(i));
   if (all || inPlace) positionals.forEach((i) => out.add(i));
   if (last && positionals.length >= 2) out.add(positionals[positionals.length - 1]);
   if (first && positionals.length >= 1) out.add(positionals[0]);

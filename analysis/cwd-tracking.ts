@@ -578,7 +578,11 @@ function subshellBaseAccess(tokens: string[], base: CwdBase, homeFixed = false):
  * the base it operated on was never flagged. `index` is where that program's
  * argv starts, so the caller skips exactly the prefixes and the program.
  */
-function stageCommand(words: string[]): { cmd: string; index: number; capped: boolean } {
+/** Which program a stage runs, past any wrapper (`timeout 60 cp …` is `cp`),
+ *  and where its operands start. Exported for the copy-payload reader
+ *  (analysis/moved-content), which must ask the SAME question about the same
+ *  stage — a second walk is how a wrapper stops being transparent. */
+export function stageCommand(words: string[]): { cmd: string; index: number; capped: boolean } {
   let k = 0;
   while (k < words.length && ENV_ASSIGN_RE.test(words[k])) k++;
   const head = k < words.length ? path.basename(words[k]).toLowerCase() : "";
