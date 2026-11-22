@@ -104,11 +104,22 @@ export function summarizePrompt(decision: PromptDecision): string {
         : (p.relativeToolIds?.length ? `${p.relativeToolIds.slice(0, 3).map(r => r.sig).join(",")} (unlisted)` : "(unlisted)");
       parts.push(`cmd ${named}`);
     }
-    if (p.needsPathApproval) {
-      const dirs = p.outsideDirs.slice(0, 3).join(",");
+    // G3 parity with buildBashPrompt: a write-role dir is its own trigger and
+    // its own grant tier, so it is named as a write — a command allowlisted
+    // for a write outside the base prompts on needsWriteApproval alone, and
+    // `outsideDirs` (read role) is empty there, which used to degrade the
+    // reason to `cmd …` or `unclassified` with the location gone.
+    const writeDirs = (p.outsideWriteDirs ?? []).filter(d => d !== "/" && !d.startsWith("<"));
+    if (p.needsPathApproval || p.needsWriteApproval) {
+      // A dir granted write implies read, so it is named once, under writes.
+      const readDirs = p.outsideDirs.filter(d => !writeDirs.includes(d));
+      const dirs = readDirs.slice(0, 3).join(",");
+      const writes = writeDirs.slice(0, 3).join(",");
       const unres = (p.unresolved ?? []).slice(0, 3).map(u => shortenToken(u.token)).join(",");
-      if (dirs && unres) parts.push(`outside ${dirs}; unresolved ${unres}`);
-      else if (dirs) parts.push(`outside ${dirs}`);
+      const loc = [dirs && `outside ${dirs}`, writes && `write outside ${writes}`]
+        .filter(Boolean).join("; ");
+      if (loc && unres) parts.push(`${loc}; unresolved ${unres}`);
+      else if (loc) parts.push(loc);
       else if (unres) parts.push(`unresolved ${unres}`);
     }
     return parts.join("; ") || "unclassified";

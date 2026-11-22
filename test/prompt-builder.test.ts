@@ -1008,6 +1008,42 @@ describe("bash prompt: LLM/confirmed token resolutions", () => {
     expect(s).toContain(long.slice(0, 59) + "…");
     expect(s).not.toContain(long);
   });
+
+  it("names the write target when a write-role dir is the only path trigger (G3)", () => {
+    // An allowlisted command writing outside the base fires on
+    // needsWriteApproval alone: outsideDirs is empty there, and the reason
+    // used to carry no location at all (`cmd …` / `unclassified`).
+    const d = bashDecision({
+      command: "touch notes.md",
+      signatures: ["touch"],
+      needsCommandApproval: false,
+      needsPathApproval: false,
+      needsWriteApproval: true,
+      outsideWriteDirs: ["/home/user/notes"],
+    });
+    expect(summarizePrompt(d)).toBe("write outside /home/user/notes");
+  });
+
+  it("names read and write dirs separately, a write dir never repeated as a read",
+    () => {
+      const d = bashDecision({
+        needsPathApproval: true,
+        outsideDirs: ["/etc/config", "/home/user/notes"],
+        needsWriteApproval: true,
+        outsideWriteDirs: ["/home/user/notes"],
+      });
+      expect(summarizePrompt(d)).toBe("outside /etc/config; write outside /home/user/notes");
+    });
+
+  it("keeps the root and sentinel write dirs out of the reason", () => {
+    // Same filter as the prompt body: the root is never a grant, and a
+    // <unresolved-…> marker can never match one — `unresolved` carries those.
+    const d = bashDecision({
+      needsWriteApproval: true,
+      outsideWriteDirs: ["/", "<unresolved-token>"],
+    });
+    expect(summarizePrompt(d)).toBe("unclassified");
+  });
 });
 
 // ── Coverage: Always options whose scope a standing grant covers ────────
