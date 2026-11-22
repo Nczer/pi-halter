@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +19,12 @@ beforeEach(() => {
   // Canonical (macOS: os.tmpdir() → /private/var/folders) — the gate
   // resolves paths, so expectations must name the resolved form.
   base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tool-gate-")));
+});
+
+afterEach(() => {
+  // The gate resolves real paths, so this is a real directory — one full run
+  // leaks a tmpdir per test without removing it.
+  fs.rmSync(base, { recursive: true, force: true });
 });
 
 function execReq(overrides: Partial<ToolRequest> = {}): ToolRequest {
