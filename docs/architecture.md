@@ -746,8 +746,9 @@ auto-allow only behind the floor.
 Settings (`/judge`: bare = show; `on|off`, `model <provider/id|session>`,
 `thinking <level>`, `timeout <ms>` — first-token deadline, see above) persist
 in the `halter` namespace of
-`~/.pi/agent/settings-ext.json` via `halter-settings.ts` (stat-cached reads,
-corrupt file → `.bak` + defaults, defaults materialized on first read).
+`~/.pi/agent/settings-ext.json` via `halter-settings.ts` — a typed facade over
+the vendored `ext-settings.ts` (stat-cached reads, corrupt file → `.bak` +
+defaults, defaults materialized on first read).
 
 ### Path resolution fallback (second use of the judge model)
 
@@ -979,6 +980,7 @@ Target layout, locked by the 2026-09-02 structure grill. `analysis/`,
 ```
 index.ts                  entry: events, /dsp* commands, /judge, wiring
 halter-settings.ts        owner of the halter namespace in settings-ext.json
+                          (facade over ext-settings.ts, vendored from ui-kit)
 decide/
   engine.ts               async dispatcher: request type → policy → Decision
   types.ts                Decision, PromptData, requests, DecideOptions
