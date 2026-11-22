@@ -62,6 +62,7 @@ vi.mock("../decide/rule-generator", () => ({
 }));
 
 import { showPrompt } from "../ui/prompt-flow";
+import * as decisionLog from "../gate/decision-log";
 import type { DspaFallthrough } from "../gate/fallthrough";
 import type { MissFact } from "../gate/dspa-gate";
 import { createStore } from "../gate/store";
@@ -767,5 +768,46 @@ describe("unresolved ledger on a dspa miss stop", () => {
     const bare: DspaFallthrough = { gate: { ok: false, stopClass: "network-egress", reason: "network egress (https://x.y/z)" }, verdict: null, stage: null };
     await showPrompt(decision(), ctx, createStore(), bare);
     expect(rows().map((r) => r.outcome)).toEqual(["gate-stop", "gate-stop"]);
+  });
+});
+
+describe("path ledger: the two prompt-flow sites pass ctx", () => {
+  // judgePathLogFields splits a judge path report against the floor AND the
+  // Session context the judge was shown. Without ctx that second side is
+  // `undefined` and every context echo — a path the parser missed but the
+  // session carried — is filed as `floorMisses`, i.e. as a parser blind spot
+  // the floor does not have. Measured on the live judge ledger: 82 floorMiss
+  // entries vs 29 contextMiss entries, so the omission misfiles about a
+  // quarter of the misses. gate/fallthrough.ts passes ctx at all three of its
+  // sites; these two (the /dspat on-demand pass, the Judge-again retry) did not.
+  const approveHigh = {
+    model: "llama-cpp/qwen", explanation: "E.", approve: "approve" as const, risk: "high" as const,
+    reason: "r", latencyMs: 10, cached: false, paths: ["/x/outside"],
+  };
+  const request: PermissionRequest = { type: "bash", command: "rm -rf /tmp/test", cwd: "/home/user/project" };
+  let spy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    spy = vi.spyOn(decisionLog, "logJudgePaths").mockImplementation(() => {});
+  });
+  afterEach(() => vi.mocked(decisionLog.logJudgePaths).mockRestore());
+
+  it("/dspat on-demand pass", async () => {
+    setDspatActive(true);
+    stage2Mock.mockResolvedValue(approveHigh);
+    await showPrompt(bashDecision(), ctx, store);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "rm -rf /tmp/test" }), store, approveHigh, "dspat", ctx,
+    );
+  });
+
+  it("Judge-again retry (a non-allowing retry reports its own paths)", async () => {
+    stage2Mock.mockResolvedValue(approveHigh);
+    const dspa = { gate: { ok: true }, verdict: null, stage: null, note: "judge call failed" } as DspaFallthrough;
+    await showPrompt(bashDecision(), ctx, store, dspa, request);
+    await retryArg()!.retry();
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "rm -rf /tmp/test" }), store, approveHigh, "dspa", ctx,
+    );
   });
 });

@@ -218,7 +218,14 @@ export async function showPrompt(
       const o2 = await getStage2Outcome(pd, ctx, store);
       const v1 = o1.verdict, v2 = o2.verdict;
       logJudgeDiff(pd, "dspat", v1, v2);
-      if (v2) logJudgePaths(pd, store, v2, "dspat");
+      // ctx is what separates the two miss kinds: without it the session
+      // context the judge actually saw is `undefined` in judge/paths.ts, so
+      // every context echo — a path the parser missed but Session context
+      // carried — files as a `floorMiss` (a parser blind spot we don't have).
+      // Measured on the live judge ledger: 82 floorMiss entries vs 29
+      // contextMiss entries, so roughly a quarter of the misses here would be
+      // misattributed.
+      if (v2) logJudgePaths(pd, store, v2, "dspat", ctx);
       const verdict = v2 ?? v1;
       if (verdict) {
         dspatVerdict = verdict;
@@ -292,7 +299,7 @@ export async function showPrompt(
               v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium");
             // dspaAutoAllowed logs the path report itself — logging it here
             // too would write the same stage-2 verdict to the ledger twice.
-            if (v2 && !allows) logJudgePaths(pd, store, v2, "dspa");
+            if (v2 && !allows) logJudgePaths(pd, store, v2, "dspa", ctx);
             if (allows) {
               dspaAutoAllowed(request, pd, ctx, store, v2, 2);
               return { autoAllowed: true, body: null };
