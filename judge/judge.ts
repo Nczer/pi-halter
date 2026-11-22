@@ -270,8 +270,15 @@ const EXPLANATION_MAX_CHARS = 240;
 function sentenceCut(text: string, max: number): { text: string; cut: boolean } {
   if (text.length <= max) return { text, cut: false };
   const head = text.slice(0, max);
-  const first = head.match(/^[^!?]*[.!?](?=\s|$)/);
-  if (first && first[0].length >= 40) return { text: first[0], cut: true };
+  // Scan left-to-right for the FIRST sentence terminator at or past 40 chars
+  // (the old greedy `^[^!?]*[.!?]` matched to the last period under `max`,
+  // keeping multiple sentences).
+  const re = /[.!?](?=\s|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(head)) !== null) {
+    const end = m.index + 1;
+    if (end >= 40) return { text: head.slice(0, end), cut: true };
+  }
   const sp = head.lastIndexOf(" ");
   if (sp > 0) return { text: head.slice(0, sp), cut: true };
   return { text: head, cut: true };
