@@ -111,7 +111,15 @@ export async function loadPlugins(root?: string): Promise<Map<string, PluginSlot
     return slots;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    let isDir = entry.isDirectory();
+    if (!isDir && entry.isSymbolicLink()) {
+      try {
+        isDir = fs.statSync(path.join(base, entry.name)).isDirectory();
+      } catch {
+        isDir = false; // dangling symlink — ignore
+      }
+    }
+    if (!isDir) continue;
     const file = path.join(base, entry.name, "halter", "index.ts");
     if (!fs.existsSync(file)) continue;
     try {
