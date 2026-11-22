@@ -90,7 +90,7 @@ import type { ResolutionMap } from "../judge/path-resolver";
 import { isTrustedScriptPath } from "../config/trusted-scripts";
 import { isGlobUnverified, globUnverifiedToken, PROC_SECRET_RE } from "../analysis/credentials";
 import { credentialAccreditation } from "./accreditation";
-import { cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, IN_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
+import { cdBaseBounds, baseWriteAccess, OUT_REDIRECT_RE, BARE_REDIRECT_RE } from "../analysis/cwd-tracking";
 import { rootScanTarget } from "../analysis/evaluators/disk-evaluator";
 import { getDelegatedCommand, segmentFetchPackage, segmentFetchOptionsOk } from "../analysis/segment-helpers";
 import { operativeTokens, staticRootOf, unquote as cleanToken } from "../analysis/delete-scale";
@@ -1018,7 +1018,7 @@ export async function checkDspaGate(
   const hasRm = analysis.segments.some(isRmSegment);
   if (hasRm) {
     // rm carve-out: bounded, explicit targets only (see header).
-    const rm = checkRmTargets(analysis.segments, pd.cwd, isInsideManualBar);
+    const rm = checkRmTargets(analysis.segments, pd.cwd, isInsideManualBar, analysis.effectiveCwds);
     if (rm.reason) return { ok: false, stopClass: "delete-scale", reason: rm.reason, advisory: true };
     outsideExempt = rm.exempt;
     // Non-rm dangerous reasons still stop the auto-allow: the carve-out
@@ -1518,6 +1518,7 @@ function checkRmTargets(
   segments: string[],
   cwd: string,
   isInsideBase: (p: string) => boolean,
+  effectiveCwds?: Array<string | null>,
 ): { reason: string | null; exempt: Set<string> } {
   // ORDER matters for the carve-out (create-THEN-delete): a self-write
   // counts only for rm targets in LATER segments, and a write is "cleaned"
@@ -1527,24 +1528,52 @@ function checkRmTargets(
   const writtenBefore = new Set<string>(); // writes from strictly earlier segments
   const writesAt = new Map<string, number[]>(); // path → writing segment indices
   const rmsAt = new Map<string, number[]>(); // path → rm segment indices
+  const normSessionCwd = resolvePathReal(expandTilde(cwd), "/");
   const record = (m: Map<string, number[]>, p: string, i: number) => {
     const idxs = m.get(p);
     if (idxs) idxs.push(i);
     else m.set(p, [i]);
+  };
+  const recordSelfWrite = (resolved: string, i: number) => {
+    record(writesAt, resolved, i);
+    // Create-then-delete exemption only applies to paths that are in-base or
+    // did not already exist on disk — overwriting a pre-existing out-of-base
+    // file and rm-ing it destroys pre-existing data.
+    if (isInsideBase(resolved) || !fs.existsSync(resolved)) {
+      writtenBefore.add(resolved);
+    }
   };
   const noPreserveRoot = () => ({ reason: "rm with --no-preserve-root" as string | null, exempt: new Set<string>() });
 
   // First pass: collect self-written paths (ordered by segment) and rm targets.
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
+    const segCwd = effectiveCwds ? (effectiveCwds[i] ?? null) : cwd;
+    const normSegCwd = segCwd !== null && !isUnresolvedPath(segCwd)
+      ? resolvePathReal(expandTilde(segCwd), "/")
+      : null;
     const words = operativeTokens(seg);
     if (isRmSegment(seg)) {
-      if (words.includes("--no-preserve-root")) return noPreserveRoot();
-      const args = words.slice(1).filter((t) => !t.startsWith("-"));
+      // Stop flag parsing at `--` so targets starting with `-` are never
+      // dropped and tokens after `--` are never misread as `-r`/`--no-preserve-root`.
+      let recursive = false;
+      let pastFlags = false;
+      const args: string[] = [];
+      for (const tok of words.slice(1)) {
+        if (!pastFlags && tok === "--") {
+          pastFlags = true;
+          continue;
+        }
+        if (!pastFlags && tok.startsWith("-") && tok !== "-") {
+          if (tok === "--no-preserve-root") return noPreserveRoot();
+          if (tok === "--recursive" || (!tok.startsWith("--") && /[rR]/.test(tok))) {
+            recursive = true;
+          }
+          continue;
+        }
+        args.push(tok);
+      }
       if (args.length === 0) return { reason: "rm without explicit targets", exempt: new Set() };
-      const recursive = words.slice(1).some(
-        (t) => t === "--recursive" || (t.startsWith("-") && !t.startsWith("--") && t !== "-" && /[rR]/.test(t)),
-      );
       for (const a of args) {
         // A pure tilde is deterministic (always $HOME) — not a hidden value
         // like a glob or variable. Expand it first, then apply the
@@ -1569,13 +1598,19 @@ function checkRmTargets(
           return { reason: `delete target not static (${target.slice(0, 40)})`, exempt: new Set() };
         }
         if (target === "-") return { reason: "rm reading from stdin", exempt: new Set() };
+        if (!path.isAbsolute(target) && normSegCwd === null) {
+          return { reason: `rm target under unresolvable working directory (${a.slice(0, 40)})`, exempt: new Set() };
+        }
+        const baseForSeg = normSegCwd ?? normSessionCwd;
         // For a glob the bar check runs on the operand's STATIC ROOT — the
         // deepest metachar-free dir, which is what the pattern can reach.
-        const resolved = resolvePathReal(glob ? staticRootOf(target, cwd) : target, cwd);
+        const resolved = resolvePathReal(glob ? staticRootOf(target, baseForSeg) : target, baseForSeg);
         // A glob rooted at the cwd deletes its ENTRIES, not the directory
         // itself (the shell never expands `*` to `.`) — only an operand that
-        // names the cwd is the self-delete case.
-        if (resolved === cwd && !glob) return { reason: "rm target is the working directory itself", exempt: new Set() };
+        // names the cwd (session or effective) is the self-delete case.
+        if (!glob && (resolved === normSessionCwd || (normSegCwd !== null && resolved === normSegCwd))) {
+          return { reason: "rm target is the working directory itself", exempt: new Set() };
+        }
         if (recursive && !glob) {
           // An explicit recursive target that exists must be a dir or
           // self-written; a glob's entries are counted by the delete-scale
@@ -1600,22 +1635,22 @@ function checkRmTargets(
         }
       }
     } else {
-      // Self-written paths from this earlier segment. Quote-aware token scan:
-      // a `>` inside quotes (echo "a > b") is data, not a redirect — the old
-      // raw-text regex fabricated a self-write for it.
+      // Self-written paths from this earlier segment. Output redirects ONLY —
+      // input redirects (`<`) read a file and must never exempt a subsequent rm.
       const tokens = tokenizeSegment(seg);
       for (let ti = 0; ti < tokens.length; ti++) {
         const tok = tokens[ti];
-        const m = tok.match(OUT_REDIRECT_RE) ?? tok.match(IN_REDIRECT_RE);
+        const m = tok.match(OUT_REDIRECT_RE);
         let target: string | null = null;
         if (m) target = m[2] !== "" ? m[2] : (tokens[ti + 1] ?? null);
-        else if (BARE_REDIRECT_RE.test(tok)) target = tokens[ti + 1] ?? null;
-        if (target === null || target.startsWith("&")) continue; // fd duplication (2>&1, > &1)
+        else if (BARE_REDIRECT_RE.test(tok) && tok.includes(">")) target = tokens[ti + 1] ?? null;
+        if (target === null || target.startsWith("&") || /^\d+$/.test(target)) continue; // fd duplication (2>&1, > &1)
         if (RM_NOT_CONCRETE_RE.test(target)) continue; // glob/var/computed — never a concrete self-write
-        const resolved = resolvePathReal(expandTilde(target), cwd);
+        const expanded = expandTilde(target);
+        if (!path.isAbsolute(expanded) && normSegCwd === null) continue;
+        const resolved = resolvePathReal(expanded, normSegCwd ?? normSessionCwd);
         if (isDevNullish(resolved)) continue;
-        writtenBefore.add(resolved);
-        record(writesAt, resolved, i);
+        recordSelfWrite(resolved, i);
       }
       // Self-write commands per pipeline stage — `a | tee f` hides tee
       // behind the segment's first word. splitOnPipe is quote-aware.
@@ -1626,10 +1661,11 @@ function checkRmTargets(
         for (const t of sw.slice(1)) {
           const target = cleanToken(t);
           if (t.startsWith("-") || /^[\d<>]/.test(t) || RM_NOT_CONCRETE_RE.test(target)) continue;
-          const resolved = resolvePathReal(expandTilde(target), cwd);
+          const expanded = expandTilde(target);
+          if (!path.isAbsolute(expanded) && normSegCwd === null) continue;
+          const resolved = resolvePathReal(expanded, normSegCwd ?? normSessionCwd);
           if (isDevNullish(resolved)) continue;
-          writtenBefore.add(resolved);
-          record(writesAt, resolved, i);
+          recordSelfWrite(resolved, i);
         }
       }
     }
