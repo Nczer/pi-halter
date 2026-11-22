@@ -119,6 +119,30 @@ describe("D21 baseWriteAccess: write-verb class", () => {
     expect(baseWriteAccess({ text: "cat x | tee out.txt", ops: ["|"], hasSubshell: false })).toBe(true);
   });
 
+  it("the write-OPERAND table decides, so a read-only operand does not flag the base", () => {
+    // The verb list alone drifts from the write bar it stands for: `rm`,
+    // `truncate`, `gzip`, `sort -o` and `perl -i` rewrite a file in the base and
+    // were not in the list, while `cp src /tmp/dst` was — and its only write
+    // lands at `/tmp/dst`, which the path set already names. Both answers now
+    // come from `writeOperandIndices` (analysis/write-roles.ts), the table the
+    // write bar and the parser use (G3).
+    for (const text of [
+      "rm -rf sub",
+      "truncate -s 0 f",
+      "gzip f",
+      "sort -o out.txt in.txt",
+      "perl -i -pe 's/a/b/' f",
+      "tar cf out.tar .",
+      "tar xf a.tar -C out",
+      "find . -delete",
+    ]) {
+      expect(seg(text), text).toBe(true);
+    }
+    for (const text of ["cp src /tmp/dst", "mv src /abs/dst", "install -m 644 rel /abs/x"]) {
+      expect(seg(text), text).toBe(false);
+    }
+  });
+
   it("non-writing commands and resolvable-only targets do not", () => {
     for (const text of [
       "ls corpus-patches/patches",

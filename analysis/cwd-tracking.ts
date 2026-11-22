@@ -744,94 +744,87 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
  * flags their base for the read bar).
  */
 
-/** Commands whose common use creates/modifies files at their targets
- * (D18 class 3, added D21). A bare (base-resolving) target under a
- * re-based base is a write to the base. git is absent as a verb:
- * subcommand-dependent (status/log don't write; `apply`/`am` are matched by
- * their own test above), and a bare `git commit`
- * rides on the judge's verdict. */
-const WRITE_VERB_BASE = new Set(["mkdir", "mv", "cp", "touch", "tee", "ln", "chmod", "chown", "chgrp", "install"]);
 export function baseWriteAccess(seg: BashSegment): boolean {
-  const tokens = tokenizeSegment(seg.text);
+  // Quote-aware tokenization & stage splitting (matching baseAccessPath) so
+  // quoted pipes like `grep "a|b" > out` are not split into bogus stages.
+  const quotedTokens = tokenizeSegmentQuoted(seg.text);
   let ti = 0;
-  while (ti < tokens.length && ENV_ASSIGN_RE.test(tokens[ti])) ti++;
-  const first = tokens[ti] ? path.basename(tokens[ti]).toLowerCase() : "";
+  while (ti < quotedTokens.length && ENV_ASSIGN_RE.test(quotedTokens[ti].text)) ti++;
+  const first = quotedTokens[ti] ? path.basename(quotedTokens[ti].text).toLowerCase() : "";
   if (seg.hasSubshell || first === "(" || first === "{") return false;
 
   // Every stage of the pipe resolves operands under the base (same reasoning
   // as baseAccessPath): `cat x | wc -l > out` writes the base, not only the
   // head stage's redirect.
-  const stages = splitPlainStages(tokens.slice(ti));
+  const stages = splitQuotedStages(quotedTokens.slice(ti));
 
   // (1) Bare output-redirect target: the file lands in the base.
   for (const stage of stages) {
     for (let i = 0; i < stage.length; i++) {
-      const tok = stage[i];
+      const qt = stage[i];
+      const tok = qt.text;
       const mOut = tok.match(OUT_REDIRECT_RE);
       if (mOut) {
-        const target = mOut[2] !== "" ? mOut[2] : (stage[i + 1] ?? null);
-        if (target === null || target.startsWith("&") || /^\d+$/.test(target)) continue; // fd duplication
-        if (!isResolvableTarget(target)) return true;
+        const targetTok = mOut[2] !== "" ? { ...qt, text: mOut[2] } : (stage[i + 1] ?? null);
+        if (targetTok === null || targetTok.text.startsWith("&") || /^\d+$/.test(targetTok.text)) continue; // fd duplication
+        if (!isResolvableTarget(targetTok.text, targetTok.hasExpansion ?? true)) return true;
         continue;
       }
-      if (BARE_REDIRECT_RE.test(tok)) {
+      if (BARE_REDIRECT_RE.test(tok) && tok.includes(">")) {
         // Bare `<` is an input redirect (a read); only the `>` forms write.
-        if (tok.includes(">")) {
-          const target = stage[i + 1] ?? null;
-          if (target !== null && !target.startsWith("&") && !/^\d+$/.test(target) && !isResolvableTarget(target)) return true;
+        const targetTok = stage[i + 1] ?? null;
+        if (
+          targetTok !== null
+          && !targetTok.text.startsWith("&")
+          && !/^\d+$/.test(targetTok.text)
+          && !isResolvableTarget(targetTok.text, targetTok.hasExpansion ?? true)
+        ) {
+          return true;
         }
       }
     }
   }
 
-  // (3) Write-verb stage with a base-resolving target (D21): mkdir/mv/cp/…
-  // — the file lands in the re-based base and the path set sees only the
-  // base (D20's base flag). Any pipeline stage counts (a pipeline shares
-  // the effective cwd: `cat x | tee f`); flags and bare numbers are not
-  // targets; resolvable targets enter the path set themselves.
-  {
-    let sawVerb = false;
-    for (const st0 of stages) {
-      const st = stageCommand(st0);
-      if (st.capped) return true; // no program identity: assume it writes the base
-      const cmd = st.cmd;
+  // (3) Write-verb stage with a base-resolving target (D21 / G3): reuse the
+  // single source of truth (`writeOperandIndices` in analysis/write-roles.ts)
+  // so verbs like rm/truncate/gzip/xz/perl -i/sort -o stay in sync with the
+  // write bar and read-only operands (e.g. `cp bare_src /tmp/dst`) do not
+  // false-flag the base as written.
+  for (const st0 of stages) {
+    const stageTexts = st0.map((t) => t.text);
+    const st = stageCommand(stageTexts);
+    if (st.capped) return true; // no program identity: assume it writes the base
+    const cmd = st.cmd;
+    const stageArgs = stageTexts.slice(st.index + 1);
       // git is absent from the verb table because its verb is the SUBCOMMAND
-      // (`status` reads, `apply` rewrites the working tree). The subcommand-aware
-      // operand rule mints a repository the command NAMES (`git -C DIR apply p`);
-      // here the repository IS the base, so the proxy stands in — otherwise
-      // `cd repo && git apply p` named no write at all.
-      if (cmd === "git" && gitOperandRoles(st0.slice(st.index + 1))?.writesRepo) return true;
-      const sedInPlace = cmd === "sed" &&
-        st0.slice(st.index + 1).some((t) => /^-[a-bd-gj-zA-Z]*i[^\s/]*$/.test(t) || t.startsWith("--in-place"));
-      if (!WRITE_VERB_BASE.has(cmd) && !sedInPlace) continue;
-      sawVerb = true;
-      const stageArgs = st0.slice(st.index + 1);
-      const skipVerbArgs = nonFileArgIndices(cmd, stageArgs);
-      for (let ai = 0; ai < stageArgs.length; ai++) {
-        if (skipVerbArgs.has(ai)) continue;
-        const t = stageArgs[ai];
-        if (t.startsWith("-") || /^\d+$/.test(t)) continue;
-        if (!isResolvableTarget(t)) return true;
+    // (`status` reads, `apply` rewrites the working tree).
+    if (cmd === "git" && gitOperandRoles(stageArgs)?.writesRepo) return true;
+    const skipVerbArgs = nonFileArgIndices(cmd, stageArgs);
+    const writeIdx = writeOperandIndices(cmd, stageArgs, skipVerbArgs);
+    for (const ai of writeIdx) {
+      let t = stageArgs[ai];
+      if (t === undefined) continue;
+      if (t.startsWith("-")) {
+        const eq = t.indexOf("=");
+        if (eq === -1 || eq >= t.length - 1) continue;
+        t = t.slice(eq + 1);
       }
+      if (/^\d+$/.test(t)) continue;
+      if (!isResolvableTarget(t, st0[st.index + 1 + ai]?.hasExpansion ?? true)) return true;
     }
-    if (sawVerb) return false; // only resolvable targets: the path set covers them
   }
 
   // (2) Inline code under the base — but the BODY decides, not the shape of
   // the call. An interpreter whose code the parser could read and which
-  // contains no write primitive reads the base, it does not write it: 8 of the
-  // 74 prompts in the 2026-10-16 ledger were `write outside base` on commands
-  // like `cd ~/x && python3 -c "json.load(open('f.json'))"`, and their
-  // Always-Allow tier would have stored a session WRITE grant for a read.
-  // A body we cannot read (a program from a variable, a heredoc the shell
-  // expands, a body the parser never saw) stays write-capable.
+  // contains no write primitive reads the base, it does not write it.
   for (const stage0 of stages) {
-    const st = stageCommand(stage0);
+    const stageTexts = stage0.map((t) => t.text);
+    const st = stageCommand(stageTexts);
     if (st.capped) return true; // no program identity: assume it writes the base
     const cmd = st.cmd;
     const shell = SHELL_INTERPRETERS.has(cmd);
     if (!SCRIPT_INTERPRETERS.has(cmd) && !shell) continue;
-    const rest = stage0.slice(st.index + 1);
+    const rest = stageTexts.slice(st.index + 1);
     const hasHeredoc = seg.ops.includes("<<") || rest.some((t) => t.startsWith("<<"));
     const hasInlineFlag = rest.includes("-c") || rest.includes("-e");
     if (!hasHeredoc && !hasInlineFlag) continue;
@@ -840,7 +833,8 @@ export function baseWriteAccess(seg: BashSegment): boolean {
   return false;
 }
 
-/** Quote-aware pipeline-stage split over tokenized segment text. */function splitQuotedStages(tokens: QuotedToken[]): QuotedToken[][] {
+/** Quote-aware pipeline-stage split over tokenized segment text. */
+function splitQuotedStages(tokens: QuotedToken[]): QuotedToken[][] {
   const stages: QuotedToken[][] = [];
   let cur: QuotedToken[] = [];
   for (const qt of tokens) {
@@ -849,22 +843,6 @@ export function baseWriteAccess(seg: BashSegment): boolean {
       cur = [];
     } else {
       cur.push(qt);
-    }
-  }
-  stages.push(cur);
-  return stages;
-}
-
-/** Same split for plain (quote-stripped) tokens. */
-function splitPlainStages(tokens: string[]): string[][] {
-  const stages: string[][] = [];
-  let cur: string[] = [];
-  for (const t of tokens) {
-    if (t === "|" || t === "|&") {
-      stages.push(cur);
-      cur = [];
-    } else {
-      cur.push(t);
     }
   }
   stages.push(cur);

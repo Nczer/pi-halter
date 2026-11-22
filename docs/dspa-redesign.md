@@ -930,7 +930,12 @@ paths + config write paths + project-pi). Stop: `write outside base
      (D20's base flag). Any pipeline stage counts (shared effective cwd:
      `cat x | tee f`); resolvable targets enter the path set themselves.
      git is deliberately absent — subcommand-dependent (status/log don't
-     write).
+     write). 3.56.0 (G3): "which operand does this verb write" is no longer
+     spelled out here — the class asks `writeOperandIndices`
+     (`analysis/write-roles.ts`), the table the parser and the write bar
+     already use, so `rm`, `truncate`, `gzip`, `sort -o` and `perl -i` count
+     as base writes and a read-only operand (`cp src /tmp/dst`, whose one
+     write lands where the path set already named it) no longer does.
 - **Out of scope (stay judgeable / unchanged):** base READS (`cd X && ls`);
   inline code under the SESSION cwd (the working set — bases inside the
   session cwd are skipped, mirroring the file branch, which never stops a
@@ -1134,13 +1139,15 @@ skills` (read-allowed, non-write-granted — the D18 stop correctly offered
   far beyond the working set); a bounded effect in an ungranted or
   outside-base directory is not. The judge may still weigh affected dirs —
   never grant state.
-- **D18 class 3** (`baseWriteAccess`): a write-verb stage (mkdir, mv, cp,
-  touch, tee, ln, chmod, chown, chgrp, install; sed only with
-  `-i`/`--in-place`) with at least one bare (non-resolvable) target under
-  a re-based base — the file lands in the base and the path set sees only
-  the base (D20's base flag). Any pipeline stage counts (a pipeline
-  shares the effective cwd — `cat x | tee f`); resolvable targets enter
-  the path set themselves (read bar / D19 handle them). git is
+- **D18 class 3** (`baseWriteAccess`): a write-verb stage with at least one
+  bare (non-resolvable) WRITE operand under a re-based base — the file lands
+  in the base and the path set sees only the base (D20's base flag). Which
+  operand a verb writes is `writeOperandIndices` (`analysis/write-roles.ts`,
+  3.56.0/G3), the same table the parser and the write bar use: rm, truncate,
+  gzip, `sort -o`, `perl -i` count; a read-only operand does not
+  (`cp src /tmp/dst` writes `/tmp/dst` and reads `src`). Any pipeline stage
+  counts (a pipeline shares the effective cwd — `cat x | tee f`); resolvable
+  targets enter the path set themselves (read bar / D19 handle them). git is
   deliberately absent — subcommand-dependent (status/log don't write);
   a bare `git commit` rides on the (now clean) judge's verdict. Bases
   inside the session cwd stay the working set (skipped, as before).

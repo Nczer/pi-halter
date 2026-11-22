@@ -380,7 +380,7 @@ nothing, so they cannot gain a prompt).
 A repository named by the SHELL's cwd (`cd repo && git apply p`) has no token to
 mint — that one is the D-h base-write proxy, which is why `baseWriteAccess`
 (cwd-tracking) asks `gitOperandRoles` for the same answer rather than consulting
-the write-verb table: git is absent there too, because its verb is the
+the write-role table: git is absent there too, because its verb is the
 subcommand. Both layers share the predicate, and both keep bare-relative
 operands unminted (see `isResolvableTarget`: minting one resolves it against the
 PARSE-time cwd, which after a `cd` is a folder the command never reads — and a
