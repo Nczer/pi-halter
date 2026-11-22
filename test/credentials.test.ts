@@ -74,6 +74,29 @@ describe("checkCommandForCredentialPaths", () => {
     });
   }
 
+  // Case-folded scanning: `warnPaths` is authored lowercase, and the same name
+  // spelled otherwise reaches the same bytes on a case-folding volume (APFS,
+  // NTFS — the macOS default). On a case-sensitive volume the variants are
+  // neighbouring files, and the warn tier's cost is one prompt, not a block.
+  const caseCases: [string, string][] = [
+    ["cat .ENV", ".env"],
+    ["cat .Env.production", ".env.*"],
+    ["cat .AWS/credentials", ".aws"],
+    ["cat .SSH/id_rsa", ".ssh"],
+    ["cat keys/Key.PEM", "*.pem"],
+    ["cat .NPMRC", ".npmrc"],
+    ["cat ID_RSA", "id_rsa"],
+    ["cat .Git-CREDENTIALS", ".git-credentials"],
+    ["cat .DOCKER/config.json", ".docker/config.json"],
+    ["cat '.ENV.local'", ".env.*"],
+    ["export X=.AWS && cat $X", ".aws"],
+  ];
+  for (const [cmd, rule] of caseCases) {
+    it(`flags the same credential named in another case: ${cmd}`, () => {
+      expect(checkCommandForCredentialPaths(cmd, cwd)).toBe(rule);
+    });
+  }
+
   const safeCases = [
     "cat regular.txt",
     "ls -la",
@@ -653,6 +676,17 @@ describe("isAccreditableCredentialPath (the ceiling)", () => {
     expect(isAccreditableCredentialPath("/srv/app/.env.production.pem")).toBe(false);
     expect(isAccreditableCredentialPath("/home/op/.ssh/id_ed25519")).toBe(false);
     expect(isAccreditableCredentialPath("/srv/app/.envrc")).toBe(false);
+  });
+
+  it("folds case the same way the scanner does", () => {
+    // A ceiling that reads one spelling while the scanner reads both would let
+    // `cat /srv/certs/Key.PEM` inside an accredited dir lift on a name the
+    // lowercase path could never lift. Folding the ceiling can only ever lift
+    // the same set of files the lowercase spelling already could.
+    expect(isAccreditableCredentialPath("/MNT/CERTS/CA-KEY.PEM")).toBe(true);
+    expect(isAccreditableCredentialPath("/HOME/OP/.SSH/id_rsa")).toBe(false);
+    expect(isAccreditableCredentialPath("/HOME/OP/.SSH/ID_RSA.PEM")).toBe(false);
+    expect(isAccreditableCredentialPath("/SRV/APP/.ENV.Production")).toBe(false);
   });
 
   it("pseudo-fs secrets are never liftable (docs/dspa-intent-floor.md §4.3)", () => {

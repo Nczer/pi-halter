@@ -51,8 +51,13 @@ import {
  * Loose match — false positives just trigger the more expensive resolve+check.
  * Matches credential file/dir name roots: .ssh, .env, .aws, .docker/config.json,
  * standalone keyfile basenames (id_rsa), .envrc, and *.pem file names.
+ *
+ * Case-insensitive: on a case-insensitive volume (APFS, the default on macOS)
+ * `.ENV.local` and `Key.PEM` ARE the credential files, and the pattern list is
+ * authored lowercase. On a case-sensitive volume the variants are other files,
+ * and the cost of matching them is one prompt (the warn tier never blocks).
  */
-export const CREDENTIAL_SCAN_RE = /\.(?:ssh|gnupg|gpg|vault|secret|secrets|env|envrc|aws|gcloud|azure|git-credentials|hg|netrc|npmrc|pypirc|docker|pem)\b|\bid_(?:rsa|ed25519|ecdsa|dsa)\b/;
+export const CREDENTIAL_SCAN_RE = /\.(?:ssh|gnupg|gpg|vault|secret|secrets|env|envrc|aws|gcloud|azure|git-credentials|hg|netrc|npmrc|pypirc|docker|pem)\b|\bid_(?:rsa|ed25519|ecdsa|dsa)\b/i;
 
 /**
  * Marker prefix for a warn raised by a FAILED GLOB-EXPANSION PROBE (the
@@ -79,11 +84,17 @@ export function globUnverifiedToken(value: string | null | undefined): string {
  *  refuses them, so the class has one owner rather than a regex per call site. */
 export const PROC_SECRET_RE = /\/proc\/[^/]+\/(environ|cmdline)\b/;
 
-/** `warnPaths` entries that are suffix globs, as their suffix (`*.pem` → `.pem`). */
-const CREDENTIAL_SUFFIX_RULES = warnPaths.filter((r) => r.startsWith("*."));
+/** `warnPaths` suffix globs, as their lowercased suffix (`*.pem` → `.pem`). */
+const SUFFIX_RULES_CI = warnPaths
+  .filter((r) => r.startsWith("*."))
+  .map((r) => r.slice(1).toLowerCase());
 
-/** `warnPaths` entries that are NAMEs — every rule that is not a suffix glob. */
-const CREDENTIAL_NAME_RULES = warnPaths.filter((r) => !r.startsWith("*."));
+/** `warnPaths` NAME rules — every rule that is not a suffix glob, lowercased.
+ *  One case-insensitive answer per shape, so the ceiling below and the scanner
+ *  cannot disagree about a name the volume itself folds (see
+ *  CREDENTIAL_SCAN_RE); path-analysis/checkPatternsResolved is the third
+ *  reader of the same list and folds the same way. */
+const NAME_RULES_CI = warnPaths.filter((r) => !r.startsWith("*.")).map((r) => r.toLowerCase());
 
 /**
  * The credential ceiling (docs/dspa-credential-vouch.md V-c / guard G1): which
@@ -110,16 +121,17 @@ export function isAccreditableCredentialPath(resolved: string): boolean {
   if (isUnresolvedPath(resolved)) return false;
   if (PROC_SECRET_RE.test(resolved)) return false;
   const parts = resolved.split("/").filter(Boolean);
-  const base = parts[parts.length - 1] ?? "";
+  const partsCi = parts.map((p) => p.toLowerCase());
+  const base = partsCi[partsCi.length - 1] ?? "";
   // An env file is name-shaped whatever it ends with (`.env.production.pem`).
   if (ENV_FILE_RE.test(base)) return false;
-  for (const rule of CREDENTIAL_NAME_RULES) {
+  for (const rule of NAME_RULES_CI) {
     // A multi-segment rule (`.docker/config.json`) is a tail, not a component.
-    if (rule.includes("/") ? resolved.endsWith(`/${rule}`) : parts.includes(rule)) {
+    if (rule.includes("/") ? resolved.toLowerCase().endsWith(`/${rule}`) : partsCi.includes(rule)) {
       return false;
     }
   }
-  return CREDENTIAL_SUFFIX_RULES.some((rule) => base.endsWith(rule.slice(1)));
+  return SUFFIX_RULES_CI.some((rule) => base.endsWith(rule));
 }
 
 /**
@@ -582,7 +594,9 @@ function globComponentName(comp: string): string | null {
     const src = globToRegexSource(variant);
     if (src === null) return GLOB_UNTRANSLATABLE;
     let re: RegExp;
-    try { re = new RegExp(src); } catch { return GLOB_UNTRANSLATABLE; }
+    // "i": the glob's letters are the operator's spelling, `warnPaths` is the
+    // rule list — on a case-folding volume `.SSH/*` reaches the credential store.
+    try { re = new RegExp(src, "i"); } catch { return GLOB_UNTRANSLATABLE; }
     for (const pattern of warnPaths) if (re.test(pattern)) return pattern;
   }
   return null;

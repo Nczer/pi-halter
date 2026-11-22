@@ -123,6 +123,15 @@ keeps `.env.production` absolute while `ca-key.pem` lifts, with no second list t
 maintain. Private key material lifting is intended: the trigger corpus ran
 `openssl pkey -in <key file> -text` and that is the friction being removed.
 
+Both halves of the decision read the names **case-folded** (3.56.0): the rule
+list is authored lowercase, `CREDENTIAL_SCAN_RE` carries `i`, and the ceiling
+folds the path's components the same way. The two must fold together — a scanner
+that sees `.SSH/id_rsa` and a ceiling that does not would let a differently
+spelled store lift inside an accredited dir. Folding can only ever cover the
+same set of files the lowercase spelling already did (on a case-folding volume,
+APFS/NTFS, they are the same bytes; on a case-sensitive one the warn tier's cost
+is one prompt).
+
 ### 4.4 Judge
 
 - **Route**: skip stage 1 and let stage 2 decide — reusing the existing skip

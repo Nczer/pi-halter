@@ -146,6 +146,23 @@ describe("resolved-path variants (hot-path optimization)", () => {
     });
   }
 
+  // Case-folded on both sides — the path as named and the rule list. `.ENV.local`
+  // IS `.env.local` on a case-folding volume, and a file read that stays silent
+  // about it is a credential read with no reason line (the bash side is pinned
+  // in test/credentials.test.ts).
+  const caseFoldCases: [string, boolean, string | null][] = [
+    ["~/.SSH/id_rsa", true, ".ssh"],
+    [".ENV.local", true, ".env.*"],
+    ["~/keys/Key.PEM", true, "*.pem"],
+    ["~/.AWS/credentials", true, ".aws"],
+    ["~/src/Index.TS", false, null],
+  ];
+  for (const [filePath, warned, matchedRule] of caseFoldCases) {
+    it(`isPathWarnedResolved folds case: ${filePath}`, () => {
+      expect(isPathWarnedResolved(filePath, resolved(filePath))).toEqual({ warned, matchedRule });
+    });
+  }
+
   const projectPiCases: [string, boolean][] = [
     [".pi/agent/foo", true],
     ["~/other/.pi/foo", false],

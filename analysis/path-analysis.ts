@@ -10,7 +10,7 @@ import { under, isUnresolvedPath } from "./path-util";
 const RELATIVE_PATH_RE = /^\.\/|^\.\.\//;
 /** Pre-compiled regex for .env.* pattern detection. Exported for the credential
  * ceiling, which refuses env files whatever they end with (V-c). */
-export const ENV_FILE_RE = /^\.env\.[^/]*$/;
+export const ENV_FILE_RE = /^\.env\.[^/]*$/i;
 
 /**
  * Check if the first token is a relative path (./foo, ../foo).
@@ -171,20 +171,25 @@ export function isProjectPiPathResolved(resolved: string, cwd: string): boolean 
   return under(resolved, piDir) && !under(resolved, getHomePiDir());
 }
 
-/** Check a pre-resolved path against denied/warned patterns. Returns matched pattern or null. */
+/** Check a pre-resolved path against denied/warned patterns. Returns matched pattern or null.
+ * Case-insensitive so APFS/macOS variants (.ENV, .SSH/ID_RSA, Key.PEM) cannot slip past. */
 function checkPatternsResolved(filePath: string, resolved: string, patterns: string[]): string | null {
-  const names = [path.basename(filePath), path.basename(resolved)];
+  const resolvedLower = resolved.toLowerCase();
+  const baseA = path.basename(filePath).toLowerCase();
+  const baseB = path.basename(resolved).toLowerCase();
+  const names = baseA === baseB ? [baseA] : [baseA, baseB];
 
-  for (const nameToCheck of names) {
-    for (const pattern of patterns) {
-      if (nameToCheck === pattern) return pattern;
-      if (resolved.includes(`/${pattern}/`) || resolved.endsWith(`/${pattern}`)) {
-        return pattern;
-      }
+  for (const pattern of patterns) {
+    const patLower = pattern.toLowerCase();
+    if (resolvedLower.includes(`/${patLower}/`) || resolvedLower.endsWith(`/${patLower}`)) {
+      return pattern;
+    }
       // Glob patterns (e.g. "*.pem") — suffix match on the basename.
-      if (pattern.startsWith("*.") && nameToCheck.endsWith(pattern.slice(1))) {
-        return pattern;
-      }
+    const isGlobExt = patLower.startsWith("*.");
+    const ext = isGlobExt ? patLower.slice(1) : "";
+    for (const nameToCheck of names) {
+      if (nameToCheck === patLower) return pattern;
+      if (isGlobExt && nameToCheck.endsWith(ext)) return pattern;
     }
   }
   return null;
