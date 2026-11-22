@@ -92,6 +92,7 @@ let cachedPath: string | null = null;
 let cachedMtimeMs: number = -1;
 let cachedSize: number = -1;
 let cachedData: Record<string, unknown> = {};
+let cachedCorruptUnbacked = false;
 
 /** Drop the read cache (module (re)load, tests). */
 export function resetSettingsCache(): void {
@@ -99,13 +100,15 @@ export function resetSettingsCache(): void {
   cachedMtimeMs = -1;
   cachedSize = -1;
   cachedData = {};
+  cachedCorruptUnbacked = false;
 }
 
-function backupCorrupt(filePath: string): void {
+function backupCorrupt(filePath: string): boolean {
   try {
     fs.copyFileSync(filePath, filePath + ".bak");
+    return true;
   } catch {
-    /* best effort — defaults still apply */
+    return false;
   }
 }
 
@@ -139,10 +142,28 @@ function refreshCache(filePath: string, data: Record<string, unknown>): void {
   }
 }
 
-/** Write the whole shared file, preserving every other namespace. */
+/** Write the whole shared file atomically (sibling tmp + rename), preserving
+ * every other namespace and avoiding torn JSON under concurrent writers. */
 function writeWhole(filePath: string, file: Record<string, unknown>): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(file, null, 2) + "\n");
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const payload = JSON.stringify(file, null, 2) + "\n";
+  const tmpPath = path.join(
+    dir,
+    `.${path.basename(filePath)}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
+  );
+  try {
+    fs.writeFileSync(tmpPath, payload);
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      /* best effort cleanup */
+    }
+    throw err;
+  }
+  cachedCorruptUnbacked = false;
   refreshCache(filePath, file);
 }
 
@@ -151,6 +172,9 @@ function writeWhole(filePath: string, file: Record<string, unknown>): void {
  * every option is visible in the file. Returns the merged namespace. */
 function materialize(filePath: string, file: Record<string, unknown>): Record<string, unknown> {
   const merged = merge(HALTER_DEFAULTS, isPlainObject(file[NAMESPACE]) ? file[NAMESPACE] : {});
+  // Never overwrite a corrupt file whose .bak backup failed — return defaults
+  // in memory while leaving the operator's file intact on disk.
+  if (cachedCorruptUnbacked && cachedPath === filePath) return merged;
   if (JSON.stringify(file[NAMESPACE]) !== JSON.stringify(merged)) {
     writeWhole(filePath, { ...file, [NAMESPACE]: merged });
   }
@@ -170,6 +194,7 @@ function readWholeCached(filePath: string): Record<string, unknown> {
     mtimeMs = st.mtimeMs;
     size = st.size;
   } catch {
+    cachedCorruptUnbacked = false;
     return {};
   }
   if (cachedPath === filePath && cachedMtimeMs === mtimeMs && cachedSize === size) {
@@ -177,21 +202,23 @@ function readWholeCached(filePath: string): Record<string, unknown> {
   }
 
   let data: Record<string, unknown> = {};
+  let corruptUnbacked = false;
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       data = parsed as Record<string, unknown>;
     } else {
-      backupCorrupt(filePath);
+      corruptUnbacked = !backupCorrupt(filePath);
     }
   } catch {
-    backupCorrupt(filePath);
+    corruptUnbacked = !backupCorrupt(filePath);
   }
 
   cachedPath = filePath;
   cachedMtimeMs = mtimeMs;
   cachedSize = size;
   cachedData = data;
+  cachedCorruptUnbacked = corruptUnbacked;
   return data;
 }
 
@@ -229,6 +256,17 @@ export function writeSettings(
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) delete ns[k];
     else ns[k] = v;
+  }
+  // The same guard materialize() applies on the read path: a corrupt file whose
+  // .bak copy failed is the operator's only copy, and an explicit write would
+  // destroy it. Refusing costs a toggle until the file is fixed; overwriting
+  // costs the file. Callers surface the message (the extension host reports
+  // handler errors); nothing here silently drops the operator's command.
+  if (cachedCorruptUnbacked && cachedPath === filePath) {
+    throw new Error(
+      `halter: ${filePath} is not valid JSON and could not be copied to ${filePath}.bak — ` +
+        "fix or delete it by hand; halter is not overwriting it.",
+    );
   }
   writeWhole(filePath, { ...file, [NAMESPACE]: ns });
   return ns;
