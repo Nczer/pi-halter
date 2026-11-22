@@ -68,6 +68,40 @@ describe("under — containment, real-disk form on both sides", () => {
   });
 });
 
+describe("staticPrefixOf — the anchor the floor knows for an unbound word", () => {
+  it("cuts at the first dynamic segment", () => {
+    expect(staticPrefixOf("/tmp/snap-x/$e")).toBe("/tmp/snap-x");
+    expect(staticPrefixOf("/tmp/snap-$e/x")).toBe("/tmp");
+    expect(staticPrefixOf("/tmp/a*b/c")).toBe("/tmp");
+    expect(staticPrefixOf("/tmp/a[1-9]/c")).toBe("/tmp");
+    // `?` spans one character per spelling, so it reaches several directories
+    // at once: an anchor below it would vouch for a folder that is not a
+    // directory, and a judge report under `/tmp/aXb` would read as covered.
+    expect(staticPrefixOf("/tmp/a?b/c")).toBe("/tmp");
+  });
+
+  it("expands a home reference before cutting", () => {
+    expect(staticPrefixOf("~/notes/$f")).toBe(`${home}/notes`);
+  });
+
+  it("reads a marker location's typed tail as an absolute path", () => {
+    // `<unresolved-var>/<as typed>`: the sentinel names no place, the tail does
+    // — the floor still knows the typed folders above the unbound part.
+    expect(staticPrefixOf(`${OPAQUE_VAR_DIR}/tmp/snap-x/$e`)).toBe("/tmp/snap-x");
+    expect(staticPrefixOf(`${OPAQUE_VAR_DIR}/x`)).toBe("/x");
+    // The tail is read as written, so this is NOT the home case above: expanding
+    // it would invent a home anchor for a token that never named one. The caller
+    // that answers with a folder takes `~/` itself (path-word.ts
+    // `staticPrefixAnchor`, pinned by test/path-word.test.ts).
+    expect(staticPrefixOf(`${OPAQUE_VAR_DIR}/~/x`)).toBe("/~/x");
+  });
+
+  it("names nothing when the word pins no folder", () => {
+    expect(staticPrefixOf("$V/x")).toBe("");
+    expect(staticPrefixOf("rel/x/$f")).toBe("");
+  });
+});
+
 describe("rememberedDirOf — the folder an approval can remember", () => {
   it("a named leaf remembers its containing dir", () => {
     expect(rememberedDirOf("/a/b/c.txt")).toBe("/a/b");

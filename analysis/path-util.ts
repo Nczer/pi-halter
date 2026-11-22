@@ -154,7 +154,7 @@ export function shortenToken(token: string, max = 60): string {
 
 /** A path segment with anything dynamic in it: a variable, a substitution,
  *  a glob or extglob brace, an unresolved-marker sentinel, an escape. */
-const DYNAMIC_SEGMENT_RE = /[$`*[\]{}<>\\]/;
+const DYNAMIC_SEGMENT_RE = /[$`*?[\]{}<>\\]/;
 
 /**
  * The static PREFIX anchor of a path token — the deepest directory every
@@ -171,6 +171,15 @@ const DYNAMIC_SEGMENT_RE = /[$`*[\]{}<>\\]/;
  */
 export function staticPrefixOf(raw: string): string {
   const text = expandTilde(raw);
+  // A marker location carries the text AS TYPED after the sentinel
+  // (`<unresolved-var>/tmp/snap-x/$e`); the sentinel stands for a value the
+  // text cannot name, so the typed tail is read as an absolute path — that
+  // tail is the anchor the floor does know. The tail is never tilde-expanded
+  // here: this is the anchor the gate matches a judge report against, and
+  // inventing a home folder for it would vouch for a place the text never
+  // pinned. The one caller that ANSWERS with a folder takes the home case
+  // itself, deliberately (path-word.ts `staticPrefixAnchor`, pinned by
+  // test/path-word.test.ts for `~/.x/sub/$f`).
   const body = text.startsWith(`${OPAQUE_VAR_DIR}/`)
     ? `/${text.slice(OPAQUE_VAR_DIR.length + 1)}`
     : text;
