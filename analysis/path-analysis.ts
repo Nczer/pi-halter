@@ -48,45 +48,45 @@ export function hasRelativePath(segment: string): boolean {
 const realPathMemo = new Map<string, string>();
 const REAL_PATH_MEMO_MAX = 8192;
 
+function memoizeRealPath(key: string, real: string): void {
+  if (realPathMemo.size >= REAL_PATH_MEMO_MAX) realPathMemo.clear();
+  realPathMemo.set(key, real);
+}
+
 export function resolvePathReal(inputPath: string, cwd: string): string {
   const resolved = path.resolve(cwd, inputPath);
   const memoized = realPathMemo.get(resolved);
   if (memoized !== undefined) return memoized;
-  let found: string | null = null;
-  // True when `found` was assembled from the deepest EXISTING parent instead
-  // of a realpath of the target itself. Such an answer is only valid until the
-  // leaf appears: a path that is a plain file now can be a symlink to outside
-  // the bar a moment later, so it is not memoized (see the cache note below).
-  let approximated = false;
+
   try {
-    found = fs.realpathSync(resolved);
+    const real = fs.realpathSync(resolved);
+    memoizeRealPath(resolved, real);
+    return real;
   } catch {
-    approximated = true;
-    // Path doesn't exist — walk up to find the deepest existing parent,
-    // resolve it (catches symlinks in parent directories), then re-append
-    // the remaining components.
-    let p = resolved;
-    let suffix = "";
-    while (p !== path.dirname(p) && found === null) {
+    // Path doesn't exist — walk up from its parent (skipping a redundant
+    // realpathSync(resolved)) to find the deepest existing ancestor, checking
+    // realPathMemo along the way. Only existing ancestors are memoized; the
+    // non-existent leaf is never memoized so a leaf created as a symlink later
+    // in the session is still noticed (TOCTOU, 3.50.0).
+    let p = path.dirname(resolved);
+    let suffix = path.basename(resolved);
+    while (true) {
+      const cachedParent = realPathMemo.get(p);
+      if (cachedParent !== undefined) {
+        return suffix ? path.join(cachedParent, suffix) : cachedParent;
+      }
       try {
         const real = fs.realpathSync(p);
-        found = suffix ? path.join(real, suffix) : real;
+        memoizeRealPath(p, real);
+        return suffix ? path.join(real, suffix) : real;
       } catch {
+        const parent = path.dirname(p);
+        if (parent === p) return resolved; // no existing parent — as-is
         suffix = path.join(path.basename(p), suffix);
-        p = path.dirname(p);
+        p = parent;
       }
     }
   }
-  const result = found ?? resolved; // no existing parent (e.g. /tmp/new/sub/file) — as-is
-  // Only a realpath of the target itself is memoized: it is stable for the
-  // session's purposes. An assembled answer is re-derived on every call, so a
-  // leaf created as a symlink later in the session (the TOCTOU this gate
-  // exists to notice) is seen the next time it is asked about (3.50.0).
-  if (!approximated) {
-    if (realPathMemo.size >= REAL_PATH_MEMO_MAX) realPathMemo.clear();
-    realPathMemo.set(resolved, result);
-  }
-  return result;
 }
 
 // ── Path containment checks ──
