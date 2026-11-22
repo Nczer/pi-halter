@@ -164,12 +164,13 @@ export const awkVariants = new Set(["awk", "gawk", "mawk"]);
 export const dangerousAwkFlags = /(?<![\w./-])-i\s+inplace\b|(?<![\w./-])--in-place\b/;
 
 /** Command + subcommand pairs that are always safe (read-only, no side effects). */
+// Note: cargo check/clippy/doc are deliberately omitted — all three compile and
+// run build.rs scripts and procedural macros (and can fetch crates without --offline).
 const allowedBashSubcommands = new Set([
   "npm ls", "npm view", "npm info",
   "yarn ls", "yarn info",
   "pnpm ls",
   "tsc",
-  "cargo check", "cargo clippy", "cargo doc",
 ]);
 
 /** Check if a first word matches the static allowlist (O(1)). */
