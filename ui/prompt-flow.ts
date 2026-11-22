@@ -6,7 +6,7 @@ import { twoTierAlwaysPrompt } from "./prompts";
 import { updateStatus } from "./widget";
 import { RuleGenerator } from "../decide/rule-generator";
 import {getJudgeVerdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
-import { dspaAutoAllowed } from "../gate/fallthrough";
+import { dspaRetryApproved, dspaStopClass, dspaStopTag, judgeLedgerFields } from "../gate/fallthrough";
 import { resolveUnresolvedPaths, type ResolutionMap } from "../judge/path-resolver";
 import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/dspat-mode";
 import type {JudgeResult} from "../judge/judge";
@@ -14,7 +14,8 @@ import { makeManualBar } from "../gate/dspa-gate";
 import { isPositionalRef } from "../analysis/path-util";
 import type { DspaFallthrough } from "../gate/fallthrough";
 import { logMissDecision } from "../gate/fallthrough";
-import { logJudgeDiff, logJudgePaths, logUnresolved, type PromptAnswer } from "../gate/decision-log";
+import { logJudgeDiff, logJudgePaths, logUnresolved, type DecisionLogFields, type PromptAnswer } from "../gate/decision-log";
+import { judgePathLogFields } from "../judge/paths";
 
 /**
  * The floor reason doubles as a ledger sentence: it carries source tags
@@ -38,6 +39,11 @@ interface PromptFlowResult {
   /** L1 (docs/dspa-credential-vouch.md §7): WHICH click this was, for the
    *  decision log — gate() writes the row after the answer, with this value. */
   answer?: PromptAnswer;
+  /** The "Judge again" retry re-ran the intent pass, so the verdict gate()
+   *  computed before the prompt showed is no longer the one that decided. These
+   *  fields ride up to replace the judge half of its row (one row per call,
+   *  written at the TERMINAL outcome). */
+  judgeRefresh?: DecisionLogFields;
 }
 
 /**
@@ -279,6 +285,9 @@ export async function showPrompt(
    * deterministic — re-running the judge cannot change it), or without the
    * request (the auto-allow log line needs it).
    */
+  /** The retry's terminal judge state, in the shape gate() spreads over the
+   *  pre-prompt fields. Undefined until a retry actually runs. */
+  let retryFields: DecisionLogFields | undefined;
   const retryJudge =
     dspa &&
     dspa.gate.ok &&
@@ -297,12 +306,57 @@ export async function showPrompt(
             if (dspa.stage === 1 && dspa.verdict) logJudgeDiff(pd, "dspa", dspa.verdict, v2);
             const allows =
               v2 && v2.approve === "approve" && (v2.risk === "low" || v2.risk === "medium");
-            // dspaAutoAllowed logs the path report itself — logging it here
-            // too would write the same stage-2 verdict to the ledger twice.
+            // dspaRetryApproved writes the judge-ledger path report itself —
+            // logging it here too would write the same verdict to it twice.
             if (v2 && !allows) logJudgePaths(pd, store, v2, "dspa", ctx);
+            // L1: this call gets ONE decision row, and gate() writes it after
+            // the click — so the retry's state rides up in `retryFields` rather
+            // than being lost to the fields gate() computed before the prompt
+            // showed (they described the verdict that PROMPTED, not the one that
+            // decided). The stop keeps naming why the prompt existed; the
+            // ` on retry` tag and the verdict fields say what ended it.
+            const paths = v2 ? judgePathLogFields(pd, store, v2.paths, ctx) : {};
+            const jp: DecisionLogFields = {
+              judgePaths: paths.judgePaths,
+              judgePathsMore: paths.judgePathsMore,
+              floorMisses: paths.floorMisses,
+            };
             if (allows) {
-              dspaAutoAllowed(request, pd, ctx, store, v2, 2);
+              dspaRetryApproved(request, pd, ctx, store, v2);
+              retryFields = {
+                dspa: `judge: stage 2 approved on retry (${v2.model})`,
+                judgeVerdict: "approve",
+                judgeStage: 2,
+                judgeModel: v2.model,
+                ...jp,
+              };
               return { autoAllowed: true, body: null };
+            }
+            if (v2) {
+              // An approve that did not auto-allow was held by its risk tier —
+              // the same classification the cascade itself would have written.
+              const rf: DspaFallthrough = {
+                gate: dspa.gate,
+                verdict: v2,
+                stage: 2,
+                ...(v2.approve === "approve" ? { judgeSkipped: "risk-tier" as const } : {}),
+              };
+              retryFields = {
+                dspa: dspaStopTag(rf, { onRetry: true }),
+                ...dspaStopClass(rf),
+                ...judgeLedgerFields(rf),
+                ...jp,
+              };
+            } else {
+              const why = judgeFailPhrase(o2);
+              const rf: DspaFallthrough = {
+                gate: dspa.gate,
+                verdict: null,
+                stage: null,
+                note: `stage 2 produced no verdict on retry${why ? ` (${why})` : ""}`,
+                judgeFail: why || undefined,
+              };
+              retryFields = { dspa: dspaStopTag(rf), ...dspaStopClass(rf), ...judgeLedgerFields(rf) };
             }
             const block = v2
               ? judgeVerdictBlock(
@@ -490,5 +544,5 @@ export async function showPrompt(
   if (rejected) {
     return { allowed: false, answer, ...(typeof result === "object" ? { reason: result.reason } : {}) };
   }
-  return { allowed: true, answer };
+  return { allowed: true, answer, ...(retryFields ? { judgeRefresh: retryFields } : {}) };
 }

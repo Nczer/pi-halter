@@ -823,6 +823,41 @@ describe("fall-through", () => {
     expect(getDspaStats()).toMatchObject({ autoAllowed: 0, declined: 0, defer: 1 });
   });
 
+  it("a Judge-again retry refreshes this row — and it stays the call's only row", async () => {
+    // showPrompt stands in for the real flow after "Judge again": the retry
+    // wrote no row of its own (fallthrough's dspaRetryApproved suppresses it) and
+    // hands the deciding state up. baseFields were computed before the prompt
+    // showed, so without the merge this row would keep the pre-retry verdict —
+    // a verdict the operator never saw — next to an answer about a different one.
+    setDspaActive(true);
+    vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(verdict({ risk: "medium" }));
+    vi.mocked(judgePrompt.getStage2Verdict).mockResolvedValue(null); // stage 2 fails → the retry is offered
+    vi.mocked(promptFlow.showPrompt).mockResolvedValueOnce({
+      allowed: true,
+      answer: "allow",
+      judgeRefresh: {
+        dspa: "judge: stage 2 approved on retry (m-test)",
+        judgeVerdict: "approve",
+        judgeStage: 2,
+        judgeModel: "m-test",
+      },
+    });
+    await runGate(bashDecision("make test"));
+    const rows = logLines();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: "prompt",
+      answer: "allow",
+      judgeVerdict: "approve",
+      judgeStage: 2,
+      dspa: "judge: stage 2 approved on retry (m-test)",
+    });
+    // The stop survives the merge: it is why the prompt existed at all — the
+    // stage-2 call that failed — and losing it would erase the infra fact.
+    expect(rows[0].stopClass).toBe("judge-failed");
+    expect(String(rows[0].stopDetail)).toContain("no usable verdict");
+  });
+
   it("judge unavailable (null) → plain prompt, no verdict", async () => {
     setDspaActive(true);
     vi.mocked(judgePrompt.getJudgeVerdict).mockResolvedValue(null);

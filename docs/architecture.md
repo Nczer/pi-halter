@@ -632,7 +632,10 @@ verdicts (DEFER, REJECT, approve above authority) are judgments, not infra
 failures — never re-judged (Yes/No are the user's tools). Not offered when
 the judge is off (a choice, not a transient failure), after a floor stop
 (the deterministic layer cannot be re-judged), or without the permission
-request.
+request. The retry reports its state up to `gate()`, which owns the call's one
+L1 row: that row carries the verdict that DECIDED, keeps the stop as it was (the
+stop is why the prompt existed — the stage-2 call that failed), and its tag is
+marked ` on retry`, so the fact that the operator had to ask stays readable.
 The failure class is carried, never re-guessed: a judge stage returns a
 `JudgeStageOutcome` (the verdict, or `judge()`'s typed `failReason` plus model
 and latency), and every no-verdict surface — the dspa stop-tag, the prompt note,

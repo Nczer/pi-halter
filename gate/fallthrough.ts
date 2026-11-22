@@ -84,9 +84,22 @@ export interface DspaFallthrough {
  *    fact, typed by judge());
  *  - `judge: <note>` — no verdict at all.
  * undefined outside dspa prompt fall-throughs.
+ *
+ * `{ onRetry }` (the prompt's "Judge again") appends ` on retry`: the operator
+ * had to ask for the second call, and that is a fact about the prompt, not
+ * about the verdict — the row has to keep it after the retry's state supersedes
+ * the one that prompted.
  */
-export function dspaStopTag(f: DspaFallthrough | undefined): string | undefined {
+export function dspaStopTag(
+  f: DspaFallthrough | undefined,
+  opts?: { onRetry?: boolean },
+): string | undefined {
   if (!f) return undefined;
+  const base = dspaStopTagBase(f);
+  return base && opts?.onRetry ? `${base} on retry` : base;
+}
+
+function dspaStopTagBase(f: DspaFallthrough): string | undefined {
   if (!f.gate.ok) return `gate: ${f.gate.reason}`;
   if (f.verdict) {
     if (f.stage === 2) return "judge: declined (stage 2)";
@@ -174,11 +187,19 @@ export function dspaAutoAllowed(
    *  (see `learnedReadGrants`), so the ledger row names the fast track it
    *  created, not just the evidence that cleared the stop. */
   learnedDirs?: string[],
+  /** The prompt's "Judge again" re-run approved the call. It gets every side
+   *  effect a stage-2 auto-allow has — the stats counter, the judge ledger's
+   *  path row, the widget — except the decision row: the call WAS prompted, so
+   *  gate() owns its single row, written after the click (L1). Writing one here
+   *  too put the same tool call in the auto-allow tally and the prompt tally
+   *  (live log: two pairs, identical to the millisecond, and a reader has no
+   *  per-call id to dedupe them with). */
+  opts?: { retry?: boolean },
 ): void {
   // D13: a stage-2 auto-allow logs the judge's path report (and any path
   // the floor never saw) — the parser-gap probe. Stage 1 never reports.
   const jp = stage === 2 ? judgePathLogFields(pd, store, verdict.paths, ctx) : {};
-  logDecision(request, {
+  if (!opts?.retry) logDecision(request, {
     kind: "auto-allow",
     reason: misses
       ? `dspa: intent over miss stop (${[...new Set(misses.map((m) => m.kind))].join("+")}, ${verdict.model})`
@@ -240,6 +261,23 @@ export function dspaAutoAllowed(
   }
   recordDspaAutoAllowed(verdict.model, pdTargetLabel(pd));
   updateDspaWidget(ctx);
+}
+
+/**
+ * The prompt's "Judge again" re-run produced an approving stage-2 verdict:
+ * the same auto-allow with the same side effects (stats, judge ledger path
+ * row, widget, toast), minus the decision row — see `opts.retry` above. The
+ * caller (ui/prompt-flow.ts) reports the retry's state up to gate(), which
+ * owns the call's one row.
+ */
+export function dspaRetryApproved(
+  request: PermissionRequest,
+  pd: PromptData,
+  ctx: ExtensionContext,
+  store: Store,
+  verdict: JudgeResult,
+): void {
+  dspaAutoAllowed(request, pd, ctx, store, verdict, 2, undefined, undefined, undefined, undefined, { retry: true });
 }
 
 /**

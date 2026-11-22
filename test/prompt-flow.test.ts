@@ -67,7 +67,7 @@ import type { DspaFallthrough } from "../gate/fallthrough";
 import type { MissFact } from "../gate/dspa-gate";
 import { createStore } from "../gate/store";
 import { setDspatActive, resetDspat } from "../modes/dspat-mode";
-import { getDspaStats } from "../modes/dspa-mode";
+import { getDspaStats, resetDspa } from "../modes/dspa-mode";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -809,5 +809,85 @@ describe("path ledger: the two prompt-flow sites pass ctx", () => {
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({ command: "rm -rf /tmp/test" }), store, approveHigh, "dspa", ctx,
     );
+  });
+});
+
+describe("Judge again: the retry's state is the row's state (one row per call)", () => {
+  // The retry used to write its OWN auto-allow row and leave gate()'s prompt
+  // row on the pre-prompt fields: the same tool call appeared in the auto-allow
+  // tally and the prompt tally (live log: 2 pairs, identical to the
+  // millisecond, and DecisionLogEntry has no per-call id to dedupe them with),
+  // and neither row described the verdict that actually decided. Now: the retry
+  // keeps every side effect except the decision row, and reports its state up
+  // so gate()'s row — the call's only row — carries it.
+  const request: PermissionRequest = { type: "bash", command: "rm -rf /tmp/test", cwd: "/home/user/project" };
+  const decLog = path.join(os.tmpdir(), `pf-retry-row-${process.pid}.jsonl`);
+  const rows = (): Array<Record<string, unknown>> =>
+    fs.existsSync(decLog)
+      ? fs.readFileSync(decLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+      : [];
+  const dspa = { gate: { ok: true }, verdict: null, stage: null, note: "judge call failed" } as DspaFallthrough;
+
+  beforeEach(() => {
+    resetDspa();
+    fs.rmSync(decLog, { force: true });
+    process.env.HALTER_DECISION_LOG = decLog;
+  });
+  afterEach(() => {
+    delete process.env.HALTER_DECISION_LOG;
+    fs.rmSync(decLog, { force: true });
+  });
+
+  /** Click "Judge again" inside the prompt, then answer Yes to the re-shown one. */
+  async function runWithRetry(v2: object | null) {
+    stage2Mock.mockResolvedValue(v2 as never);
+    promptSpy.mockImplementation(async (_p: unknown, _s: unknown, _c: unknown, ...rest: unknown[]) => {
+      const hook = rest.find(
+        (x) => !!x && typeof x === "object" && typeof (x as { retry?: unknown }).retry === "function",
+      ) as { retry: () => Promise<unknown> };
+      await hook.retry();
+      return "yes";
+    });
+    return showPrompt(bashDecision(), ctx, store, dspa, request);
+  }
+
+  it("an approving retry auto-allows, still counts, and writes no row of its own", async () => {
+    const res = await runWithRetry({
+      model: "llama-cpp/qwen", explanation: "the user asked for exactly this",
+      approve: "approve", risk: "medium", reason: "r", latencyMs: 10, cached: false,
+    });
+    expect(res.allowed).toBe(true);
+    expect(getDspaStats().autoAllowed).toBe(1); // the judge's allow still counts
+    expect(rows()).toEqual([]);                 // gate() owns the call's single row
+    expect(res.judgeRefresh).toMatchObject({
+      dspa: "judge: stage 2 approved on retry (llama-cpp/qwen)",
+      judgeVerdict: "approve", judgeStage: 2, judgeModel: "llama-cpp/qwen",
+    });
+  });
+
+  it("a rejecting retry replaces the verdict fields, and the tag says it was a retry", async () => {
+    const res = await runWithRetry({
+      model: "llama-cpp/qwen", explanation: "unscoped delete",
+      approve: "deny", risk: "high", reason: "r", latencyMs: 10, cached: false,
+    });
+    expect(res.allowed).toBe(true); // the operator answered Yes anyway — the prompt's job
+    expect(getDspaStats().autoAllowed).toBe(0);
+    expect(rows()).toEqual([]);
+    expect(res.judgeRefresh).toMatchObject({
+      dspa: "judge: declined (stage 2) on retry",
+      stopClass: "judge-declined",
+      stopDetail: "deny (stage 2)",
+      judgeVerdict: "deny", judgeStage: 2,
+    });
+    expect(res.judgeRefresh?.judgeExplain).toBe("unscoped delete");
+  });
+
+  it("a retry that fails again says so, as a retry", async () => {
+    const res = await runWithRetry(null);
+    expect(res.judgeRefresh).toMatchObject({
+      dspa: "judge: stage 2 produced no verdict on retry",
+      stopClass: "judge-failed",
+    });
+    expect(String(res.judgeRefresh?.stopDetail)).toContain("on retry");
   });
 });

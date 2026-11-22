@@ -122,7 +122,8 @@ export async function gate(
     judgePathsMore: judgePathFields.judgePathsMore,
     floorMisses: judgePathFields.floorMisses,
   };
-  const log = (answer?: PromptAnswer) => logDecision(request, decision, { ...baseFields, answer });
+  const log = (answer?: PromptAnswer, refresh?: DecisionLogFields) =>
+    logDecision(request, decision, { ...baseFields, ...refresh, answer });
 
   if (decision.kind === "auto-allow") {
     log();
@@ -145,7 +146,10 @@ export async function gate(
   try {
     const result = await showPrompt(decision, ctx, store, dspaFallthrough, request);
     // L1: written now, after the click — the row carries what the operator chose.
-    log(result.answer);
+    // A "Judge again" retry re-rendered the judge's state, and the retry writes
+    // no row of its own: this row is that call's only row, so the refreshed
+    // fields (the verdict that DECIDED) replace the ones computed pre-prompt.
+    log(result.answer, result.judgeRefresh);
     if (!result.allowed) {
       return onReject(decision, result);
     }
