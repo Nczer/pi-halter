@@ -932,7 +932,9 @@ scripted calls queue instead of opening two prompts.
   never a clicked grant, never `halter.readDirs`. A row that was economy-capped
   says so (3.44.0): `cmd` sliced to 1000 chars carries `cmdCut`, and a
   stage-2 `paths` row that left report or floor paths out carries
-  `judgePathsMore` / `floorPathsMore`. The decision log's `target` cap was
+  `judgePathsMore` / `floorPathsMore`, and so does a decision row whose
+  `judgePaths` was sliced (the decision row used to drop the marker, so a
+  capped report there read as a complete one). The decision log's `target` cap was
   unmarked until 3.51.0, which added `targetCut`. A cut `cmd` is suspect for replay —
   a heredoc body turns into segments — and a sliced path list is not the whole
   answer set. The disagreement lists themselves (`floorMisses`, `contextMisses`,

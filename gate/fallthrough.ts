@@ -191,6 +191,7 @@ export function dspaAutoAllowed(
     judgeStage: stage,
     judgeModel: verdict.model,
     judgePaths: jp.judgePaths,
+    judgePathsMore: jp.judgePathsMore,
     floorMisses: jp.floorMisses,
   });
   // D17: the same path report also goes to the on-by-default judge ledger

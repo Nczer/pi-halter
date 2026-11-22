@@ -305,7 +305,7 @@ function dspaCmd() {
       console.log(`  verdict: ${e.judgeVerdict}${e.judgeStage ? ` (stage ${e.judgeStage}${e.judgeModel ? ` via ${e.judgeModel}` : ""})` : ""}`);
     if (e.judgeSkipped) console.log(`  skipped: ${e.judgeSkipped}`);
     if (e.judgeExplain) console.log(`  judgeExplain: ${trunc(e.judgeExplain, 160)}`);
-    if (e.judgePaths?.length) console.log(`  judgePaths: ${e.judgePaths.join(", ")}`);
+    if (e.judgePaths?.length) console.log(`  judgePaths: ${e.judgePaths.join(", ")}${e.judgePathsMore ? ` +${e.judgePathsMore}` : ""}`);
     if (e.floorMisses?.length) console.log(`  floorMisses: ${e.floorMisses.join(", ")}`);
     console.log(`  target: ${trunc(firstLine(e.target), 160)}`);
   }
@@ -331,7 +331,7 @@ function dspaPaths() {
     if (e.dspa) console.log(`  stop:   ${e.dspa}`);
     if (e.reason) console.log(`  reason: ${trunc(e.reason, 160)}`);
     console.log(`  target: ${trunc(firstLine(e.target), 160)}`);
-    if (e.judgePaths?.length) console.log(`  judge:  ${e.judgePaths.join(", ")}`);
+    if (e.judgePaths?.length) console.log(`  judge:  ${e.judgePaths.join(", ")}${e.judgePathsMore ? ` +${e.judgePathsMore}` : ""}`);
     for (const m of e.floorMisses ?? []) console.log(`  MISS:   ${m}`);
   }
 }

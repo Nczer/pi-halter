@@ -119,6 +119,7 @@ export async function gate(
     ...dspaStopClass(dspaFallthrough),
     ...judgeLedgerFields(dspaFallthrough),
     judgePaths: judgePathFields.judgePaths,
+    judgePathsMore: judgePathFields.judgePathsMore,
     floorMisses: judgePathFields.floorMisses,
   };
   const log = (answer?: PromptAnswer) => logDecision(request, decision, { ...baseFields, answer });

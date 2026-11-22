@@ -1118,6 +1118,30 @@ describe("D13 — stage-2 path report (diagnostic log)", () => {
     expect(line.floorMisses).toBeUndefined();
   });
 
+  it("a capped report says how much it cut (both row builders)", async () => {
+    // judgePathLogFields has always computed the cut count and judge.jsonl has
+    // always stored it; the decision row dropped the field, so 151 rows of the
+    // live log carry a truncated `judgePaths` with no way to tell how much is
+    // missing — while 11 of 69 judge rows do say. Absence means "nothing cut".
+    const ten = Array.from({ length: 10 }, (_, i) => `/Users/u/project/target/p${i}`);
+    await runAnalyzedGate(
+      "ls /Users/u/project/target",
+      verdict({ risk: "medium" }),
+      verdict({ paths: ten }),
+    );
+    const auto = logLines().find((l) => l.kind === "auto-allow");
+    expect(auto?.judgePaths).toHaveLength(8);
+    expect(auto?.judgePathsMore).toBe(2);
+    await runAnalyzedGate(
+      "ls /Users/u/project/target",
+      verdict({ risk: "medium" }),
+      verdict({ approve: "deny", paths: ten }),
+    );
+    const prompt = logLines().find((l) => l.kind === "prompt");
+    expect(prompt?.judgePaths).toHaveLength(8);
+    expect(prompt?.judgePathsMore).toBe(2);
+  });
+
   it("judge-declined fall-through logs the stage-2 report", async () => {
     await runAnalyzedGate(
       "ls /Users/u/project/target",

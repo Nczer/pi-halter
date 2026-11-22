@@ -222,6 +222,12 @@ export interface DecisionLogEntry {
    * lists every path the judge saw that the static floor never did.
    */
   judgePaths?: string[];
+  /** The report was cut by the storage cap: how many paths the row does not
+   *  show. Absent means nothing was cut — a silent cut hides a real blind
+   *  spot, which is why judge.jsonl has carried this since the cap landed and
+   *  a reader of decisions.jsonl could only guess (`log-inspect` shows the
+   *  cut rows there with no way to know what they omitted). */
+  judgePathsMore?: number;
   /**
    * D13: judge-reported paths NOT covered by the floor's knowledge
    * (analysis paths, outside list, confirmed dirs, cwd) — the FLOOR's
@@ -348,6 +354,7 @@ export interface DecisionLogFields extends JudgeLedgerFields {
   answer?: PromptAnswer;
   /** D13: the stage-2 judge's path report / the floor's blind spots. */
   judgePaths?: string[];
+  judgePathsMore?: number;
   floorMisses?: string[];
 }
 
@@ -389,6 +396,7 @@ export function logDecision(
       judgeSkipped: fields.judgeSkipped,
       judgeExplain: fields.judgeExplain,
       judgePaths: fields.judgePaths,
+      judgePathsMore: fields.judgePathsMore,
       floorMisses: fields.floorMisses,
       reason:
         decision.kind === "block"
