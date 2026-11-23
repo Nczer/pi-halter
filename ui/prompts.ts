@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BuiltPrompt } from "./prompt-builder";
 import type { Store } from "../gate/store";
-import { withUILock } from "./ui-lock";
+import { withUILock } from "../ui-lock";
 /** Native select → option index, or null on cancel. Keeps index-based dispatch. */
 async function selectIndex(ctx: ExtensionContext, title: string, options: string[]): Promise<number | null> {
   // Serialized against the ask dialogs: pi runs the tool calls of one message

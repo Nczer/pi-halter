@@ -5,7 +5,7 @@
  * therefore cancels the halter prompt. Both chain on one mutex.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { withUILock as halterLock } from "../ui/ui-lock";
+import { withUILock as halterLock } from "../ui-lock";
 // The ask extension holds the same mutex; its lock lives in the sibling repo.
 import { withUILock as askLock } from "../../ask/index";
 import { twoTierAlwaysPrompt } from "../ui/prompts";

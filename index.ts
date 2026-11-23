@@ -12,7 +12,7 @@ import {readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES,
 import {judgeStatus} from "./judge/verdict";
 import { store } from "./gate/store";
 import { checkScriptBudget, resetScriptBudget } from "./gate/script-budget";
-import { withUILock } from "./ui/ui-lock";
+import { withUILock } from "./ui-lock";
 import { registerAllowedReadDirs } from "./config";
 import { readConfigReadDirs } from "./halter-settings";
 
