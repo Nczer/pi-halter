@@ -1,7 +1,7 @@
 import path from "node:path";
 import { EvaluationBuilder } from "./builder";
 import { EvalCache, EvaluatorResult, RiskEvaluator } from "./types";
-import { getFirstWord, isGitDangerous, parseGitSubcommand } from "../segment-helpers";
+import { getFirstWord, isGitDangerous, parseGitSubcommand, GIT_CLEAN_FLAGS_RE, GIT_DRY_RUN_RE } from "../segment-helpers";
 import { skipEnvPrefixes } from "../../config";
 import { GIT_FORCE_LEASE_REASON_TAIL, GIT_FORCE_REASON_TAIL } from "../../config/dangerous-patterns";
 import { tokenizeSegment } from "../tokenizer";
@@ -149,6 +149,27 @@ export const GitEvaluator: RiskEvaluator = {
       // Destructive git ops are high; a plain (non-force) push is a normal
       // remote write — medium, still dangerous.
       if (sub === "push" && !forceFlag) b.danger(reason); else b.high(reason);
+
+      // The ABSOLUTE bar for these forms lives in config/dangerous-patterns.ts
+      // as regexes over the segment text (`git\s+reset\s+.*--hard`), so a global
+      // flag between the program and the verb — `git -C repo reset --hard`,
+      // `git --no-pager reset --hard` — hides an irreversible operation from the
+      // /dspa floor, which keys on the `[Absolute]` tag (gate/dspa-gate.ts,
+      // absoluteBarHits). This subcommand is already resolved past those flags,
+      // so the same bar is emitted from here. The label text is coupled to the
+      // table's verbatim on purpose: identical strings are one bar hit, not two,
+      // and the `git clean` dry-run exemption has to match the table's.
+      const dryRun = subArgs.some((a) => a === "--dry-run" || GIT_DRY_RUN_RE.test(a));
+      const bar =
+        sub === "reset" && subArgs.includes("--hard") ? "git reset --hard"
+        : sub === "clean" && !dryRun && subArgs.some((a) => GIT_CLEAN_FLAGS_RE.test(a))
+          ? "git clean (can delete untracked files)"
+        : forceFlag === "--force" ? `git push --force${GIT_FORCE_REASON_TAIL}`
+        : forceFlag === "--force-with-lease" ? `git push --force-with-lease${GIT_FORCE_LEASE_REASON_TAIL}`
+          : null;
+      // A reason that already carries `[Absolute] ` passes the reason tagger
+      // untouched — that tag IS the bar (analysis/segment-analysis.ts).
+      if (bar) b.note(`[Absolute] ${bar}`);
     }
 
     // Locations the command names outside the working set (the parser mints

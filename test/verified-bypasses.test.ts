@@ -13,6 +13,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import {decide} from "../decide/engine";
 import { analyzeCommand } from "../analysis/command-analysis";
 import { createStore } from "../gate/store";
+import { checkDspaGate } from "../gate/dspa-gate";
 import { RuleGenerator } from "../decide/rule-generator";
 import { createContractCwd, removeContractCwd } from "./hermetic-cwd";
 
@@ -1599,5 +1600,84 @@ describe("P16: a runner's options are part of what the grant vouches for", () =>
     valued.addAllowed({ bashSigs: ["uvx --python 3.12"] });
     expect((await decide({ type: "bash", command: "uvx --python 3.12 tsc", cwd }, valued)).kind).toBe("auto-allow");
     expect((await decide({ type: "bash", command: "uvx --python /tmp/evil/python tsc", cwd }, valued)).kind).not.toBe("auto-allow");
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// 2026-12: the `[Absolute]` bar reaching the /dspa floor. The floor reads the
+// tag the analysis emits (gate/dspa-gate.ts, absoluteBarHits); three shapes
+// carried the bar in a tag it could not see, and a fourth hid the verb behind
+// a git global flag, so the tables' `git\s+reset\s+.*--hard` never fired.
+// All four auto-allowed at the floor — a filesystem format and an irreversible
+// git operation with no human in the loop.
+// ──────────────────────────────────────────────────────────────────────
+async function floorClass(command: string): Promise<string> {
+  const store = createStore();
+  const d = await decide({ type: "bash", command, cwd }, store);
+  if (d.kind !== "prompt") return `manual:${d.kind}`;
+  const g = await checkDspaGate(d.promptData as never, store);
+  return g.ok ? "floor:OK" : `floor:${g.stopClass}`;
+}
+
+describe("the absolute bar survives the wrapper tags and git's global flags", () => {
+  it("a nested payload's `[Absolute]` reason still bars", async () => {
+    for (const cmd of [
+      `echo "$(sudo mkfs.ext4 /dev/sda)"`,          // [Subst] [Absolute] …
+      "tmux send-keys -t 0 'sudo mkfs.ext4 /dev/sda' Enter", // [TmuxPayload] [Absolute] …
+      "echo hi | sudo mkfs.ext4 /dev/sda",          // [Pipeline/Absolute] …
+    ]) {
+      expect(await floorClass(cmd), cmd).toBe("floor:absolute-bar");
+    }
+  });
+
+  it("a global flag between `git` and its verb does not hide the bar", async () => {
+    for (const cmd of [
+      "git -C repo reset --hard",
+      "git --no-pager reset --hard",
+      "git -C repo clean -fdx",
+      "git -C repo push --force origin main",
+      "echo hi | git reset --hard",
+    ]) {
+      expect(await floorClass(cmd), cmd).toBe("floor:absolute-bar");
+    }
+    // The same bar, one spelling per location flag.
+    const a = await analyzeCommand("git --git-dir=/x status; git -C /x push --force-with-lease", cwd);
+    expect(a.risk.reasons.some((r) => r.startsWith("[Absolute] git push --force-with-lease")), JSON.stringify(a.risk.reasons)).toBe(true);
+  });
+
+  it("the bar's exemptions survive: dry-run, the short force flag, a plain push", async () => {
+    for (const cmd of [
+      "git clean -dn",              // reports, deletes nothing
+      "git -C repo clean -n -d",
+      "git push -f origin main",    // the tables never barred the short form
+      "git -C repo push origin main",
+    ]) {
+      expect(await floorClass(cmd), cmd).not.toBe("floor:absolute-bar");
+    }
+    // And the reversible forms stay exactly as reversible as they were.
+    for (const cmd of ["git -C repo reset --soft HEAD~1", "git -C repo status"]) {
+      expect(await floorClass(cmd), cmd).toBe("manual:auto-allow");
+    }
+    expect((await analyzeCommand("echo 'git reset --hard is in the docs'", cwd)).risk.reasons)
+      .not.toContain("[Absolute] git reset --hard");
+  });
+});
+
+describe("argv starts at the program, not one token past the line's first word", () => {
+  it("an inline assignment prefix keeps the tool and system reasons", async () => {
+    for (const [cmd, reason] of [
+      ["FOO=1 kubectl delete pod x", "kubectl delete (resource deletion)"],
+      ["FOO=1 terraform destroy", "terraform destroy (infrastructure teardown)"],
+      ["FOO=1 systemctl stop x", "systemctl stop/disable (service disruption)"],
+    ] as const) {
+      const reasons = (await analyzeCommand(cmd, cwd)).risk.reasons;
+      expect(reasons.some((r) => r.includes(reason)), `${cmd} → ${JSON.stringify(reasons)}`).toBe(true);
+    }
+    // Parity with the bare spelling is the point: same reasons, same bar.
+    for (const bare of ["kubectl delete pod x", "terraform destroy"]) {
+      const a = await analyzeCommand(bare, cwd);
+      const p = await analyzeCommand(`FOO=1 ${bare}`, cwd);
+      expect(p.risk.reasons, bare).toEqual(a.risk.reasons);
+    }
   });
 });

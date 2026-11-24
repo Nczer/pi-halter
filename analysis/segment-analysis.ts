@@ -102,10 +102,19 @@ function addReason(acc: DangerAccum, tagged: string): void {
   if (!acc.reasons.includes(tagged)) acc.reasons.push(tagged);
 }
 
-/** Tag a raw evaluator reason as `[${prefix}${Cap(evName)}] reason`. */
+/** Tag a raw evaluator reason as `[${prefix}${Cap(evName)}] reason`.
+ *
+ *  One tag passes through untouched: `[Absolute] `. The /dspa floor reads that
+ *  tag as an irreversible bar (gate/dspa-gate.ts, absoluteBarHits), and the
+ *  pattern tables can miss it — `git\s+reset\s+.*--hard` never fires on
+ *  `git -C repo reset --hard` — so an evaluator that resolved the verb past the
+ *  global flags has to be able to carry the bar itself. Re-tagging it `[Git]`
+ *  would hide the bar again. */
 const tagEvaluator =
   (evName: string, prefix = ""): ((reason: string) => string) =>
-  (reason) => `[${prefix}${capFirst(evName)}] ${reason}`;
+  (reason) => reason.startsWith("[Absolute] ")
+    ? reason
+    : `[${prefix}${capFirst(evName)}] ${reason}`;
 
 /**
  * Merge a risk source (a raw evaluator result, or a pre-tagged delegated

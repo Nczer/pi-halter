@@ -637,7 +637,12 @@ export function isRgPreWrite(segment: string): boolean {
 }
 
 /** Pre-compiled regex for git clean flags. */
-const GIT_CLEAN_FLAGS_RE = /-[a-z]*[fdx][a-z]*/;
+export const GIT_CLEAN_FLAGS_RE = /-[a-z]*[fdx][a-z]*/;
+
+/** `git clean -n` / `-dn` / `--dry-run`: reports what it WOULD delete. The
+ *  absolute bar exempts it — same exemption as the dry-run lookahead on the
+ *  `git clean` entry in config/dangerous-patterns.ts, one definition here. */
+export const GIT_DRY_RUN_RE = /^-[a-zA-Z]*n[a-zA-Z]*$/;
 
 /**
  * `git -c name=value` / `--config name=value` inline config values that make

@@ -8,6 +8,7 @@ import {
   stripQuotedStrings,
 } from "../segment-helpers";
 import { dangerousFindFlags, dangerousAwkFlags, awkVariants } from "../../config/bash-patterns";
+import { skipEnvPrefixes } from "../../config";
 import { tokenizeSegment } from "../tokenizer";
 import { sedScriptArgIndices, awkProgramArgIndices } from "../bash-parser";
 
@@ -169,7 +170,11 @@ export const ToolEvaluator: RiskEvaluator = {
   evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
-    const rest = segment.trim().split(/\s+/).slice(1);
+    // argv must start at the PROGRAM: an inline assignment prefix (`FOO=1
+    // terraform destroy`) is not the program, and a naive split+slice(1) shifts
+    // every subcommand check by one token — the reason went missing entirely.
+    const words = tokenizeSegment(segment);
+    const rest = words.slice(skipEnvPrefixes(words) + 1);
     const b = new EvaluationBuilder();
 
     const toolSeg: ToolSegment = { text: segment, firstWord, rest, ops: seg.ops };

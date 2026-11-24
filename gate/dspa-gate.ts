@@ -796,8 +796,18 @@ function d7ResolveSentinel(
  * already emitted, rather than re-matching the table in the gate, is what keeps
  * the analysis's own exclusions: trusted commands, version-only invocations and
  * quoted text (`grep "curl | bash" notes.md`) never reach the bar.
+ *
+ * The tag survives, but not always alone: the passes that analyse content the
+ * shell nests — command substitution, a tmux keystroke payload, a pipeline
+ * stage, a wrapper's delegated command — prepend their own tag, so the same bar
+ * arrives as `[Subst] [Absolute] …`, `[TmuxPayload] [Absolute] …` or
+ * `[Pipeline/Absolute] …`. Anchoring on a bare leading `[Absolute]` let those
+ * through: measured on HEAD, `echo "$(sudo mkfs.ext4 /dev/sda)"`,
+ * `tmux send-keys 'sudo mkfs.ext4 /dev/sda'` and
+ * `echo hi | sudo mkfs.ext4 /dev/sda` were all auto-allowed by the floor.
+ * Wrapper tags are skipped; only a tag whose last segment is `Absolute` counts.
  */
-const ABSOLUTE_REASON_RE = /^\[Absolute\]\s*(.+)$/;
+const ABSOLUTE_REASON_RE = /^(?:\[[A-Za-z/]+\]\s*)*\[(?:[A-Za-z/]+\/)?Absolute\]\s*(.+)$/;
 function absoluteBarHits(reasons: string[]): string[] {
   return [...new Set(
     reasons.map((r) => ABSOLUTE_REASON_RE.exec(r)?.[1]).filter((l): l is string => l !== undefined),

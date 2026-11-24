@@ -4,6 +4,8 @@ import path from "node:path";
 import { EvaluationBuilder } from "./builder";
 import { EvalCache, EvaluatorResult, RiskEvaluator } from "./types";
 import { getFirstWord } from "../segment-helpers";
+import { skipEnvPrefixes } from "../../config";
+import { tokenizeSegment } from "../tokenizer";
 import { expandTilde } from "../path-util";
 
 /** Check if an arg contains a short flag character (exact match or composite like -if). Rejects long flags. */
@@ -259,7 +261,11 @@ export const SystemEvaluator: RiskEvaluator = {
   evaluate(seg, cwd, cache): EvaluatorResult {
     const segment = seg.text;
     const firstWord = cache?.firstWord ?? getFirstWord(segment);
-    const rest = segment.trim().split(/\s+/).slice(1);
+    // argv must start at the PROGRAM: an inline assignment prefix (`FOO=1
+    // kubectl delete …`) is not the program, and a naive split+slice(1) shifts
+    // every flag check by one token — the reason went missing entirely.
+    const words = tokenizeSegment(segment);
+    const rest = words.slice(skipEnvPrefixes(words) + 1);
     const b = new EvaluationBuilder();
 
     for (const handler of SYSTEM_HANDLERS) {
