@@ -32,6 +32,14 @@ export function shortenHomePath(p: string): string {
   return p;
 }
 
+/** Display-only shortening inside a free-form line: a floor reason or a
+ *  risk sentence names paths in the middle of its text, where the whole-line
+ *  helper above cannot reach. Same `~/` spelling, so the prompt reads as one
+ *  vocabulary. */
+export function shortenHomeInText(text: string): string {
+  return text.split(homedir() + "/").join("~/");
+}
+
 /** Longest common prefix of two paths cut at a directory boundary (trailing
  *  slash); "" when the paths share no directory (incl. top-level siblings). */
 function commonDirPrefix(a: string, b: string): string {

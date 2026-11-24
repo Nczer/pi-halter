@@ -2,6 +2,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BuiltPrompt } from "./prompt-builder";
 import type { Store } from "../gate/store";
 import { withUILock } from "../ui-lock";
+import { PROMPT_WARNING_THRESHOLD } from "../config";
+import { shortenHomePath } from "./path-display";
 /** Native select → option index, or null on cancel. Keeps index-based dispatch. */
 async function selectIndex(ctx: ExtensionContext, title: string, options: string[]): Promise<number | null> {
   // Serialized against the ask dialogs: pi runs the tool calls of one message
@@ -52,8 +54,10 @@ enum Tier2 {
   Back = 1,
 }
 
-const SESSION_SCOPE_WARNING =
-  "\n⚠️ This grants permission for the ENTIRE SESSION. Any subsequent matching operation will auto-allow without further prompts.";
+// Every grant is session-scoped — the scope is in the option's own words
+// ("this session"), so no separate warning repeats it. A grant that reaches
+// further than the operator expects is a copy problem, not a footnote: name
+// the scope once, in the tier-2 body that shows what is minted.
 
 // ── Data-driven tier-1 options ──
 
@@ -157,7 +161,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
         {
           title: "Confirm Always Allow",
           body: prompt.tier2Broader?.body
-            ?? `"Always Yes" will auto-allow for this directory this session:\n\n  ${broaderPaths![0].dir}/*`,
+            ?? `Auto-allow this session:\n  ${shortenHomePath(broaderPaths![0].dir)}/*`,
         },
         () => { cb.onAlwaysBroader?.(broaderPaths![0].dir); return "always"; },
       ),
@@ -169,15 +173,7 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
   }
 
   // Standard layout: primary + optional variants (bash, outside-cwd file without parents)
-  const hasVariants = prompt.includePathsOption || prompt.includeFileOption;
-  const primaryConfig = hasVariants
-    ? prompt.tier2Everything
-    : {
-        title: prompt.tier2Everything.title,
-        body: prompt.tier2Everything.body
-          ? prompt.tier2Everything.body + SESSION_SCOPE_WARNING
-          : SESSION_SCOPE_WARNING.trimStart(),
-      };
+  const primaryConfig = prompt.tier2Everything;
 
   const options: AlwaysOption[] = [];
   // *Covered flags: the option's scope already has a standing session grant
@@ -203,10 +199,10 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
     // npx/uvx/dlx/x run forms (session-scoped).
     options.push(
       confirmOpt(
-        `Trust: ${prompt.trustPackages.join(", ")} (session)`,
+        `Trust: ${prompt.trustPackages.join(", ")}`,
         {
           title: "Confirm Trust Package",
-          body: `"Trust" will auto-allow run forms of these packages for the ENTIRE SESSION:\n${prompt.trustPackages.map(p => `  \u2022 ${p} (npx/uvx/dlx \u2026 any args)`).join("\n")}${SESSION_SCOPE_WARNING}`,
+          body: `Auto-allow run forms this session (npx/uvx/dlx, any args):\n${prompt.trustPackages.map(p => `  \u2022 ${p}`).join("\n")}`,
         },
         () => { cb.onTrust?.(); return "always"; },
       ),
@@ -222,12 +218,13 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
   const pathsRowGrantsWrites = prompt.includePathsOption
     && (prompt.writeGrantDirs ?? []).every(d => (prompt.pathGrantDirs ?? []).includes(d));
   if (prompt.writeGrantDirs?.length && cb.onWriteGrant && !pathsRowGrantsWrites) {
+    const shown = prompt.writeGrantDirs.map(shortenHomePath);
     options.push(
       confirmOpt(
-        `Allow writes: ${prompt.writeGrantDirs.join(", ")} (session)`,
+        `Allow writes: ${shown.join(", ")}`,
         {
           title: "Confirm Write Grant",
-          body: `"Allow writes" will grant WRITE (and read) for these directories for the ENTIRE SESSION:\n${prompt.writeGrantDirs.map(d => `  • ${d}/*`).join("\n")}${SESSION_SCOPE_WARNING}`,
+          body: `Grant read + write this session:\n${shown.map(d => `  • ${d}/*`).join("\n")}`,
         },
         () => { cb.onWriteGrant?.(); return "always"; },
       ),
@@ -236,19 +233,16 @@ function buildAlwaysOptions(prompt: BuiltPrompt, cb: AlwaysCallbacks): AlwaysOpt
   // The credential floor (docs/dspa-credential-vouch.md): the operator vouches
   // for the credential material under one directory, read-only, for this
   // session. Not a grant of permission to run something — it moves one floor so
-  // the judge can rule. SESSION_SCOPE_WARNING is deliberately not appended:
-  // what follows is not an auto-allow, and saying so is the option's whole point.
+  // the judge can rule, and the label says so (`reads`, not `writes`/`allow`).
   if (prompt.accreditDir && cb.onAccredit) {
+    const shown = shortenHomePath(prompt.accreditDir);
     options.push(
       confirmOpt(
-        `Allow credential files: ${prompt.accreditDir} (session)`,
+        `Allow credential reads: ${shown}`,
         {
           title: "Confirm Credential Accreditation",
           body:
-            `"Allow credential files" stands the credential floor down for reads under this directory for the rest of the session:\n` +
-            `  • ${prompt.accreditDir}/**\n` +
-            `The judge then rules on each one — it can still say no, and the prompt comes back when it does.\n` +
-            `A file whose name is the credential (id_rsa, a .env, a credential store) stays blocked.`,
+            `Let the judge review credential reads this session (not auto-allow; .env/id_rsa/stores stay blocked):\n  • ${shown}/**`,
         },
         () => { cb.onAccredit?.(); return "always"; },
       ),
@@ -285,8 +279,8 @@ async function runBroaderUmbrella(
   const action = chosen.label.split(" ")[0];
   const isWrite = action !== "Read";
   const body = isWrite
-    ? `"Always Yes" will auto-allow ${action.toLowerCase()} for this directory this session (includes read):\n  ${chosen.dir}/*`
-    : `"Always Yes" will auto-allow read for this directory this session (write/edit will still prompt):\n  ${chosen.dir}/*`;
+    ? `Auto-allow ${action.toLowerCase()} (and read) this session:\n  ${shortenHomePath(chosen.dir)}/*`
+    : `Auto-allow read this session:\n  ${shortenHomePath(chosen.dir)}/*`;
 
   if (await confirmAlways(ctx, "Confirm Always Allow", body)) {
     onAlwaysBroader?.(chosen.dir);
@@ -343,9 +337,14 @@ export async function twoTierAlwaysPrompt(
   while (true) {
     const showJudge = !!judge && !judgeExplained;
 
-    const warningPrefix = over
-      ? `⚠️ High prompt frequency (${count} prompts this session). "Always" reduces future prompts.\n\n`
+    // The frequency tip fires once, on the prompt that crosses the threshold
+    // (the count is per prompt, not per loop iteration) — prepending it to
+    // every later prompt trained the eye to skip it.
+    const warningPrefix = over && count === PROMPT_WARNING_THRESHOLD + 1
+      ? `Tip: ${count} prompts this session — "Always" reduces repeats.\n`
       : "";
+    const renderPrompt = (p: BuiltPrompt) =>
+      warningPrefix + (p.body ? `${p.title}\n${p.body}` : p.title);
 
     // ── Session consent (T4): single tier — the grant IS the choice ──
     if (activePrompt.sessionConsent) {
@@ -355,7 +354,7 @@ export async function twoTierAlwaysPrompt(
         ...(showJudge ? ["Explain"] : []),
         "No",
       ];
-      const idx = await selectIndex(ctx, warningPrefix + activePrompt.title + "\n\n" + activePrompt.body, choices);
+      const idx = await selectIndex(ctx, renderPrompt(activePrompt), choices);
       if (idx === null) return "abort"; // dismissed without answering (Escape)
       if (idx === 0) {
         onAlways();
@@ -393,7 +392,7 @@ export async function twoTierAlwaysPrompt(
       "No",
     ];
 
-    const idx = await selectIndex(ctx, warningPrefix + activePrompt.title + "\n\n" + activePrompt.body, choices);
+    const idx = await selectIndex(ctx, renderPrompt(activePrompt), choices);
     if (idx === null) return "abort"; // dismissed without answering (Escape)
 
     // ── Direct actions (no tier-2) ──

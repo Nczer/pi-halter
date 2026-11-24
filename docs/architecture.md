@@ -559,7 +559,7 @@ Before any prompt, `gate/fallthrough.ts` attempts the auto-allow:
      pseudo-fs secret a bar even inside an accredited dir. The prompt that
      offers it, and why only dirs qualify: `docs/dspa-credential-vouch.md`;
    - untrusted **fetchable** run form (D10) → stop names the package; the
-     prompt offers `Trust: <pkg> (session)`;
+     prompt offers `Trust: <pkg>`;
    - network egress: fetch forms and raw egress stop; **loopback-only
      curl/wget is judgeable** (every URL in the command is 127.0.0.0/8, ::1,
      or localhost, D14); all other egress stops are **advisory**: the judge
@@ -690,7 +690,7 @@ stages run (the same cascade order as /dspa, but stage 2 is never skipped,
 even on stage-1 approve+low — the cross-check of stage-1 lows is the data
 /dspa's auto-allow path cannot produce) and the block shows the FINAL
 verdict — stage 2's, or stage 1's when stage 2 produced none
-(explanation + `→ suggests: APPROVE|REJECT|DEFER (<risk>)`). The user's
+(explanation + `→ APPROVE|REJECT|DEFER (<risk>, s1|s2)`). The user's
 choice is recorded against that final verdict as session agreement stats
 (widget line). Stage disagreements and stage-2 path mismatches are mirrored
 to the judge ledger (on by default, D17). No auto-allow.

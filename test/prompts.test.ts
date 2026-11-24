@@ -5,9 +5,12 @@
  * return canned indices/strings. Verifies callback wiring and tier-2 confirmation flow.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import os from "node:os";
+import path from "node:path";
 import { twoTierAlwaysPrompt } from "../ui/prompts";
 import type { BuiltPrompt } from "../ui/prompt-builder";
 import { store } from "../gate/store";
+import { PROMPT_WARNING_THRESHOLD } from "../config";
 
 // ── Fake ctx ───────────────────────────────────────────────────────────
 
@@ -734,18 +737,61 @@ describe("twoTierAlwaysPrompt: paths-only layout (bash no broader)", () => {
 // ── High prompt frequency warning ──────────────────────────────────────
 
 describe("twoTierAlwaysPrompt: high prompt frequency warning", () => {
-  it("shows warning prefix when over threshold", async () => {
-    // Push the count past the threshold
-    for (let i = 0; i < 25; i++) store.incrementPromptCount();
+  /** Records every select title, cancels the dialog. */
+  function recorder() {
+    const titles: string[] = [];
+    const ctx = {
+      ui: {
+        select: async (title: string) => { titles.push(title); return undefined; },
+        input: async () => "no thanks",
+      },
+    } as any;
+    return { titles, ctx };
+  }
 
-    // The warning prefix is concatenated with title before showSelectIndex.
-    // Just verify the function completes successfully (doesn't crash).
+  it("the tip fires once — on the prompt that crosses the threshold", async () => {
+    const { titles, ctx } = recorder();
     const cb = makeCallbacks();
-    const result = await twoTierAlwaysPrompt(
-      makePrompt(), store, makeCtx([-1, "no thanks"]), // No
-      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile,
+    // At the threshold: this prompt is the one that crosses it.
+    for (let i = 0; i < PROMPT_WARNING_THRESHOLD; i++) store.incrementPromptCount();
+    await twoTierAlwaysPrompt(makePrompt(), store, ctx, cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile);
+    expect(titles[0]).toContain(`Tip: ${PROMPT_WARNING_THRESHOLD + 1} prompts this session`);
+    // Every later prompt is past the threshold too — repeating the line there
+    // is what trained the eye to skip it.
+    await twoTierAlwaysPrompt(makePrompt(), store, ctx, cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile);
+    expect(titles[1]).not.toContain("Tip:");
+    expect(titles[1]).toBe("Test\nTest body"); // title + body, no blank line between
+  });
+});
+
+describe("twoTierAlwaysPrompt: $HOME paths render as ~/", () => {
+  it("shortens the credential accreditation row", async () => {
+    const cb = makeCallbacks();
+    const onAccredit = vi.fn();
+    const ctx = makeCtx([1, 0]); // the row, then confirm
+    await twoTierAlwaysPrompt(
+      makePrompt({ includeAlwaysOption: false, accreditDir: path.join(os.homedir(), ".config/app") }),
+      store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      undefined, undefined, undefined, undefined, onAccredit,
     );
-    expect(result).toEqual({ kind: "no", reason: "no thanks" });
+    expect(ctx.__selects[0][1]).toBe("Allow credential reads: ~/.config/app");
+    expect(onAccredit).toHaveBeenCalledTimes(1);
+  });
+
+  it("shortens the write-grant row and confirms into the grant callback", async () => {
+    const cb = makeCallbacks();
+    const onWriteGrant = vi.fn();
+    const ctx = makeCtx([1, 0]);
+    await twoTierAlwaysPrompt(
+      makePrompt({ includeAlwaysOption: false, writeGrantDirs: [path.join(os.homedir(), "Downloads")] }),
+      store, ctx,
+      cb.onAlways, cb.onAlwaysPaths, cb.onAlwaysFile, cb.onAlwaysBroader,
+      undefined, undefined, undefined, onWriteGrant,
+    );
+    expect(ctx.__selects[0][1]).toBe("Allow writes: ~/Downloads");
+    expect(ctx.__selects[1][0]).toBe("Always Yes");
+    expect(onWriteGrant).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1040,7 +1086,7 @@ describe("twoTierAlwaysPrompt: credential accreditation option", () => {
   it("names the stopped dir, and confirms into the accreditation callback", async () => {
     const cb = makeCallbacks();
     const onAccredit = vi.fn();
-    // choices = ["Yes", "Allow credential files: /w/certs (session)", "No"]
+    // choices = ["Yes", "Allow credential reads: /w/certs", "No"]
     const ctx = makeCtx([1, 0]);
     const result = await twoTierAlwaysPrompt(
       makePrompt({ includeAlwaysOption: false, accreditDir: "/w/certs" }),
@@ -1051,7 +1097,7 @@ describe("twoTierAlwaysPrompt: credential accreditation option", () => {
     expect(result).toBe("always");
     expect(onAccredit).toHaveBeenCalledTimes(1);
     expect(cb.onAlways).not.toHaveBeenCalled();
-    expect(ctx.__selects[0]).toEqual(["Yes", "Allow credential files: /w/certs (session)", "No"]);
+    expect(ctx.__selects[0]).toEqual(["Yes", "Allow credential reads: /w/certs", "No"]);
   });
 
   // Back out of the tier-2: nothing is recorded — the accreditation is a

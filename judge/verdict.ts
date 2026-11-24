@@ -425,14 +425,14 @@ export function getStage2Outcome(
  * the stage matters to the call: stage 2 has session context, stage 1
  * is stateless.
  *
- * The suggests line uses the verdict's own word — a defer renders DEFER,
+ * The verdict's arrow line uses its own word — a defer renders DEFER,
  * not REJECT: "the model could not verify" is a different signal from
  * "the model saw something bad", and the operator reading the line (and
  * the dspat stats review) needs the distinction. Auto-allow authority is
  * per stage (Q4): stage 1 approve+low, stage 2 approve+{low, medium}.
  *
- * `note` appends to the suggests line (the /dspa fall-through's
- * "not auto-allowed" explanation for an approving but not-low verdict).
+ * `note` appends to the arrow line (the /dspa fall-through's reason the
+ * approving verdict did not auto-allow).
  */
 export function judgeVerdictBlock(
   verdict: JudgeResult,
@@ -444,5 +444,5 @@ export function judgeVerdictBlock(
     : verdict.approve === "defer" ? "DEFER"
     : "REJECT";
   const risk = verdict.risk ? `${verdict.risk}, ` : "";
-  return `   ${verdict.explanation}\n   → suggests: ${suggestion} (${risk}stage ${stage})${note ? ` ${note}` : ""}`;
+  return `${verdict.explanation}\n→ ${suggestion} (${risk}s${stage})${note ? ` · ${note}` : ""}`;
 }

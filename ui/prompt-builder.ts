@@ -1,8 +1,8 @@
 import path from "node:path";
 import type {PromptDecision, PromptData, BashPromptData, FilePromptData, ToolPromptData} from "../decide/types";
 
-import { formatBashCommand, isTmuxCommand, truncateSegmentDisplay } from "./tmux-render";
-import { dirGrantLabel, dirListBody } from "./path-display";
+import { formatBashCommand, isTmuxCommand } from "./tmux-render";
+import { dirGrantLabel, dirListBody, shortenHomePath } from "./path-display";
 import { shortenToken } from "../analysis/path-util";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import type { ResolutionMap } from "../judge/path-resolver";
@@ -203,11 +203,11 @@ function riskReasonLines(reasons: string[]): string[] {
     const single = g.items.filter((r) => !r.includes("\n"));
     if (single.length) {
       const text = single.map((r) => r.replace(/^\[[A-Za-z/]+\]\s*/, "")).join(", ");
-      lines.push(`\u26a0\ufe0f ${text}\n`);
+      lines.push(`· ${text}\n`);
     }
     for (const r of g.items.filter((x) => x.includes("\n"))) {
       const ls = r.split("\n");
-      lines.push(`\u26a0\ufe0f ${ls[0].replace(/^\[[A-Za-z/]+\]\s*/, "")}\n` + ls.slice(1).map((l) => `  ${l}\n`).join(""));
+      lines.push(`· ${ls[0].replace(/^\[[A-Za-z/]+\]\s*/, "")}\n` + ls.slice(1).map((l) => `  ${l}\n`).join(""));
     }
   }
   return lines;
@@ -311,48 +311,42 @@ function buildBashPrompt(
   // Body — dense layout (the prompt dialog blocks the screen; every line
   // must earn its place). No re-listing of the command itself: the pending
   // tool call above the prompt carries it, and each prompt sits directly
-  // under its own call, so the pairing is unambiguous. Each signal is ONE
-  // ⚠️ line: outside dirs, unresolved tokens (resolution inline), risk
-  // reasons (severity already in the title ⚠️), flagged segments, and the
-  // credential note. No section headers, no inter-section blank lines, no
-  // re-listing of unflagged segments — the command above carries them.
+  // under its own call, so the pairing is unambiguous. One `·` per signal —
+  // the icon marks a line as a signal, it does not grade it (severity is in
+  // the title, and the judge's own line carries the risk): outside dirs,
+  // unresolved tokens (resolution inline), risk reasons, and the credential
+  // note. `⚠️` stays on the two lines that are genuinely unresolved: a glob
+  // that could not be verified, a credential pattern.
   let body = "";
 
   if (needsAnyPathApproval) {
     if (readDirList.length > 0) {
-      body += `\u26a0\ufe0f outside cwd: ${dirListBody(readDirList)}\n`;
+      body += `· outside cwd: ${dirListBody(readDirList)}\n`;
     }
-    // A dir the D18/D-h write stop already names below is printed once: the
-    // "writes not granted" line says the same thing with its grant state on
-    // the record.
+    // A dir the D18/D-h write stop already names is printed once: the
+    // `Allow writes:` choice carries it, with its grant state on the record.
     const d18Named = new Set(writeGrantDirs ?? []);
     const writeLineDirs = writeDirs.filter((d) => !d18Named.has(d));
     if (writeLineDirs.length > 0) {
-      body += `\u26a0\ufe0f writes outside cwd: ${dirListBody(writeLineDirs)}\n`;
+      body += `· writes outside cwd: ${dirListBody(writeLineDirs)}\n`;
     }
     // Symlink hops: a written token that resolves into an outside dir that
     // appears nowhere in the command text — render the chain so the dir
     // traces back to its token (mirrors the file prompt's symlinkHint).
     const hops = data.symlinkHops ?? [];
-    for (const h of hops.slice(0, 3)) body += `\u{1F517} ${h.written} \u2192 ${h.resolved}\n`;
-    if (hops.length > 3) body += `\u{1F517} +${hops.length - 3} more\n`;
+    for (const h of hops.slice(0, 3)) body += `· symlink: ${h.written} → ${shortenHomePath(h.resolved)}\n`;
+    if (hops.length > 3) body += `· +${hops.length - 3} more symlinks\n`;
     for (const u of unresolved) {
-      let line = `\u26a0\ufe0f unresolved ${shortenToken(u.token)}`;
-      if (u.reason === "base") line += ` \u2014 working directory not statically known`;
+      let line = `· unresolved: ${shortenToken(u.token)}`;
+      if (u.reason === "base") line += ` (unknown cwd)`;
       const dirs = resolutions?.get(u.token);
       if (dirs && dirs.length > 0) {
         const source = confirmedTokens?.has(u.token) ? "confirmed" : "LLM";
-        const shown = dirs.slice(0, 3).join(", ");
-        line += ` \u2192 ${source}: ${shown}${dirs.length > 3 ? ` (+${dirs.length - 3} more)` : ""}`;
+        const shown = dirs.slice(0, 3).map(shortenHomePath).join(", ");
+        line += ` → ${source}: ${shown}${dirs.length > 3 ? ` (+${dirs.length - 3})` : ""}`;
       }
       body += line + "\n";
     }
-  }
-  // D18: the floor stopped a base write that lacks a write grant — the
-  // title names it; this line is the body's grant state (the command itself
-  // looks benign, so the ⚠️ line carries the why).
-  if (writeGrantDirs && writeGrantDirs.length > 0) {
-    body += `\u26a0\ufe0f writes not granted: ${writeGrantDirs.join(", ")}\n`;
   }
   if (riskDangerous) {
     for (const line of riskReasonLines(riskReasons)) body += line;
@@ -362,67 +356,52 @@ function buildBashPrompt(
   // it (the sig itself shows `--with <unresolved>`).
   const UNGRANTABLE_MAX = 3;
   for (const sig of ungrantableRunForms.slice(0, UNGRANTABLE_MAX)) {
-    body += `\u26a0\ufe0f no grant for: ${sig} \u2014 a value it needs is not a name yet; this form prompts every time\n`;
+    body += `· ungrantable: ${sig} (runtime value)\n`;
   }
   if (ungrantableRunForms.length > UNGRANTABLE_MAX) {
-    body += `\u26a0\ufe0f \u2026 ${ungrantableRunForms.length - UNGRANTABLE_MAX} more ungrantable forms\n`;
+    body += `· +${ungrantableRunForms.length - UNGRANTABLE_MAX} more ungrantable\n`;
   }
 
-  // Segment breakdown — tmux chains keep the full formatted view (their
-  // nesting is unreadable raw); plain chains list ONLY the flagged
-  // segment texts (no indices — the raw command line is gone, the text
-  // stands on its own).
-  if (segments.length > 1) {
-    const hasTmuxSegment = segments.some(isTmuxCommand);
-    if (hasTmuxSegment) {
-      const formattedCommand = formatBashCommand(command, nonAllowedSet, segments);
-      body += `Segments:\n${formattedCommand}\n`;
-    } else {
-      const FLAGGED_MAX = 5;
-      const flagged = segments
-        .map((s, i) => ({ s, i }))
-        .filter(({ i }) => nonAllowedSet.has(i));
-      for (const { s } of flagged.slice(0, FLAGGED_MAX)) {
-        body += `\u26a0\ufe0f ${truncateSegmentDisplay(s.trimEnd())}\n`;
-      }
-      if (flagged.length > FLAGGED_MAX) {
-        body += `\u26a0\ufe0f \u2026 ${flagged.length - FLAGGED_MAX} more flagged segments\n`;
-      }
-    }
+  // Segment breakdown — only tmux chains get one: their nesting is unreadable
+  // raw. A plain chain's flagged segments are not re-listed; the pending call
+  // above the prompt already shows them.
+  if (segments.length > 1 && segments.some(isTmuxCommand)) {
+    body += `${formatBashCommand(command, nonAllowedSet, segments)}\n`;
   }
   if (credentialRule) {
     if (isGlobUnverified(credentialRule)) {
-      body += `\u26a0\ufe0f glob "${globUnverifiedToken(credentialRule)}" could not be expanded and verified \u2014 may reach credential files; prompted for safety\n`;
+      body += `⚠️ unverified glob: ${globUnverifiedToken(credentialRule)}\n`;
     } else {
-      body += `\u26a0\ufe0f credential pattern "${credentialRule}" \u2014 may contain secrets or tokens\n`;
+      body += `⚠️ credential: ${credentialRule}\n`;
     }
   }
+  body = body.trimEnd();
 
   // Tier 2 — "always (everything)" confirmation (dense, same as the body)
   const dangerWarning = riskDangerous
     ? "\n" + riskReasonLines(riskReasons).join("")
     : "";
-  const pathBullets = pathGrantDirs.map(d => `  \u2022 ${d}/*${writeDirs.includes(d) ? " (write)" : ""}`).join("\n");
+  const pathBullets = pathGrantDirs.map(d => `  \u2022 ${shortenHomePath(d)}/*${writeDirs.includes(d) ? " (write)" : ""}`).join("\n");
   const tier2Everything = hasBoth
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow:\nCommands:\n${cmdBullets}${pathGrantDirs.length ? `\nPaths:\n${pathBullets}` : ""}${dangerWarning}`,
+        body: `Auto-allow this session:\n${cmdBullets}${pathGrantDirs.length ? `\n${pathBullets}` : ""}${dangerWarning}`,
       }
     : needsAnyPathApproval
     ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow ${writeDirs.length > 0 ? "read + write" : "read"} for these directories this session:\n${pathBullets}`,
+        body: `Auto-allow ${writeDirs.length > 0 ? "read + write" : "read"} this session:\n${pathBullets}`,
       }
     : {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will auto-allow these command signatures this session:\n${cmdBullets}${dangerWarning}`,
+        body: `Auto-allow this session:\n${cmdBullets}${dangerWarning}`,
       };
 
   // Tier 2 — "always (paths only)" confirmation
   const tier2Paths = hasBoth && pathGrantDirs.length > 0
     ? {
         title: `Confirm Always (paths only)`,
-        body: `"Always Yes" will auto-allow ${writeDirs.length > 0 ? "read + write" : "read"} for these directories this session:\n${pathBullets}\nThe command will still prompt next time`,
+        body: `Auto-allow ${writeDirs.length > 0 ? "read + write" : "read"} this session (command still prompts):\n${pathBullets}`,
       }
     : undefined;
 
@@ -454,19 +433,21 @@ function buildFilePrompt(
   // Asking the read tier suppressed the dir/file tiers and left only the
   // umbrella, one level up (3.40.1).
   const covered = (d: string) => (isCovered ? isCovered(d, isWriteOp ? "write" : "read") : false);
-  const symlinkLine = symlinkHint ? `\n\u{1F517} Resolved via symlink: ${symlinkHint}` : "";
-  const warnLine = warnedRule ? `\n\u26a0\ufe0f credential pattern "${warnedRule}" — may contain secrets or tokens` : "";
+  const symlinkLine = symlinkHint ? `\n· symlink: ${symlinkHint}` : "";
+  const warnLine = warnedRule ? `\n⚠️ credential: ${warnedRule}` : "";
   const existsNote = exists && action === "Write"
-    ? `\n\u2139\ufe0f file exists — writing will overwrite`
+    ? `\n· overwrites existing file`
     : "";
+  const displayPath = shortenHomePath(filePath);
+  const displayResolved = shortenHomePath(resolved);
 
   if (insideCwd) {
     const scopeNote = isWriteOp
-      ? `"Always Yes" will auto-allow ${action.toLowerCase()} on this file this session (includes read).`
-      : `"Always Yes" will auto-allow read on this file this session (write/edit will still prompt).`;
+      ? `Auto-allow ${action.toLowerCase()} (and read) on this file this session:`
+      : `Auto-allow read on this file this session:`;
     const dirScope = isWriteOp
-      ? `auto-allow ${action.toLowerCase()} for this directory this session (includes read)`
-      : `auto-allow read for this directory this session (write/edit will still prompt)`;
+      ? `Auto-allow ${action.toLowerCase()} (and read) this session:`
+      : `Auto-allow read this session:`;
     const fileName = resolved.split("/").pop() || resolved;
     const parentDir = path.dirname(resolved);
     // Compute broader parent directories: immediate parent then up to 3 levels
@@ -476,7 +457,7 @@ function buildFilePrompt(
     // Immediate parent is the file's containing directory
     if (parentDir !== "/") {
       broaderPaths.push({
-        label: `${action} ${path.join(parentDir, '*')}`,
+        label: `${action} ${shortenHomePath(parentDir)}/*`,
         dir: parentDir,
       });
     }
@@ -488,7 +469,7 @@ function buildFilePrompt(
       if (parent === "/") break; // never offer a grant of the root
       cur = parent;
       broaderPaths.push({
-        label: `${action} ${path.join(cur, '*')}`,
+        label: `${action} ${shortenHomePath(cur)}/*`,
         dir: cur,
       });
     }
@@ -501,14 +482,14 @@ function buildFilePrompt(
       title: action,
       // Bare path: the title names the action and the parenthetical flags
       // carry the warnings. `Path:` + a second line said the same thing.
-      body: `${filePath}${warnLine}${symlinkLine}${existsNote}\n`,
+      body: `${displayPath}${warnLine}${symlinkLine}${existsNote}`,
       tier2Everything: {
         title: `Confirm Always Allow`,
-        body: `${scopeNote}\n  ${resolved}`,
+        body: `${scopeNote}\n  ${displayResolved}`,
       },
       tier2Broader: kept.length > 0 ? {
         title: `Confirm Always Allow`,
-        body: `"Always Yes" will ${dirScope}:\n  ${path.join(kept[0].dir, '*')}`,
+        body: `${dirScope}\n  ${shortenHomePath(kept[0].dir)}/*`,
       } : undefined,
       includePathsOption: false,
       includeFileOption: false,
@@ -523,17 +504,17 @@ function buildFilePrompt(
   }
 
   const scope = isWriteOp
-    ? `auto-allow ${action.toLowerCase()} for this directory this session`
-    : `auto-allow read for this directory this session (write/edit will still prompt)`;
+    ? `Auto-allow ${action.toLowerCase()} (and read) this session:`
+    : `Auto-allow read this session:`;
   // A file directly under / has no grantable directory (the root is never
   // granted): the primary label is the file, matching the sanitized rule.
   const tier2Label = outsideDir === "/"
     ? `${isWriteOp ? action : "Read"} ${resolved.split("/").pop() || resolved}`
-    : isWriteOp ? `${action} ${path.join(outsideDir, '*')}` : `Read ${path.join(outsideDir, '*')}`;
+    : `${isWriteOp ? action : "Read"} ${shortenHomePath(outsideDir)}/*`;
   const fileName = resolved.split("/").pop() || resolved;
   const fileScope = isWriteOp
-    ? `auto-allow ${action.toLowerCase()} on this file this session (includes read)`
-    : `auto-allow read on this file this session (write/edit will still prompt)`;
+    ? `Auto-allow ${action.toLowerCase()} (and read) on this file this session:`
+    : `Auto-allow read on this file this session:`;
 
   // Broader paths: parents of outsideDir (1–3 levels above). The root is
   // never an option — an /etc file prompt used to offer "Always (broader): /
@@ -546,12 +527,12 @@ function buildFilePrompt(
     if (parent === "/") break; // never offer a grant of the root
     cur = parent;
     broaderPaths.push({
-      label: `${action} ${path.join(cur, '*')}`,
+      label: `${action} ${shortenHomePath(cur)}/*`,
       dir: cur,
     });
   }
 
-  const outsideDirGlob = outsideDir === "/" ? resolved : path.join(outsideDir, '*');
+  const outsideDirGlob = outsideDir === "/" ? displayResolved : `${shortenHomePath(outsideDir)}/*`;
 
   // Coverage — same rule as the inside branch: a standing session grant that
   // already covers a scope suppresses the Always option for it. The umbrella
@@ -563,14 +544,14 @@ function buildFilePrompt(
     // The title already says "outside cwd"; repeating it on the path line (and
     // the `Path:` label above it) was the same fact three times in a dialog
     // that blocks the screen. The path alone is the missing part.
-    body: `${filePath}${warnLine}${symlinkLine}${existsNote}\n`,
+    body: `${displayPath}${warnLine}${symlinkLine}${existsNote}`,
     tier2Everything: {
       title: `Confirm Always Allow`,
-      body: `"Always Yes" will ${scope}:\n  ${outsideDirGlob}`,
+      body: `${scope}\n  ${outsideDirGlob}`,
     },
     tier2File: {
       title: `Confirm Always Allow`,
-      body: `"Always Yes" will ${fileScope}:\n  ${resolved}\nOther files in ${outsideDir} will still prompt.`,
+      body: `${fileScope}\n  ${displayResolved}`,
     },
     includePathsOption: false,
     includeFileOption: true,

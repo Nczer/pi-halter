@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import os from "node:os";
+import path from "node:path";
 import { buildPrompt, pdTargetLabel, summarizePrompt } from "../ui/prompt-builder";
 import { createStore } from "../gate/store";
 import type {PromptDecision, BashPromptData, FilePromptData} from "../decide/types";
@@ -67,8 +69,8 @@ describe("bash body content", () => {
       credentialRule: "glob-unverified:judge/*.ts",
     }));
     expect(prompt.body).toContain("judge/*.ts");
-    expect(prompt.body).toContain("could not be expanded and verified");
-    expect(prompt.body).not.toContain("credential pattern");
+    expect(prompt.body).toContain("unverified glob: judge/*.ts");
+    expect(prompt.body).not.toContain("⚠️ credential:");
   });
 
   it("title is Path when only path needs approval", () => {
@@ -118,7 +120,9 @@ describe("bash body content", () => {
       }),
       undefined, undefined, undefined, ["/Users/u/.pi"],
     );
-    expect(prompt.body).toContain("⚠️ writes not granted: /Users/u/.pi");
+    // The dir is named by the tier-1 `Allow writes:` row (prompts.ts), not by
+    // a body line repeating the title's stop.
+    expect(prompt.body).not.toContain("writes not granted");
     expect(prompt.writeGrantDirs).toEqual(["/Users/u/.pi"]);
   });
 
@@ -128,9 +132,9 @@ describe("bash body content", () => {
     expect(prompt.writeGrantDirs).toBeUndefined();
   });
 
-  it("includes danger flags in body (one ⚠️ line per reason, no header, no source tags)", () => {
+  it("includes danger flags in body (one · line per reason, no header, no source tags)", () => {
     const prompt = buildPrompt(bashDecision({ riskDangerous: true, riskSeverity: "high", riskReasons: ["[System] sudo (privilege escalation)"] }));
-    expect(prompt.body).toContain("⚠️ sudo (privilege escalation)");
+    expect(prompt.body).toContain("· sudo (privilege escalation)");
     expect(prompt.body).not.toContain("[System]");
     expect(prompt.body).not.toContain("Danger flags");
   });
@@ -140,10 +144,10 @@ describe("bash body content", () => {
       riskDangerous: true, riskSeverity: "high",
       riskReasons: ["[System] forced delete (-f)", "[System] recursive delete (-r/-R)", "[Pattern] rm (any file deletion)"],
     }));
-    const lines = prompt.body.split("\n").filter(l => l.startsWith("⚠️"));
+    const lines = prompt.body.split("\n").filter(l => l.startsWith("·"));
     expect(lines).toEqual([
-      "⚠️ rm (any file deletion)",
-      "⚠️ forced delete (-f), recursive delete (-r/-R)",
+      "· rm (any file deletion)",
+      "· forced delete (-f), recursive delete (-r/-R)",
     ]);
   });
 
@@ -164,7 +168,7 @@ describe("bash body content", () => {
     const segments = ["mkdir -p /tmp/foo", "tmux -f /dev/null -S $SOCKET new -d -s foo", "sleep 1"];
     const cmd = segments.join("; ");
     const prompt = buildPrompt(bashDecision({ command: cmd, segments, nonAllowedSegmentIndices: [1] }));
-    expect(prompt.body).toContain("Segments:");
+    expect(prompt.body).toContain("bash (3 segments)");
     expect(prompt.body).toContain("1.");
     expect(prompt.body).toContain("2.");
     expect(prompt.body).toContain("3.");
@@ -178,22 +182,19 @@ describe("bash body content", () => {
     expect(segmentLines.some(l => l.includes("⚠"))).toBe(true);
   });
 
-  it("non-tmux chains list only the flagged segments (no raw command)", () => {
-    // The transcript's pending tool call carries the raw chain; the body
-    // lists only the flagged segment texts (unflagged ones never repeat).
+  it("non-tmux chains re-list nothing (the pending call above carries the chain)", () => {
+    // The transcript's pending tool call is the chain; repeating flagged
+    // segment texts under it added lines without adding information.
     const cmd = "ls && rm -rf /";
     const prompt = buildPrompt(bashDecision({ command: cmd, segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
-    expect(prompt.body).not.toContain("  ls && rm -rf /");
+    expect(prompt.body).not.toContain("rm -rf /");
     expect(prompt.body).not.toContain("bash (");
-    expect(prompt.body).toContain("⚠️ rm -rf /");
-    expect(prompt.body).not.toContain("⚠️ ls");
+    expect(prompt.body).not.toContain("ls &&");
   });
 
-  it("marks non-allowed segments with warning emoji in chain list", () => {
+  it("a flagged non-tmux segment is not re-printed, ⚠ marker included", () => {
     const prompt = buildPrompt(bashDecision({ command: "ls && rm -rf /", segments: ["ls", "rm -rf /"], nonAllowedSegmentIndices: [1] }));
-    const segmentLines = prompt.body.split("\n").filter(l => l.includes("rm -rf /"));
-    expect(segmentLines.length).toBe(1);
-    expect(segmentLines[0]).toContain("⚠");
+    expect(prompt.body.split("\n").filter(l => l.includes("rm -rf /"))).toEqual([]);
   });
 
   it("shows formatted breakdown even when tmux command has no boilerplate", () => {
@@ -201,7 +202,6 @@ describe("bash body content", () => {
     const segments = ["tmux list-sessions", "sleep 1"];
     const cmd = segments.join("; ");
     const prompt = buildPrompt(bashDecision({ command: cmd, segments, nonAllowedSegmentIndices: [0] }));
-    expect(prompt.body).toContain("Segments:");
     expect(prompt.body).toContain("bash (2 segments)");
     // ⚠ marker on segment 1 (index 0)
     const lines = prompt.body.split("\n");
@@ -209,13 +209,14 @@ describe("bash body content", () => {
     expect(line1).toContain("⚠");
   });
 
-  it("compresses multi-line segments in non-tmux chain list", () => {
-    // Flagged-segment lines use the compressed display (raw command above
-    // still shows the full heredoc)
+  it("compresses multi-line segments inside a tmux breakdown", () => {
+    // The breakdown is the one place a chain is re-printed; a heredoc there
+    // shows its first line + a line count.
     const multiLine = "cat <<'EOF'\nline1\nline2\nline3\nEOF";
+    const segments = ["tmux new -d -s s", multiLine];
     const prompt = buildPrompt(bashDecision({
-      command: `ls && ${multiLine}`,
-      segments: ["ls", multiLine],
+      command: segments.join(" && "),
+      segments,
       nonAllowedSegmentIndices: [1],
     }));
     // Flagged line shows the compressed form
@@ -234,9 +235,10 @@ describe("bash body content", () => {
       needsPathApproval: true,
       outsideDirs: ["/home/user/.config/joplin-desktop"],
     }));
-    expect(prompt.body).toContain("⚠️ head -30 ~/.config/joplin-desktop/userchrome.css");
-    expect(prompt.body).not.toContain("⚠️ echo part 0");
-    expect(prompt.body).not.toContain("⚠️ echo part 29");
+    expect(prompt.body).toContain("· outside cwd: /home/user/.config/joplin-desktop");
+    expect(prompt.body).not.toContain("head -30");
+    expect(prompt.body).not.toContain("echo part 0");
+    expect(prompt.body).not.toContain("echo part 29");
   });
 
   it("renders symlink hops under the outside-cwd line (written → resolved)", () => {
@@ -246,8 +248,8 @@ describe("bash body content", () => {
       needsPathApproval: true,
       symlinkHops: [{ written: "~/.local/bin/Joplin", resolved: "/mnt/Ndr/Download/Joplin-3.7.16.appimage" }],
     }));
-    expect(prompt.body).toContain("⚠️ outside cwd: /mnt/Ndr/Download");
-    expect(prompt.body).toContain("🔗 ~/.local/bin/Joplin → /mnt/Ndr/Download/Joplin-3.7.16.appimage");
+    expect(prompt.body).toContain("· outside cwd: /mnt/Ndr/Download");
+    expect(prompt.body).toContain("· symlink: ~/.local/bin/Joplin → /mnt/Ndr/Download/Joplin-3.7.16.appimage");
   });
 
   it("caps symlink hops at 3 lines with a +N more tail", () => {
@@ -257,14 +259,14 @@ describe("bash body content", () => {
       needsPathApproval: true,
       symlinkHops: hops,
     }));
-    const hopLines = prompt.body.split("\n").filter(l => l.startsWith("🔗"));
-    expect(hopLines).toHaveLength(4);
-    expect(hopLines[3]).toContain("+2 more");
+    const hopLines = prompt.body.split("\n").filter(l => l.startsWith("· symlink:"));
+    expect(hopLines).toHaveLength(3);
+    expect(prompt.body).toContain("· +2 more symlinks");
   });
 
   it("no hop lines when symlinkHops is absent", () => {
     const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], needsPathApproval: true }));
-    expect(prompt.body).not.toContain("🔗");
+    expect(prompt.body).not.toContain("symlink:");
   });
 
   it("body names the one parent a set of dirs hangs under", () => {
@@ -272,7 +274,7 @@ describe("bash body content", () => {
       outsideDirs: ["/proj/halter/a", "/proj/halter/b", "/proj/halter/c", "/proj/halter/d", "/mnt/other"],
       needsPathApproval: true,
     }));
-    expect(prompt.body).toContain("⚠️ outside cwd: /proj/halter/ (4 dirs under it) +1 others");
+    expect(prompt.body).toContain("· outside cwd: /proj/halter/ (4 dirs under it) +1 others");
     expect(prompt.body).not.toContain("/proj/halter/a");
   });
 
@@ -281,7 +283,7 @@ describe("bash body content", () => {
       outsideDirs: ["/a/aa", "/a/ab", "/a"],
       needsPathApproval: true,
     }));
-    expect(prompt.body).toContain("⚠️ outside cwd: /a\n");
+    expect(prompt.body).toBe("· outside cwd: /a");
     expect(prompt.body).not.toContain("/a/aa");
   });
 
@@ -330,32 +332,33 @@ describe("bash body content", () => {
     }));
     expect(prompt.body).not.toContain("echo part 0"); // no re-listing at all
     expect(prompt.body).not.toContain("echo part 11");
-    expect(prompt.body).toContain("⚠️ outside cwd: /etc"); // risk signal still shows
+    expect(prompt.body).toContain("· outside cwd: /etc"); // risk signal still shows
   });
 
-  it("short chains list only the flagged segments", () => {
+  it("short chains re-list nothing either", () => {
     const segs = Array.from({ length: 8 }, (_, i) => `echo part ${i}`);
     const prompt = buildPrompt(bashDecision({
       command: segs.join("\n"),
       segments: segs,
       nonAllowedSegmentIndices: [3],
     }));
-    expect(prompt.body).toContain("⚠️ echo part 3");
-    expect(prompt.body).not.toContain("⚠️ echo part 0");
-    expect(prompt.body).not.toContain("⚠️ echo part 7");
+    expect(prompt.body).not.toContain("echo part 3");
+    expect(prompt.body).not.toContain("echo part 0");
+    expect(prompt.body).not.toContain("echo part 7");
   });
 
-  it("truncates long segment display in chain list", () => {
+  it("truncates long segment display inside a tmux breakdown", () => {
     const longSegment = "a".repeat(100);
+    const segments = ["tmux new -d -s s", longSegment];
     const prompt = buildPrompt(bashDecision({
-      command: `ls && ${longSegment}`,
-      segments: ["ls", longSegment],
+      command: segments.join(" && "),
+      segments,
       nonAllowedSegmentIndices: [1],
     }));
-    // Flagged segment display should be truncated to 80 chars
+    // Flagged segment display is truncated to 80 chars inside the breakdown
     const segLines = prompt.body.split("\n").filter(l => l.includes("..."));
     expect(segLines[0]).toContain("⚠️");
-    expect(segLines[0].length).toBeLessThanOrEqual(80 + 8); // "⚠️ " prefix + ellipsis
+    expect(segLines[0].length).toBeLessThanOrEqual(80 + 12); // "  2. ⚠️ " prefix + ellipsis
   });
 
   it("hasUnsafePattern no longer adds a note line (Always is withheld, not explained)", () => {
@@ -462,7 +465,7 @@ describe("bash tier2 confirmations", () => {
     const prompt = buildPrompt(bashDecision({ outsideDirs: ["/etc"], signatures: ["rm"], needsCommandApproval: true, needsPathApproval: true }));
     expect(prompt.tier2Paths).toBeDefined();
     expect(prompt.tier2Paths!.body).toContain("/etc");
-    expect(prompt.tier2Paths!.body).toContain("will still prompt");
+    expect(prompt.tier2Paths!.body).toContain("(command still prompts)");
   });
 
   it("tier2 paths option is undefined when only path needs approval", () => {
@@ -872,8 +875,8 @@ describe("buildPrompt: unresolved references", () => {
       unresolved: [{ token: "$f", reason: "var" }, { token: "$x/sub", reason: "base" }],
     });
     const b = buildPrompt(d);
-    expect(b.body).toContain("⚠️ unresolved $f\n");
-    expect(b.body).toContain("⚠️ unresolved $x/sub \u2014 working directory not statically known");
+    expect(b.body).toContain("· unresolved: $f\n");
+    expect(b.body).toContain("· unresolved: $x/sub (unknown cwd)");
   });
 
   it("omits the section when everything resolved", () => {
@@ -908,7 +911,7 @@ describe("bash prompt: LLM/confirmed token resolutions", () => {
       }),
       new Map([[token, ["/Users/u/ext/a", "/Users/u/ext/b", "/Users/u/ext/c", "/Users/u/ext/d", "/Users/u/ext/e"]]]),
     );
-    expect(prompt.body).toContain("→ LLM: /Users/u/ext/a, /Users/u/ext/b, /Users/u/ext/c (+2 more)");
+    expect(prompt.body).toContain("→ LLM: /Users/u/ext/a, /Users/u/ext/b, /Users/u/ext/c (+2)");
   });
 
   it("renders `→ confirmed:` for user-confirmed resolutions", () => {
@@ -1225,9 +1228,43 @@ describe("bash paths-tier labels for write dirs", () => {
     );
   });
 
-  it("a dir the D18 write stop already names is printed once", () => {
+  it("a dir the D18 write stop names is left to the Allow writes row", () => {
     const prompt = buildPrompt(bashDecision(W), undefined, undefined, undefined, ["/home/user/Downloads"]);
-    expect(prompt.body).toContain("\u26a0\ufe0f writes not granted: /home/user/Downloads");
+    // Not in the body twice, and not in the body at all: the tier-1 row
+    // (`Allow writes: …`, prompts.ts) names it with its grant state, and the
+    // write line would only repeat the stop the title already made.
     expect(prompt.body).not.toContain("writes outside cwd:");
+    expect(prompt.writeGrantDirs).toEqual(["/home/user/Downloads"]);
+  });
+});
+
+// ── $HOME shortening in the file prompt ───────────────────────────────
+
+describe("file prompt: $HOME paths render as ~/", () => {
+  const home = os.homedir();
+  const dir = path.join(home, ".pi/agent/memories");
+  const resolved = path.join(dir, "DEEP.md");
+
+  it("shortens the body path and every grant label that names it", () => {
+    const prompt = buildPrompt(fileDecision({
+      action: "Write",
+      filePath: resolved,
+      resolved,
+      cwd: "/work",
+      outsideDir: dir,
+      isWriteOp: true,
+    }));
+    expect(prompt.body).toBe("~/.pi/agent/memories/DEEP.md");
+    expect(prompt.alwaysLabel).toBe("Write ~/.pi/agent/memories/*");
+    expect(prompt.tier2Everything.body).toBe(
+      "Auto-allow write (and read) this session:\n  ~/.pi/agent/memories/*",
+    );
+    expect(prompt.broaderPaths![0].label).toBe("Write ~/.pi/agent/*");
+  });
+
+  it("a path outside $HOME is not touched", () => {
+    const prompt = buildPrompt(fileDecision({ outsideDir: "/etc/ssh", resolved: "/etc/ssh/sshd_config", filePath: "/etc/ssh/sshd_config" }));
+    expect(prompt.body).toBe("/etc/ssh/sshd_config");
+    expect(prompt.alwaysLabel).toBe("Read /etc/ssh/*");
   });
 });

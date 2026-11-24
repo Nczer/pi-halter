@@ -448,7 +448,7 @@ describe("Bash: granular allow (subcommand vs broader)", () => {
     const pd = d.promptData as BashPromptData;
     expect(pd.ungrantableRunForms).toEqual(["uv run --with <unresolved>"]);
     expect(RuleGenerator.generatePrimaryRules(pd).bashSigs ?? []).not.toContain("uv run --with <unresolved>");
-    expect(buildPrompt(d).body).toContain("no grant for: uv run --with <unresolved>");
+    expect(buildPrompt(d).body).toContain("ungrantable: uv run --with <unresolved>");
     // And it stays a prompt however often it is approved.
     store.addAllowed({ bashSigs: ["uv run --with pandas"] });
     expect((await decide({ type: "bash", command: 'uv run --with "$PKG" python3 b.py', cwd }, store)).kind).toBe("prompt");

@@ -12,6 +12,7 @@ import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/d
 import type {JudgeResult} from "../judge/judge";
 import { makeManualBar } from "../gate/dspa-gate";
 import { isPositionalRef } from "../analysis/path-util";
+import { shortenHomeInText } from "./path-display";
 import type { DspaFallthrough } from "../gate/fallthrough";
 import { logMissDecision } from "../gate/fallthrough";
 import { logJudgeDiff, logJudgePaths, logUnresolved, type DecisionLogFields, type PromptAnswer } from "../gate/decision-log";
@@ -24,10 +25,12 @@ import { judgePathLogFields } from "../judge/paths";
  * same facts without them. The title keeps the reason's substance.
  */
 function titleReason(reason: string): string {
-  return reason
-    .replace(/^dangerous:\s*/, "")
-    .replace(/\[[A-Za-z/]+\]\s*/g, "")
-    .trim();
+  return shortenHomeInText(
+    reason
+      .replace(/^dangerous:\s*/, "")
+      .replace(/\[[A-Za-z/]+\]\s*/g, "")
+      .trim(),
+  );
 }
 
 /** Result of showing a permission prompt to the user. */
@@ -159,7 +162,7 @@ export async function showPrompt(
     if (!dspa.gate.ok) {
       prompt = {
         ...prompt,
-        title: `🚧 DSPA: ${titleReason(dspa.gate.reason)}`,
+        title: `DSPA · ${titleReason(dspa.gate.reason)}`,
       };
       if (dspa.verdict) {
         // D10: untrusted-package stop — the judge ran anyway; its verdict is
@@ -168,14 +171,14 @@ export async function showPrompt(
         prompt = {
           ...prompt,
           body:
-            judgeVerdictBlock(dspa.verdict, dspa.stage!, "— advisory (floor stop stands)") +
-            (rest ? `\n\n${rest}` : ""),
+            judgeVerdictBlock(dspa.verdict, dspa.stage!, "advisory") +
+            (rest ? `\n${rest}` : ""),
         };
       }
       if (dspa.note) {
         prompt = {
           ...prompt,
-          body: prompt.body + `\n🚧 DSPA: ${dspa.note}`,
+          body: (prompt.body ? prompt.body + "\n" : "") + `· ${dspa.note}`,
         };
       }
     } else if (dspa.verdict) {
@@ -185,17 +188,18 @@ export async function showPrompt(
       // to de-risk, needs low or medium).
       const note = dspa.verdict.approve === "approve"
         ? dspa.stage === 2
-          ? "— not auto-allowed (risk must be low or medium)"
-          : "— not auto-allowed (risk must be low)"
+          ? "risk > medium"
+          : "risk > low"
         : undefined;
-      prompt = { ...prompt, body: prompt.body + "\n" + judgeVerdictBlock(dspa.verdict, dspa.stage!, note) };
+      const block = judgeVerdictBlock(dspa.verdict, dspa.stage!, note);
+      prompt = { ...prompt, body: prompt.body ? `${prompt.body}\n${block}` : block };
       if (dspa.note) {
-        prompt = { ...prompt, body: prompt.body + `\n🚧 DSPA: ${dspa.note}` };
+        prompt = { ...prompt, body: prompt.body + `\n· ${dspa.note}` };
       }
     } else if (dspa.note) {
       prompt = {
         ...prompt,
-        body: prompt.body + `\n🚧 DSPA: ${dspa.note}`,
+        body: (prompt.body ? prompt.body + "\n" : "") + `· ${dspa.note}`,
       };
     }
   }
@@ -367,10 +371,10 @@ export async function showPrompt(
                   v2,
                   2,
                   v2.approve === "approve"
-                    ? "— not auto-allowed (risk must be low or medium)"
+                    ? "risk > medium"
                     : undefined,
                 )
-              : `🚧 DSPA: call again — stage 2 produced no verdict (${judgeFailPhrase(o2) || "no verdict returned"})`;
+              : `· call again — stage 2 produced no verdict (${judgeFailPhrase(o2) || "no verdict returned"})`;
             return { autoAllowed: false, body: baseBody + "\n" + block };
           },
         }

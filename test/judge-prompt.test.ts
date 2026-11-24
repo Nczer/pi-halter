@@ -401,28 +401,28 @@ describe("judgeVerdictBlock", () => {
 
   it("approve → APPROVE with the verdict's own risk", () => {
     expect(judgeVerdictBlock(v("approve", "low"), 1)).toBe(
-      "   Ex.\n   → suggests: APPROVE (low, stage 1)",
+      "Ex.\n→ APPROVE (low, s1)",
     );
   });
 
   it("deny → REJECT", () => {
-    expect(judgeVerdictBlock(v("deny", "high"), 2)).toContain("→ suggests: REJECT (high, stage 2)");
+    expect(judgeVerdictBlock(v("deny", "high"), 2)).toContain("→ REJECT (high, s2)");
   });
 
   it("defer → DEFER (distinct from REJECT — 'could not verify' ≠ 'saw something bad')", () => {
     const block = judgeVerdictBlock(v("defer", "medium"), 1);
-    expect(block).toContain("→ suggests: DEFER (medium, stage 1)");
+    expect(block).toContain("→ DEFER (medium, s1)");
     expect(block).not.toContain("REJECT");
   });
 
   it("risk is independent of the verdict word (defer can carry any risk)", () => {
-    expect(judgeVerdictBlock(v("defer", "low"), 1)).toContain("→ suggests: DEFER (low, stage 1)");
-    expect(judgeVerdictBlock(v("approve", "medium"), 2)).toContain("→ suggests: APPROVE (medium, stage 2)");
+    expect(judgeVerdictBlock(v("defer", "low"), 1)).toContain("→ DEFER (low, s1)");
+    expect(judgeVerdictBlock(v("approve", "medium"), 2)).toContain("→ APPROVE (medium, s2)");
   });
 
-  it("note appends to the suggests line (the /dspa not-auto-allowed case)", () => {
-    expect(judgeVerdictBlock(v("approve", "medium"), 1, "— not auto-allowed (risk must be low)")).toContain(
-      "→ suggests: APPROVE (medium, stage 1) — not auto-allowed (risk must be low)",
+  it("note appends after · on the arrow line (the /dspa not-auto-allowed case)", () => {
+    expect(judgeVerdictBlock(v("approve", "medium"), 1, "risk > low")).toContain(
+      "→ APPROVE (medium, s1) · risk > low",
     );
   });
 });
