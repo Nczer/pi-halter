@@ -6,6 +6,7 @@ import {
   trackEffectiveCwd,
   reResolveCwdDependentParts,
   baseWriteAccess,
+  baseAccessPath,
   homeReassigned,
   isCwdRelativeWord,
 } from "../analysis/cwd-tracking";
@@ -1252,10 +1253,14 @@ describe("baseWriteAccess (D18)", () => {
     // under the base, and git is absent from the write-verb table because its
     // operands are revisions — so the subcommand decides (config/bash-patterns,
     // gitOperandRoles). Without this the command named no write at all.
+    // `init` joins: what it creates is the base itself (`git init`), or the
+    // folder it names as an operand — and then the operand carries the write.
     for (const t of [
       "git apply p.patch",
       "git am mailbox/*.mbox",
       "git apply --index -p2 rel/p.patch",
+      "git init",
+      "git init sub",
     ]) {
       expect(baseWriteAccess(seg(t)), t).toBe(true);
     }
@@ -1268,8 +1273,58 @@ describe("baseWriteAccess (D18)", () => {
       // The repository is named by a flag, so the operand mint covers that one;
       // the base stays untouched — the command never runs in it.
       "git -C /repo status",
+      "git -C /repo apply p.patch",
+      // An operand of its own: that folder is the write, not the base.
+      "git init /etc/foo",
     ]) {
       expect(baseWriteAccess(seg(t)), t).toBe(false);
+    }
+  });
+
+  it("the same git subcommands touch their base — the half that reaches a prompt", () => {
+    // baseWriteAccess is consulted by the /dspa floor, and the floor only runs
+    // on a command the manual layer already prompted (gate/gate.ts). So the
+    // read-bar twin below is what makes the question reachable at all: without
+    // it, `cd /etc && git init` auto-allowed in manual and the floor's proxy
+    // never saw the command (measured 2026-12-28).
+    expect(baseAccessPath(seg("git init"), "/etc")).toBe("/etc");
+    expect(baseAccessPath(seg("git apply p.patch"), "/etc")).toBe("/etc");
+    expect(baseAccessPath(seg("git am mailbox"), "/etc")).toBe("/etc");
+    expect(baseAccessPath(seg("git init sub"), "/etc")).toBe("/etc");
+    for (const t of [
+      "git status",
+      "git log --oneline",
+      "git diff HEAD~2",
+      "git -C /repo status",
+      "git -C /repo apply p.patch",
+      "git init /etc/foo",
+    ]) {
+      expect(baseAccessPath(seg(t), "/etc"), t).toBeNull();
+    }
+  });
+
+  it("end to end: git's base write reaches the operator, its reads do not", async () => {
+    // A repository the shell walked into has no token to name, so this is the
+    // shape where the whole location model was invisible to the prompt: the
+    // floor's write proxy existed, but a manual auto-allow never consults it.
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(HOME, ".halter-gitbase-")));
+    try {
+      const ask = async (command: string) =>
+        decide({ type: "bash", command, cwd: BASE } as never, createStore());
+      for (const c of [`cd ${repo} && git init`, `cd ${repo} && git apply rel.patch`]) {
+        const d = await ask(c);
+        expect(d.kind, c).toBe("prompt");
+      }
+      for (const c of [
+        `cd ${repo} && git status`,
+        `cd ${repo} && git log --oneline`,
+        `cd ${repo} && git diff HEAD~2`,
+      ]) {
+        const d = await ask(c);
+        expect(d.kind, c).toBe("auto-allow");
+      }
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
     }
   });
 

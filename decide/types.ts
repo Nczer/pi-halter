@@ -62,6 +62,12 @@ export interface FileRequest {
    * never shown in the human prompt.
    */
   content?: string;
+  /** Heading for the judge packet's content section (an edit carries the
+   *  after-edit file view, not raw new content). Set on the REQUEST, not just
+   *  on a prompt decision: the D3 write probe re-decides this same request
+   *  (gate/conversions), and a view left on the first decision never reaches
+   *  the prompt that probe produces. */
+  contentHeading?: string;
 }
 
 export type PermissionRequest = BashRequest | FileRequest | ToolRequest;

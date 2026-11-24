@@ -867,6 +867,39 @@ describe("git: the subcommand's own words reach the path set", () => {
     // bare-relative patch is the only operand left — and it stays unminted.
   });
 
+  it("-C and --git-dir name the place in every spelling the shell allows", async () => {
+    // What these shapes prompted on was always honest; the prompt just had no
+    // folder to hand over, so "always allow this folder" was not on offer.
+    for (const [cmd, place] of [
+      [`git -C ${OUT} status`, OUT],
+      [`git -C${OUT} status`, OUT],
+      [`git --git-dir=${OUT}/g status`, `${OUT}/g`],
+      [`git --git-dir ${OUT}/g status`, `${OUT}/g`],
+      [`git --work-tree=${OUT}/w status`, `${OUT}/w`],
+    ] as const) {
+      const a = await analyzeCommand(cmd, cwd);
+      expect(a.paths, cmd).toEqual([place]);
+      expect(a.writePaths, cmd).toEqual([]);
+    }
+    // The same flag on a write subcommand makes that place a WRITE.
+    const a = await analyzeCommand(`git -C${OUT} init`, cwd);
+    expect(a.paths).toEqual([OUT]);
+    expect(a.writePaths).toEqual([OUT]);
+  });
+
+  it("a folder `git init` creates is a write operand, not a read", async () => {
+    // Minting it as a READ would have been the bypass: `~/.pi` and the other
+    // read-allowed dirs carry no write grant, so the write bar never saw it.
+    const a = await analyzeCommand(`git init ${OUT}/repo`, cwd);
+    expect(a.paths).toEqual([`${OUT}/repo`]);
+    expect(a.writePaths).toEqual([`${OUT}/repo`]);
+    // A bare operand stays unminted like every other command's bare word; the
+    // base carries it (see the base goldens in test/cwd-threading.test.ts).
+    const b = await analyzeCommand("git init sub", cwd);
+    expect(b.paths).toEqual([]);
+    expect(b.writePaths).toEqual([]);
+  });
+
   it("a mailbox is a read while the tree is the write", async () => {
     const a = await analyzeCommand(`git -C ${OUT} am ${OUT}/1.mbox`, cwd);
     expect(a.paths).toEqual([OUT, `${OUT}/1.mbox`]);

@@ -517,9 +517,36 @@ function isAllowedRootToken(w: string, cwd: string): boolean {
 }
 
 /**
+ * Body text that can put a value in a loop variable OTHER than the in-list:
+ * an assignment (`d=`, `d+=`, `((d++))`), an input command naming it (`read`,
+ * `mapfile`, `printf -v`, `unset`, `declare`/`local`/`export`), a nested
+ * `for`/`select` over the same name, or `eval` (its payload assigns anything).
+ * The loop-cd binding treats the in-list as the complete value set, so any of
+ * these makes that claim false — a false positive costs one prompt, a miss
+ * makes `cd $d` land somewhere the analysis never sees (measured before the
+ * guard: `for d in halter; do cd "$d"; d=/etc; cd "$d"; cat x; done` resolved
+ * the read to the in-list dir and auto-allowed it).
+ */
+function loopVarReassigned(body: string, varName: string): boolean {
+  const n = varName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [
+    `(^|[;&|\\n(\\s])${n}(\\+|-|\\*|/|%|\\^|&|<<|>>)?=`, // plain + augmented assignment
+    `\\b${n}\\s*(\\+\\+|--)`, // arithmetic assignment
+    `\\b(?:read|readarray|mapfile)\\b[^;|\\n]*\\b${n}\\b`, // input into the variable
+    `(^|\\s)-[A-Za-z]*v\\s+${n}\\b`, // printf -v name
+    `\\bunset\\b[^;|\\n]*\\b${n}\\b`,
+    `\\b(?:local|declare|typeset|export|readonly)\\b[^;|\\n=]*\\b${n}\\b`,
+    `\\b(?:for|select)\\s+${n}\\s+in\\b`, // nested loop over the same name
+    `\\beval\\b`,
+  ].some((form) => new RegExp(form).test(body));
+}
+
+/**
  * The in-list words of the NEAREST enclosing for loop that binds `varName`,
  * or null when no such loop exists (a loop binding a different variable is
- * skipped — the reference may bind an outer loop).
+ * skipped — the reference may bind an outer loop), or when the loop's body
+ * writes its own variable (see loopVarReassigned — the in-list then bounds
+ * nothing, and the shadowing name makes an outer loop's list equally unusable).
  */
 function enclosingLoopInList(node: TSNode, varName: string): string[] | null {
   let cur = node.parent;
@@ -528,15 +555,22 @@ function enclosingLoopInList(node: TSNode, varName: string): string[] | null {
       let loopVar: string | null = null;
       const inList: string[] = [];
       let afterIn = false;
+      let body: string | null = null;
       for (let i = 0; i < cur.childCount; i++) {
         const c = cur.child(i);
         if (!c) continue;
         if (c.type === "in") { afterIn = true; continue; }
+        if (c.type === "do_group") { body = c.text; break; }
         if (!afterIn) { if (c.type === "variable_name") loopVar = c.text; continue; }
-        if (c.type === ";" || c.type === "do_group") break;
+        if (c.type === ";") continue; // the `;` before `do` is not an in-list word
         inList.push(c.text);
       }
-      if (loopVar === varName) return inList.length > 0 ? inList : null;
+      if (loopVar === varName) {
+        if (inList.length === 0) return null;
+        // No body node parsed → cannot prove the value set is the in-list.
+        if (body === null || loopVarReassigned(body, varName)) return null;
+        return inList;
+      }
       // a different (outer/nested) loop variable — keep walking up
     }
     cur = cur.parent;
@@ -546,11 +580,11 @@ function enclosingLoopInList(node: TSNode, varName: string): string[] | null {
 
 /**
  * For a `cd` command whose single target is a loop-bound variable reference
- * (`cd $d` / `cd ${d}` where `d` is bound by an enclosing for loop), return
- * the loop's in-list words so resolveCdTarget can thread a known local base.
- * Null in every other case: not a cd, extra/rejected args (bash would error —
- * no cd runs), `cd -` (OLDPWD), non-variable or substitution targets (the
- * tokenizer may split those anyway), or no binding loop.
+ * (`cd $d` / `cd ${d}` / `cd "$d"` where `d` is bound by an enclosing for loop),
+ * return the loop's in-list words so resolveCdTarget can thread a known local
+ * base. Null in every other case: not a cd, extra/rejected args (bash would
+ * error — no cd runs), `cd -` (OLDPWD), non-variable or substitution targets
+ * (the tokenizer may split those anyway), or no binding loop.
  */
 function extractLoopCdBinding(n: TSNode): string[] | null {
   if (n.type !== "command") return null;
@@ -575,7 +609,12 @@ function extractLoopCdBinding(n: TSNode): string[] | null {
   }
   if (targetCount !== 1 || !target) return null;
   if (target === "-") return null; // OLDPWD — not trackable
-  const m = target.match(/^\$(\w+)$/) ?? target.match(/^\$\{(\w+)\}$/);
+  // `cd "$d"` — a fully double-quoted expansion reaches the same value set as
+  // the bare word (quoting even keeps braces in a value literal, so the
+  // candidate set can only be narrower). A SINGLE-quoted '$d' is a directory
+  // literally named `$d`: the loop never binds it, so only `"` is stripped.
+  const bare = /^"[^"]*"$/.test(target) ? target.slice(1, -1) : target;
+  const m = bare.match(/^\$(\w+)$/) ?? bare.match(/^\$\{(\w+)\}$/);
   if (!m) return null;
   return enclosingLoopInList(n, m[1]);
 }
@@ -1947,8 +1986,13 @@ export function nonFileArgIndices(cmdName: string, args: string[]): Set<number> 
  */
 const BODY_PATH_RE = /(?<![\w:/.{}$\-\\+*?)\]])(?:~)?\/[\w.-]+(?:\/[\w.-]+)+/g;
 
-/** Unquoted JS/Perl regex literal with flags (+ optional method chain) like `/foo/g.test` or `/foo/gi`. */
-const JS_REGEX_LITERAL_RE = /^\/([^/]+)\/[dgimsuvy]+(?:\.[A-Za-z_$][\w$]*)?$/;
+/** Unquoted JS/Perl regex literal with flags (+ optional method chain) like
+ * `/foo/g.test` or `/foo/gi`, AND the flagless form `/foo/.test` — a regex
+ * literal used straight off (`.test`, `.exec`, `.source`), which is how
+ * `filter(l=>/TS2339/.test(l))` appears in a node -e payload. Both forms are
+ * only skipped when the body does not exist under `/` (see bodyPaths). */
+const JS_REGEX_LITERAL_RE =
+  /^\/([^/]+)\/(?:[dgimsuvy]+(?:\.[A-Za-z_$][\w$]*)?|\.[A-Za-z_$][\w$]*)$/;
 
 /** A command substitution inside argument TEXT (the quoted forms — the
  *  unquoted ones arrive as their own node and are recursed into). */
@@ -1993,6 +2037,24 @@ function bodyPaths(text: string, cwd: string, out: PathWord[], hop?: (written: s
     if (prev !== "'" && prev !== '"' && prev !== "`") {
       const rm = JS_REGEX_LITERAL_RE.exec(raw);
       if (rm && !fs.existsSync("/" + rm[1])) continue;
+    } else if (raw.startsWith("/")) {
+      // A string-concatenation SUFFIX — `process.env.HOME + "/.pi/agent/…"`.
+      // The literal's leading `/` is a JOIN character, not the file system's
+      // root, so minting it invents an absolute path that exists nowhere; a
+      // location that exists nowhere can never be answered by a judge report
+      // (§4.2 matches on a `/` boundary), which is a permanent false prompt —
+      // the same failure mode as the truncated body path above. Kept when the
+      // fragment could be a real absolute path on its own (its root segment
+      // exists at `/`, so `/tmp` + `/x` still surfaces) and when the left
+      // operand is itself a quoted literal (`"/etc" + "/passwd"` — the whole
+      // value is statically knowable).
+      const beforeQuote = text.slice(0, Math.max(0, idx - 1)).replace(/[ \t]+$/, "");
+      if (beforeQuote.endsWith("+")) {
+        const leftEnd = beforeQuote.slice(0, -1).replace(/[ \t]+$/, "");
+        const leftIsLiteral = /['"`]$/.test(leftEnd);
+        const root = raw.split("/")[1] ?? "";
+        if (!leftIsLiteral && root && !fs.existsSync("/" + root)) continue;
+      }
     }
     const resolved = resolvePathReal(expandTilde(raw), cwd);
     hop?.(raw, resolved);
@@ -2518,8 +2580,10 @@ export async function parseCommand(
       // rewrite that working tree — `git apply my.patch` reads a patch and
       // changes the repo), and the files it is told to read (the patch, a commit
       // message file). A repository named by the SHELL's cwd (`cd repo && git
-      // apply p`) has no token to mint; that one is the D-h base-write proxy,
-      // which `baseWriteAccess` now also grants to these subcommands.
+      // apply p`) has no token to mint: `baseAccessPath` flags that base as the
+      // segment's location and `baseWriteAccess` marks the same base WRITTEN,
+      // so a prompt can name it (git's bare words are never minted, so without
+      // those two the shape auto-allowed).
       if (cmdName === "git") {
         const roles = gitOperandRoles(args.map((a) => a.text));
         if (roles) {
@@ -2527,7 +2591,11 @@ export async function parseCommand(
             const arg = args[idx];
             if (!arg) return;
             const eq = arg.text.startsWith("--") ? arg.text.indexOf("=") : -1;
-            const value = eq > 0 ? arg.text.slice(eq + 1) : arg.text;
+            let value = eq > 0 ? arg.text.slice(eq + 1) : arg.text;
+            // `-C<dir>` carries its directory inside the flag token; the quotes
+            // of `-C"/etc/x"` are part of the same word.
+            if (eq < 0 && /^-C[^-]/.test(value)) value = value.slice(2);
+            if (/^["'].*["']$/.test(value) && value.length > 1) value = value.slice(1, -1);
             if (value === "" || value.startsWith("-")) return;
             const hasExpansion = nodeHasRuntimeExpansion(arg.node);
             // A BARE-RELATIVE value stays unminted, exactly as it does for every
@@ -2544,6 +2612,7 @@ export async function parseCommand(
           };
           if (roles.repoIdx >= 0) mintGitArg(roles.repoIdx, roles.writesRepo);
           for (const idx of roles.reads) mintGitArg(idx, false);
+          for (const idx of roles.writes) mintGitArg(idx, true);
         }
       }
     }

@@ -222,23 +222,43 @@ describe("gitOperandRoles: the subcommand decides what an operand means", () => 
 
   it("a working-tree rewrite reads its patch and writes the repository", () => {
     expect(roles(["apply", "/var/p.patch"])).toEqual({
-      sub: "apply", repoIdx: -1, writesRepo: true, reads: [1],
+      sub: "apply", repoIdx: -1, writesRepo: true, reads: [1], writes: [],
     });
     expect(roles(["am", "/box/1.mbox"])).toMatchObject({ sub: "am", writesRepo: true, reads: [1] });
     // Its own options all carry the value inline, so the first bare word is the patch.
     expect(roles(["-C", "/repo", "apply", "--index", "-p2", "rel.patch"])).toEqual({
-      sub: "apply", repoIdx: 1, writesRepo: true, reads: [5],
+      sub: "apply", repoIdx: 1, writesRepo: true, reads: [5], writes: [],
     });
   });
 
-  it("the location flags name the repository; --git-dir does not (it is not the tree)", () => {
+  it("every location flag names the repository, spaced or glued", () => {
     expect(roles(["--work-tree=/repo", "apply", "p"])).toMatchObject({ repoIdx: 0, writesRepo: true });
-    expect(roles(["--git-dir", "/g", "apply", "/p"])).toMatchObject({ repoIdx: -1, reads: [3] });
+    // `--git-dir` names the metadata the write subcommands also touch, so it is
+    // a location worth minting (and the evaluator already reasons about it).
+    expect(roles(["--git-dir", "/g", "apply", "/p"])).toMatchObject({ repoIdx: 1, writesRepo: true, reads: [3] });
+    expect(roles(["--git-dir=/g", "status"])).toMatchObject({ repoIdx: 0, writesRepo: false });
+    // `-C<dir>` glued: the directory is the flag token itself.
+    expect(roles(["-C/etc", "status"])).toEqual({
+      sub: "status", repoIdx: 0, writesRepo: false, reads: [], writes: [],
+    });
+    expect(roles(["-C/repo", "apply", "p"])).toMatchObject({ repoIdx: 0, writesRepo: true, reads: [2] });
+  });
+
+  it("a created folder is a WRITE operand, not a read", () => {
+    expect(roles(["init", "/etc/foo"])).toEqual({
+      sub: "init", repoIdx: -1, writesRepo: true, reads: [], writes: [1],
+    });
+    expect(roles(["init"])).toMatchObject({ sub: "init", writesRepo: true, writes: [] });
+    expect(roles(["-C", "/etc", "init"])).toMatchObject({ repoIdx: 1, writesRepo: true, writes: [] });
+    // Its options carry their value (`--template DIR` is not an operand), and
+    // `--` ends the operand list.
+    expect(roles(["init", "-q", "/tmp/x"])).toMatchObject({ writes: [2] });
+    expect(roles(["init", "--", "/tmp/x"])).toMatchObject({ writes: [] });
   });
 
   it("a message file is a read, and only commit declares such flags", () => {
     expect(roles(["commit", "-q", "-F", "/m/msg.txt"])).toEqual({
-      sub: "commit", repoIdx: -1, writesRepo: false, reads: [3],
+      sub: "commit", repoIdx: -1, writesRepo: false, reads: [3], writes: [],
     });
     expect(roles(["commit", "-Fmsg.txt"])).toMatchObject({ reads: [1] }); // the glued spelling
     expect(roles(["commit", "--file=/m/msg.txt"])).toMatchObject({ reads: [1] });
@@ -246,7 +266,7 @@ describe("gitOperandRoles: the subcommand decides what an operand means", () => 
     // than null: nothing is minted, and the caller cannot confuse "no opinion"
     // with "opinion: nothing".
     expect(roles(["commit", "-m", "text"])).toEqual({
-      sub: "commit", repoIdx: -1, writesRepo: false, reads: [],
+      sub: "commit", repoIdx: -1, writesRepo: false, reads: [], writes: [],
     });
   });
 
@@ -257,7 +277,7 @@ describe("gitOperandRoles: the subcommand decides what an operand means", () => 
     expect(roles(["diff", "HEAD~2"])).toBeNull();
     // A repository named without a tree-writing subcommand is still a read.
     expect(roles(["-C", "/repo", "status"])).toEqual({
-      sub: "status", repoIdx: 1, writesRepo: false, reads: [],
+      sub: "status", repoIdx: 1, writesRepo: false, reads: [], writes: [],
     });
   });
 });

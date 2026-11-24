@@ -17,6 +17,37 @@ const CMD_SUBST_MARKER = "__CMD_SUBST__";
 
 /** Detect command substitution in quoted strings. */
 const CMD_SUBST_IN_QUOTE_RE = /\$\s*\(/;
+
+/**
+ * Drop balanced `$(( … ))` ARITHMETIC substitutions from a quoted string's
+ * contents before asking whether it holds a command substitution: bash reads
+ * `$((` as arithmetic, never as `$( … )`, but the plain `$(` test cannot tell
+ * them apart, so `echo "n=$((1+2))"` collapsed to the opaque `__CMD_SUBST__`
+ * marker and prompted while `echo "n=$(pwd)"` did not. An unbalanced `$((` is
+ * left in place (fail closed — it stays flagged).
+ */
+function stripArithSubst(s: string): string {
+  let out = "";
+  for (let i = 0; i < s.length; ) {
+    if (s[i] === "$" && s[i + 1] === "(" && s[i + 2] === "(") {
+      let depth = 0;
+      let j = i + 1;
+      for (; j < s.length; j++) {
+        if (s[j] === "(") depth++;
+        else if (s[j] === ")" && --depth === 0) {
+          j++;
+          break;
+        }
+      }
+      if (depth === 0) {
+        i = j;
+        continue;
+      }
+    }
+    out += s[i++];
+  }
+  return out;
+}
 const BACKTICK_RE = /`/;
 /** Write redirect patterns. */
 export const STARTS_WITH_REDIRECT_RE = /^[0-9]*&?>+/;
@@ -138,7 +169,7 @@ export function stripQuotedStrings(cmd: string): string {
         }
       }
       if (j < cmd.length) {
-        out += (CMD_SUBST_IN_QUOTE_RE.test(inner) || BACKTICK_RE.test(inner))
+        out += (CMD_SUBST_IN_QUOTE_RE.test(stripArithSubst(inner)) || BACKTICK_RE.test(inner))
           ? CMD_SUBST_MARKER
           : "__STR__";
         i = j + 1;

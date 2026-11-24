@@ -2096,12 +2096,30 @@ describe("git and tar: the location the subcommand or the mode states reaches th
 
   it("`cd repo && git apply rel.patch` faces the base as a write — no token to mint", async () => {
     // The repository here is the shell's cwd, so the operand mint has nothing to
-    // name; the D-h base-write proxy stands in (cwd-tracking.baseWriteAccess).
+    // name; the base stands in — `baseAccessPath` flags it as the segment's
+    // location and `baseWriteAccess` marks it WRITTEN (cwd-tracking).
     const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-gitrepo-")));
     try {
       const r = await checkDspaGate(await pd(`cd ${repo} && git apply rel.patch`), store);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.reason).toContain("write outside base");
+      if (!r.ok) {
+        expect(r.reason).toContain(repo);
+        expect(r.reason).toContain(`writes ${repo}`);
+      }
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("`cd repo && git init` faces the same base — it creates its `.git` there", async () => {
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".halter-gitrepo-")));
+    try {
+      const r = await checkDspaGate(await pd(`cd ${repo} && git init`), store);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.reason).toContain(repo);
+        expect(r.reason).toContain(`writes ${repo}`);
+      }
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

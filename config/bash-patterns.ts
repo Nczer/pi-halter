@@ -45,6 +45,10 @@ const ALLOW_TABLE: readonly AllowEntry[] = [
   // `while read -r x; do …; done` loops from prompting on the builtin itself.
   ["echo"], ["printf"], ["basename"], ["dirname"], ["realpath"], ["readlink"],
   ["test"], ["true"], ["false"], ["read"],
+  // `continue` / `break` — loop-control builtins: no args, no file access, no
+  // exec. They were absent, so any loop body using them prompted on the
+  // builtin alone (`for d in a b; do [ -f "$d" ] || continue; done`).
+  ["continue"], ["break"],
   // System info (read-only, no file side effects)
   // NOTE: `printenv` is not in the table at all — with args it prints env
   // vars (often secrets: OPENAI_API_KEY) into the transcript; bare it dumps
@@ -524,8 +528,13 @@ export function gitNetworkSubcommand(words: string[]): string | null {
  *  their pathspecs as operands. */
 export const GIT_TREE_WRITE_SUBCOMMANDS = new Set(["apply", "am"]);
 
+/** Subcommands whose POSITIONAL operand is a folder they CREATE — the opposite
+ *  role from a read operand, so it must not join the tree-write set (whose
+ *  positionals are patches). `git init DIR` builds `DIR/.git`. */
+export const GIT_WRITE_OPERAND_SUBCOMMANDS = new Set(["init"]);
+
 /** The flags naming the REPOSITORY a git command acts on. */
-export const GIT_REPO_FLAGS = new Set(["-C", "--work-tree"]);
+export const GIT_REPO_FLAGS = new Set(["-C", "--work-tree", "--git-dir"]);
 
 /** Flags whose VALUE a git subcommand reads as a file (`git commit -F msg.txt`). */
 const GIT_FILE_READ_FLAGS: Record<string, string[]> = {
@@ -542,6 +551,8 @@ export interface GitOperandRoles {
   writesRepo: boolean;
   /** Token indices of files the subcommand reads (a patch, a message). */
   reads: number[];
+  /** Token indices of folders the subcommand writes (creates) as operands. */
+  writes: number[];
 }
 
 /**
@@ -572,17 +583,26 @@ export function gitOperandRoles(args: string[]): GitOperandRoles | null {
       i += eq > 0 ? 1 : 2;
       continue;
     }
-    // `-c KEY=VAL` and `--git-dir DIR` consume a value; a bare `--flag=x` does
-    // not. Any other leading dash ends the global-flag walk (the subcommand is
-    // then unreadable, and only an explicit `-C DIR` still gets minted).
-    if (a === "-c" || a === "--git-dir") i += 2;
+    // `-C DIR` may also be spelled glued (`git -C/tmp status`): the directory
+    // lives inside the flag token, so the walk has to consume it here or the
+    // subcommand becomes unreadable and nothing is minted.
+    if (name === "-C" || (name.startsWith("-C") && !name.startsWith("--") && name.length > 2)) {
+      repoIdx = i;
+      i += 1;
+      continue;
+    }
+    // `-c KEY=VAL` consumes a value; a bare `--flag=x` does not. Any other
+    // leading dash ends the global-flag walk (the subcommand is then unreadable,
+    // and only an explicit `-C DIR` still gets minted).
+    if (a === "-c") i += 2;
     else if (GIT_GLOBAL_FLAGS.has(a) || (a.startsWith("--") && a.includes("="))) i += 1;
     else break;
   }
-  if (i >= args.length) return repoIdx >= 0 ? { sub: "", repoIdx, writesRepo: false, reads: [] } : null;
+  if (i >= args.length) return repoIdx >= 0 ? { sub: "", repoIdx, writesRepo: false, reads: [], writes: [] } : null;
   const sub = stripQuotes(args[i]).toLowerCase();
   const rest = args.slice(i + 1);
   const reads: number[] = [];
+  const writes: number[] = [];
   if (GIT_TREE_WRITE_SUBCOMMANDS.has(sub)) {
     // apply/am take their patch / mailbox as a positional; every option of
     // theirs carries its value inline (`-p2`, `--directory=DIR`, `--whitespace=fix`).
@@ -592,9 +612,18 @@ export function gitOperandRoles(args: string[]): GitOperandRoles | null {
       if (a.startsWith("-")) continue;
       reads.push(i + 1 + j);
     }
+  } else if (GIT_WRITE_OPERAND_SUBCOMMANDS.has(sub)) {
+    // `git init DIR` writes DIR (its `.git`); with no operand it writes the
+    // folder it runs in, which is `writesRepo`'s base-write job.
+    for (let j = 0; j < rest.length; j++) {
+      const a = stripQuotes(rest[j]);
+      if (a === "--") break;
+      if (a.startsWith("-")) continue;
+      writes.push(i + 1 + j);
+    }
   } else {
     const flags = GIT_FILE_READ_FLAGS[sub];
-    if (!flags) return repoIdx >= 0 ? { sub, repoIdx, writesRepo: false, reads } : null;
+    if (!flags) return repoIdx >= 0 ? { sub, repoIdx, writesRepo: false, reads, writes } : null;
     for (let j = 0; j < rest.length; j++) {
       const a = stripQuotes(rest[j]);
       const eq = a.startsWith("--") ? a.indexOf("=") : -1;
@@ -607,7 +636,13 @@ export function gitOperandRoles(args: string[]): GitOperandRoles | null {
       }
     }
   }
-  return { sub, repoIdx, writesRepo: GIT_TREE_WRITE_SUBCOMMANDS.has(sub), reads };
+  return {
+    sub,
+    repoIdx,
+    writesRepo: GIT_TREE_WRITE_SUBCOMMANDS.has(sub) || GIT_WRITE_OPERAND_SUBCOMMANDS.has(sub),
+    reads,
+    writes,
+  };
 }
 
 /** git subcommands that talk to a remote. */

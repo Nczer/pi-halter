@@ -2,6 +2,7 @@ import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-
 import fs from "node:fs";
 import type {FileRequest} from "../decide/types";
 import { gate, gateDecide, rejectFile } from "../gate/gate";
+import { dspaWriteProbeActive } from "../gate/conversions";
 import { store } from "../gate/store";
 import {
   resolvePathReal,
@@ -399,12 +400,24 @@ export async function handleFile(
         // bare newText blocks to the AFTER-EDIT file view (replaced regions
         // with context, line numbers). Isolated so a view-builder failure falls
         // back to raw edits content and never skips gate().
-        if (decision.kind === "prompt" && decision.promptData.type === "file") {
+        //
+        // Two decisions need it, not one: the ordinary prompt, and the
+        // auto-allow the D3 write probe is about to convert into a judged
+        // prompt (a write into a session-granted or project dir). That
+        // converted prompt is built by re-deciding the REQUEST, so the view has
+        // to ride on the request — a view set only on `decision.promptData`
+        // reaches the first prompt and leaves the converted one reviewing bare
+        // newText (a one-line edit judged out of context).
+        if (decision.kind === "prompt" || dspaWriteProbeActive(ctx)) {
           try {
             const view = buildEditAfterView(fileContent, edits);
             if (view) {
-              decision.promptData.content = view;
-              decision.promptData.contentHeading = "File after this edit";
+              request.content = view;
+              request.contentHeading = "File after this edit";
+              if (decision.kind === "prompt" && decision.promptData.type === "file") {
+                decision.promptData.content = view;
+                decision.promptData.contentHeading = "File after this edit";
+              }
             }
           } catch {
             /* fall back to raw edits content; never skip gate() */

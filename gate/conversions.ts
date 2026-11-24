@@ -43,14 +43,26 @@ import type { Store } from "./store";
  *
  * Returns the (possibly converted) decision.
  */
+/**
+ * True when the D3 file-write probe would run — i.e. a manual (or
+ * session-granted) WRITE auto-allow is about to be re-decided into a judged
+ * prompt. A handler that has to prepare judge input for that prompt asks here:
+ * the condition is the probe's, and re-deriving it elsewhere is how the
+ * converted prompt ends up reviewing a context-free fragment instead of the
+ * after-edit view the prompt path already builds (a write into a granted dir
+ * is an auto-allow, so the view-building next to the prompt case never ran).
+ */
+export function dspaWriteProbeActive(ctx: ExtensionContext): boolean {
+  return isDspaActive() && ctx.hasUI && judgeStatus(ctx).state === "ok";
+}
+
 export async function applyDspaConversions(
   request: PermissionRequest,
   decision: Decision,
   store: Store,
   ctx: ExtensionContext,
 ): Promise<Decision> {
-  if (decision.kind !== "auto-allow" || !isDspaActive() || !ctx.hasUI
-      || judgeStatus(ctx).state !== "ok") {
+  if (decision.kind !== "auto-allow" || !dspaWriteProbeActive(ctx)) {
     return decision;
   }
   // D3: file-write probe.

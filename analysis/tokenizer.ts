@@ -407,6 +407,19 @@ export function tokenizeSegmentQuoted(cmd: string): QuotedToken[] {
     const wasSingleOrAnsi = inSingleQuote || inAnsi;
     const wasDouble = inDoubleQuote;
     const wasQuoted = wasSingleOrAnsi || wasDouble;
+    // Outside any quote, `\'` and `\"` are a single LITERAL quote character
+    // (the `'…'\''x'\''…'` idiom for embedding a quote in a single-quoted
+    // word), not a quote delimiter. Without this the `\` is emitted verbatim
+    // and the following `'` OPENS a quote, so the word loses its quote
+    // character and the run after it is seen as quoted (D-c ledger: a node -e
+    // payload carrying `'\''result'\''` reached the floor as a glob-bearing
+    // word → "unverifiable glob" on text that names no path).
+    if (!wasQuoted && s[i] === "\\" && (s[i + 1] === "'" || s[i + 1] === '"')) {
+      current += s[i + 1];
+      quoted = true;
+      i += 2;
+      continue;
+    }
     const { append, advance, inSingleQuote: sq, inDoubleQuote: dq, inAnsi: an } = processChar(
       s, i, inSingleQuote, inDoubleQuote, inAnsi, true, true, true,
     );

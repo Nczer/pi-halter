@@ -85,6 +85,7 @@ export function decideFile(req: FileRequest, store: Store, opts?: DecideOptions)
     symlinkHint,
     exists,
     content: req.toolName === "read" ? undefined : req.content,
+    contentHeading: req.toolName === "read" ? undefined : req.contentHeading,
   };
 
   return { kind: "prompt", promptData };

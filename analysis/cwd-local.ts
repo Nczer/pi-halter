@@ -13,6 +13,9 @@ import { expandTilde } from "./path-util";
  * Phase-1 shapes (closed; anything else stays opaque):
  *   find . [flags…]                        — plain enumeration, relative start
  *   find . … | head|sort|uniq [flags]      — output-preserving filters
+ *   … | grep [flags] PATTERN               — prints a SUBSET of the piped
+ *                                            lines (no file operands)
+ *   … | sed 's|^\./||'                     — deletes a leading `./` per line
  *   find . … | xargs grep -l <pattern>     — grep -l prints a subset of the
  *                                            names find fed it
  *   grep [flags] -l PATTERN START…         — -l prints the START paths (with
@@ -26,8 +29,10 @@ import { expandTilde } from "./path-util";
  *   - a grep start that is absolute, ~/, .., `-` (stdin), or expanded
  *   - find -exec/-execdir/-ok/-okdir (the executed command's stdout replaces
  *     find's — arbitrary values)
- *   - any other stage command (awk, sed, wc, …), any extra grep operand, a
- *     bare numeric not fed by a flag (`sort 5` reads a file)
+ *   - any other stage command (awk, wc, cut, …), any extra grep operand (a
+ *     file operand gets printed), a bare numeric not fed by a flag
+ *     (`sort 5` reads a file), a value-taking grep flag, `sed -i` (in-place
+ *     edit), any other sed program (a rewrite can produce an absolute name)
  *   - `$`, backtick, `;`, `&` in the inner text (computed paths, a second
  *     command)
  *   - a substitution that is not the ENTIRE word (`$(find .) extra`)
@@ -244,6 +249,103 @@ function isFilterStage(tokens: string[]): boolean {
   return true;
 }
 
+/** grep FILTER stage (a stage after the first): `grep [flags] PATTERN` with no
+ *  file operands. With no operands grep reads the piped lines and prints a
+ *  subset of them unchanged, so a cwd-local stream stays cwd-local (the log
+ *  case: a `grep -rln … .` name list narrowed by `grep -v "/test\|…"`).
+ *  Flags are a closed set of pure filters: no value-taking short flag
+ *  (`-e`/`-f`/`-m`/`-A`/`-B`/`-C` — their value would be read as the pattern),
+ *  no flag that replaces or reshapes the printed line (`-c`, `-l`, `-o`, `-n`),
+ *  and no long flag without an attached value (its value would land in the
+ *  operand position). Exactly one operand — more means file operands, whose
+ *  contents are then printed. */
+const GREP_FILTER_FLAG_RE = /^-[viwxqRr]+$/;
+const GREP_FILTER_LONG_RE = /^--(?:include|exclude|exclude-dir)=[^=]+$/;
+
+function isGrepFilterStage(tokens: string[]): boolean {
+  if (tokens[0] !== "grep") return false;
+  let operands = 0;
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--") continue; // the pattern terminator, not an operand
+    if (t.startsWith("--")) {
+      if (!GREP_FILTER_LONG_RE.test(t)) return false;
+      continue;
+    }
+    if (t.startsWith("-")) {
+      if (!GREP_FILTER_FLAG_RE.test(t)) return false;
+      continue;
+    }
+    operands++;
+  }
+  return operands === 1;
+}
+
+/** One operand as literal text: one balanced quote pair removed, nothing that
+ *  expands at run time (`$` / backtick) inside. */
+function literalOperand(w: string): string | null {
+  const q = w.match(/^(['"])([\s\S]*)\1$/);
+  if (q) {
+    if (q[1] === "`" || (q[1] === '"' && /[$`]/.test(q[2]))) return null;
+    return q[1] === '"' ? q[2].replace(/\\([$`"\\])/g, "$1") : q[2];
+  }
+  // Unquoted: a backslash here changes the text bash passes (and can hide a
+  // metacharacter), a quote char means the operand boundary is not provable.
+  if (/[`$'"\\]/.test(w)) return null;
+  return w;
+}
+
+/** The one sed program that keeps a name stream local: it deletes a leading
+ *  `./` from every line, touching nothing else. Parsed rather than regexed —
+ *  a program that rewrites text can turn a relative name into an absolute
+ *  path, so only the exact `s|^.\/||`-shaped prefix strip is accepted. */
+function isDotStripProgram(p: string): boolean {
+  if (p[0] !== "s" || p.length < 5) return false;
+  const d = p[1];
+  if (/\w/.test(d) || d === "\\" || /\s/.test(d)) return false;
+  const fields: string[] = [];
+  let cur = "";
+  let i = 2;
+  for (; i < p.length && fields.length < 2; i++) {
+    const c = p[i];
+    if (c === "\\" && i + 1 < p.length) {
+      cur += c + p[i + 1];
+      i++;
+      continue;
+    }
+    if (c === d) {
+      fields.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  if (fields.length !== 2) return false; // exactly pattern + replacement
+  if (/[^gpi]/.test(p.slice(i))) return false; // then only s/// flags may follow
+  // The escaped-dot form only: `^./` (bare `.`) matches ANY character, so it
+  // could strip the first segment of a name that did not start with `./`.
+  return fields[0] === "^\\./" && fields[1] === "";
+}
+
+/** sed FILTER stage: `sed [dialect flags] PROGRAM` — no `-i` (that edits
+ *  files), no `-e` (its program is the NEXT token), no file operands, and the
+ *  program must be the `./`-prefix strip. */
+function isSedDotStripStage(tokens: string[]): boolean {
+  if (tokens[0] !== "sed") return false;
+  let programs = 0;
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.startsWith("-")) {
+      if (t !== "-E" && t !== "-r" && t !== "--posix") return false;
+      continue;
+    }
+    const program = literalOperand(t);
+    if (program === null || !isDotStripProgram(program)) return false;
+    programs++;
+  }
+  return programs > 0;
+}
+
 /** xargs stage: `xargs [flags] grep [flags] -l <pattern>` — grep -l prints a
  *  subset of the names xargs fed it; exactly one non-flag grep operand (the
  *  pattern; the names come from xargs, not the command line). */
@@ -281,7 +383,12 @@ export function isCwdLocalSubstitution(inner: string): boolean {
   const grepTokens = splitShellWords(stages[0].join(" "));
   if (!isFindLocalStage(stages[0]) && !(grepTokens && isGrepLStage(grepTokens))) return false;
   for (let i = 1; i < stages.length; i++) {
-    if (!isFilterStage(stages[i]) && !isXargsGrepLStage(stages[i])) return false;
+    if (isFilterStage(stages[i]) || isXargsGrepLStage(stages[i])) continue;
+    // The grep and sed filter stages carry quoted operands whose spaces matter
+    // — tokenized quote-aware from the stage's own text.
+    const words = splitShellWords(stageTexts[i].trim());
+    if (words && (isGrepFilterStage(words) || isSedDotStripStage(words))) continue;
+    return false;
   }
   return true;
 }

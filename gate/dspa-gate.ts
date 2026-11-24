@@ -107,6 +107,9 @@ import {
   goCargoFetchForm,
   isAllowedCommand,
   skipEnvPrefixes,
+  wrapperCommands,
+  SHELL_INTERPRETERS,
+  SCRIPT_INTERPRETERS,
 } from "../config";
 
 export type DspaGateResult =
@@ -1029,9 +1032,16 @@ export async function checkDspaGate(
     // non-rm path already judges — so class labels no longer block the
     // carve-out. Absolute bars are NOT exempted (the `absoluteBarHits` check
     // below stops them) and evaluator-side reasons (`[Tool]`, `[System]`, …)
-    // keep blocking, as they did before.
+    // keep blocking, as they did before. Two more families are exempted now
+    // that their danger is provably owned elsewhere (see the two regexes
+    // below): a file-modification command whose operand the parser mints as a
+    // write, and a scheduling wrapper around a payload the parser sees.
+    const wrappersRedundant = wrapperReasonsRedundant(analysis.segments);
     const otherDanger = analysis.risk.reasons.filter(
-      (r) => !RM_RISK_REASON_RE.test(r) && !CLASS_LABEL_REASON_RE.test(r),
+      (r) =>
+        !RM_RISK_REASON_RE.test(r) &&
+        !CLASS_LABEL_REASON_RE.test(r) &&
+        !(RM_LOCATION_REASON_RE.test(r) || (wrappersRedundant && RM_WRAPPER_REASON_RE.test(r))),
     );
     if (otherDanger.length > 0) {
       return { ok: false, stopClass: "dangerous", reason: `dangerous: ${otherDanger.join("; ").slice(0, 120)}`, advisory: true };
@@ -1467,6 +1477,48 @@ export async function checkDspaGate(
  * block the carve-out. New reason strings fail safe (block → prompt). */
 const RM_RISK_REASON_RE =
   /\brecursive delete\b|\bforced delete\b|mass deletion|entire (?:tree|home) deleted|\[Pattern\] rm \(|shell (?:input|output) redirection|pipe operator|tee \(file writing\)|\bdeletes \d+\+? files\b/i;
+
+/** A `[Shell]` reason for a file-modification command whose operand the parser
+ * mints as a WRITE (`sed -i f`, `sort -o f`): the danger is a LOCATION, and the
+ * write bar below checks that location whether or not the reason blocks —
+ * measured on `sed -i 's/a/b/' /etc/hosts; rm /tmp/x`, where `/etc/hosts` is in
+ * `writePaths` and `outsideWritePaths`, so the out-of-bar write still stops it.
+ * The arbitrary-code family is deliberately absent (`[Tool] perl (script
+ * execution)`, `[Shell] heredoc to shell interpreter`): there the payload, not
+ * a minted operand, is the danger — `perl -pi -i` keeps BOTH reasons, so
+ * exempting its `[Shell]` one would change nothing but weaken the rule. */
+const RM_LOCATION_REASON_RE = /^\[Shell\] (?:sed -i|sort -o\/--output) \(/;
+
+/** `[Shell] timeout wrapper running write operation` (system-evaluator, for the
+ * `wrapperCommands` set): a scheduling prefix adds no danger of its own — the
+ * payload is analysed inside the SAME segment, so its paths and its own reasons
+ * are already in this analysis (measured: `timeout 600 python3 -c
+ * "open('/etc/x','w')"` carries `[Tool] python (script execution)` and mints
+ * `/etc/x` as a write). Exempted only for a payload the parser sees through:
+ * for `timeout 600 sh -c 'rm -rf /var/lib/foo'` the interpreter's body never
+ * reaches the parser (no paths minted), so there the wrapper reason is the
+ * floor's only handle on the delete and it keeps blocking. */
+const RM_WRAPPER_REASON_RE = /^\[Shell\] \S+ wrapper running write operation$/;
+
+/** True when no segment in the command wraps a shell/script interpreter (see
+ *  RM_WRAPPER_REASON_RE). Fail closed: an unresolvable payload counts as code. */
+function wrapperReasonsRedundant(segments: string[]): boolean {
+  return segments.every((seg) => {
+    // The RAW head of the segment — `operativeTokens` skips wrappers on
+    // purpose (it exists to find the rm), which would hide the wrapper here.
+    // Leading `NAME=value` assignments are skipped: they prefix a wrapper too.
+    const words = tokenizeSegment(seg);
+    let head = "";
+    for (const w of words) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+      head = w.split("/").pop()?.toLowerCase() ?? "";
+      break;
+    }
+    if (!wrapperCommands.has(head)) return true; // not a wrapper segment
+    const payload = getDelegatedCommand(seg)?.cmd.split("/").pop()?.toLowerCase() ?? "";
+    return payload !== "" && !SHELL_INTERPRETERS.has(payload) && !SCRIPT_INTERPRETERS.has(payload);
+  });
+}
 /** A location only the shell knows at run time: a variable, a substitution,
  * a backtick. No location for the bar to check — absolute. */
 const RM_COMPUTED_TARGET_RE = /[$`]/;

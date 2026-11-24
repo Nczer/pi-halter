@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { expandTilde, expandHomeToken, UNKNOWN_CWD_MARKER } from "./path-util";
 import { resolvePathReal } from "./path-analysis";
-import { pathWord, type PathWord } from "./path-word";
+import { pathWord, mintWord, type PathWord } from "./path-word";
 import { tokenizeSegment, tokenizeSegmentQuoted, type QuotedToken } from "./tokenizer";
 import { pathAwareCommands, SCRIPT_INTERPRETERS, SHELL_INTERPRETERS, codeBodiesWrite, gitOperandRoles } from "../config";
 import { writeOperandIndices } from "./write-roles";
@@ -48,7 +48,12 @@ export type CwdBase = string | null;
 
 type CdResolution =
   | { kind: "thread"; dir: string } // literal target that exists → base becomes dir
-  | { kind: "unknown" } // target not exactly determinable → base unknown
+  /** Target not exactly determinable → base unknown. `candidates` is set when
+   *  the base is not knowable as ONE dir but IS knowable as a finite SET (a
+   *  loop `cd $d` over an in-list of real dirs): path minting still has no
+   *  single base to resolve against, but the /dspa floor's marker bound can
+   *  test that set instead of declaring the base unbounded (cdBaseBounds). */
+  | { kind: "unknown"; candidates?: string[] }
   | { kind: "unchanged" }; // not a cd, or the cd cannot succeed at runtime
 
 /** Strip backslash escapes from a shell word (\X → X) so escaped literal
@@ -161,7 +166,11 @@ export function resolveCdTarget(
     if (cands === null) return { kind: "unknown" };
     if (cands.length === 0) return { kind: "unchanged" };
     if (cands.length === 1) return { kind: "thread", dir: cands[0] };
-    return { kind: "unknown" };
+    // Multiple distinct dirs: a set-valued base would still need per-value path
+    // checks, which the path pipeline doesn't do, so the base stays unknown.
+    // But the set is statically known and finite — reported as `candidates` so
+    // the floor can bound a marker with it rather than fail open on "anywhere".
+    return { kind: "unknown", candidates: cands };
   }
   // Closed-set $HOME / ${HOME} expand statically whatever the base is (the
   // same closed set the parser applies to path tokens, see path-util). Off
@@ -204,6 +213,17 @@ export function resolveCdTarget(
  *    so candidates only ever grow. Proved-failed cds (target missing) and
  *    subshell/pipeline/backgrounded cds change nothing.
  *
+ * The exception to "unresolvable → anywhere": a loop cd whose in-list resolves
+ * to several real dirs (`for d in ask exa gallop; do cd "$d"`). Its runtime
+ * base ∈ that set (plus the pre-cd base, should every cd fail), so the set
+ * joins the candidates instead of unbounding: the in-list is what makes it
+ * knowable, and resolveLoopCdCandidates already fails closed on anything that
+ * is not (runtime expansion, unexpandable glob, relative under an unknown base,
+ * over-cap matches). One such cd also ends the single-base threading below —
+ * the base is now the SET, so a later RELATIVE literal cd (`cd sub`, relative to
+ * WHICH candidate?) falls into the ordinary unknown → unbounded branch, and
+ * only an absolute literal cd recovers a definite base.
+ *
  * Only persistent top-level cds participate: a ( ) subshell's cd dies with
  * the child, a pipeline stage's cd runs in a subshell, a backgrounded cd is
  * `cd … &` (subshell). resolveCdTarget already classifies those as
@@ -222,8 +242,12 @@ export function cdBaseBounds(
     if ((seg.subshellDepth ?? 0) !== 0 || seg.backgrounded) continue;
     if (unbounded) continue;
     const r = resolveCdTarget(seg, base, homeFixed);
-    if (r.kind === "unknown") unbounded = true;
-    else if (r.kind === "thread") {
+    if (r.kind === "unknown") {
+      if (r.candidates && r.candidates.length > 0) {
+        for (const c of r.candidates) if (!candidates.includes(c)) candidates.push(c);
+        base = null; // set-valued from here — see the soundness note above
+      } else unbounded = true;
+    } else if (r.kind === "thread") {
       base = r.dir;
       if (!candidates.includes(r.dir)) candidates.push(r.dir);
     }
@@ -593,6 +617,23 @@ export function stageCommand(words: string[]): { cmd: string; index: number; cap
   return { cmd: wrapped.cmd, index: k + wrapped.index, capped: false };
 }
 
+/** Does this git stage work ON the directory it runs in, with nothing else
+ *  naming the target? `cd repo && git apply p` rewrites that working tree,
+ *  `cd repo && git init` builds its `.git` there; `git -C /repo apply p` and
+ *  `git init DIR` name the place outright, so the mint covers those and the
+ *  base stays out of it. Both layers ask the same question — `baseAccessPath`
+ *  (the segment touches its base, read bar) and `baseWriteAccess` (writes it).
+ *  git is absent from the path-aware and write-verb tables for a good reason
+ *  (its operands are revisions and refs), so this is its own door. */
+function gitWritesItsBase(args: string[]): boolean {
+  const roles = gitOperandRoles(args);
+  if (!roles || !roles.writesRepo || roles.repoIdx >= 0) return false;
+  // A write operand that names a place outright carries the write itself.
+  // A BARE word is the shell's cwd's child and the parser never mints it, so
+  // the base carries it — D20's rule, shared with every other write verb.
+  return roles.writes.every((i) => !isResolvableTarget((args[i] ?? "").replace(/^["']|["']$/g, ""), false));
+}
+
 export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = false): string | null {
   const quotedTokens = tokenizeSegmentQuoted(seg.text);
   const tokens = quotedTokens.map((t) => t.text);
@@ -621,6 +662,7 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
   let sawResolvable = false;
   let sawPathAware = false;
   let sawCwdDefault = false;
+  let gitWritesBase = false;
   let bareRedirectTarget = false;
 
   for (const stage of stages) {
@@ -637,6 +679,11 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
     const pathAware = cmd !== "" && pathAwareCommands.has(cmd);
     if (pathAware) sawPathAware = true;
     if (CWD_DEFAULT_COMMANDS.has(cmd)) sawCwdDefault = true;
+    // git is in neither table: its verb is the SUBCOMMAND, so the generic
+    // rules cannot see that `init` / `apply` / `am` work ON the directory. Only
+    // when nothing else names the target: with a `-C DIR` flag (or a `git init
+    // DIR` operand) that location is minted, and the base is not involved.
+    if (cmd === "git" && gitWritesItsBase(rest.map((t) => t.text))) gitWritesBase = true;
 
     // Redirect to a bare name reads/writes the base (see above).
     for (let i = 0; i < rest.length; i++) {
@@ -703,6 +750,16 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
     for (const rt of inRedirectTargets) evalFileToken(rt, false);
   }
 
+  // A tree-writing git subcommand with no location of its own operates on the
+  // base the shell put it in: `cd /etc && git apply p.patch` rewrites /etc's
+  // working tree, `cd /etc && git init` builds /etc/.git. Nothing else covers
+  // it — git's bare words are never minted (its arguments are refs), and the
+  // floor's `baseWriteAccess` proxy cannot: a command the manual layer
+  // auto-allows never reaches the floor. Both shapes auto-allowed while
+  // `cd /etc && touch f` prompted (measured 2026-12-28); the read-only
+  // subcommands (`status`, `log`, `diff`) never join and stay as they were.
+  if (gitWritesBase) return base === null ? UNKNOWN_CWD_MARKER : base;
+
   if (!sawPathAware && !bareRedirectTarget) return null;
   // No path-aware stage but a bare redirect target (`echo x > f`): the file
   // lands in the base, which is all this segment says (D7 sentinel stop when
@@ -742,8 +799,11 @@ export function baseAccessPath(seg: BashSegment, base: CwdBase, homeFixed = fals
  *    base flag). A pipeline shares the effective cwd, so any stage
  *    counts (`cat x | tee f`). Resolvable targets enter the path set
  *    themselves (read bar / D19 handle them). git has no VERB here — it is
- *    subcommand-dependent (status/log don't write) — but `apply`/`am` join
- *    through their own subcommand test, since what they rewrite is the base.
+ *    subcommand-dependent (status/log don't write) — but `apply`/`am`/`init`
+ *    join through their own subcommand test, since what they rewrite (or, for
+ *    `init`, create) is the base. Its READ-bar twin in `baseAccessPath` is the
+ *    half that makes the question reachable: a segment no layer flags never
+ *    reaches a prompt, so this proxy alone could not cover `cd /etc && git init`.
  * Subshells are not modeled here (baseAccessPath's subshell scan already
  * flags their base for the read bar).
  */
@@ -802,7 +862,7 @@ export function baseWriteAccess(seg: BashSegment): boolean {
     const stageArgs = stageTexts.slice(st.index + 1);
       // git is absent from the verb table because its verb is the SUBCOMMAND
     // (`status` reads, `apply` rewrites the working tree).
-    if (cmd === "git" && gitOperandRoles(stageArgs)?.writesRepo) return true;
+    if (cmd === "git" && gitWritesItsBase(stageArgs)) return true;
     const skipVerbArgs = nonFileArgIndices(cmd, stageArgs);
     const writeIdx = writeOperandIndices(cmd, stageArgs, skipVerbArgs);
     for (const ai of writeIdx) {
@@ -865,6 +925,13 @@ function splitQuotedStages(tokens: QuotedToken[]): QuotedToken[][] {
 interface CwdDependentToken {
   readonly isPwd: boolean;
   readonly rel: string;
+  /** The word carries a runtime expansion (`$`, backtick) — the parser refuses
+   *  to open its braces for such a word, and the re-based mint must not open
+   *  them either or the two records stop matching (see relativeWord). */
+  readonly dynamic: boolean;
+  /** Part of the word is quoted, so its braces spell part of its name
+   *  (`cat './{a,b}/x'`) — same reason, same sync obligation. */
+  readonly quoted: boolean;
   /** The token sits at a WRITE-operand position of its command (G3) — the
    *  post-cd re-resolution of a `cd ~/.pi/agent && mkdir ./x` has to carry the
    *  role, or the write bar never sees the re-based location. */
@@ -894,9 +961,9 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
     const argv0 = stage[ti];
     if (argv0) {
       if ((argv0.hasExpansion ?? true) && /^\$\{?PWD\}?\//.test(argv0.text)) {
-        out.push({ isPwd: true, rel: argv0.text.slice(argv0.text.indexOf("/") + 1), isWrite: false });
+        out.push({ isPwd: true, rel: argv0.text.slice(argv0.text.indexOf("/") + 1), isWrite: false, dynamic: argv0.hasExpansion ?? true, quoted: argv0.quoted });
       } else if (isCwdRelativeWord(argv0.text)) {
-        out.push({ isPwd: false, rel: argv0.text, isWrite: false });
+        out.push({ isPwd: false, rel: argv0.text, isWrite: false, dynamic: argv0.hasExpansion ?? true, quoted: argv0.quoted });
       }
     }
     const cmd = argv0 ? path.basename(argv0.text).toLowerCase() : "";
@@ -919,19 +986,45 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
       // Only cwd-dependent tokens need re-resolving: ./x, ../x, $PWD/x.
       // Absolute and ~/ paths resolve identically under any cwd.
       if ((qt.hasExpansion ?? true) && (t === "$PWD" || t === "${PWD}")) {
-        out.push({ isPwd: true, rel: "", isWrite: writeIdx.has(i) });
+        out.push({ isPwd: true, rel: "", isWrite: writeIdx.has(i), dynamic: true, quoted: qt.quoted });
         continue;
       }
       if ((qt.hasExpansion ?? true) && (t.startsWith("$PWD/") || t.startsWith("${PWD}/"))) {
-        out.push({ isPwd: true, rel: t.slice(t.indexOf("/") + 1), isWrite: writeIdx.has(i) });
+        out.push({ isPwd: true, rel: t.slice(t.indexOf("/") + 1), isWrite: writeIdx.has(i), dynamic: true, quoted: qt.quoted });
         continue;
       }
       if (isDotRelativeWord(t)) {
-        out.push({ isPwd: false, rel: t, isWrite: writeIdx.has(i) });
+        out.push({ isPwd: false, rel: t, isWrite: writeIdx.has(i), dynamic: qt.hasExpansion ?? true, quoted: qt.quoted });
       }
     }
   }
   return out;
+}
+
+/**
+ * The record for one cwd-dependent token, resolved under `base`. Minted through
+ * the SAME brace-opening the parser applies to the same word
+ * (`mintWord` in analysis/path-word): a dot token carrying an openable group
+ * (`./{a,b}/x`) reaches the path set as one location PER BRANCH, so the stale
+ * resolution that gets dropped and the re-based one that gets added must open
+ * the group too — minting it whole made both wrong at once: the pre-cd pair
+ * survived as a phantom outside-dir (nothing matched it to drop) while the
+ * re-base added one unopened string no run can produce
+ * (measured: `cd /tmp && ls ./{a,b}/x` → `/…Projects/a/x`, `/…Projects/b/x`,
+ * `/tmp/{a,b}/x`). A word the parser refuses to open (dynamic, or quoted)
+ * stays single-location here as well — that is what keeps the two in step.
+ *
+ * String join, NOT path.join for the marker: join normalizes `..` so the marker
+ * escapes (`<unresolved-cwd>/../x` → `../x`) and a bare relative token lands in
+ * the outside set — displayed as its dirname (`.`, `node_modules/.bin`).
+ * Keeping the marker prefix intact makes the prompt read `outside <unresolved-cwd>`.
+ */
+function relativeWord(token: CwdDependentToken, base: CwdBase): PathWord {
+  const resolve = (word: string): string =>
+    base === null
+      ? (word ? `${UNKNOWN_CWD_MARKER}/${word.replace(/^\.\//, "")}` : UNKNOWN_CWD_MARKER)
+      : resolvePathReal(word, base);
+  return mintWord(token.rel, resolve, { quotedBraces: token.quoted, dynamic: token.dynamic });
 }
 
 /**
@@ -948,7 +1041,8 @@ function cwdDependentTokens(seg: BashSegment): CwdDependentToken[] {
  *
  * One record per TOKEN, text as typed: these are words the parser resolved
  * against the wrong base, so the record is where the re-based location and the
- * spelling the operator typed stay together.
+ * spelling the operator typed stay together (a token naming several places
+ * through a brace group is still ONE record, with one location per place).
  *
  * `writeLocations` is the subset those tokens hold in a WRITE role (the same
  * `writeOperandIndices` answer the write bar uses, see cwdDependentTokens) —
@@ -962,17 +1056,11 @@ export function reResolveCwdDependentParts(
 ): { words: PathWord[]; writeLocations: string[] } {
   const words: PathWord[] = [];
   const writeLocations: string[] = [];
-  for (const { isPwd, rel, isWrite } of cwdDependentTokens(seg)) {
-    if (opts?.skipDotPaths && !isPwd) continue;
-    // String join, NOT path.join: join normalizes `..` so the marker escapes
-    // (`<unresolved-cwd>/../x` → `../x`) and a bare relative token lands in
-    // the outside set — displayed as its dirname (`.`, `node_modules/.bin`).
-    // Keeping the marker prefix intact makes the prompt read `outside <unresolved-cwd>`.
-    const location = base === null
-      ? (rel ? `${UNKNOWN_CWD_MARKER}/${rel.replace(/^\.\//, "")}` : UNKNOWN_CWD_MARKER)
-      : resolvePathReal(rel, base);
-    words.push(pathWord(rel, [location]));
-    if (isWrite) writeLocations.push(location);
+  for (const token of cwdDependentTokens(seg)) {
+    if (opts?.skipDotPaths && !token.isPwd) continue;
+    const word = relativeWord(token, base);
+    words.push(word);
+    if (token.isWrite) writeLocations.push(...word.locations);
   }
   return { words, writeLocations };
 }
@@ -989,12 +1077,17 @@ export function reResolveCwdDependentParts(
  * outside-dir (the prompt claims the pre-cd location) and a dead grant (an
  * always-for-dir approval for a path the command cannot reach). The base
  * resolution (or the unknown-cwd marker) replaces it.
+ *
+ * One string per PLACE, brace-opened by the same `mintWord` recipe the parser
+ * used (see relativeWord) — the removal matches on the location string, so a
+ * group opened here but not there (or the reverse) silently keeps the phantom.
  */
 export function staleCwdResolutions(seg: BashSegment, sessionCwd: string): string[] {
   const out: string[] = [];
-  for (const { isPwd, rel } of cwdDependentTokens(seg)) {
-    if (isPwd) continue;
-    out.push(resolvePathReal(rel, sessionCwd));
+  for (const token of cwdDependentTokens(seg)) {
+    if (token.isPwd) continue;
+    const word = relativeWord(token, sessionCwd);
+    out.push(...word.locations);
   }
   return out;
 }
