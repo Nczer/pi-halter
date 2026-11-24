@@ -8,6 +8,7 @@ import {
 import { store } from "../gate/store";
 import { resetDspa, recordDspaAutoAllowed, setDspaActive, setDspaJudging } from "../modes/dspa-mode";
 import { setDspatActive, setDspatJudging } from "../modes/dspat-mode";
+import { judgeStatus } from "../judge/verdict";
 
 // The widget calls judgeStatus(ctx) per render; the real one reads the user's
 // live settings + model registry — mock it so mode-line tests are hermetic.
@@ -162,6 +163,19 @@ describe("updateStatus", () => {
     recordDspaAutoAllowed("ollama/Other-9B", "Edit f.ts");
     updateStatus(ctx);
     expect(status).toBe("» DSPA (Other-9B): 1a");
+  });
+
+  it("names the disabled judge: /dspa on with the judge off can only prompt", () => {
+    const js = judgeStatus as unknown as ReturnType<typeof vi.fn>;
+    js.mockReturnValue({ state: "off", modelLabel: null, reason: null });
+    try {
+      setDspaActive(true);
+      updateStatus(ctx);
+      expect(status).toBe("» DSPA (judge off)");
+    } finally {
+      js.mockReset();
+      js.mockImplementation(() => ({ state: "ok", modelLabel: null, reason: null }));
+    }
   });
 
   it("paints the in-flight judging stage inline on the DSPA line (restored indicator)", () => {

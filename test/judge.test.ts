@@ -15,6 +15,9 @@ import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {buildJudgmentPacket, JudgmentInput} from "../judge/packet";
 import {judge, readJudgeSettings, writeJudgeSettings, resolveJudgeModel, resolveJudgeAuth, resetJudgeCache, DEFAULT_JUDGE_SETTINGS, JUDGE_SYSTEM_PROMPT, JUDGE_STAGE2_SYSTEM_PROMPT, JudgeOptions, JudgeStreamFn, ModelRegistryLike} from "../judge/judge";
+import { buildJudgmentInput } from "../judge/verdict";
+import { analyzeCommand } from "../analysis/command-analysis";
+import { createStore } from "../gate/store";
 
 // ── Fakes ──
 
@@ -472,6 +475,49 @@ describe("judgment packet", () => {
     const none = buildJudgmentPacket(baseInput);
     expect(none).not.toContain("effective base:");
     expect(none).not.toContain("risk flags:");
+  });
+
+  // The derivation side (judge/verdict.ts): the base is compared against the
+  // effective cwds the parser mints, and those come out realpath'd — a lexical
+  // compare of a symlinked cwd differs from every one of them, so EVERY packet
+  // in that cwd carried a `(after cd)` line for a command that never moved.
+  const baseOf = (i: JudgmentInput) => (i as { effectiveBase: string | null }).effectiveBase;
+
+  it("D21: a symlinked cwd invents no effective base", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-symcwd-"));
+    try {
+      const real = path.join(tmp, "real");
+      fs.mkdirSync(real);
+      const link = path.join(tmp, "link");
+      fs.symlinkSync(real, link);
+      const analysis = await analyzeCommand("ls -la", link);
+      const input = await buildJudgmentInput(
+        { type: "bash", command: "ls -la", cwd: link, analysis } as never,
+        createStore(),
+      );
+      expect(baseOf(input)).toBeNull();
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("D21: a real cd out of a symlinked cwd still names the base", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "halter-symcwd-"));
+    try {
+      const real = path.join(tmp, "real");
+      fs.mkdirSync(real);
+      fs.mkdirSync(path.join(real, "sub"));
+      const link = path.join(tmp, "link");
+      fs.symlinkSync(real, link);
+      const analysis = await analyzeCommand("cd sub && ls", link);
+      const input = await buildJudgmentInput(
+        { type: "bash", command: "cd sub && ls", cwd: link, analysis } as never,
+        createStore(),
+      );
+      expect(baseOf(input)).toContain("sub");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

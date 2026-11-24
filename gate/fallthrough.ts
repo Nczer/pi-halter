@@ -21,7 +21,7 @@ import { credentialClassCleared } from "./accreditation";
 import { checkDspaGate, hasFileScriptOutsideCwd, judgeWriteOutside, answeredMissPaths, intentGuardFaults, makeManualBar, type DspaGateResult, type MissAnswers, type MissFact } from "./dspa-gate";
 import { resolveUnresolvedPaths } from "../judge/path-resolver";
 import { sanitizeJudgePaths, reportBases, JUDGE_PATHS_MAX } from "../judge/paths";
-import {getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus, type JudgePromptDeps} from "../judge/verdict";
+import {buildJudgmentInput, getJudgeVerdict, getStage2Verdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus, type JudgePromptDeps} from "../judge/verdict";
 import { judgePathLogFields } from "../judge/paths";
 import { pdTargetLabel } from "../ui/prompt-builder";
 import { shortenHomePath } from "../ui/path-display";
@@ -609,10 +609,13 @@ export async function tryDspaAutoAllow(
     // stop — no judge call — is the defensive fallback below; the gate
     // currently never emits one.)
     if (gateResult.advisory) {
-      const v1 = await getJudgeVerdict(pd, ctx, store, deps);
+      // One packet for the pair (stage 2 runs unless stage 1 approved): it is
+      // stage-independent, and each build costs a stat/read per reported path.
+      const pairDeps = { ...deps, input: deps.input ?? (await buildJudgmentInput(pd, store)) };
+      const v1 = await getJudgeVerdict(pd, ctx, store, pairDeps);
       const v2 = v1 && v1.approve === "approve"
         ? null
-        : await getStage2Verdict(pd, ctx, store, deps);
+        : await getStage2Verdict(pd, ctx, store, pairDeps);
       // Judge-self disagreement is still logged (the judge ran, whatever
       // the floor's stop) — but NO paths line: the floor stopped the
       // command, so the miss never ran through the floor. The ledger
@@ -668,7 +671,11 @@ export async function tryDspaAutoAllow(
     (pd.type === "bash" && pd.analysis != null &&
       findExecutedScript(pd.analysis, pd.cwd) !== null);
   // Stage 1 — stateless (the packet's static analysis is the whole input).
-  const o1 = skipStage1 ? null : await getStage1Outcome(pd, ctx, store, deps);
+  // Stage 1 and 2 share one packet: it is stage-independent (stage 2 appends
+  // its session-context section in judge()), and each build costs a stat/read
+  // per reported path. A caller that already built one (replay) keeps its own.
+  const pairDeps = { ...deps, input: deps.input ?? (await buildJudgmentInput(pd, store)) };
+  const o1 = skipStage1 ? null : await getStage1Outcome(pd, ctx, store, pairDeps);
   const v1 = o1?.verdict ?? null;
   // D19: a file script OUTSIDE the working set never auto-allows here —
   // its writes surface only in the stage-2 report, which the write bar
@@ -679,7 +686,7 @@ export async function tryDspaAutoAllow(
     return { autoAllowed: true, fallthrough: { gate: gateResult, verdict: v1, stage: 1 } };
   }
   // Stage 2 — intent pass (session context, uncached, final verdict).
-  const o2 = await getStage2Outcome(pd, ctx, store, deps);
+  const o2 = await getStage2Outcome(pd, ctx, store, pairDeps);
   const v2 = o2.verdict;
   logJudgeDiff(pd, "dspa", v1, v2);
   // D19: the deterministic write bar on the judge's FRESH write report —

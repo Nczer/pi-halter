@@ -5,7 +5,7 @@ import { buildPrompt, pdTargetLabel } from "./prompt-builder";
 import { twoTierAlwaysPrompt } from "./prompts";
 import { updateStatus } from "./widget";
 import { RuleGenerator } from "../decide/rule-generator";
-import {getJudgeVerdict, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
+import {getJudgeVerdict, buildJudgmentInput, getStage1Outcome, getStage2Outcome, judgeFailPhrase, judgeStatus, judgeVerdictBlock} from "../judge/verdict";
 import { dspaRetryApproved, dspaStopClass, dspaStopTag, judgeLedgerFields } from "../gate/fallthrough";
 import { resolveUnresolvedPaths, type ResolutionMap } from "../judge/path-resolver";
 import { isDspatActive, recordDspatOutcome, updateDspatWidget } from "../modes/dspat-mode";
@@ -220,8 +220,12 @@ export async function showPrompt(
         body: prompt.body + `\n⚠️ Judge invalid: ${jstatus.reason}`,
       };
     } else {
-      const o1 = await getStage1Outcome(pd, ctx, store);
-      const o2 = await getStage2Outcome(pd, ctx, store);
+      // One packet for the stage pair: the packet is stage-independent (stage 2
+      // appends its own section in judge()), and each build costs a stat/read
+      // per reported path.
+      const pairDeps = { input: await buildJudgmentInput(pd, store) };
+      const o1 = await getStage1Outcome(pd, ctx, store, pairDeps);
+      const o2 = await getStage2Outcome(pd, ctx, store, pairDeps);
       const v1 = o1.verdict, v2 = o2.verdict;
       logJudgeDiff(pd, "dspat", v1, v2);
       // ctx is what separates the two miss kinds: without it the session

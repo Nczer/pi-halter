@@ -107,6 +107,7 @@ function displayPaths(paths: string[], cap: number): string {
  *   » DSPA (Other-9B): 3a                        non-zero only, in stop-source
  *   » DSPA                                       order: a auto-allowed, g floor stop,
  *   » DSPA: 3a — judging stage 2…                r judge reject, c declined, d defer;
+ *   » DSPA (judge off)                           judge disabled: the mode can only prompt
  *   ◎ DSPAT: 3/4 agreed                          bare name pre-first-op, like ◎ DSPAT.
  *   · R/W: … · R: … · R intent: … · R cred: …    The model tag shows only when the
  *   · Pkg: … · Cwd: … · Tools: …                 judge model differs from the session
@@ -203,7 +204,8 @@ export function updateStatus(ctx: ExtensionContext): void {
   // read (settings + session model), so a model switch is picked up on the
   // next status update. The modes are mutually exclusive (index.ts), so
   // if/else — one line can carry one main.
-  const judgeOk = judgeStatus(ctx).state !== "invalid";
+  const judgeState = judgeStatus(ctx).state;
+  const judgeOk = judgeState !== "invalid";
   let main = "";
   if (isDspaActive() && judgeOk) {
     const s = getDspaStats();
@@ -212,10 +214,14 @@ export function updateStatus(ctx: ExtensionContext): void {
     // tag only when it is NOT the session model (the stats line already
     // names that one): `» DSPA:` bare, or `» DSPA (Other-9B):`.
     const sessionRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null;
-    const modelTag =
-      s.model === null || s.model === sessionRef
-        ? ""
-        : ` (${s.model.split("/").pop()})`;
+    // One parenthetical, both tags: the judge model when it is NOT the session
+    // model, and `judge off` while /dspa is on with the judge disabled — with
+    // no verdict to weigh, the mode can only prompt, and a bare `» DSPA` reads
+    // as if it could auto-allow.
+    const tags: string[] = [];
+    if (judgeState === "off") tags.push("judge off");
+    if (s.model !== null && s.model !== sessionRef) tags.push(s.model.split("/").pop() ?? s.model);
+    const tagTail = tags.length > 0 ? ` (${tags.join(" · ")})` : "";
     // Session health as compact counts (only non-zero), in stop-source
     // order: a = auto-allowed, g = floor stop, r = judge REJECT,
     // c = approve-but-above-authority (declined), d = DEFER/no verdict.
@@ -233,7 +239,7 @@ export function updateStatus(ctx: ExtensionContext): void {
     // status at every transition).
     const judgingStage = getDspaJudgingStage();
     const judgingTail = judgingStage !== null ? ` — judging stage ${judgingStage}…` : "";
-    main = theme.fg("accent", theme.bold(`» DSPA${modelTag}${body}${judgingTail}`));
+    main = theme.fg("accent", theme.bold(`» DSPA${tagTail}${body}${judgingTail}`));
   } else if (isDspatActive() && judgeOk) {
     const s = getDspatStats();
     // Agreement counter only — updateStatus re-runs after every recorded

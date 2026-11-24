@@ -1,10 +1,47 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { findNetworkEgress, isWriteOperation, isTrustedScriptCommand, registryRunDeps, uvRunFlags, resolveDepSource } from "../config";
 import { tokenizeSegmentQuoted } from "../analysis/tokenizer";
 import { dangerousPerlFlags, codeBodiesWrite } from "../config/bash-patterns";
 import { analyzeCommand } from "../analysis/command-analysis";
 
 // ── isWriteOperation (from config) ──
+
+describe("PI_CODING_AGENT_DIR — a relocated agent dir", () => {
+  it("widens the read bar and moves the trusted skills dir to it", async () => {
+    const prev = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = "/opt/relocated-agent";
+    try {
+      vi.resetModules();
+      const [{ allowedReadPaths }, { isTrustedScriptPath }] = await Promise.all([
+        import("../config/path-rules"),
+        import("../config/trusted-scripts"),
+      ]);
+      expect(allowedReadPaths).toContain("/opt/relocated-agent");
+      expect(isTrustedScriptPath("/opt/relocated-agent/skills/pdf/scripts/x.py")).toBe(true);
+      // The default location is no longer special once the dir is relocated —
+      // skills cannot exist in both, and trusting fewer dirs is the safe side.
+      expect(isTrustedScriptPath(`${process.env.HOME}/.pi/agent/skills/y.py`)).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = prev;
+      vi.resetModules();
+    }
+  });
+
+  it("keeps the default agent dir covered when the variable is unset", async () => {
+    const prev = process.env.PI_CODING_AGENT_DIR;
+    delete process.env.PI_CODING_AGENT_DIR;
+    try {
+      vi.resetModules();
+      const { allowedReadPaths } = await import("../config/path-rules");
+      // Realpath'd (the array stores real paths), so match the tail.
+      expect(allowedReadPaths.some((p) => p.endsWith("/.pi/agent"))).toBe(true);
+    } finally {
+      if (prev !== undefined) process.env.PI_CODING_AGENT_DIR = prev;
+      vi.resetModules();
+    }
+  });
+});
 
 describe("codeBodiesWrite — a shell body's redirects (2026-10-16)", () => {
   // The outer-command redirect scan cannot see inside a quoted payload: the

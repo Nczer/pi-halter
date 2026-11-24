@@ -10,6 +10,7 @@ import { isDecisionLogEnabled, setDecisionLogEnabled } from "./gate/decision-log
 import { isLedgerLogEnabled, setLedgerLogEnabled } from "./config/logging";
 import {readJudgeSettings, writeJudgeSettings, resetJudgeCache, THINKING_VALUES, JudgeSettings} from "./judge/judge";
 import {judgeStatus} from "./judge/verdict";
+import { resetPathResolverCache } from "./judge/path-resolver";
 import { store } from "./gate/store";
 import { checkScriptBudget, resetScriptBudget } from "./gate/script-budget";
 import { withUILock } from "./ui-lock";
@@ -88,6 +89,7 @@ export default async function halterExtension(pi: ExtensionAPI) {
     resetDspat();
     resetDspa();
     resetJudgeCache();
+    resetPathResolverCache(); // confirmed path resolutions are session state
     ctx.ui.setStatus("halter", undefined);
     // Defensive: same-process /reload from a pre-status build could still
     // carry the old widgets (incl. the pre-merge per-mode ids).
@@ -96,6 +98,7 @@ export default async function halterExtension(pi: ExtensionAPI) {
     ctx.ui.setWidget("dspa", undefined);
     ctx.ui.setWidget("dspat", undefined);
     ctx.ui.setWidget("judge", undefined);
+    ctx.ui.setWidget("resolver", undefined);
   });
 
   // ── /dsp command (exclusive with /dspa and /dspat) ──

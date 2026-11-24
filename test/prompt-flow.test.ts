@@ -13,13 +13,15 @@ import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {Decision, PermissionRequest, PromptDecision} from "../decide/types";
 
-const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock, stage2Mock, failMock } = vi.hoisted(() => ({
+const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock, stage2Mock, failMock, packetMock } = vi.hoisted(() => ({
   judgeStatusMock: vi.fn(),
   verdictMock: vi.fn(),
   promptSpy: vi.fn(),
   resolverMock: vi.fn(),
   pathsRulesMock: vi.fn(),
   stage2Mock: vi.fn(),
+  // The judgment packet builder — the stage-pair dedup test counts it.
+  packetMock: vi.fn(async () => ({}) as never),
   // Extra outcome fields (the typed failure class judge() reports) — set by
   // the failure-identity tests, empty for every existing test.
   failMock: vi.fn(() => ({})),
@@ -27,6 +29,7 @@ const { judgeStatusMock, verdictMock, promptSpy, resolverMock, pathsRulesMock, s
 
 vi.mock("../judge/verdict", async (importOriginal) => ({
   judgeStatus: judgeStatusMock,
+  buildJudgmentInput: packetMock,
   getJudgeVerdict: verdictMock,
   getStage2Verdict: stage2Mock,
   getStage1Outcome: async (...a: any[]) => ({ verdict: await verdictMock(...a), ...failMock() }),
@@ -171,6 +174,18 @@ describe("/dspat active", () => {
     failMock.mockReturnValue({ failReason: "timeout", latencyMs: 8020 });
     await showPrompt(bashDecision(), ctx, store);
     expect(shownPrompt().body).toContain("⚠️ Judge: no verdict — both stages failed (timeout 8.0s)");
+  });
+
+  it("D17: the stage pair builds ONE judgment packet, not two", async () => {
+    // The packet is stage-independent (stage 2 appends its own section in
+    // judge()), and building it stats/reads the operation's reported paths.
+    verdictMock.mockResolvedValue({ model: "m/x", explanation: "e", approve: "reject", risk: "high" });
+    stage2Mock.mockResolvedValue({ model: "m/x", explanation: "e", approve: "reject", risk: "high" });
+    packetMock.mockClear();
+    await showPrompt(bashDecision(), ctx, store);
+    expect(verdictMock).toHaveBeenCalledTimes(1);
+    expect(stage2Mock).toHaveBeenCalledTimes(1);
+    expect(packetMock).toHaveBeenCalledTimes(1);
   });
 
   it("D17: BOTH stages run (stage 2 never skipped, even on stage-1 approve+low)", async () => {

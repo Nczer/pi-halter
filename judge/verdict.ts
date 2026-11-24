@@ -16,7 +16,6 @@
  * judge fenced as untrusted data (trusted skill scripts are excluded — the
  * user already vouches for that directory).
  */
-import path from "node:path";
 import { stream } from "@earendil-works/pi-ai/compat";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -27,6 +26,7 @@ import { findExecutedScript } from "../analysis/script-payload";
 import { findMovedContent } from "../analysis/moved-content";
 import { isGlobUnverified, globUnverifiedToken } from "../analysis/credentials";
 import { expandTilde } from "../analysis/path-util";
+import { resolvePathReal } from "../analysis/path-analysis";
 import {judge, JUDGE_STAGE2_SYSTEM_PROMPT, readJudgeSettings, resolveJudgeModel, resolveJudgeAuth, judgeAttributionHeaders, judgeRequestModel, judgeSessionId, JudgeStreamFn, JudgeResult, JudgeSettings, JudgeFailReason} from "./judge";
 import type {JudgmentBashInput, JudgmentInput, JudgmentScript} from "./packet";
 import { buildSessionContext } from "./session-context";
@@ -82,7 +82,10 @@ export async function buildJudgmentInput(
     // cd) — radius context only. Grant state is never in the packet: the
     // floor enforces scope, and the verdict weighs affected dirs only when
     // they are unreasonable/unsafe, never grant state.
-    const normBase = path.resolve(expandTilde(pd.cwd));
+    // Realpath, not lexical: the effective cwds the parser mints come out
+    // realpath'd, so a symlinked cwd differs from every one of them and paints
+    // a `(after cd)` line for a command that never moved.
+    const normBase = resolvePathReal(expandTilde(pd.cwd), "/");
     let effectiveBase: string | null = null;
     for (const b of analysis.effectiveCwds) {
       if (b !== null && b !== normBase) effectiveBase = b;
@@ -199,6 +202,11 @@ export function judgeStatus(
 export interface JudgePromptDeps {
   stream?: JudgeStreamFn;
   settings?: JudgeSettings;
+  /** Pre-built packet, shared by the two stages of one prompt. The packet is
+   *  stage-independent (stage 2 appends its "## Session context" section in
+   *  judge(), not here) and building it costs a stat/read per reported path,
+   *  so a stage pair without this builds it twice for the same operation. */
+  input?: JudgmentInput;
 }
 
 /**
@@ -247,7 +255,7 @@ async function runJudgeStage(
       return { verdict: null, failReason: "auth-failed", model: `${model.provider}/${model.id}` };
     }
 
-    const input = await buildJudgmentInput(pd, store);
+    const input = deps.input ?? (await buildJudgmentInput(pd, store));
 
     try {
       if (dspaMode) setDspaJudging(stage as 1 | 2, ctx);

@@ -1,5 +1,5 @@
 import path from "node:path";
-import os from "node:os";
+import { agentDir } from "../ext-settings";
 import { expandTilde } from "../analysis/path-util";
 import { tokenizeSegmentQuoted, type QuotedToken } from "../analysis/tokenizer";
 import { skipEnvPrefixes } from "./bash-patterns";
@@ -7,7 +7,7 @@ import { findScriptOperand } from "./script-operand";
 
 /** Directories whose scripts are auto-trusted (interpreter + script in this dir bypasses dangerous-pattern check). */
 const trustedScriptDirs: string[] = [
-  path.join(os.homedir(), ".pi", "agent", "skills"),
+  path.join(agentDir(), "skills"), // follows PI_CODING_AGENT_DIR, like settings-ext.json
 ];
 
 /** Packages allowed in `uv run --with` for trusted scripts (supply chain defense).

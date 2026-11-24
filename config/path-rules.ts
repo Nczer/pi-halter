@@ -1,6 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+import { agentDir } from "../ext-settings";
 
 // ── Path allow/deny rules ──
 
@@ -34,6 +35,10 @@ const tmpdir = os.tmpdir();
 export const allowedReadPaths: string[] = withReal([
   "/opt/pi-coding-agent",
   path.join(os.homedir(), ".pi"),
+  // The agent dir itself: `PI_CODING_AGENT_DIR` relocates it out of `~/.pi`,
+  // and halter then cannot read its own settings or skills. withReal skips the
+  // entry when it duplicates the line above (the default location).
+  agentDir(),
   path.join(os.homedir(), ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
   tmpdir, // os.tmpdir() e.g. /var/folders/.../T — withReal adds its /private/... spelling
   "/tmp", // skill scripts write to /tmp (withReal adds /private/tmp on macOS)
